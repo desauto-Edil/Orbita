@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+
+{% block title %}Iniciar sesión — Órbita{% endblock %}
+
+{% block content %}
+  <div class="auth-card card">
+    <h1 class="auth-card__brand">Órbita</h1>
+
+    {% if form.errors %}
+      <div class="alert alert--danger" role="alert">Usuario o contraseña incorrectos.</div>
+    {% endif %}
+
+    <form method="post" class="form" novalidate>
+      {% csrf_token %}
+      <div class="field">
+        <label for="{{ form.username.id_for_label }}">Usuario</label>
+        {{ form.username }}
+      </div>
+      <div class="field">
+        <label for="{{ form.password.id_for_label }}">Contraseña</label>
+        {{ form.password }}
+      </div>
+      <button type="submit" class="btn btn--primary btn--block">Entrar</button>
+    </form>
+  </div>
+{% endblock %}

@@ -1,0 +1,104 @@
+/* Órbita — design tokens (Incremento 0.5).
+   Identidad oficial única: carbón + superficies cálidas + blanco + lima.
+   Sustituye la paleta violeta previa (nunca implementada en pantalla). */
+
+:root {
+  /* Neutros */
+  --carbon: #17181b;
+  --carbon-soft: #232428;
+  --carbon-border: #2e2f34;
+  --background: #f3f1ea;
+  --surface: #ffffff;
+  --surface-sunken: #f7f6f1;
+  --border: #e7e4da;
+  --text: #17181b;
+  --text-muted: #706e64;
+  --text-on-dark: #f3f1ea;
+  --text-on-dark-muted: #97968f;
+
+  /* Acento principal — uso estratégico: selección, CTA, foco, indicadores */
+  --accent: #d7ff3e;
+  --accent-hover: #c3eb27;
+  --accent-contrast: #14140f;
+
+  /* Estados funcionales */
+  --success: #1f8f5f;
+  --success-soft: #def3e7;
+  --warning: #b9791a;
+  --warning-soft: #faeacb;
+  --danger: #c23b3b;
+  --danger-soft: #fae0df;
+  --info: #2569a6;
+  --info-soft: #ddebf9;
+
+  /* Secundarios — categorización futura (sin consumidor real en 0.5) */
+  --tag-violet-bg: #ede7fb;
+  --tag-violet-text: #5b3fc4;
+  --tag-peach-bg: #fce6d4;
+  --tag-peach-text: #b25a1d;
+  --tag-sky-bg: #dceefc;
+  --tag-sky-text: #1d6fb2;
+  --tag-rose-bg: #fbe3ea;
+  --tag-rose-text: #b93a63;
+
+  /* Radios */
+  --radius-sm: 8px;
+  --radius-md: 14px;
+  --radius-lg: 20px;
+  --radius-xl: 28px;
+  --radius-pill: 999px;
+
+  /* Sombras */
+  --shadow-sm: 0 1px 2px rgba(23, 24, 27, 0.05);
+  --shadow-md: 0 6px 20px rgba(23, 24, 27, 0.08);
+  --shadow-lg: 0 20px 48px rgba(23, 24, 27, 0.14);
+
+  /* Glass — sidebar, topbar, dropdowns y superficies flotantes/overlays.
+     Nunca en cards/formularios/tablas: esas siguen sólidas (--surface). */
+  --glass-blur: 20px;
+  --glass-blur-sm: 12px;
+  --glass-dark-bg: rgba(23, 24, 27, 0.78);
+  --glass-dark-bg-fallback: #1c1d21;
+  --glass-dark-border: rgba(255, 255, 255, 0.08);
+  --glass-light-bg: rgba(255, 255, 255, 0.62);
+  --glass-light-bg-fallback: #f7f6f1;
+  --glass-light-border: rgba(255, 255, 255, 0.6);
+  --glass-shadow: 0 8px 32px rgba(23, 24, 27, 0.12);
+
+  /* Espaciado (base 4px) */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 40px;
+  --space-8: 56px;
+
+  /* Tipografía */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 16px;
+  --text-lg: 18px;
+  --text-xl: 22px;
+  --text-2xl: 28px;
+  --text-3xl: 36px;
+
+  /* Controles */
+  --control-h-sm: 32px;
+  --control-h-md: 40px;
+  --control-h-lg: 48px;
+
+  /* Transición */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* Shell */
+  --sidebar-w: 220px;
+  --sidebar-w-collapsed: 72px;
+  --topbar-h: 64px;
+}

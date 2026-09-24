@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+
+{% block title %}{{ version.formulario.nombre }} — Previsualización — Órbita{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h1>{{ version.formulario.nombre }}</h1>
+    <p class="text-muted">Versión {{ version.numero }} — {{ version.get_estado_display }}</p>
+    <p class="text-muted">Esta es una previsualización: ninguna respuesta se guarda.</p>
+  </section>
+
+  <section class="card">
+    <form class="form" onsubmit="return false;">
+      {% for item in campos_preview %}
+        <div class="field">
+          <label for="campo_{{ item.campo.pk }}">
+            {{ item.campo.etiqueta }}{% if item.campo.obligatorio %} *{% endif %}
+          </label>
+          {% if item.campo.ayuda %}<p class="text-muted">{{ item.campo.ayuda }}</p>{% endif %}
+
+          {% if item.widget == "textarea" %}
+            <textarea id="campo_{{ item.campo.pk }}" disabled></textarea>
+          {% elif item.widget == "select" %}
+            <select id="campo_{{ item.campo.pk }}" disabled>
+              {% if item.opciones_referencia is not None %}
+                {% for referencia in item.opciones_referencia %}<option>{{ referencia }}</option>{% endfor %}
+              {% else %}
+                {% for opcion in item.opciones %}<option>{{ opcion.etiqueta }}</option>{% endfor %}
+              {% endif %}
+            </select>
+          {% elif item.widget == "select-multiple" %}
+            <select id="campo_{{ item.campo.pk }}" multiple disabled>
+              {% for opcion in item.opciones %}<option>{{ opcion.etiqueta }}</option>{% endfor %}
+            </select>
+          {% elif item.widget == "checkbox" %}
+            <input type="checkbox" id="campo_{{ item.campo.pk }}" disabled>
+          {% else %}
+            <input type="{{ item.widget }}" id="campo_{{ item.campo.pk }}" disabled>
+          {% endif %}
+        </div>
+      {% empty %}
+        <div class="empty-state">
+          <p>Este formulario todavía no tiene campos.</p>
+        </div>
+      {% endfor %}
+    </form>
+  </section>
+{% endblock %}

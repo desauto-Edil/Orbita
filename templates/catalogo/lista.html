@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+
+{% block title %}Servicios — Órbita{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <form method="get" class="form catalogo-filtros">
+      <div class="field">
+        <label for="id_q">Buscar</label>
+        <input type="text" id="id_q" name="q" value="{{ texto_busqueda }}" placeholder="Buscar servicio...">
+      </div>
+      <div class="field">
+        <label for="id_categoria">Categoría</label>
+        <select id="id_categoria" name="categoria">
+          <option value="">Todas</option>
+          {% for categoria in categorias %}
+            <option value="{{ categoria.pk }}" {% if categoria_seleccionada == categoria.pk|stringformat:"s" %}selected{% endif %}>
+              {{ categoria.nombre }}
+            </option>
+          {% endfor %}
+        </select>
+      </div>
+      <button type="submit" class="btn btn--secondary">Filtrar</button>
+    </form>
+  </section>
+
+  {% if servicios %}
+    <div class="catalogo-grid">
+      {% for servicio in servicios %}
+        <a class="card catalogo-card" href="{% url 'catalogo:detalle' servicio.pk %}">
+          <h3>{{ servicio.nombre }}</h3>
+          <p class="text-muted">{{ servicio.categoria.nombre }}</p>
+        </a>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p>No hay servicios disponibles para ti todavía.</p>
+    </div>
+  {% endif %}
+{% endblock %}

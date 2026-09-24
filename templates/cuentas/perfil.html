@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+
+{% block title %}Mi perfil — Órbita{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h2>{{ usuario.get_full_name|default:usuario.get_username }}</h2>
+    <dl class="definition-list">
+      <div>
+        <dt>Usuario</dt>
+        <dd>{{ usuario.get_username }}</dd>
+      </div>
+      <div>
+        <dt>Correo</dt>
+        <dd>{{ usuario.email|default:"—" }}</dd>
+      </div>
+      {% if perfil %}
+        <div>
+          <dt>Cargo</dt>
+          <dd>{{ perfil.cargo|default:"—" }}</dd>
+        </div>
+        <div>
+          <dt>Teléfono</dt>
+          <dd>{{ perfil.telefono|default:"—" }}</dd>
+        </div>
+      {% endif %}
+    </dl>
+  </section>
+
+  <section class="card">
+    <h3>Áreas</h3>
+    {% if areas %}
+      <ul class="plain-list">
+        {% for ua in areas %}
+          <li>
+            {{ ua.area.nombre }}
+            {% if ua.es_principal %}<span class="badge badge--accent">Principal</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="empty-state"><p>Aún no tienes áreas asignadas.</p></div>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h3>Unidades de negocio</h3>
+    {% if unidades_negocio %}
+      <ul class="plain-list">
+        {% for uu in unidades_negocio %}
+          <li>
+            {{ uu.unidad_negocio.nombre }}
+            {% if uu.es_principal %}<span class="badge badge--accent">Principal</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="empty-state"><p>Aún no tienes unidades de negocio asignadas.</p></div>
+    {% endif %}
+  </section>
+{% endblock %}

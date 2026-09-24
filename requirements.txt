@@ -1,0 +1,14 @@
+# Único requirements.txt para Sprint 0 (sin separar base/development/production todavía,
+# decisión confirmada en el plan de Sprint 0).
+
+Django>=5.1,<5.2
+psycopg[binary]>=3.2,<4
+celery>=5.4,<6
+redis>=5.0,<6
+django-celery-beat>=2.7,<3
+django-environ>=0.11,<1
+whitenoise>=6.7,<7
+
+# Cargadas condicionalmente en settings.py solo cuando DEBUG=True
+django-debug-toolbar>=4.4,<5
+django-extensions>=3.2,<4

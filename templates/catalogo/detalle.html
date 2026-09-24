@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}{{ servicio.nombre }} — Órbita{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'catalogo:lista' %}">Servicios</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">{{ servicio.nombre }}</span>
+  </nav>
+
+  <section class="card">
+    <h1>{{ servicio.nombre }}</h1>
+    <p class="text-muted">{{ servicio.categoria.nombre }}</p>
+    {% if servicio.descripcion %}
+      <p>{{ servicio.descripcion }}</p>
+    {% endif %}
+    {% if servicio.formulario.version_activa %}
+      <form method="post" action="{% url 'tickets:iniciar' servicio.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn--primary">Solicitar</button>
+      </form>
+    {% endif %}
+  </section>
+
+  {% if servicio.instrucciones %}
+    <section class="card">
+      <h3>Instrucciones</h3>
+      <p>{{ servicio.instrucciones }}</p>
+    </section>
+  {% endif %}
+{% endblock %}

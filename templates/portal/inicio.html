@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Inicio — Órbita{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h2>Hola, {{ usuario.get_full_name|default:usuario.get_username }}</h2>
+    <p class="text-muted">Bienvenido a Órbita.</p>
+  </section>
+
+  <section class="card">
+    <h3>Tu información organizacional</h3>
+    {% if area_principal or unidad_principal %}
+      <dl class="definition-list">
+        {% if area_principal %}
+          <div>
+            <dt>Área principal</dt>
+            <dd>{{ area_principal.area.nombre }}</dd>
+          </div>
+        {% endif %}
+        {% if unidad_principal %}
+          <div>
+            <dt>Unidad de negocio principal</dt>
+            <dd>{{ unidad_principal.unidad_negocio.nombre }}</dd>
+          </div>
+        {% endif %}
+      </dl>
+    {% else %}
+      <div class="empty-state">
+        <p>Aún no tienes área ni unidad de negocio asignadas.</p>
+      </div>
+    {% endif %}
+    <p><a class="btn btn--secondary" href="{% url 'core:perfil' %}">Ver mi perfil completo</a></p>
+  </section>
+{% endblock %}
