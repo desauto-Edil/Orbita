@@ -95,6 +95,42 @@ class EspecificacionRegla:
             return False
 
 
+_EFECTO_OPUESTO = {
+    "MOSTRAR": "OCULTAR",
+    "OCULTAR": "MOSTRAR",
+    "REQUERIR": "NO_REQUERIR",
+    "NO_REQUERIR": "REQUERIR",
+}
+
+
+def validar_composicion_reglas(regla):
+    """2.2 (RQF-043, decisión aprobada del usuario) — un mismo
+    `campo_objetivo` no puede tener reglas de efectos opuestos dentro de la
+    misma familia: `MOSTRAR`+`OCULTAR` (visibilidad) o `REQUERIR`+
+    `NO_REQUERIR` (obligatoriedad) simultáneas se rechazan al guardar, en
+    vez de resolverse con una precedencia en tiempo de evaluación. Varias
+    reglas del MISMO efecto sobre el mismo objetivo sí son válidas (se
+    combinan por OR — ver `apps/tickets/validaciones.py`). MOSTRAR/OCULTAR
+    y REQUERIR/NO_REQUERIR son familias independientes: una regla MOSTRAR y
+    una REQUERIR sobre el mismo objetivo nunca entran en conflicto entre
+    sí.
+    """
+    if not regla.campo_objetivo_id or regla.efecto not in _EFECTO_OPUESTO:
+        return
+    opuesto = _EFECTO_OPUESTO[regla.efecto]
+    existe_opuesta = (
+        type(regla)
+        .objects.filter(campo_objetivo_id=regla.campo_objetivo_id, efecto=opuesto)
+        .exclude(pk=regla.pk)
+        .exists()
+    )
+    if existe_opuesta:
+        raise ValidationError(
+            f"Ya existe una regla con efecto {opuesto} para este campo objetivo; no puede "
+            f"combinarse con {regla.efecto} sobre el mismo campo."
+        )
+
+
 def validar_integridad_regla(regla):
     """Validaciones de integridad de `ReglaCondicional` (propuesta 1.2,
     sección E): compatibilidad operador/tipo, misma `FormularioVersion`, sin

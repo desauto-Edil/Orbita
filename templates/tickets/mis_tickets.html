@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block title %}Mis tickets — Órbita{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h1>Mis tickets</h1>
+    <p class="text-muted">Borradores en curso y tickets ya radicados.</p>
+  </section>
+
+  {% if tickets %}
+    <section class="card">
+      <ul class="plain-list">
+        {% for ticket in tickets %}
+          <li>
+            {% if ticket.estado == "BORRADOR" %}
+              <a href="{% url 'tickets:borrador' ticket.pk %}">{{ ticket.detalle_servicio.servicio.nombre }}</a>
+              <span class="badge badge--warning">Borrador</span>
+            {% else %}
+              <a href="{% url 'tickets:detalle' ticket.pk %}">{{ ticket.detalle_servicio.servicio.nombre }}</a>
+              <span class="badge badge--info">{{ ticket.get_estado_display }}</span>
+            {% endif %}
+            <span class="text-muted">{{ ticket.creado_en|date:"d/m/Y H:i" }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% else %}
+    <div class="empty-state">
+      <p>Aún no tienes tickets.</p>
+    </div>
+  {% endif %}
+{% endblock %}

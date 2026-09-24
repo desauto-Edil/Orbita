@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+
+{% block title %}Ticket {{ ticket.radicado }} — Órbita{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'tickets:mis_tickets' %}">Mis tickets</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">{{ servicio.nombre }}</span>
+  </nav>
+
+  <section class="card">
+    <h1>{{ servicio.nombre }}</h1>
+    <span class="badge badge--info">{{ ticket.get_estado_display }}</span>
+    <p class="text-muted">Radicado: {{ ticket.radicado }}</p>
+    <p class="text-muted">Radicado el {{ ticket.radicado_en|date:"d/m/Y H:i" }}</p>
+  </section>
+
+  <section class="card">
+    <h3>Respuestas</h3>
+    {% for item in campos_formulario %}
+      <div class="field">
+        <label>{{ item.campo.etiqueta }}</label>
+        {% if item.campo.tipo == "ARCHIVO" %}
+          {% if item.respuesta and item.respuesta.archivo %}
+            <p><a href="{% url 'tickets:descargar_archivo' item.respuesta.archivo.pk %}">{{ item.respuesta.archivo.nombre_original }}</a></p>
+          {% else %}
+            <p class="text-muted">Sin archivo.</p>
+          {% endif %}
+        {% elif item.campo.tipo == "USUARIO" %}
+          <p>{% if item.respuesta %}{{ item.respuesta.valor_usuario }}{% else %}—{% endif %}</p>
+        {% elif item.campo.tipo == "AREA" %}
+          <p>{% if item.respuesta %}{{ item.respuesta.valor_area }}{% else %}—{% endif %}</p>
+        {% elif item.campo.tipo == "UNIDAD" %}
+          <p>{% if item.respuesta %}{{ item.respuesta.valor_unidad }}{% else %}—{% endif %}</p>
+        {% elif item.campo.tipo == "BOOLEANO" %}
+          <p>{% if item.respuesta and item.respuesta.valor %}Sí{% else %}No{% endif %}</p>
+        {% elif item.campo.tipo == "MULTILISTA" %}
+          <p>
+            {% for opcion in item.opciones %}{% if item.respuesta and opcion.valor in item.respuesta.valor %}{{ opcion.etiqueta }}{% if not forloop.last %}, {% endif %}{% endif %}{% endfor %}
+            {% if not item.respuesta %}—{% endif %}
+          </p>
+        {% elif item.campo.tipo == "LISTA" %}
+          <p>
+            {% for opcion in item.opciones %}{% if item.respuesta and opcion.valor == item.respuesta.valor %}{{ opcion.etiqueta }}{% endif %}{% endfor %}
+            {% if not item.respuesta %}—{% endif %}
+          </p>
+        {% else %}
+          <p>{% if item.respuesta %}{{ item.respuesta.valor|default_if_none:"—" }}{% else %}—{% endif %}</p>
+        {% endif %}
+      </div>
+    {% empty %}
+      <div class="empty-state">
+        <p>Este formulario no tiene campos.</p>
+      </div>
+    {% endfor %}
+  </section>
+{% endblock %}

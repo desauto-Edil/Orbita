@@ -53,7 +53,7 @@ def elementos_navegacion(usuario):
         },
         {
             "etiqueta": "Tickets",
-            "url_name": "tickets:mis_borradores",
+            "url_name": "tickets:mis_tickets",
             "icono": "tickets",
             "namespace": "tickets",
         },

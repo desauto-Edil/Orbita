@@ -1,21 +1,22 @@
-"""Operaciones de dominio de Tickets — incremento 2.1 (CU-014 parcial,
-CU-015; RQF-049/050/051; RN-015).
+"""Operaciones de dominio de Tickets — incrementos 2.1 (CU-015; modelo base
+y borradores) y 2.2 (CU-014; radicación y respuestas). RQF-049 a 054;
+RN-014/015/016.
 
-Cubre únicamente el ciclo de vida de un BORRADOR: crear, guardar
-respuestas (incluidos archivos de campos tipo ARCHIVO) y eliminar. Radicar,
-generar el `radicado` y validar obligatoriedad (RQF-053/054) son 2.2 — no
-se adelantan aquí.
+2.1 cubre el ciclo de vida de un BORRADOR: crear, guardar respuestas
+(incluidos archivos de campos tipo ARCHIVO) y eliminar. 2.2 agrega
+`radicar_ticket`: valida el estado ya persistido (`validaciones.py`) y
+transiciona BORRADOR -> RADICADO generando el `radicado` único.
 """
 
-from collections import defaultdict
+import uuid
 from decimal import Decimal
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
+from django.utils import timezone
 
 from apps.catalogo.campos import ESTRATEGIAS_POR_TIPO
-from apps.catalogo.models import Campo, ReglaCondicional
-from apps.catalogo.reglas import EspecificacionRegla
+from apps.catalogo.models import Campo
 from apps.catalogo.visibilidad import servicios_visibles_para
 from apps.tickets.autorizacion import es_propietario_borrador
 from apps.tickets.models import (
@@ -27,6 +28,7 @@ from apps.tickets.models import (
     Ticket,
     TicketServicio,
 )
+from apps.tickets.validaciones import calcular_estados_efectivos, validar_para_radicar
 
 
 @transaction.atomic
@@ -62,30 +64,6 @@ def _es_valor_vacio(valor_crudo):
     if isinstance(valor_crudo, (list, tuple)) and len(valor_crudo) == 0:
         return True
     return False
-
-
-def _es_visible(campo, valores_para_evaluar, reglas_por_objetivo):
-    """Un campo objetivo de al menos una regla MOSTRAR es "condicional":
-    empieza OCULTO y solo se revela cuando esa condición se satisface (el
-    patrón usual de campo condicional — RQF-043). Un campo sin ninguna
-    regla MOSTRAR dirigida a él es visible por defecto y solo una OCULTAR
-    satisfecha lo esconde. En orden de `id` de regla, la última aplicable
-    (satisfecha) gana. Con reglas MOSTRAR/OCULTAR conflictivas sobre el
-    mismo campo esto es un comportamiento mínimo y determinista para 2.1
-    (última regla aplicable gana) — la composición o precedencia
-    definitiva es una propuesta pendiente, explícitamente diferida a antes
-    de 2.2 (no resuelta aquí, por instrucción del usuario)."""
-    reglas = reglas_por_objetivo.get(campo.id, ())
-    depende_de_mostrar = any(regla.efecto == ReglaCondicional.Efecto.MOSTRAR for regla in reglas)
-    visible = not depende_de_mostrar
-    for regla in reglas:
-        if not EspecificacionRegla(regla).es_satisfecha_por(valores_para_evaluar):
-            continue
-        if regla.efecto == ReglaCondicional.Efecto.OCULTAR:
-            visible = False
-        elif regla.efecto == ReglaCondicional.Efecto.MOSTRAR:
-            visible = True
-    return visible
 
 
 def _upsert_respuesta_escalar(respuesta_formulario, campo, valor_normalizado, existente):
@@ -160,21 +138,11 @@ def guardar_respuestas_borrador(ticket, actor, respuestas_crudas):
     valores_para_evaluar = {campo_id: rc.valor for campo_id, rc in existentes.items()}
     valores_para_evaluar.update(respuestas_crudas)
 
-    reglas = (
-        ReglaCondicional.objects.filter(
-            campo_origen__version=version,
-            efecto__in=[ReglaCondicional.Efecto.MOSTRAR, ReglaCondicional.Efecto.OCULTAR],
-        )
-        .select_related("campo_origen", "campo_objetivo")
-        .order_by("id")
-    )
-    reglas_por_objetivo = defaultdict(list)
-    for regla in reglas:
-        reglas_por_objetivo[regla.campo_objetivo_id].append(regla)
+    estados_efectivos = calcular_estados_efectivos(version, valores_para_evaluar)
 
     for campo_id, campo in campos.items():
         existente = existentes.get(campo_id)
-        visible = _es_visible(campo, valores_para_evaluar, reglas_por_objetivo)
+        visible = estados_efectivos[campo_id].visible
 
         if not visible:
             if existente is not None:
@@ -211,3 +179,47 @@ def eliminar_borrador(ticket, actor):
     if not es_propietario_borrador(actor, ticket):
         raise PermissionDenied("Solo el solicitante puede eliminar este borrador.")
     ticket.delete()
+
+
+@transaction.atomic
+def radicar_ticket(ticket, actor):
+    """CU-014/RQF-053/RQF-054, RN-014/RN-016 — incremento 2.2.
+
+    Responsabilidad exclusiva: VALIDAR el estado YA PERSISTIDO del ticket y,
+    si es válido, transicionarlo a RADICADO. No purga ni normaliza
+    respuestas — esa responsabilidad sigue siendo de
+    `guardar_respuestas_borrador` (2.1). El flujo de UI (`views.radicar_view`)
+    ejecuta primero `guardar_respuestas_borrador` con el envío actual del
+    formulario y luego esta función, como dos operaciones atómicas
+    independientes en secuencia (no una única transacción envolvente) — ver
+    esa vista para la justificación completa de esa decisión.
+
+    Precondiciones, en orden: actor es el solicitante; ticket sigue en
+    BORRADOR (cubre también la doble radicación); el Servicio sigue activo
+    (decisión de negocio del proyecto — RN-011 protege tickets ya
+    radicados/históricos, no autoriza radicar contra un servicio que el
+    catálogo ya retiró; un cambio posterior únicamente de *visibilidad* NO
+    bloquea, mismo criterio que 2.1 aplica al guardar un borrador);
+    `validar_para_radicar` (RQF-044/RN-012, solo lectura).
+
+    `radicado` (UUID4, RN-014) y `radicado_en` (`timezone.now()`, RN-016)
+    se fijan aquí exclusivamente — nunca a partir de un valor del cliente.
+    """
+    if not es_propietario_borrador(actor, ticket):
+        raise PermissionDenied("Solo el solicitante puede radicar este ticket.")
+    if ticket.estado != Ticket.Estado.BORRADOR:
+        raise ValidationError("Solo un ticket en estado BORRADOR puede radicarse.")
+
+    servicio = ticket.detalle_servicio.servicio
+    if not servicio.activo:
+        raise ValidationError(
+            "El servicio ya no está activo: no es posible radicar este ticket."
+        )
+
+    validar_para_radicar(ticket)
+
+    ticket.radicado = uuid.uuid4()
+    ticket.radicado_en = timezone.now()
+    ticket.estado = Ticket.Estado.RADICADO
+    ticket.save()
+    return ticket

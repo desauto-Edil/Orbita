@@ -4,18 +4,24 @@
 
 {% block content %}
   <nav class="breadcrumb" aria-label="Ruta de navegación">
-    <a href="{% url 'tickets:mis_borradores' %}">Mis tickets</a>
+    <a href="{% url 'tickets:mis_tickets' %}">Mis tickets</a>
     <span class="breadcrumb__separator" aria-hidden="true">/</span>
     <span class="breadcrumb__current">{{ servicio.nombre }}</span>
   </nav>
 
   <section class="card">
     <h1>{{ servicio.nombre }}</h1>
-    <p class="text-muted">Borrador — los cambios se guardan solo al presionar «Guardar borrador».</p>
+    <p class="text-muted">Borrador — los cambios se guardan solo al presionar «Guardar borrador» o «Radicar».</p>
   </section>
 
   <section class="card">
-    <form class="form" method="post" enctype="multipart/form-data">
+    <form
+      class="form"
+      method="post"
+      action="{% url 'tickets:borrador' ticket.pk %}"
+      enctype="multipart/form-data"
+      onsubmit="this.querySelectorAll('button[type=submit]').forEach(function(b) { b.disabled = true; });"
+    >
       {% csrf_token %}
       {% for item in campos_formulario %}
         <div class="field">
@@ -23,6 +29,11 @@
             {{ item.campo.etiqueta }}{% if item.campo.obligatorio %} *{% endif %}
           </label>
           {% if item.campo.ayuda %}<p class="text-muted">{{ item.campo.ayuda }}</p>{% endif %}
+          {% if item.errores %}
+            <ul class="field-errors">
+              {% for error in item.errores %}<li class="text-danger">{{ error }}</li>{% endfor %}
+            </ul>
+          {% endif %}
 
           {% if item.widget == "textarea" %}
             <textarea name="campo_{{ item.campo.pk }}" id="campo_{{ item.campo.pk }}">{% if item.respuesta %}{{ item.respuesta.valor }}{% endif %}</textarea>
@@ -69,7 +80,10 @@
         </div>
       {% endfor %}
 
-      <button type="submit" class="btn btn--primary">Guardar borrador</button>
+      <div class="form-actions">
+        <button type="submit" class="btn btn--secondary">Guardar borrador</button>
+        <button type="submit" formaction="{% url 'tickets:radicar' ticket.pk %}" class="btn btn--primary">Radicar</button>
+      </div>
     </form>
   </section>
 

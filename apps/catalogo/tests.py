@@ -660,6 +660,15 @@ class EstrategiaNumericaTests(TestCase):
         with self.assertRaises(ValidationError):
             self.estrategia.validar_configuracion({"minimo": 10, "maximo": 5})
 
+    def test_normalizar_valor_no_numerico_lanza_validationerror_controlado(self):
+        # Corrección 2.2: antes `float("abc")` dejaba propagar un
+        # ValueError sin controlar; ahora es el mismo tipo de error
+        # controlado que usa el resto del Form Builder.
+        with self.assertRaises(ValidationError):
+            self.estrategia.normalizar("abc")
+        with self.assertRaises(ValidationError):
+            self.estrategia.validar_valor(self.campo, "abc")
+
 
 class EstrategiaTemporalTests(TestCase):
     def setUp(self):
@@ -959,6 +968,57 @@ class ReglaCondicionalIntegridadTests(TestCase):
         )
         self.assertIsNotNone(regla_ab.pk)
         self.assertIsNotNone(regla_ba.pk)
+
+
+class ReglaCondicionalComposicionTests(TestCase):
+    """2.2 — decisión aprobada: impedir configuraciones contradictorias
+    (MOSTRAR+OCULTAR, REQUERIR+NO_REQUERIR sobre el mismo campo_objetivo)
+    en vez de resolverlas con una precedencia en tiempo de evaluación."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="jsalas", password=CLAVE_PRUEBA)
+        self.formulario = Formulario.objects.create(nombre="F")
+        self.version = crear_nueva_version(self.formulario, actor=self.usuario)
+        self.origen_1 = Campo.objects.create(version=self.version, tipo=Campo.TipoCampo.TEXTO, etiqueta="Origen1")
+        self.origen_2 = Campo.objects.create(version=self.version, tipo=Campo.TipoCampo.TEXTO, etiqueta="Origen2")
+        self.objetivo = Campo.objects.create(version=self.version, tipo=Campo.TipoCampo.TEXTO, etiqueta="Objetivo")
+
+    def _crear(self, origen, efecto):
+        return ReglaCondicional.objects.create(
+            campo_origen=origen,
+            operador=ReglaCondicional.Operador.NO_ESTA_VACIO,
+            valor="",
+            campo_objetivo=self.objetivo,
+            efecto=efecto,
+        )
+
+    def test_rechaza_mostrar_y_ocultar_sobre_el_mismo_objetivo(self):
+        self._crear(self.origen_1, ReglaCondicional.Efecto.MOSTRAR)
+        with self.assertRaises(ValidationError):
+            self._crear(self.origen_2, ReglaCondicional.Efecto.OCULTAR)
+
+    def test_rechaza_ocultar_y_mostrar_en_orden_inverso(self):
+        self._crear(self.origen_1, ReglaCondicional.Efecto.OCULTAR)
+        with self.assertRaises(ValidationError):
+            self._crear(self.origen_2, ReglaCondicional.Efecto.MOSTRAR)
+
+    def test_rechaza_requerir_y_no_requerir_sobre_el_mismo_objetivo(self):
+        self._crear(self.origen_1, ReglaCondicional.Efecto.REQUERIR)
+        with self.assertRaises(ValidationError):
+            self._crear(self.origen_2, ReglaCondicional.Efecto.NO_REQUERIR)
+
+    def test_permite_multiples_reglas_del_mismo_efecto_sobre_el_mismo_objetivo(self):
+        regla_1 = self._crear(self.origen_1, ReglaCondicional.Efecto.MOSTRAR)
+        regla_2 = self._crear(self.origen_2, ReglaCondicional.Efecto.MOSTRAR)
+        self.assertIsNotNone(regla_1.pk)
+        self.assertIsNotNone(regla_2.pk)
+
+    def test_mostrar_y_requerir_sobre_el_mismo_objetivo_son_independientes(self):
+        # Familias distintas (visibilidad vs. obligatoriedad) — no conflictan entre sí.
+        regla_mostrar = self._crear(self.origen_1, ReglaCondicional.Efecto.MOSTRAR)
+        regla_requerir = self._crear(self.origen_2, ReglaCondicional.Efecto.REQUERIR)
+        self.assertIsNotNone(regla_mostrar.pk)
+        self.assertIsNotNone(regla_requerir.pk)
 
 
 class PrevisualizarVersionTests(TestCase):

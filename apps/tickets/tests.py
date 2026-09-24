@@ -1,17 +1,21 @@
-"""Pruebas de `apps.tickets` — incremento 2.1 (modelo base y borradores).
+"""Pruebas de `apps.tickets` — incrementos 2.1 (modelo base y borradores) y
+2.2 (radicación y respuestas).
 
 Único archivo de pruebas de esta app (misma decisión que `apps.core` y
 `apps.catalogo`: sin paquete `tests/`). No se ejecutan como parte de la
 implementación — se entregan junto con los comandos exactos para correrlas
 vía Docker; las corre el usuario.
 
-Cubre únicamente el alcance de 2.1: crear/editar/eliminar un BORRADOR.
-Radicar, `radicado`, obligatoriedad (RQF-053/054), atención, comentarios y
-`HistorialTicket` son 2.2+ y no se prueban aquí (no existen todavía).
+2.2 agrega: radicar, `radicado`/`radicado_en`, validación final
+(obligatoriedad dinámica vía REQUERIR/NO_REQUERIR, campos ocultos nunca
+obligatorios), inmutabilidad posterior a la radicación e invariantes de
+versión. Atención, comentarios y `HistorialTicket` siguen siendo 2.3+ y no
+se prueban aquí.
 """
 
 import shutil
 import tempfile
+import uuid
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
@@ -19,13 +23,14 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.catalogo.models import Campo, Categoria, Formulario, OpcionCampo, ReglaCondicional, Servicio
 from apps.catalogo.versionamiento import activar_version, crear_nueva_version
 from apps.core.models import Area, UnidadNegocio
 from apps.tickets.autorizacion import es_propietario_borrador
 from apps.tickets.models import ArchivoRespuestaCampo, RespuestaCampo, RespuestaFormulario, Ticket, TicketServicio
-from apps.tickets.operaciones import crear_borrador, eliminar_borrador, guardar_respuestas_borrador
+from apps.tickets.operaciones import crear_borrador, eliminar_borrador, guardar_respuestas_borrador, radicar_ticket
 
 Usuario = get_user_model()
 
@@ -620,9 +625,350 @@ class VistasBorradorTests(TestCase):
         respuesta = self.client.get(reverse("tickets:borrador", args=[ticket.pk]))
         self.assertEqual(respuesta.status_code, 403)
 
-    def test_mis_borradores_lista_solo_los_propios(self):
+    def test_mis_tickets_lista_solo_los_propios(self):
         crear_borrador(self.usuario, self.servicio)
         self.client.login(username="npardo", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:mis_borradores"))
+        respuesta = self.client.get(reverse("tickets:mis_tickets"))
         self.assertEqual(respuesta.status_code, 200)
-        self.assertEqual(len(respuesta.context["borradores"]), 0)
+        self.assertEqual(len(respuesta.context["tickets"]), 0)
+
+
+def _completar_texto(ticket, usuario, campos, etiqueta="Texto", valor="Motivo válido"):
+    guardar_respuestas_borrador(ticket, usuario, {campos[etiqueta].id: valor})
+
+
+class RadicarTicketTests(TestCase):
+    """CU-014/RQF-053/054, RN-014/RN-016 — incremento 2.2."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="oquintero", password=CLAVE_PRUEBA)
+        self.otro_usuario = Usuario.objects.create_user(username="pbarrios", password=CLAVE_PRUEBA)
+        self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
+            self.usuario,
+            [
+                {"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto", "obligatorio": True},
+                {"tipo": Campo.TipoCampo.NUMERO, "etiqueta": "Numero"},
+            ],
+        )
+        self.ticket = crear_borrador(self.usuario, self.servicio)
+
+    def test_radica_correctamente(self):
+        _completar_texto(self.ticket, self.usuario, self.campos)
+        radicar_ticket(self.ticket, self.usuario)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.RADICADO)
+        self.assertIsInstance(self.ticket.radicado, uuid.UUID)
+        self.assertIsNotNone(self.ticket.radicado_en)
+
+    def test_actor_ajeno_no_puede_radicar(self):
+        _completar_texto(self.ticket, self.usuario, self.campos)
+        with self.assertRaises(PermissionDenied):
+            radicar_ticket(self.ticket, self.otro_usuario)
+
+    def test_no_se_puede_radicar_dos_veces(self):
+        _completar_texto(self.ticket, self.usuario, self.campos)
+        radicar_ticket(self.ticket, self.usuario)
+        with self.assertRaises(ValidationError):
+            radicar_ticket(self.ticket, self.usuario)
+
+    def test_rechaza_si_servicio_esta_inactivo(self):
+        _completar_texto(self.ticket, self.usuario, self.campos)
+        self.servicio.activo = False
+        self.servicio.save()
+        with self.assertRaises(ValidationError):
+            radicar_ticket(self.ticket, self.usuario)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.BORRADOR)
+
+    def test_cambio_de_visibilidad_no_bloquea_la_radicacion(self):
+        # Decisión de negocio del proyecto (no texto literal del Excel):
+        # un cambio de visibilidad posterior a crear el borrador no
+        # bloquea radicar — mismo criterio que 2.1 aplica al guardar.
+        _completar_texto(self.ticket, self.usuario, self.campos)
+        self.servicio.alcance_visibilidad = Servicio.AlcanceVisibilidad.RESTRINGIDO
+        self.servicio.save()
+        radicar_ticket(self.ticket, self.usuario)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.RADICADO)
+
+    def test_falla_si_falta_campo_obligatorio(self):
+        with self.assertRaises(ValidationError):
+            radicar_ticket(self.ticket, self.usuario)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.BORRADOR)
+        self.assertIsNone(self.ticket.radicado)
+
+    def test_rollback_completo_si_falla_la_validacion(self):
+        with self.assertRaises(ValidationError):
+            radicar_ticket(self.ticket, self.usuario)
+        self.ticket.refresh_from_db()
+        self.assertIsNone(self.ticket.radicado)
+        self.assertIsNone(self.ticket.radicado_en)
+
+    def test_radicado_es_unico_entre_dos_tickets(self):
+        _completar_texto(self.ticket, self.usuario, self.campos)
+        radicar_ticket(self.ticket, self.usuario)
+
+        otro_ticket = crear_borrador(self.usuario, self.servicio)
+        _completar_texto(otro_ticket, self.usuario, self.campos)
+        radicar_ticket(otro_ticket, self.usuario)
+
+        self.assertNotEqual(self.ticket.radicado, otro_ticket.radicado)
+
+    def test_radicado_en_usa_la_hora_del_sistema(self):
+        _completar_texto(self.ticket, self.usuario, self.campos)
+        antes = timezone.now()
+        radicar_ticket(self.ticket, self.usuario)
+        despues = timezone.now()
+        self.ticket.refresh_from_db()
+        self.assertGreaterEqual(self.ticket.radicado_en, antes)
+        self.assertLessEqual(self.ticket.radicado_en, despues)
+
+    def test_campo_opcional_puede_quedar_vacio(self):
+        _completar_texto(self.ticket, self.usuario, self.campos)
+        radicar_ticket(self.ticket, self.usuario)  # Numero nunca se llenó
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.RADICADO)
+
+
+class ObligatoriedadDinamicaEnRadicarTests(TestCase):
+    """RQF-043/044 — REQUERIR/NO_REQUERIR modifican dinámicamente la
+    obligatoriedad base de `Campo.obligatorio` (decisión aprobada, sin
+    precedencia: MOSTRAR/OCULTAR y REQUERIR/NO_REQUERIR no pueden mezclarse
+    con su opuesto sobre el mismo objetivo — ver `apps/catalogo/tests.py`)."""
+
+    def setUp(self):
+        def _reglas(campos):
+            ReglaCondicional.objects.create(
+                campo_origen=campos["Tipo"],
+                operador=ReglaCondicional.Operador.IGUAL_A,
+                valor="URGENTE",
+                campo_objetivo=campos["Justificacion"],
+                efecto=ReglaCondicional.Efecto.REQUERIR,
+            )
+            ReglaCondicional.objects.create(
+                campo_origen=campos["Tipo"],
+                operador=ReglaCondicional.Operador.IGUAL_A,
+                valor="RUTINA",
+                campo_objetivo=campos["Aprobador"],
+                efecto=ReglaCondicional.Efecto.NO_REQUERIR,
+            )
+
+        self.usuario = Usuario.objects.create_user(username="qsierra", password=CLAVE_PRUEBA)
+        self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
+            self.usuario,
+            [
+                {
+                    "tipo": Campo.TipoCampo.LISTA,
+                    "etiqueta": "Tipo",
+                    "opciones": [("URGENTE", "Urgente"), ("RUTINA", "Rutina"), ("NORMAL", "Normal")],
+                },
+                {"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Justificacion", "obligatorio": False},
+                {"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Aprobador", "obligatorio": True},
+            ],
+            reglas_builder=_reglas,
+        )
+
+    def _ticket_con_tipo(self, valor_tipo):
+        ticket = crear_borrador(self.usuario, self.servicio)
+        guardar_respuestas_borrador(
+            ticket, self.usuario, {self.campos["Tipo"].id: valor_tipo, self.campos["Aprobador"].id: "Ana"}
+        )
+        return ticket
+
+    def test_requerir_satisfecha_exige_el_campo_normalmente_opcional(self):
+        ticket = self._ticket_con_tipo("URGENTE")  # Justificacion pasa a requerida, sin valor
+        with self.assertRaises(ValidationError):
+            radicar_ticket(ticket, self.usuario)
+
+    def test_requerir_no_satisfecha_conserva_el_estado_base_opcional(self):
+        ticket = self._ticket_con_tipo("RUTINA")  # REQUERIR de Justificacion no se satisface
+        radicar_ticket(ticket, self.usuario)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+
+    def test_no_requerir_satisfecha_libera_el_campo_normalmente_obligatorio(self):
+        ticket = crear_borrador(self.usuario, self.servicio)
+        guardar_respuestas_borrador(ticket, self.usuario, {self.campos["Tipo"].id: "RUTINA"})  # Aprobador sin valor
+        radicar_ticket(ticket, self.usuario)  # NO_REQUERIR se satisface -> Aprobador ya no es obligatorio
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+
+    def test_no_requerir_no_satisfecha_conserva_obligatorio_por_defecto(self):
+        # "NORMAL" no satisface ni REQUERIR (Tipo==URGENTE) ni NO_REQUERIR
+        # (Tipo==RUTINA) — aísla el caso: solo Aprobador queda sin valor.
+        ticket = crear_borrador(self.usuario, self.servicio)
+        guardar_respuestas_borrador(ticket, self.usuario, {self.campos["Tipo"].id: "NORMAL"})  # Aprobador sin valor
+        with self.assertRaises(ValidationError):
+            radicar_ticket(ticket, self.usuario)
+
+    def test_campo_oculto_nunca_es_obligatorio_aunque_tenga_valor_residual(self):
+        # Simula un valor residual accidental en un campo que en ese
+        # momento evalúa como oculto — no debe considerarse "obligatorio
+        # incumplido" (instrucción explícita del usuario para 2.2).
+        def _reglas_visibilidad(campos):
+            ReglaCondicional.objects.create(
+                campo_origen=campos["Disparador"],
+                operador=ReglaCondicional.Operador.IGUAL_A,
+                valor="true",
+                campo_objetivo=campos["Oculto"],
+                efecto=ReglaCondicional.Efecto.MOSTRAR,
+            )
+
+        servicio, version, campos = _crear_servicio_con_formulario(
+            self.usuario,
+            [
+                {"tipo": Campo.TipoCampo.BOOLEANO, "etiqueta": "Disparador"},
+                {"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Oculto", "obligatorio": True},
+            ],
+            reglas_builder=_reglas_visibilidad,
+        )
+        ticket = crear_borrador(self.usuario, servicio)
+        respuesta_formulario = ticket.respuesta_formulario
+        # Se inserta directamente por ORM (bypass de guardar_respuestas_borrador,
+        # que purgaría el valor por estar oculto) para simular el residuo.
+        RespuestaCampo.objects.create(
+            respuesta_formulario=respuesta_formulario, campo=campos["Oculto"], valor_texto="residual"
+        )
+        radicar_ticket(ticket, self.usuario)  # Disparador nunca fue True -> Oculto sigue oculto
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+
+
+class InmutabilidadPosteriorARadicarTests(TestCase):
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="rzapata", password=CLAVE_PRUEBA)
+        self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
+            self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
+        )
+        self.ticket = crear_borrador(self.usuario, self.servicio)
+        _completar_texto(self.ticket, self.usuario, self.campos)
+        radicar_ticket(self.ticket, self.usuario)
+        self.ticket.refresh_from_db()
+
+    def test_no_se_pueden_guardar_respuestas_despues_de_radicar(self):
+        with self.assertRaises(ValidationError):
+            guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Texto"].id: "Otro valor"})
+
+    def test_no_se_puede_eliminar_despues_de_radicar(self):
+        with self.assertRaises(ValidationError):
+            eliminar_borrador(self.ticket, self.usuario)
+
+    def test_no_se_puede_guardar_respuestacampo_directamente(self):
+        respuesta = RespuestaCampo.objects.get(
+            respuesta_formulario=self.ticket.respuesta_formulario, campo=self.campos["Texto"]
+        )
+        respuesta.valor_texto = "Modificado por ORM directo"
+        with self.assertRaises(ValidationError):
+            respuesta.save()
+
+    def test_no_se_puede_modificar_formulario_version_de_ticketservicio(self):
+        otra_version = crear_nueva_version(Formulario.objects.create(nombre="Otro"), actor=self.usuario)
+        self.ticket.detalle_servicio.formulario_version = otra_version
+        with self.assertRaises(ValidationError):
+            self.ticket.detalle_servicio.save()
+
+    def test_no_se_puede_modificar_formulario_version_de_respuestaformulario(self):
+        otra_version = crear_nueva_version(Formulario.objects.create(nombre="Otro"), actor=self.usuario)
+        self.ticket.respuesta_formulario.formulario_version = otra_version
+        with self.assertRaises(ValidationError):
+            self.ticket.respuesta_formulario.save()
+
+
+class InvariantesDeVersionEnRadicacionTests(TestCase):
+    def test_invariantes_de_version_se_preservan_tras_radicar(self):
+        usuario = Usuario.objects.create_user(username="sflores", password=CLAVE_PRUEBA)
+        servicio, version, campos = _crear_servicio_con_formulario(
+            usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
+        )
+        ticket = crear_borrador(usuario, servicio)
+        _completar_texto(ticket, usuario, campos)
+        radicar_ticket(ticket, usuario)
+
+        ticket.refresh_from_db()
+        detalle = ticket.detalle_servicio
+        respuesta_formulario = ticket.respuesta_formulario
+        self.assertEqual(detalle.formulario_version_id, respuesta_formulario.formulario_version_id)
+        for respuesta_campo in respuesta_formulario.respuestas_campo.select_related("campo"):
+            self.assertEqual(respuesta_campo.campo.version_id, respuesta_formulario.formulario_version_id)
+
+
+class RadicarViewTests(TestCase):
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="tnunez", password=CLAVE_PRUEBA)
+        self.otro_usuario = Usuario.objects.create_user(username="uvelez", password=CLAVE_PRUEBA)
+        self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
+            self.usuario,
+            [
+                {"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto", "obligatorio": True},
+                {"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Opcional"},
+            ],
+        )
+
+    def test_radicar_view_exitoso_redirige_al_detalle(self):
+        ticket = crear_borrador(self.usuario, self.servicio)
+        self.client.login(username="tnunez", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:radicar", args=[ticket.pk]), {f"campo_{self.campos['Texto'].id}": "Listo"}
+        )
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[ticket.pk]))
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+
+    def test_radicar_view_conserva_lo_guardado_si_falla_la_validacion(self):
+        ticket = crear_borrador(self.usuario, self.servicio)
+        self.client.login(username="tnunez", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:radicar", args=[ticket.pk]),
+            {f"campo_{self.campos['Opcional'].id}": "No se pierde"},
+        )
+        self.assertEqual(respuesta.status_code, 200)  # re-render con errores, no redirect
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.BORRADOR)
+        rc = RespuestaCampo.objects.get(
+            respuesta_formulario=ticket.respuesta_formulario, campo=self.campos["Opcional"]
+        )
+        self.assertEqual(rc.valor_texto, "No se pierde")
+
+    def test_actor_ajeno_recibe_403_al_radicar(self):
+        ticket = crear_borrador(self.usuario, self.servicio)
+        self.client.login(username="uvelez", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:radicar", args=[ticket.pk]), {f"campo_{self.campos['Texto'].id}": "x"}
+        )
+        self.assertEqual(respuesta.status_code, 403)
+
+
+class DetalleViewTests(TestCase):
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="vcorrea", password=CLAVE_PRUEBA)
+        self.otro_usuario = Usuario.objects.create_user(username="wgomez", password=CLAVE_PRUEBA)
+        self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
+            self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
+        )
+        self.ticket = crear_borrador(self.usuario, self.servicio)
+        _completar_texto(self.ticket, self.usuario, self.campos)
+        radicar_ticket(self.ticket, self.usuario)
+
+    def test_propietario_ve_el_detalle(self):
+        self.client.login(username="vcorrea", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertEqual(respuesta.status_code, 200)
+
+    def test_usuario_ajeno_recibe_403_en_detalle(self):
+        self.client.login(username="wgomez", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertEqual(respuesta.status_code, 403)
+
+    def test_detalle_de_un_borrador_redirige_al_formulario_editable(self):
+        borrador = crear_borrador(self.usuario, self.servicio)
+        self.client.login(username="vcorrea", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[borrador.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:borrador", args=[borrador.pk]))
+
+    def test_mis_tickets_incluye_borradores_y_radicados(self):
+        crear_borrador(self.usuario, self.servicio)
+        self.client.login(username="vcorrea", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:mis_tickets"))
+        estados = {t.estado for t in respuesta.context["tickets"]}
+        self.assertEqual(estados, {Ticket.Estado.BORRADOR, Ticket.Estado.RADICADO})

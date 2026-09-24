@@ -120,7 +120,10 @@ class EstrategiaNumerica(EstrategiaCampo):
     def normalizar(self, valor):
         if valor in (None, ""):
             return None
-        return float(valor)
+        try:
+            return float(valor)
+        except (TypeError, ValueError) as exc:
+            raise ValidationError("El valor debe ser numérico.") from exc
 
     def validar_valor(self, campo, valor):
         numero = self.normalizar(valor)

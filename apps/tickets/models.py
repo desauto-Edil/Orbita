@@ -1,11 +1,17 @@
-"""Ticket — incremento 2.1: modelo base y borradores (CU-014 parcial,
-CU-015; RQF-049/050/051; RN-015).
+"""Ticket — incrementos 2.1 (modelo base y borradores) y 2.2 (radicación y
+respuestas). CU-014, CU-015; RQF-049/050/051/053/054; RN-014/015/016.
 
-Solo el ciclo BORRADOR está operativo aquí: `estado` declara ya el enum
-completo (RADICADO/EN_ATENCION/RESUELTO/CERRADO/CANCELADO) porque es una
-propiedad estructural de Ticket (RQF-048), pero ningún valor distinto de
-BORRADOR se produce todavía — radicar, generar `radicado` y validar
-obligatoriedad (RQF-053/054) son 2.2, no se adelantan.
+Desde 2.2, `estado` también produce RADICADO (vía
+`apps.tickets.operaciones.radicar_ticket`) — EN_ATENCION/RESUELTO/CERRADO/
+CANCELADO siguen sin producirse (2.3+).
+
+**Inmutabilidad posterior a la radicación (2.2)**: `Ticket.exigir_editable()`
+bloquea las vías ordinarias de escritura de `RespuestaCampo`/
+`ArchivoRespuestaCampo` una vez el ticket deja de estar en BORRADOR — mismo
+alcance documentado que el resto del proyecto (protege `save()`, no
+`QuerySet.update()`/bulk). `TicketServicio`/`RespuestaFormulario` además
+impiden que su `formulario_version` congelada cambie una vez creado el
+registro, sin importar el estado del ticket.
 
 **`RespuestaFormulario` cuelga de `Ticket`, no de `TicketServicio`** —
 mismo criterio de transversalidad ya aplicado a `Formulario` en 1.2: si en
@@ -69,12 +75,30 @@ class Ticket(RegistroBase):
     )
     estado = models.CharField(max_length=20, choices=Estado.choices, default=Estado.BORRADOR)
     origen = models.CharField(max_length=20, choices=Origen.choices, default=Origen.MANUAL)
+    # RN-014 (unicidad) — UUID4 sin prefijo/año/formato empresarial (el
+    # Excel solo exige unicidad, ver propuesta 2.2 aprobada). NULL mientras
+    # es BORRADOR; Postgres no colisiona múltiples NULL en una constraint
+    # unique, así que no hace falta un índice parcial.
+    radicado = models.UUIDField(null=True, blank=True, unique=True, editable=False)
+    # RN-016 — siempre `timezone.now()` en `operaciones.radicar_ticket`,
+    # nunca un valor recibido del cliente.
+    radicado_en = models.DateTimeField(null=True, blank=True, editable=False)
 
     def exigir_eliminable(self):
         if self.estado != Ticket.Estado.BORRADOR:
             raise ValidationError(
                 "Solo un ticket en estado BORRADOR puede eliminarse físicamente por las vías "
                 "ordinarias de dominio."
+            )
+
+    def exigir_editable(self):
+        """2.2 — una vez el ticket deja de estar en BORRADOR (radicado o
+        más allá), sus respuestas/archivos quedan inmutables por las vías
+        ordinarias. Consultado por `RespuestaCampo`/`ArchivoRespuestaCampo`
+        además del chequeo temprano de `operaciones.guardar_respuestas_borrador`."""
+        if self.estado != Ticket.Estado.BORRADOR:
+            raise ValidationError(
+                "Solo se puede modificar el contenido de un ticket mientras está en BORRADOR."
             )
 
     def delete(self, *args, **kwargs):
@@ -103,6 +127,23 @@ class TicketServicio(RegistroBase):
         FormularioVersion, on_delete=models.PROTECT, related_name="tickets_servicio"
     )
 
+    def _exigir_formulario_version_inmutable(self):
+        if self.pk is None:
+            return
+        anterior_id = TicketServicio.objects.filter(pk=self.pk).values_list(
+            "formulario_version_id", flat=True
+        ).first()
+        if anterior_id is not None and anterior_id != self.formulario_version_id:
+            raise ValidationError(
+                "La FormularioVersion congelada de un TicketServicio no puede modificarse "
+                "después de creado (2.2 — invariante TicketServicio.formulario_version == "
+                "RespuestaFormulario.formulario_version)."
+            )
+
+    def save(self, *args, **kwargs):
+        self._exigir_formulario_version_inmutable()
+        super().save(*args, **kwargs)
+
     def __str__(self):
         return f"{self.servicio} — {self.ticket}"
 
@@ -112,6 +153,22 @@ class RespuestaFormulario(RegistroBase):
     formulario_version = models.ForeignKey(
         FormularioVersion, on_delete=models.PROTECT, related_name="respuestas_formulario"
     )
+
+    def _exigir_formulario_version_inmutable(self):
+        if self.pk is None:
+            return
+        anterior_id = RespuestaFormulario.objects.filter(pk=self.pk).values_list(
+            "formulario_version_id", flat=True
+        ).first()
+        if anterior_id is not None and anterior_id != self.formulario_version_id:
+            raise ValidationError(
+                "La FormularioVersion congelada de una RespuestaFormulario no puede modificarse "
+                "después de creada (2.2 — misma invariante que TicketServicio)."
+            )
+
+    def save(self, *args, **kwargs):
+        self._exigir_formulario_version_inmutable()
+        super().save(*args, **kwargs)
 
     def __str__(self):
         return f"Respuestas de {self.ticket}"
@@ -207,6 +264,7 @@ class RespuestaCampo(RegistroBase):
 
     def save(self, *args, **kwargs):
         self.exigir_integridad()
+        self.respuesta_formulario.ticket.exigir_editable()
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -242,6 +300,7 @@ class ArchivoRespuestaCampo(RegistroBase):
 
     def save(self, *args, **kwargs):
         self.exigir_integridad()
+        self.respuesta_campo.respuesta_formulario.ticket.exigir_editable()
         super().save(*args, **kwargs)
 
     def __str__(self):

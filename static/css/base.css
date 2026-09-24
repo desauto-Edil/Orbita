@@ -43,6 +43,17 @@ p {
   color: var(--text-muted);
 }
 
+.text-danger {
+  color: var(--danger);
+}
+
+.field-errors {
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+  font-size: var(--text-sm, 0.875rem);
+}
+
 a {
   color: var(--text);
   text-decoration-color: var(--border);

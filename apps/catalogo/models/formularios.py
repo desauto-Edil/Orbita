@@ -31,7 +31,7 @@ from django.db import models
 from django.db.models import UniqueConstraint
 
 from apps.catalogo.campos import ESTRATEGIAS_POR_TIPO
-from apps.catalogo.reglas import validar_integridad_regla
+from apps.catalogo.reglas import validar_composicion_reglas, validar_integridad_regla
 from apps.core.models import RegistroBase
 
 
@@ -181,9 +181,14 @@ class ReglaCondicional(RegistroBase):
 
     def clean(self):
         validar_integridad_regla(self)
+        validar_composicion_reglas(self)
 
     def save(self, *args, **kwargs):
         self.campo_origen.version.exigir_editable()
+        # 2.2: impide configuraciones contradictorias (MOSTRAR+OCULTAR,
+        # REQUERIR+NO_REQUERIR sobre el mismo objetivo) desde el momento en
+        # que se configura la regla, no solo al radicar — ver reglas.py.
+        validar_composicion_reglas(self)
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
