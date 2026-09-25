@@ -53,7 +53,7 @@
   --shadow-md: 0 6px 20px rgba(23, 24, 27, 0.08);
   --shadow-lg: 0 20px 48px rgba(23, 24, 27, 0.14);
 
-  /* Glass — sidebar, topbar, dropdowns y superficies flotantes/overlays.
+  /* Glass — dock, topbar, popovers y superficies flotantes/overlays.
      Nunca en cards/formularios/tablas: esas siguen sólidas (--surface). */
   --glass-blur: 20px;
   --glass-blur-sm: 12px;
@@ -98,7 +98,7 @@
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
 
   /* Shell */
-  --sidebar-w: 220px;
-  --sidebar-w-collapsed: 72px;
   --topbar-h: 64px;
+  --dock-h: 56px;
+  --dock-clearance: 128px;
 }

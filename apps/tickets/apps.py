@@ -10,13 +10,16 @@ class TicketsConfig(AppConfig):
     def ready(self):
         from django.db.models.signals import pre_delete
 
-        from apps.tickets.models import ArchivoRespuestaCampo, eliminar_archivo_fisico
+        from apps.tickets.models import Adjunto, ArchivoRespuestaCampo, eliminar_archivo_fisico
 
         # Señal explícita, mismo criterio que 0.4 (`apps/core/auditoria.py`):
-        # sin infraestructura genérica, solo este modelo conecta su propia
-        # señal. Necesaria porque un `ticket.delete()` en cascada NO llama al
-        # `.delete()` de Python de cada fila hija (Django usa un Collector a
-        # nivel SQL) — solo `pre_delete` se dispara de forma confiable tanto
-        # en cascada como en un delete directo, y es donde se borra el
-        # archivo físico del storage antes de perder la fila que lo referencia.
+        # sin infraestructura genérica, cada modelo con archivo conecta la
+        # misma función (genérica) por separado. Necesaria porque un
+        # `ticket.delete()` en cascada NO llama al `.delete()` de Python de
+        # cada fila hija (Django usa un Collector a nivel SQL) — solo
+        # `pre_delete` se dispara de forma confiable tanto en cascada como
+        # en un delete directo, y es donde se borra el archivo físico del
+        # storage antes de perder la fila que lo referencia.
         pre_delete.connect(eliminar_archivo_fisico, sender=ArchivoRespuestaCampo)
+        # 2.4 — Adjunto operativo (Ticket/Comentario/Solicitud/Respuesta).
+        pre_delete.connect(eliminar_archivo_fisico, sender=Adjunto)

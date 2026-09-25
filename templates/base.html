@@ -12,14 +12,46 @@
 <body>
   <a class="skip-link" href="#main-content">Saltar al contenido</a>
 
-  <div class="app-shell">
-    {% if user.is_authenticated %}{% include "layout/sidebar.html" %}{% endif %}
-    <div class="app-shell__main">
-      {% if user.is_authenticated %}{% include "layout/topbar.html" %}{% endif %}
-      <main class="{% if user.is_authenticated %}content-area{% else %}bare-content{% endif %}" id="main-content">
-        {% block content %}{% endblock %}
-      </main>
+  {% if messages %}
+    <div class="messages" aria-live="polite">
+      {% for message in messages %}
+        <div class="alert alert--{{ message.tags|default:'info' }}" role="alert">
+          <span class="alert__icon" aria-hidden="true">
+            {% if message.tags == "success" %}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9"/>
+                <path d="m8.5 12.5 2.5 2.5 5-5"/>
+              </svg>
+            {% elif message.tags == "danger" %}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9"/>
+                <path d="m9 9 6 6M15 9l-6 6"/>
+              </svg>
+            {% elif message.tags == "warning" %}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 3.5 2 20h20L12 3.5Z"/>
+                <path d="M12 10v4M12 17.5h.01"/>
+              </svg>
+            {% else %}
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="9"/>
+                <path d="M12 11v5M12 7.5h.01"/>
+              </svg>
+            {% endif %}
+          </span>
+          <span class="alert__text">{{ message }}</span>
+          <button type="button" class="alert__close" data-action="cerrar-mensaje" aria-label="Cerrar mensaje">&times;</button>
+        </div>
+      {% endfor %}
     </div>
+  {% endif %}
+
+  <div class="app-shell">
+    {% if user.is_authenticated %}{% include "layout/topbar.html" %}{% endif %}
+    <main class="{% if user.is_authenticated %}content-area {% block content_modifier %}{% endblock %}{% else %}bare-content{% endif %}" id="main-content">
+      {% block content %}{% endblock %}
+    </main>
+    {% if user.is_authenticated %}{% include "layout/dock.html" %}{% endif %}
   </div>
 
   <script src="{% static 'js/app.js' %}" defer></script>

@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Cola de atención — Órbita{% endblock %}
+
+{% block content_modifier %}content-area--wide{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h1>Cola de atención</h1>
+    <p class="text-muted">Tickets que puedes atender según tu autorización.</p>
+  </section>
+
+  {% if tickets %}
+    <section class="card">
+      <ul class="plain-list">
+        {% for ticket in tickets %}
+          <li>
+            <a href="{% url 'tickets:detalle' ticket.pk %}">{{ ticket.detalle_servicio.servicio.nombre }}</a>
+            <span class="badge badge--info">{{ ticket.get_estado_display }}</span>
+            <span class="text-muted">
+              {% if ticket.usuario_responsable %}{{ ticket.usuario_responsable }}
+              {% elif ticket.equipo_responsable %}{{ ticket.equipo_responsable }}
+              {% else %}Sin responsable{% endif %}
+            </span>
+            <span class="text-muted">{{ ticket.radicado_en|date:"d/m/Y H:i" }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% else %}
+    <div class="empty-state">
+      <p>No hay tickets en tu cola de atención.</p>
+    </div>
+  {% endif %}
+{% endblock %}

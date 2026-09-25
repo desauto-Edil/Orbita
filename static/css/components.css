@@ -1,6 +1,6 @@
 /* Órbita — componentes base (Incremento 0.5).
    Resueltos como clases reutilizables, no como un partial por elemento:
-   solo se separan en su propio template las estructuras (sidebar, topbar)
+   solo se separan en su propio template las estructuras (topbar, dock)
    que realmente lo justifican. */
 
 /* --- Botón --- */
@@ -157,6 +157,9 @@
 /* --- Alert --- */
 
 .alert {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
   padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
   font-size: var(--text-sm);
@@ -165,6 +168,63 @@
 .alert--danger { background: var(--danger-soft); color: var(--danger); }
 .alert--success { background: var(--success-soft); color: var(--success); }
 .alert--info { background: var(--info-soft); color: var(--info); }
+.alert--warning { background: var(--warning-soft); color: var(--warning); }
+
+.alert__icon {
+  flex-shrink: 0;
+  display: flex;
+  margin-top: 1px;
+}
+
+.alert__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.alert__text {
+  flex: 1;
+}
+
+.alert__close {
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  color: inherit;
+  font-size: var(--text-md);
+  line-height: 1;
+  padding: 0;
+  opacity: 0.7;
+}
+
+.alert__close:hover {
+  opacity: 1;
+}
+
+/* --- Mensajes globales del shell (Django messages, 2.C) --- */
+
+.messages {
+  position: fixed;
+  top: calc(var(--topbar-h) + var(--space-3));
+  right: var(--space-4);
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(360px, calc(100% - var(--space-8)));
+}
+
+.messages .alert {
+  box-shadow: var(--shadow-md);
+}
+
+@media (max-width: 639px) {
+  .messages {
+    left: var(--space-3);
+    right: var(--space-3);
+    width: auto;
+  }
+}
 
 /* --- Avatar --- */
 
@@ -190,69 +250,6 @@
   border-radius: var(--radius-lg);
   color: var(--text-muted);
   text-align: center;
-}
-
-/* --- Dropdown --- */
-
-.dropdown {
-  position: relative;
-}
-
-.dropdown__toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  background: transparent;
-  border: none;
-  cursor: pointer;
-  padding: var(--space-2);
-  border-radius: var(--radius-pill);
-  color: var(--text);
-}
-
-.dropdown__toggle:hover {
-  background: var(--surface-sunken);
-}
-
-.dropdown__menu {
-  position: absolute;
-  right: 0;
-  top: calc(100% + var(--space-2));
-  min-width: 180px;
-  background: var(--glass-light-bg);
-  -webkit-backdrop-filter: blur(var(--glass-blur-sm));
-  backdrop-filter: blur(var(--glass-blur-sm));
-  border: 1px solid var(--glass-light-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--glass-shadow);
-  padding: var(--space-2);
-  z-index: 50;
-}
-
-@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .dropdown__menu {
-    background: var(--glass-light-bg-fallback);
-  }
-}
-
-.dropdown__menu a,
-.dropdown__menu button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  border: none;
-  background: transparent;
-  color: var(--text);
-  font-size: var(--text-sm);
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.dropdown__menu a:hover,
-.dropdown__menu button:hover {
-  background: var(--surface-sunken);
 }
 
 /* --- Listas de definición / planas (perfil, inicio) --- */

@@ -175,3 +175,69 @@ class ServicioResponsable(RegistroBase):
 
     def __str__(self):
         return f"{self.servicio} — {self.tipo_responsable}"
+
+
+class ServicioContextoAtencion(RegistroBase):
+    """Contexto organizacional de enrutamiento de atención. RQF-061 (CU-017),
+    decisión aprobada 2.3 (alternativa B de la micropropuesta).
+
+    Responde exclusivamente "¿en qué área/unidad se atiende operativamente
+    este servicio?" — deliberadamente separado de `ServicioResponsable`
+    (RQF-033, "quién puede atender") y de la asignación concreta del Ticket
+    (`Ticket.usuario_responsable`/`equipo_responsable`, "quién atiende ESTE
+    caso"). Coincidir con un contexto AREA/UNIDAD nunca concede por sí solo
+    capacidad de atender (RQF-028, RN-009) — solo acota el alcance que
+    evalúa el permiso `tickets.atender`; la capacidad real de tomar sigue
+    viniendo de `ServicioResponsable`/la relación operacional vigente (ver
+    `apps.tickets.autorizacion`).
+
+    Un servicio transversal admite múltiples filas activas simultáneas
+    (varias AREA y/o varias UNIDAD) — no se impone cardinalidad 1, mismo
+    criterio que el resto del modelo organizacional (RN-003/004/005). No
+    existe un tipo de alcance GLOBAL aquí: la ausencia de filas no equivale
+    a alcance global (esa lectura fue rechazada explícitamente) — un Ticket
+    sin contextos configurados sigue siendo alcanzable solo por relaciones
+    directas o por `tickets.atender` en alcance GLOBAL.
+    """
+
+    class TipoAlcance(models.TextChoices):
+        AREA = "AREA", "Área"
+        UNIDAD = "UNIDAD", "Unidad de negocio"
+
+    servicio = models.ForeignKey(Servicio, on_delete=models.CASCADE, related_name="contextos_atencion")
+    tipo_alcance = models.CharField(max_length=10, choices=TipoAlcance.choices)
+    area = models.ForeignKey(
+        Area, on_delete=models.CASCADE, null=True, blank=True, related_name="contextos_atencion_servicio"
+    )
+    unidad_negocio = models.ForeignKey(
+        UnidadNegocio,
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name="contextos_atencion_servicio",
+    )
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                check=(
+                    Q(tipo_alcance="AREA", area__isnull=False, unidad_negocio__isnull=True)
+                    | Q(tipo_alcance="UNIDAD", unidad_negocio__isnull=False, area__isnull=True)
+                ),
+                name="ck_contextoatencion_alcance_coherente",
+            ),
+            UniqueConstraint(
+                fields=["servicio", "area"],
+                condition=Q(activo=True, tipo_alcance="AREA"),
+                name="uq_contextoatencion_area_activo",
+            ),
+            UniqueConstraint(
+                fields=["servicio", "unidad_negocio"],
+                condition=Q(activo=True, tipo_alcance="UNIDAD"),
+                name="uq_contextoatencion_unidad_activo",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.servicio} — {self.tipo_alcance}"

@@ -1,0 +1,74 @@
+<nav class="dock" aria-label="Navegación principal">
+  <ul class="dock__list">
+    {% for item in nav_items %}
+      {% if not item.en_mas %}
+        <li>
+          <a class="dock__item{% if item.url_name == nav_item_activo %} is-active{% endif %}"
+             href="{% url item.url_name %}"
+             title="{{ item.etiqueta }}"
+             {% if item.url_name == nav_item_activo %}aria-current="page"{% endif %}>
+            <span class="dock__icon" aria-hidden="true">
+              {% if item.icono == "home" %}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 11.5 12 4l8 7.5"/>
+                  <path d="M6 10v9a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1v-9"/>
+                </svg>
+              {% elif item.icono == "servicios" %}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="3" width="8" height="8" rx="2"/>
+                  <rect x="13" y="3" width="8" height="8" rx="2"/>
+                  <rect x="3" y="13" width="8" height="8" rx="2"/>
+                  <rect x="13" y="13" width="8" height="8" rx="2"/>
+                </svg>
+              {% elif item.icono == "tickets" %}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 7a2 2 0 0 1 2-2h12a2 2 0 0 1 2 2v2a2 2 0 0 0 0 6v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-2a2 2 0 0 0 0-6V7Z"/>
+                  <path d="M10 6v12" stroke-dasharray="2 2"/>
+                </svg>
+              {% elif item.icono == "cola" %}
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 4h16l-1.5 9H5.5L4 4Z"/>
+                  <path d="M5.5 13 6.5 20h11l1-7"/>
+                  <path d="M9 13a3 3 0 0 0 6 0"/>
+                </svg>
+              {% endif %}
+            </span>
+            <span class="dock__label">{{ item.etiqueta }}</span>
+          </a>
+        </li>
+      {% endif %}
+    {% endfor %}
+
+    {% if user.is_authenticated %}
+      <li class="dock__item-wrap">
+        <button type="button"
+                class="dock__item dock__item--more{% if nav_item_activo == "admin:index" or request.resolver_match.view_name == "core:perfil" %} is-active{% endif %}"
+                data-action="toggle-more"
+                aria-haspopup="true"
+                aria-expanded="false"
+                aria-controls="dock-more">
+          <span class="dock__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="currentColor">
+              <circle cx="5" cy="12" r="1.75"/>
+              <circle cx="12" cy="12" r="1.75"/>
+              <circle cx="19" cy="12" r="1.75"/>
+            </svg>
+          </span>
+          <span class="dock__label">Más</span>
+        </button>
+        <div class="dock__popover" id="dock-more" role="menu" hidden>
+          {% for item in nav_items %}
+            {% if item.en_mas %}
+              <a role="menuitem" href="{% url item.url_name %}">{{ item.etiqueta }}</a>
+            {% endif %}
+          {% endfor %}
+          <a role="menuitem" href="{% url 'core:perfil' %}">Mi perfil</a>
+          <form method="post" action="{% url 'core:logout' %}" role="none">
+            {% csrf_token %}
+            <button type="submit" role="menuitem">Cerrar sesión</button>
+          </form>
+        </div>
+      </li>
+    {% endif %}
+  </ul>
+</nav>

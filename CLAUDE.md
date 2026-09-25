@@ -55,6 +55,15 @@ Roles iniciales: Usuario, Ejecutor, Aprobador, Gestor de Servicios, Gestor de Pr
 
 Los permisos combinan **ROL + ALCANCE + RELACIÓN CON EL OBJETO**. Alcances: `GLOBAL`, `AREA`, `UNIDAD`, `SERVICIO`, `PROCESO` (estos dos últimos solo cuando existan esos modelos). Ser solicitante/responsable de un ticket/tarea o participante de una gaceta **no** constituye un rol global.
 
+## Autenticación
+
+El login local de Django (usuario/contraseña) es **provisional**. Pendiente al cierre/integración final del proyecto:
+
+- **2.UI.2 — Preparación SSO.**
+- **2.UI.3 — OIDC real + integración con Intranet.**
+
+Objetivo futuro: un usuario autenticado corporativamente entra desde la Intranet/un enlace directo, no vuelve a introducir credenciales, y Órbita resuelve la autorización local (roles/alcances) sobre esa identidad ya autenticada externamente. No se implementa nada de OAuth/OIDC/SSO hasta que se llegue explícitamente a esos incrementos.
+
 ## Decisiones estructurales de Sprint 0 (vigentes para todo el proyecto salvo que se revisen explícitamente)
 
 - **Una sola app Django `apps.core`** para Sistema/Organización/Permisos/Auditoría — no `cuentas`/`organizacion`/`permisos`/`auditoria` separadas. Futuras apps de dominio (tickets, procesos, workflows...) se evalúan cuando lleguen a su sprint.

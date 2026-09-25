@@ -45,6 +45,7 @@ from apps.catalogo.models import (
     OpcionCampo,
     ReglaCondicional,
     Servicio,
+    ServicioContextoAtencion,
     ServicioResponsable,
     ServicioVisibilidad,
 )
@@ -102,19 +103,28 @@ class ServicioResponsableInline(admin.TabularInline):
     extra = 1
 
 
+class ServicioContextoAtencionInline(admin.TabularInline):
+    """RQF-061 (CU-017, 2.3) — enrutamiento por área/unidad, deliberadamente
+    separado del inline de `ServicioResponsable` (ver docstring del modelo:
+    dos responsabilidades distintas, nunca una misma fila)."""
+
+    model = ServicioContextoAtencion
+    extra = 1
+
+
 @admin.register(Servicio)
 class ServicioAdmin(PermisoGlobalAdminMixin, AdminAuditableMixin, admin.ModelAdmin):
     permiso_codigo = "catalogo.administrar"
     list_display = ("nombre", "categoria", "formulario", "alcance_visibilidad", "activo")
     list_filter = ("categoria", "alcance_visibilidad", "activo")
     search_fields = ("nombre",)
-    inlines = [ServicioVisibilidadInline, ServicioResponsableInline]
+    inlines = [ServicioVisibilidadInline, ServicioResponsableInline, ServicioContextoAtencionInline]
 
     def save_formset(self, request, form, formset, change):
-        """`ServicioVisibilidad`/`ServicioResponsable` son inlines, no pasan
-        por `save_model` — sin este override quedarían sin auditar (RQF-120).
-        """
-        if formset.model not in (ServicioVisibilidad, ServicioResponsable):
+        """`ServicioVisibilidad`/`ServicioResponsable`/`ServicioContextoAtencion`
+        son inlines, no pasan por `save_model` — sin este override
+        quedarían sin auditar (RQF-120)."""
+        if formset.model not in (ServicioVisibilidad, ServicioResponsable, ServicioContextoAtencion):
             super().save_formset(request, form, formset, change)
             return
         guardar_formset_auditado(request, formset)

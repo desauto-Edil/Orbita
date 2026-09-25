@@ -22,6 +22,7 @@ from apps.catalogo.models import (
     OpcionCampo,
     ReglaCondicional,
     Servicio,
+    ServicioContextoAtencion,
     ServicioResponsable,
     ServicioVisibilidad,
 )
@@ -211,6 +212,82 @@ class ServicioResponsableTests(TestCase):
         area = Area.objects.create(nombre="TIC", codigo="TIC-RESP")
         UsuarioArea.objects.create(usuario=self.usuario, area=area)
         self.assertEqual(self.servicio.responsables.count(), 0)
+
+
+class ServicioContextoAtencionTests(TestCase):
+    """RQF-061, RQF-028, RN-009 — integridad de `ServicioContextoAtencion`
+    (2.3, alternativa B aprobada). Mismo patrón de constraints que
+    `ServicioVisibilidad`/`ServicioResponsable`: CheckConstraint de
+    coherencia + UniqueConstraint parcial independiente por rama."""
+
+    def setUp(self):
+        categoria = Categoria.objects.create(nombre="Tecnología")
+        self.servicio = Servicio.objects.create(nombre="Soporte técnico", categoria=categoria)
+        self.area = Area.objects.create(nombre="TIC", codigo="TIC-CTX")
+        self.otra_area = Area.objects.create(nombre="Financiera", codigo="FIN-CTX")
+        self.unidad = UnidadNegocio.objects.create(nombre="Infraestructura", codigo="INFRA-CTX")
+
+    def test_constraint_area_exige_area_y_rechaza_unidad(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ServicioContextoAtencion.objects.create(
+                    servicio=self.servicio,
+                    tipo_alcance=ServicioContextoAtencion.TipoAlcance.AREA,
+                    unidad_negocio=self.unidad,
+                )
+
+    def test_constraint_unidad_exige_unidad_y_rechaza_area(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ServicioContextoAtencion.objects.create(
+                    servicio=self.servicio,
+                    tipo_alcance=ServicioContextoAtencion.TipoAlcance.UNIDAD,
+                    area=self.area,
+                )
+
+    def test_no_permite_duplicar_contexto_area_activo(self):
+        ServicioContextoAtencion.objects.create(
+            servicio=self.servicio, tipo_alcance=ServicioContextoAtencion.TipoAlcance.AREA, area=self.area
+        )
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ServicioContextoAtencion.objects.create(
+                    servicio=self.servicio,
+                    tipo_alcance=ServicioContextoAtencion.TipoAlcance.AREA,
+                    area=self.area,
+                )
+
+    def test_no_permite_duplicar_contexto_unidad_activo(self):
+        ServicioContextoAtencion.objects.create(
+            servicio=self.servicio,
+            tipo_alcance=ServicioContextoAtencion.TipoAlcance.UNIDAD,
+            unidad_negocio=self.unidad,
+        )
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                ServicioContextoAtencion.objects.create(
+                    servicio=self.servicio,
+                    tipo_alcance=ServicioContextoAtencion.TipoAlcance.UNIDAD,
+                    unidad_negocio=self.unidad,
+                )
+
+    def test_servicio_transversal_admite_varios_contextos_simultaneos(self):
+        # Un servicio transversal conserva varias AREA (y/o UNIDAD) a la
+        # vez — no hay cardinalidad 1 impuesta (RN-003/004/005).
+        ServicioContextoAtencion.objects.create(
+            servicio=self.servicio, tipo_alcance=ServicioContextoAtencion.TipoAlcance.AREA, area=self.area
+        )
+        ServicioContextoAtencion.objects.create(
+            servicio=self.servicio,
+            tipo_alcance=ServicioContextoAtencion.TipoAlcance.AREA,
+            area=self.otra_area,
+        )
+        ServicioContextoAtencion.objects.create(
+            servicio=self.servicio,
+            tipo_alcance=ServicioContextoAtencion.TipoAlcance.UNIDAD,
+            unidad_negocio=self.unidad,
+        )
+        self.assertEqual(self.servicio.contextos_atencion.filter(activo=True).count(), 3)
 
 
 class VisibilidadCatalogoTests(TestCase):
@@ -423,6 +500,13 @@ class CatalogoAuditoriaTests(TestCase):
             "responsables-INITIAL_FORMS": "0",
             "responsables-MIN_NUM_FORMS": "0",
             "responsables-MAX_NUM_FORMS": "1000",
+            # 2.3: `ServicioContextoAtencionInline` — sin su management form
+            # el POST de Admin re-renderiza con errores (200) en vez de
+            # redirigir (302), aunque el inline se deje vacío.
+            "contextos_atencion-TOTAL_FORMS": "0",
+            "contextos_atencion-INITIAL_FORMS": "0",
+            "contextos_atencion-MIN_NUM_FORMS": "0",
+            "contextos_atencion-MAX_NUM_FORMS": "1000",
         }
         respuesta = self.client.post(reverse("admin:catalogo_servicio_add"), datos)
         self.assertEqual(respuesta.status_code, 302)

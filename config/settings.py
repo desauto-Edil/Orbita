@@ -103,6 +103,16 @@ LOGIN_URL = "core:login"
 LOGIN_REDIRECT_URL = "core:inicio"
 LOGOUT_REDIRECT_URL = "core:login"
 
+# 2.C — el shell renderiza `messages` con clases `alert--<tag>`; se remapea
+# ERROR a "danger" para reutilizar los tokens/clases ya existentes
+# (--danger, .alert--danger, .badge--danger) en vez de introducir "error"
+# como una excepción de nomenclatura aislada.
+from django.contrib.messages import constants as message_constants  # noqa: E402
+
+MESSAGE_TAGS = {
+    message_constants.ERROR: "danger",
+}
+
 LANGUAGE_CODE = "es"
 TIME_ZONE = env("TIME_ZONE", default="UTC")
 CELERY_TIMEZONE = TIME_ZONE

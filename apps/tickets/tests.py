@@ -1,5 +1,7 @@
-"""Pruebas de `apps.tickets` — incrementos 2.1 (modelo base y borradores) y
-2.2 (radicación y respuestas).
+"""Pruebas de `apps.tickets` — incrementos 2.1 (modelo base y borradores),
+2.2 (radicación y respuestas), 2.3 (atención y asignación), 2.4
+(comunicación, adjuntos operativos y solicitud de información) y 2.5
+(resolución, cierre, cancelación y reapertura).
 
 Único archivo de pruebas de esta app (misma decisión que `apps.core` y
 `apps.catalogo`: sin paquete `tests/`). No se ejecutan como parte de la
@@ -9,32 +11,144 @@ vía Docker; las corre el usuario.
 2.2 agrega: radicar, `radicado`/`radicado_en`, validación final
 (obligatoriedad dinámica vía REQUERIR/NO_REQUERIR, campos ocultos nunca
 obligatorios), inmutabilidad posterior a la radicación e invariantes de
-versión. Atención, comentarios y `HistorialTicket` siguen siendo 2.3+ y no
-se prueban aquí.
+versión. 2.3 agrega: `ServicioContextoAtencion`→`TicketContextoAtencion`
+(snapshot al radicar), `estados.py` (State), autorización de atención
+(`tickets.atender` GLOBAL/AREA/UNIDAD + relación operacional),
+tomar/asignar/reasignar, concurrencia (`TransactionTestCase` + hilos reales
+contra Postgres) y `HistorialTicket`. 2.4 agrega: `ComentarioTicket`
+(cronológico, sin threading), `Adjunto` (TICKET/COMENTARIO/SOLICITUD/
+RESPUESTA_SOLICITUD, `CheckConstraint` de coherencia), `SolicitudInformacion`
++ `RespuestaSolicitudInformacion` (una respuesta final, `OneToOneField`),
+autorización de participación separada de consulta
+(`puede_comentar_ticket`/`puede_solicitar_informacion`/
+`puede_responder_solicitud` ≠ `puede_consultar_ticket`), concurrencia de
+`responder_solicitud` y la corrección de `descargar_archivo_respuesta_view`
+para RQF-006. 2.5 agrega: `ResolucionTicket` (entidad propia, `OneToOneField`,
+adjuntos vía `Adjunto.TipoRelacion.RESOLUCION`), las 4 transiciones finales
+en `estados.py` (RESOLVER/CERRAR/CANCELAR/REABRIR), autorización de
+finalización (`puede_resolver_ticket`/`puede_cerrar_ticket`/
+`puede_cancelar_ticket`/`puede_reabrir_ticket` — ninguna se satisface solo
+con alcance de `tickets.atender`), bloqueo de RESOLVER por
+`SolicitudInformacion` pendiente, concurrencia de las 4 operaciones, y la
+integración doble `HistorialTicket` + `RegistroAuditoria` por transición.
 """
 
 import shutil
 import tempfile
+import threading
 import uuid
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.db import IntegrityError, transaction
-from django.test import TestCase, override_settings
+from django.db import IntegrityError, connection, transaction
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
-from apps.catalogo.models import Campo, Categoria, Formulario, OpcionCampo, ReglaCondicional, Servicio
+from apps.catalogo.models import (
+    Campo,
+    Categoria,
+    Formulario,
+    OpcionCampo,
+    ReglaCondicional,
+    Servicio,
+    ServicioContextoAtencion,
+    ServicioResponsable,
+)
 from apps.catalogo.versionamiento import activar_version, crear_nueva_version
-from apps.core.models import Area, UnidadNegocio
-from apps.tickets.autorizacion import es_propietario_borrador
-from apps.tickets.models import ArchivoRespuestaCampo, RespuestaCampo, RespuestaFormulario, Ticket, TicketServicio
-from apps.tickets.operaciones import crear_borrador, eliminar_borrador, guardar_respuestas_borrador, radicar_ticket
+from apps.core.models import (
+    Area,
+    AsignacionRol,
+    Equipo,
+    MiembroEquipo,
+    Permiso,
+    RegistroAuditoria,
+    RolFuncional,
+    RolPermiso,
+    UnidadNegocio,
+)
+from apps.tickets.autorizacion import (
+    es_propietario_borrador,
+    es_responsable_actual,
+    puede_asignar,
+    puede_cancelar_ticket,
+    puede_cerrar_ticket,
+    puede_comentar_ticket,
+    puede_consultar_ticket,
+    puede_reabrir_ticket,
+    puede_reasignar,
+    puede_resolver_ticket,
+    puede_responder_solicitud,
+    puede_solicitar_informacion,
+    puede_tomar,
+    puede_ver_en_cola,
+    usuario_es_responsable_configurado,
+)
+from apps.tickets.estados import exigir_transicion, puede_ejecutar
+from apps.tickets.models import (
+    Adjunto,
+    ArchivoRespuestaCampo,
+    ComentarioTicket,
+    HistorialTicket,
+    ResolucionTicket,
+    RespuestaCampo,
+    RespuestaFormulario,
+    RespuestaSolicitudInformacion,
+    SolicitudInformacion,
+    Ticket,
+    TicketServicio,
+)
+from apps.tickets.operaciones import (
+    adjuntar_archivo_ticket,
+    asignar_ticket,
+    cancelar_ticket,
+    cerrar_ticket,
+    comentar_ticket,
+    crear_borrador,
+    eliminar_borrador,
+    guardar_respuestas_borrador,
+    radicar_ticket,
+    reabrir_ticket,
+    reasignar_ticket,
+    resolver_ticket,
+    responder_solicitud,
+    solicitar_informacion,
+    tomar_ticket,
+)
 
 Usuario = get_user_model()
 
 CLAVE_PRUEBA = "Clave-Segura-123"
+
+
+def _otorgar_tickets_atender(usuario, *, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL, area=None, unidad_negocio=None):
+    """Helper de pruebas: crea un `RolFuncional` con el permiso
+    `tickets.atender` (sembrado por `0004_seed_permiso_tickets_atender`) y
+    lo asigna a `usuario` en el alcance indicado.
+
+    `get_or_create` (no `.get()`): las pruebas de concurrencia usan
+    `TransactionTestCase`, que hace `flush` de toda la base de datos al
+    terminar (TRUNCATE, no rollback de transacción) — eso incluye la fila
+    sembrada por la data migration. La siguiente clase `TransactionTestCase`
+    que corra necesita poder re-crearla."""
+    permiso, _ = Permiso.objects.get_or_create(
+        codigo="tickets.atender", defaults={"nombre": "Atender tickets (tomar, asignar, reasignar)"}
+    )
+    rol = RolFuncional.objects.create(nombre=f"Rol atender {usuario.username}")
+    RolPermiso.objects.create(rol=rol, permiso=permiso)
+    return AsignacionRol.objects.create(
+        usuario=usuario, rol=rol, tipo_alcance=tipo_alcance, area=area, unidad_negocio=unidad_negocio
+    )
+
+
+def _auditorias_de_ticket(ticket):
+    """Helper de pruebas 2.5: `RegistroAuditoria` generados sobre `ticket`
+    (auditoría transversal — distinta de `HistorialTicket`)."""
+    return RegistroAuditoria.objects.filter(
+        content_type=ContentType.objects.get_for_model(Ticket), object_id=ticket.pk
+    )
 
 
 class _MediaAisladaMixin:
@@ -972,3 +1086,1839 @@ class DetalleViewTests(TestCase):
         respuesta = self.client.get(reverse("tickets:mis_tickets"))
         estados = {t.estado for t in respuesta.context["tickets"]}
         self.assertEqual(estados, {Ticket.Estado.BORRADOR, Ticket.Estado.RADICADO})
+
+
+# ---------------------------------------------------------------------------
+# 2.3 — Atención y asignación (CU-016/CU-017)
+# ---------------------------------------------------------------------------
+
+
+class EstadosTests(TestCase):
+    """`apps/tickets/estados.py` — RN-018, única transición real de 2.3."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="xrivera", password=CLAVE_PRUEBA)
+        self.servicio, _, self.campos = _crear_servicio_con_formulario(
+            self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
+        )
+
+    def test_puede_ejecutar_tomar_desde_radicado(self):
+        ticket = crear_borrador(self.usuario, self.servicio)
+        _completar_texto(ticket, self.usuario, self.campos)
+        radicar_ticket(ticket, self.usuario)
+        ticket.refresh_from_db()
+        self.assertTrue(puede_ejecutar(ticket, "TOMAR"))
+        self.assertTrue(puede_ejecutar(ticket, "ASIGNAR_USUARIO"))
+
+    def test_no_puede_ejecutar_tomar_desde_borrador(self):
+        ticket = crear_borrador(self.usuario, self.servicio)
+        self.assertFalse(puede_ejecutar(ticket, "TOMAR"))
+
+    def test_no_existe_transicion_reasignar(self):
+        # Decisión explícita del usuario: REASIGNAR nunca es una transición
+        # de estado, ni siquiera EN_ATENCION -> EN_ATENCION.
+        ticket = Ticket(estado=Ticket.Estado.EN_ATENCION)
+        self.assertFalse(puede_ejecutar(ticket, "REASIGNAR"))
+
+    def test_exigir_transicion_aplica_el_estado_resultante(self):
+        ticket = Ticket(estado=Ticket.Estado.RADICADO)
+        exigir_transicion(ticket, "TOMAR")
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+
+    def test_exigir_transicion_lanza_validationerror_si_no_hay_transicion(self):
+        ticket = Ticket(estado=Ticket.Estado.EN_ATENCION)
+        with self.assertRaises(ValidationError):
+            exigir_transicion(ticket, "TOMAR")
+
+
+class ContextoAtencionSnapshotTests(TestCase):
+    """RQF-062/RN-019 — `radicar_ticket` congela los `ServicioContextoAtencion`
+    activos del servicio en `TicketContextoAtencion`, sin elegir uno solo
+    cuando el servicio es transversal."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="ysalazar", password=CLAVE_PRUEBA)
+        self.servicio, _, self.campos = _crear_servicio_con_formulario(
+            self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
+        )
+        self.area = Area.objects.create(nombre="TIC", codigo="TIC-SNAP")
+        self.unidad = UnidadNegocio.objects.create(nombre="Infraestructura", codigo="INFRA-SNAP")
+
+    def test_congela_todos_los_contextos_activos_del_servicio_transversal(self):
+        ServicioContextoAtencion.objects.create(
+            servicio=self.servicio, tipo_alcance=ServicioContextoAtencion.TipoAlcance.AREA, area=self.area
+        )
+        ServicioContextoAtencion.objects.create(
+            servicio=self.servicio,
+            tipo_alcance=ServicioContextoAtencion.TipoAlcance.UNIDAD,
+            unidad_negocio=self.unidad,
+        )
+        ticket = crear_borrador(self.usuario, self.servicio)
+        _completar_texto(ticket, self.usuario, self.campos)
+        radicar_ticket(ticket, self.usuario)
+
+        contextos = list(ticket.contextos_atencion.all())
+        self.assertEqual(len(contextos), 2)
+        tipos = {c.tipo_alcance for c in contextos}
+        self.assertEqual(tipos, {"AREA", "UNIDAD"})
+
+    def test_no_copia_contextos_inactivos(self):
+        ServicioContextoAtencion.objects.create(
+            servicio=self.servicio,
+            tipo_alcance=ServicioContextoAtencion.TipoAlcance.AREA,
+            area=self.area,
+            activo=False,
+        )
+        ticket = crear_borrador(self.usuario, self.servicio)
+        _completar_texto(ticket, self.usuario, self.campos)
+        radicar_ticket(ticket, self.usuario)
+        self.assertEqual(ticket.contextos_atencion.count(), 0)
+
+    def test_cambios_posteriores_en_la_configuracion_no_alteran_el_snapshot(self):
+        contexto = ServicioContextoAtencion.objects.create(
+            servicio=self.servicio, tipo_alcance=ServicioContextoAtencion.TipoAlcance.AREA, area=self.area
+        )
+        ticket = crear_borrador(self.usuario, self.servicio)
+        _completar_texto(ticket, self.usuario, self.campos)
+        radicar_ticket(ticket, self.usuario)
+
+        contexto.activo = False
+        contexto.save()
+        otra_area = Area.objects.create(nombre="Financiera", codigo="FIN-SNAP")
+        ServicioContextoAtencion.objects.create(
+            servicio=self.servicio, tipo_alcance=ServicioContextoAtencion.TipoAlcance.AREA, area=otra_area
+        )
+
+        snapshot = list(ticket.contextos_atencion.all())
+        self.assertEqual(len(snapshot), 1)
+        self.assertEqual(snapshot[0].area_id, self.area.id)
+
+    def test_sin_contextos_configurados_no_congela_nada(self):
+        ticket = crear_borrador(self.usuario, self.servicio)
+        _completar_texto(ticket, self.usuario, self.campos)
+        radicar_ticket(ticket, self.usuario)
+        self.assertEqual(ticket.contextos_atencion.count(), 0)
+
+
+class _EscenarioAtencionMixin:
+    """Base compartida por las pruebas de autorización/operaciones de 2.3:
+    un Servicio con un `ServicioResponsable` USUARIO directo, un
+    `ServicioResponsable` EQUIPO (con un miembro), un contexto AREA, y un
+    Ticket ya RADICADO con ese contexto congelado."""
+
+    def _preparar_escenario(self):
+        self.solicitante = Usuario.objects.create_user(username="solicitante23", password=CLAVE_PRUEBA)
+        self.responsable_directo = Usuario.objects.create_user(username="responsable23", password=CLAVE_PRUEBA)
+        self.miembro_equipo = Usuario.objects.create_user(username="miembro23", password=CLAVE_PRUEBA)
+        self.gestor_area = Usuario.objects.create_user(username="gestorarea23", password=CLAVE_PRUEBA)
+        self.gestor_otra_area = Usuario.objects.create_user(username="gestorotra23", password=CLAVE_PRUEBA)
+        self.ajeno = Usuario.objects.create_user(username="ajeno23", password=CLAVE_PRUEBA)
+
+        self.equipo = Equipo.objects.create(nombre="Mesa de ayuda 2.3")
+        MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.miembro_equipo, activo=True)
+
+        self.area = Area.objects.create(nombre="TIC", codigo="TIC-AT")
+        self.otra_area = Area.objects.create(nombre="Financiera", codigo="FIN-AT")
+
+        self.servicio, _, self.campos = _crear_servicio_con_formulario(
+            self.solicitante, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
+        )
+        ServicioResponsable.objects.create(
+            servicio=self.servicio,
+            tipo_responsable=ServicioResponsable.TipoResponsable.USUARIO,
+            usuario=self.responsable_directo,
+        )
+        ServicioResponsable.objects.create(
+            servicio=self.servicio, tipo_responsable=ServicioResponsable.TipoResponsable.EQUIPO, equipo=self.equipo
+        )
+        ServicioContextoAtencion.objects.create(
+            servicio=self.servicio, tipo_alcance=ServicioContextoAtencion.TipoAlcance.AREA, area=self.area
+        )
+
+        _otorgar_tickets_atender(self.responsable_directo)
+        _otorgar_tickets_atender(self.miembro_equipo)
+        _otorgar_tickets_atender(
+            self.gestor_area, tipo_alcance=AsignacionRol.TipoAlcance.AREA, area=self.area
+        )
+        _otorgar_tickets_atender(
+            self.gestor_otra_area, tipo_alcance=AsignacionRol.TipoAlcance.AREA, area=self.otra_area
+        )
+
+        self.ticket = crear_borrador(self.solicitante, self.servicio)
+        _completar_texto(self.ticket, self.solicitante, self.campos)
+        radicar_ticket(self.ticket, self.solicitante)
+        self.ticket.refresh_from_db()
+
+
+class AutorizacionAtencionTests(_EscenarioAtencionMixin, TestCase):
+    """RQF-061, RQF-028, RN-006/009 — `apps/tickets/autorizacion.py`."""
+
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_usuario_sin_permiso_no_ve_ni_puede_tomar(self):
+        self.assertFalse(puede_ver_en_cola(self.ajeno, self.ticket))
+        self.assertFalse(puede_tomar(self.ajeno, self.ticket))
+
+    def test_responsable_directo_configurado_puede_tomar(self):
+        self.assertTrue(usuario_es_responsable_configurado(self.responsable_directo, self.servicio))
+        self.assertTrue(puede_tomar(self.responsable_directo, self.ticket))
+
+    def test_miembro_de_equipo_responsable_puede_tomar(self):
+        self.assertTrue(usuario_es_responsable_configurado(self.miembro_equipo, self.servicio))
+        self.assertTrue(puede_tomar(self.miembro_equipo, self.ticket))
+
+    def test_alcance_area_sin_relacion_operacional_no_basta_para_tomar(self):
+        # RQF-028/RN-009: coincidir con el área del gestor no otorga por
+        # sí solo capacidad de TOMAR — no está configurado como responsable.
+        self.assertFalse(usuario_es_responsable_configurado(self.gestor_area, self.servicio))
+        self.assertFalse(puede_tomar(self.gestor_area, self.ticket))
+
+    def test_alcance_area_si_basta_para_asignar_a_un_tercero(self):
+        # Función supervisora: sí basta para ASIGNAR, sin exigir que el
+        # gestor esté configurado como responsable del servicio.
+        self.assertTrue(puede_asignar(self.gestor_area, self.ticket))
+
+    def test_area_distinta_no_cubre_el_ticket(self):
+        self.assertFalse(puede_asignar(self.gestor_otra_area, self.ticket))
+        self.assertFalse(puede_ver_en_cola(self.gestor_otra_area, self.ticket))
+
+    def test_miembro_de_equipo_sin_permiso_atender_no_ve_ni_asigna(self):
+        otro_miembro = Usuario.objects.create_user(username="miembrosinpermiso", password=CLAVE_PRUEBA)
+        MiembroEquipo.objects.create(equipo=self.equipo, usuario=otro_miembro, activo=True)
+        self.assertFalse(puede_ver_en_cola(otro_miembro, self.ticket))
+        self.assertFalse(puede_asignar(otro_miembro, self.ticket))
+
+    def test_no_se_puede_tomar_un_ticket_en_borrador(self):
+        borrador = crear_borrador(self.solicitante, self.servicio)
+        self.assertFalse(puede_tomar(self.responsable_directo, borrador))
+        self.assertFalse(puede_ver_en_cola(self.responsable_directo, borrador))
+
+    def test_responsable_actual_puede_reasignar_sin_alcance_de_area(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.assertTrue(es_responsable_actual(self.responsable_directo, self.ticket))
+        self.assertTrue(puede_reasignar(self.responsable_directo, self.ticket))
+
+
+class TomarTicketTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_responsable_configurado_toma_correctamente(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.EN_ATENCION)
+        self.assertEqual(self.ticket.usuario_responsable_id, self.responsable_directo.id)
+
+    def test_miembro_de_equipo_responsable_toma_correctamente(self):
+        tomar_ticket(self.ticket, self.miembro_equipo)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.usuario_responsable_id, self.miembro_equipo.id)
+
+    def test_sin_autorizacion_no_puede_tomar(self):
+        with self.assertRaises(PermissionDenied):
+            tomar_ticket(self.ticket, self.ajeno)
+
+    def test_gestor_de_area_no_puede_tomar_sin_relacion_operacional(self):
+        with self.assertRaises(PermissionDenied):
+            tomar_ticket(self.ticket, self.gestor_area)
+
+    def test_no_se_puede_tomar_dos_veces(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            tomar_ticket(self.ticket, self.miembro_equipo)
+
+    def test_no_se_puede_tomar_un_borrador(self):
+        borrador = crear_borrador(self.solicitante, self.servicio)
+        with self.assertRaises(PermissionDenied):
+            tomar_ticket(borrador, self.responsable_directo)
+
+
+class AsignarTicketTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_gestor_area_asigna_usuario_dispara_transicion(self):
+        asignar_ticket(self.ticket, self.gestor_area, usuario=self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.EN_ATENCION)
+        self.assertEqual(self.ticket.usuario_responsable_id, self.responsable_directo.id)
+
+    def test_asignar_solo_equipo_no_cambia_el_estado(self):
+        asignar_ticket(self.ticket, self.gestor_area, equipo=self.equipo)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.RADICADO)
+        self.assertEqual(self.ticket.equipo_responsable_id, self.equipo.id)
+        self.assertIsNone(self.ticket.usuario_responsable_id)
+
+    def test_sin_alcance_no_puede_asignar(self):
+        with self.assertRaises(PermissionDenied):
+            asignar_ticket(self.ticket, self.gestor_otra_area, usuario=self.responsable_directo)
+
+    def test_requiere_usuario_o_equipo(self):
+        with self.assertRaises(ValidationError):
+            asignar_ticket(self.ticket, self.gestor_area)
+
+    def test_no_se_puede_asignar_si_ya_tiene_responsable(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            asignar_ticket(self.ticket, self.gestor_area, usuario=self.miembro_equipo)
+
+
+class ReasignarTicketTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+
+    def test_gestor_area_reasigna_correctamente(self):
+        reasignar_ticket(self.ticket, self.gestor_area, usuario=self.miembro_equipo)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.EN_ATENCION)
+        self.assertEqual(self.ticket.usuario_responsable_id, self.miembro_equipo.id)
+
+    def test_reasignar_no_pasa_por_estados_ni_cambia_estado(self):
+        estado_previo = self.ticket.estado
+        reasignar_ticket(self.ticket, self.gestor_area, equipo=self.equipo)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, estado_previo)
+
+    def test_responsable_actual_puede_reasignar_su_propio_ticket(self):
+        reasignar_ticket(self.ticket, self.responsable_directo, usuario=self.miembro_equipo)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.usuario_responsable_id, self.miembro_equipo.id)
+
+    def test_sin_alcance_y_sin_ser_responsable_no_puede_reasignar(self):
+        with self.assertRaises(PermissionDenied):
+            reasignar_ticket(self.ticket, self.ajeno, usuario=self.miembro_equipo)
+
+    def test_no_se_puede_reasignar_un_ticket_sin_tomar(self):
+        otro_ticket = crear_borrador(self.solicitante, self.servicio)
+        _completar_texto(otro_ticket, self.solicitante, self.campos)
+        radicar_ticket(otro_ticket, self.solicitante)
+        with self.assertRaises(ValidationError):
+            reasignar_ticket(otro_ticket, self.gestor_area, usuario=self.miembro_equipo)
+
+
+class HistorialTicketTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_radicar_registra_un_unico_evento_radicado(self):
+        eventos = list(self.ticket.historial.all())
+        self.assertEqual(len(eventos), 1)
+        self.assertEqual(eventos[0].tipo_evento, HistorialTicket.TipoEvento.RADICADO)
+        self.assertEqual(eventos[0].actor_id, self.solicitante.id)
+
+    def test_tomar_agrega_un_unico_evento_tomado(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        eventos = list(self.ticket.historial.all())
+        self.assertEqual(len(eventos), 2)
+        self.assertEqual(eventos[1].tipo_evento, HistorialTicket.TipoEvento.TOMADO)
+        self.assertEqual(eventos[1].actor_id, self.responsable_directo.id)
+
+    def test_orden_cronologico_radicado_luego_tomado_luego_reasignado(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        reasignar_ticket(self.ticket, self.gestor_area, usuario=self.miembro_equipo)
+        tipos = [e.tipo_evento for e in self.ticket.historial.all()]
+        self.assertEqual(
+            tipos,
+            [HistorialTicket.TipoEvento.RADICADO, HistorialTicket.TipoEvento.TOMADO, HistorialTicket.TipoEvento.REASIGNADO],
+        )
+
+    def test_asignar_solo_equipo_no_genera_evento_cambio_estado(self):
+        asignar_ticket(self.ticket, self.gestor_area, equipo=self.equipo)
+        tipos = [e.tipo_evento for e in self.ticket.historial.all()]
+        self.assertEqual(tipos, [HistorialTicket.TipoEvento.RADICADO, HistorialTicket.TipoEvento.ASIGNADO])
+
+
+class ConcurrenciaTomarTicketTests(_EscenarioAtencionMixin, TransactionTestCase):
+    """Punto 12 (aprobado): dos usuarios intentando TOMAR el mismo ticket a
+    la vez — solo uno gana, el otro recibe un error explícito en vez de
+    sobrescribir en silencio. `TransactionTestCase` + hilos reales contra
+    Postgres (no `TestCase`, que envuelve cada test en una única
+    transacción y no serializa hilos de verdad)."""
+
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_dos_tomas_concurrentes_solo_una_gana(self):
+        resultados = {}
+        barrera = threading.Barrier(2)
+
+        def _intentar_tomar(usuario, clave):
+            barrera.wait()
+            try:
+                ticket = Ticket.objects.get(pk=self.ticket.pk)
+                tomar_ticket(ticket, usuario)
+                resultados[clave] = "ok"
+            except ValidationError:
+                resultados[clave] = "ya_tomado"
+            finally:
+                connection.close()
+
+        hilo_a = threading.Thread(target=_intentar_tomar, args=(self.responsable_directo, "a"))
+        hilo_b = threading.Thread(target=_intentar_tomar, args=(self.miembro_equipo, "b"))
+        hilo_a.start()
+        hilo_b.start()
+        hilo_a.join()
+        hilo_b.join()
+
+        valores = list(resultados.values())
+        self.assertEqual(valores.count("ok"), 1)
+        self.assertEqual(valores.count("ya_tomado"), 1)
+
+        ticket = Ticket.objects.get(pk=self.ticket.pk)
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+        self.assertIn(ticket.usuario_responsable_id, [self.responsable_directo.id, self.miembro_equipo.id])
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=ticket, tipo_evento=HistorialTicket.TipoEvento.TOMADO
+            ).count(),
+            1,
+        )
+
+
+class ConcurrenciaReasignarTicketTests(_EscenarioAtencionMixin, TransactionTestCase):
+    """Punto 12 (aprobado), reasignación: sin `select_for_update()`, la
+    segunda reasignación podría registrar en `HistorialTicket` un
+    `usuario_anterior_id` obsoleto (leído antes de que la primera
+    confirmara) en vez del responsable que la primera realmente dejó."""
+
+    def setUp(self):
+        self._preparar_escenario()
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.candidato_a = Usuario.objects.create_user(username="candidatoa23", password=CLAVE_PRUEBA)
+        self.candidato_b = Usuario.objects.create_user(username="candidatob23", password=CLAVE_PRUEBA)
+        _otorgar_tickets_atender(self.candidato_a)
+        _otorgar_tickets_atender(self.candidato_b)
+
+    def test_reasignaciones_concurrentes_no_pierden_actualizaciones(self):
+        barrera = threading.Barrier(2)
+        errores = []
+
+        def _reasignar(usuario_destino):
+            barrera.wait()
+            try:
+                ticket = Ticket.objects.get(pk=self.ticket.pk)
+                reasignar_ticket(ticket, self.gestor_area, usuario=usuario_destino)
+            except Exception as exc:  # noqa: BLE001 - se reporta, no se oculta
+                errores.append(exc)
+            finally:
+                connection.close()
+
+        hilo_a = threading.Thread(target=_reasignar, args=(self.candidato_a,))
+        hilo_b = threading.Thread(target=_reasignar, args=(self.candidato_b,))
+        hilo_a.start()
+        hilo_b.start()
+        hilo_a.join()
+        hilo_b.join()
+
+        self.assertEqual(errores, [])
+        ticket = Ticket.objects.get(pk=self.ticket.pk)
+        self.assertIn(ticket.usuario_responsable_id, [self.candidato_a.id, self.candidato_b.id])
+
+        eventos = list(
+            HistorialTicket.objects.filter(
+                ticket=ticket, tipo_evento=HistorialTicket.TipoEvento.REASIGNADO
+            ).order_by("creado_en")
+        )
+        self.assertEqual(len(eventos), 2)
+        primer_destino_id = eventos[0].datos["usuario_id"]
+        segundo_anterior_id = eventos[1].datos["usuario_anterior_id"]
+        self.assertEqual(primer_destino_id, segundo_anterior_id)
+
+
+class ColaAtencionViewTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_responsable_configurado_ve_el_ticket_en_su_cola(self):
+        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:cola"))
+        self.assertIn(self.ticket, respuesta.context["tickets"])
+
+    def test_gestor_de_area_ve_el_ticket_en_su_cola(self):
+        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:cola"))
+        self.assertIn(self.ticket, respuesta.context["tickets"])
+
+    def test_usuario_sin_autorizacion_no_ve_el_ticket(self):
+        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:cola"))
+        self.assertNotIn(self.ticket, respuesta.context["tickets"])
+
+    def test_solicitante_no_ve_su_propio_ticket_solo_por_ser_solicitante(self):
+        # Separación explícita: "Mis tickets" no se mezcla con la cola.
+        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:cola"))
+        self.assertNotIn(self.ticket, respuesta.context["tickets"])
+
+
+class DetalleViewAtencionTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_gestor_de_area_puede_ver_el_detalle_de_un_ticket_ajeno(self):
+        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTrue(respuesta.context["puede_asignar"])
+
+    def test_usuario_sin_autorizacion_recibe_403(self):
+        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertEqual(respuesta.status_code, 403)
+
+    def test_tomar_view_exitoso_redirige_al_detalle_y_transiciona(self):
+        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(reverse("tickets:tomar", args=[self.ticket.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.EN_ATENCION)
+
+    def test_tomar_view_rechaza_get(self):
+        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:tomar", args=[self.ticket.pk]))
+        self.assertEqual(respuesta.status_code, 405)
+
+    def test_asignar_view_exitoso(self):
+        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:asignar", args=[self.ticket.pk]), {"usuario_id": self.responsable_directo.id}
+        )
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.usuario_responsable_id, self.responsable_directo.id)
+
+    def test_reasignar_view_exitoso(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:reasignar", args=[self.ticket.pk]), {"usuario_id": self.miembro_equipo.id}
+        )
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.usuario_responsable_id, self.miembro_equipo.id)
+
+    def test_asignar_view_sin_autorizacion_no_modifica_el_ticket(self):
+        # El `ajeno` tampoco puede VER el detalle (403), así que solo se
+        # verifica el redirect sin seguirlo (`assertRedirects` exigiría
+        # 200 en el destino) y que el ticket quedó intacto.
+        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:asignar", args=[self.ticket.pk]), {"usuario_id": self.responsable_directo.id}
+        )
+        self.assertEqual(respuesta.status_code, 302)
+        self.ticket.refresh_from_db()
+        self.assertIsNone(self.ticket.usuario_responsable_id)
+
+
+# ---------------------------------------------------------------------------
+# 2.4 — Comunicación, adjuntos operativos y solicitud de información
+# (CU-018, RQF-006/007/052/057/058). Reutiliza `_EscenarioAtencionMixin`
+# (solicitante/responsable_directo/miembro_equipo/gestor_area/
+# gestor_otra_area/ajeno, ticket ya RADICADO) — cada clase toma sobre esa
+# base al responsable concreto (`tomar_ticket`) cuando lo necesita.
+# ---------------------------------------------------------------------------
+
+
+class AutorizacionComunicacionTests(_EscenarioAtencionMixin, TestCase):
+    """Corrección explícita del usuario: consultar y participar NO son lo
+    mismo — `puede_comentar_ticket`/`puede_solicitar_informacion` no se
+    definen en términos de `puede_consultar_ticket`."""
+
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_solicitante_puede_comentar(self):
+        self.assertTrue(puede_comentar_ticket(self.solicitante, self.ticket))
+
+    def test_gestor_con_alcance_puede_consultar_pero_no_comentar(self):
+        # El gestor SÍ puede consultar (por alcance), pero eso no le da
+        # capacidad de escribir — solo el solicitante o el responsable actual.
+        self.assertTrue(puede_consultar_ticket(self.gestor_area, self.ticket))
+        self.assertFalse(puede_comentar_ticket(self.gestor_area, self.ticket))
+
+    def test_responsable_actual_puede_comentar(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.assertTrue(puede_comentar_ticket(self.responsable_directo, self.ticket))
+
+    def test_ajeno_no_puede_comentar_ni_consultar(self):
+        self.assertFalse(puede_consultar_ticket(self.ajeno, self.ticket))
+        self.assertFalse(puede_comentar_ticket(self.ajeno, self.ticket))
+
+    def test_no_se_puede_comentar_un_borrador(self):
+        borrador = crear_borrador(self.solicitante, self.servicio)
+        self.assertFalse(puede_comentar_ticket(self.solicitante, borrador))
+
+    def test_solo_responsable_actual_puede_solicitar_informacion(self):
+        # RQF-058 (actor "Ejecutor"): ni el gestor con alcance (sin ser
+        # responsable de ESTE ticket) ni el solicitante pueden solicitar.
+        self.assertFalse(puede_solicitar_informacion(self.gestor_area, self.ticket))
+        self.assertFalse(puede_solicitar_informacion(self.solicitante, self.ticket))
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.assertTrue(puede_solicitar_informacion(self.responsable_directo, self.ticket))
+
+    def test_puede_responder_solicitud_exige_ser_el_destinatario(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        solicitud = solicitar_informacion(self.ticket, self.responsable_directo, "¿Puedes confirmar el equipo?")
+        # R.1: destinatario siempre el solicitante del Ticket.
+        self.assertEqual(solicitud.destinatario_id, self.solicitante.id)
+        self.assertTrue(puede_responder_solicitud(self.solicitante, solicitud))
+        self.assertFalse(puede_responder_solicitud(self.responsable_directo, solicitud))
+        self.assertFalse(puede_responder_solicitud(self.ajeno, solicitud))
+
+
+class ComentarTicketTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_solicitante_comenta_correctamente(self):
+        comentario = comentar_ticket(self.ticket, self.solicitante, "Quedo atento.")
+        self.assertEqual(comentario.autor_id, self.solicitante.id)
+        self.assertEqual(comentario.contenido, "Quedo atento.")
+        self.assertIn(comentario, self.ticket.comentarios.all())
+
+    def test_responsable_actual_comenta_correctamente(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        comentario = comentar_ticket(self.ticket, self.responsable_directo, "Estoy revisando el caso.")
+        self.assertEqual(comentario.autor_id, self.responsable_directo.id)
+
+    def test_gestor_con_alcance_sin_ser_responsable_no_puede_comentar(self):
+        with self.assertRaises(PermissionDenied):
+            comentar_ticket(self.ticket, self.gestor_area, "Intento no autorizado.")
+
+    def test_ajeno_no_puede_comentar(self):
+        with self.assertRaises(PermissionDenied):
+            comentar_ticket(self.ticket, self.ajeno, "Intento no autorizado.")
+
+    def test_comentario_vacio_es_rechazado(self):
+        with self.assertRaises(ValidationError):
+            comentar_ticket(self.ticket, self.solicitante, "   ")
+
+    def test_no_se_puede_comentar_un_borrador(self):
+        borrador = crear_borrador(self.solicitante, self.servicio)
+        with self.assertRaises(PermissionDenied):
+            comentar_ticket(borrador, self.solicitante, "Todavía no.")
+
+    def test_comentarios_quedan_en_orden_cronologico(self):
+        comentar_ticket(self.ticket, self.solicitante, "Primero.")
+        comentar_ticket(self.ticket, self.solicitante, "Segundo.")
+        contenidos = list(self.ticket.comentarios.values_list("contenido", flat=True))
+        self.assertEqual(contenidos, ["Primero.", "Segundo."])
+
+    def test_comentario_no_genera_evento_en_historial(self):
+        # Decisión explícita 2.4: sin evento espejo por comentario/adjunto.
+        comentar_ticket(self.ticket, self.solicitante, "Sin eco en el historial.")
+        self.assertFalse(
+            HistorialTicket.objects.filter(
+                ticket=self.ticket,
+                tipo_evento__in=[
+                    HistorialTicket.TipoEvento.INFORMACION_SOLICITADA,
+                    HistorialTicket.TipoEvento.INFORMACION_RESPONDIDA,
+                ],
+            ).exists()
+        )
+
+
+class ComentarioConAdjuntoTests(_MediaAisladaMixin, _EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_comentario_con_archivo_crea_adjunto_asociado(self):
+        archivo = SimpleUploadedFile("evidencia.txt", b"contenido", content_type="text/plain")
+        comentario = comentar_ticket(self.ticket, self.solicitante, "Ver adjunto.", archivos=[archivo])
+        self.assertEqual(comentario.adjuntos.count(), 1)
+        adjunto = comentario.adjuntos.get()
+        self.assertEqual(adjunto.tipo_relacion, Adjunto.TipoRelacion.COMENTARIO)
+        self.assertEqual(adjunto.nombre_original, "evidencia.txt")
+        self.assertEqual(adjunto.tamano_bytes, len(b"contenido"))
+        self.assertEqual(adjunto.subido_por_id, self.solicitante.id)
+        self.assertEqual(adjunto.ticket_relacionado.pk, self.ticket.pk)
+
+    def test_archivo_vacio_es_rechazado(self):
+        archivo = SimpleUploadedFile("vacio.txt", b"", content_type="text/plain")
+        with self.assertRaises(ValidationError):
+            comentar_ticket(self.ticket, self.solicitante, "Adjunto vacío.", archivos=[archivo])
+
+
+class AdjuntarArchivoTicketTests(_MediaAisladaMixin, _EscenarioAtencionMixin, TestCase):
+    """R.4 aprobado: adjunto directo al Ticket, sin exigir un comentario."""
+
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_solicitante_adjunta_directo_al_ticket(self):
+        archivo = SimpleUploadedFile("plano.pdf", b"contenido", content_type="application/pdf")
+        adjunto = adjuntar_archivo_ticket(self.ticket, self.solicitante, archivo)
+        self.assertEqual(adjunto.tipo_relacion, Adjunto.TipoRelacion.TICKET)
+        self.assertEqual(adjunto.ticket_id, self.ticket.pk)
+        self.assertIsNone(adjunto.comentario_id)
+        self.assertIn(adjunto, self.ticket.adjuntos.all())
+
+    def test_gestor_con_alcance_sin_ser_responsable_no_puede_adjuntar(self):
+        archivo = SimpleUploadedFile("plano.pdf", b"contenido", content_type="application/pdf")
+        with self.assertRaises(PermissionDenied):
+            adjuntar_archivo_ticket(self.ticket, self.gestor_area, archivo)
+
+    def test_ajeno_no_puede_adjuntar(self):
+        archivo = SimpleUploadedFile("plano.pdf", b"contenido", content_type="application/pdf")
+        with self.assertRaises(PermissionDenied):
+            adjuntar_archivo_ticket(self.ticket, self.ajeno, archivo)
+
+
+class AdjuntoModeloTests(TestCase):
+    """`CheckConstraint` de coherencia del discriminador — sin `GenericForeignKey`
+    (4 ramas conocidas: TICKET/COMENTARIO/SOLICITUD/RESPUESTA_SOLICITUD)."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="autoradj24", password=CLAVE_PRUEBA)
+        self.servicio, _, _ = _crear_servicio_con_formulario(self.usuario, [])
+        self.ticket = crear_borrador(self.usuario, self.servicio)
+
+    def _archivo(self):
+        return SimpleUploadedFile("a.txt", b"x", content_type="text/plain")
+
+    def test_tipo_ticket_exige_solo_ticket_poblado(self):
+        Adjunto.objects.create(
+            tipo_relacion=Adjunto.TipoRelacion.TICKET,
+            ticket=self.ticket,
+            archivo=self._archivo(),
+            nombre_original="a.txt",
+            tamano_bytes=1,
+            subido_por=self.usuario,
+        )
+
+    def test_tipo_ticket_con_comentario_tambien_poblado_es_rechazado(self):
+        comentario = ComentarioTicket.objects.create(ticket=self.ticket, autor=self.usuario, contenido="x")
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Adjunto.objects.create(
+                    tipo_relacion=Adjunto.TipoRelacion.TICKET,
+                    ticket=self.ticket,
+                    comentario=comentario,
+                    archivo=self._archivo(),
+                    nombre_original="a.txt",
+                    tamano_bytes=1,
+                    subido_por=self.usuario,
+                )
+
+    def test_tipo_comentario_sin_comentario_poblado_es_rechazado(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                Adjunto.objects.create(
+                    tipo_relacion=Adjunto.TipoRelacion.COMENTARIO,
+                    archivo=self._archivo(),
+                    nombre_original="a.txt",
+                    tamano_bytes=1,
+                    subido_por=self.usuario,
+                )
+
+
+class SolicitarInformacionTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+
+    def test_responsable_actual_solicita_correctamente(self):
+        solicitud = solicitar_informacion(self.ticket, self.responsable_directo, "¿Cuál es el equipo afectado?")
+        self.assertEqual(solicitud.solicitada_por_id, self.responsable_directo.id)
+        self.assertEqual(solicitud.destinatario_id, self.solicitante.id)
+        self.assertEqual(solicitud.estado, SolicitudInformacion.Estado.PENDIENTE)
+
+    def test_destinatario_no_se_puede_forzar_a_otro_distinto_del_solicitante(self):
+        # R.1: `solicitar_informacion` no acepta destinatario por parámetro —
+        # siempre se deriva de `ticket.solicitante`.
+        solicitud = solicitar_informacion(self.ticket, self.responsable_directo, "Mensaje.")
+        self.assertEqual(solicitud.destinatario_id, self.ticket.solicitante_id)
+
+    def test_gestor_con_alcance_no_puede_solicitar(self):
+        with self.assertRaises(PermissionDenied):
+            solicitar_informacion(self.ticket, self.gestor_area, "Mensaje.")
+
+    def test_solicitante_no_puede_solicitarse_informacion_a_si_mismo(self):
+        with self.assertRaises(PermissionDenied):
+            solicitar_informacion(self.ticket, self.solicitante, "Mensaje.")
+
+    def test_mensaje_vacio_es_rechazado(self):
+        with self.assertRaises(ValidationError):
+            solicitar_informacion(self.ticket, self.responsable_directo, "   ")
+
+    def test_permite_varias_solicitudes_simultaneas_pendientes(self):
+        solicitar_informacion(self.ticket, self.responsable_directo, "Primera.")
+        solicitar_informacion(self.ticket, self.responsable_directo, "Segunda.")
+        self.assertEqual(
+            self.ticket.solicitudes_informacion.filter(estado=SolicitudInformacion.Estado.PENDIENTE).count(), 2
+        )
+
+    def test_registra_evento_informacion_solicitada_en_historial(self):
+        solicitar_informacion(self.ticket, self.responsable_directo, "Mensaje.")
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.INFORMACION_SOLICITADA
+            ).count(),
+            1,
+        )
+
+
+class ResponderSolicitudTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.solicitud = solicitar_informacion(self.ticket, self.responsable_directo, "¿Confirmas el equipo?")
+
+    def test_destinatario_responde_correctamente(self):
+        respuesta = responder_solicitud(self.solicitud, self.solicitante, "Sí, es el equipo A.")
+        self.assertEqual(respuesta.respondida_por_id, self.solicitante.id)
+        self.solicitud.refresh_from_db()
+        self.assertEqual(self.solicitud.estado, SolicitudInformacion.Estado.RESPONDIDA)
+        self.assertEqual(self.solicitud.respuesta, respuesta)
+
+    def test_no_destinatario_no_puede_responder(self):
+        with self.assertRaises(PermissionDenied):
+            responder_solicitud(self.solicitud, self.responsable_directo, "Respuesta no autorizada.")
+
+    def test_ajeno_no_puede_responder(self):
+        with self.assertRaises(PermissionDenied):
+            responder_solicitud(self.solicitud, self.ajeno, "Respuesta no autorizada.")
+
+    def test_respuesta_vacia_es_rechazada(self):
+        with self.assertRaises(ValidationError):
+            responder_solicitud(self.solicitud, self.solicitante, "   ")
+
+    def test_no_se_puede_responder_dos_veces(self):
+        responder_solicitud(self.solicitud, self.solicitante, "Primera respuesta.")
+        with self.assertRaises(ValidationError):
+            responder_solicitud(self.solicitud, self.solicitante, "Segunda respuesta.")
+
+    def test_segunda_respuesta_no_crea_fila_duplicada(self):
+        responder_solicitud(self.solicitud, self.solicitante, "Primera respuesta.")
+        with self.assertRaises(ValidationError):
+            responder_solicitud(self.solicitud, self.solicitante, "Segunda respuesta.")
+        self.assertEqual(
+            RespuestaSolicitudInformacion.objects.filter(solicitud=self.solicitud).count(), 1
+        )
+
+    def test_registra_evento_informacion_respondida_en_historial(self):
+        responder_solicitud(self.solicitud, self.solicitante, "Respuesta.")
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.INFORMACION_RESPONDIDA
+            ).count(),
+            1,
+        )
+
+    def test_respuesta_con_archivo_crea_adjunto_asociado(self):
+        archivo = SimpleUploadedFile("respaldo.txt", b"contenido", content_type="text/plain")
+        respuesta = responder_solicitud(self.solicitud, self.solicitante, "Con evidencia.", archivos=[archivo])
+        self.assertEqual(respuesta.adjuntos.count(), 1)
+        adjunto = respuesta.adjuntos.get()
+        self.assertEqual(adjunto.tipo_relacion, Adjunto.TipoRelacion.RESPUESTA_SOLICITUD)
+        self.assertEqual(adjunto.ticket_relacionado.pk, self.ticket.pk)
+
+
+class ConcurrenciaResponderSolicitudTests(_EscenarioAtencionMixin, TransactionTestCase):
+    """Punto 8 (aprobado): dos respuestas simultáneas a la misma solicitud —
+    solo una gana. Mismo patrón que `ConcurrenciaTomarTicketTests` (hilos
+    reales contra Postgres, `TransactionTestCase`)."""
+
+    def setUp(self):
+        self._preparar_escenario()
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.solicitud = solicitar_informacion(self.ticket, self.responsable_directo, "¿Confirmas?")
+
+    def test_dos_respuestas_concurrentes_solo_una_gana(self):
+        resultados = {}
+        barrera = threading.Barrier(2)
+
+        def _intentar_responder(clave, contenido):
+            barrera.wait()
+            try:
+                solicitud = SolicitudInformacion.objects.get(pk=self.solicitud.pk)
+                responder_solicitud(solicitud, self.solicitante, contenido)
+                resultados[clave] = "ok"
+            except ValidationError:
+                resultados[clave] = "ya_respondida"
+            finally:
+                connection.close()
+
+        hilo_a = threading.Thread(target=_intentar_responder, args=("a", "Respuesta A"))
+        hilo_b = threading.Thread(target=_intentar_responder, args=("b", "Respuesta B"))
+        hilo_a.start()
+        hilo_b.start()
+        hilo_a.join()
+        hilo_b.join()
+
+        valores = list(resultados.values())
+        self.assertEqual(valores.count("ok"), 1)
+        self.assertEqual(valores.count("ya_respondida"), 1)
+        self.assertEqual(
+            RespuestaSolicitudInformacion.objects.filter(solicitud=self.solicitud).count(), 1
+        )
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.INFORMACION_RESPONDIDA
+            ).count(),
+            1,
+        )
+
+
+class DescargarAdjuntoViewTests(_MediaAisladaMixin, _EscenarioAtencionMixin, TestCase):
+    """RQF-006/RQ-NFN-04 — descarga de `Adjunto` centralizada en
+    `puede_consultar_ticket` (nunca por conocer la URL de MEDIA)."""
+
+    def setUp(self):
+        self._preparar_escenario()
+        archivo = SimpleUploadedFile("evidencia.txt", b"contenido", content_type="text/plain")
+        self.adjunto = adjuntar_archivo_ticket(self.ticket, self.solicitante, archivo)
+
+    def test_solicitante_puede_descargar(self):
+        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:descargar_adjunto", args=[self.adjunto.pk]))
+        self.assertEqual(respuesta.status_code, 200)
+
+    def test_gestor_con_alcance_puede_descargar(self):
+        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:descargar_adjunto", args=[self.adjunto.pk]))
+        self.assertEqual(respuesta.status_code, 200)
+
+    def test_ajeno_no_puede_descargar(self):
+        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:descargar_adjunto", args=[self.adjunto.pk]))
+        self.assertEqual(respuesta.status_code, 403)
+
+    def test_intento_de_descarga_sin_autenticar_redirige_a_login(self):
+        respuesta = self.client.get(reverse("tickets:descargar_adjunto", args=[self.adjunto.pk]))
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertIn(reverse("core:login"), respuesta.url)
+
+
+class DescargaArchivoRespuestaRegresionTests(_MediaAisladaMixin, TestCase):
+    """2.4 corrige RQF-006 en `descargar_archivo_respuesta_view`: antes solo
+    el solicitante podía descargar (`es_propietario_borrador`); ahora
+    cualquiera autorizado a CONSULTAR el ticket (`puede_consultar_ticket`)
+    también puede — mismo criterio que ya aplicaba al detalle desde 2.3."""
+
+    def setUp(self):
+        self.solicitante = Usuario.objects.create_user(username="solicitante24da", password=CLAVE_PRUEBA)
+        self.gestor = Usuario.objects.create_user(username="gestor24da", password=CLAVE_PRUEBA)
+        self.ajeno = Usuario.objects.create_user(username="ajeno24da", password=CLAVE_PRUEBA)
+        self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
+            self.solicitante, [{"tipo": Campo.TipoCampo.ARCHIVO, "etiqueta": "Soporte"}]
+        )
+        self.ticket = crear_borrador(self.solicitante, self.servicio)
+        archivo = SimpleUploadedFile("evidencia.txt", b"contenido", content_type="text/plain")
+        guardar_respuestas_borrador(self.ticket, self.solicitante, {self.campos["Soporte"].id: archivo})
+        radicar_ticket(self.ticket, self.solicitante)
+        self.ticket.refresh_from_db()
+        _otorgar_tickets_atender(self.gestor)
+        self.archivo_id = RespuestaCampo.objects.get(
+            respuesta_formulario=self.ticket.respuesta_formulario, campo=self.campos["Soporte"]
+        ).archivo.pk
+
+    def test_solicitante_sigue_pudiendo_descargar(self):
+        self.client.login(username="solicitante24da", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:descargar_archivo", args=[self.archivo_id]))
+        self.assertEqual(respuesta.status_code, 200)
+
+    def test_gestor_autorizado_a_consultar_ahora_tambien_puede_descargar(self):
+        self.client.login(username="gestor24da", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:descargar_archivo", args=[self.archivo_id]))
+        self.assertEqual(respuesta.status_code, 200)
+
+    def test_ajeno_sigue_sin_poder_descargar(self):
+        self.client.login(username="ajeno24da", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:descargar_archivo", args=[self.archivo_id]))
+        self.assertEqual(respuesta.status_code, 403)
+
+
+class ComunicacionViewsTests(_EscenarioAtencionMixin, TestCase):
+    """Vistas POST de 2.4 — mismo patrón que `DetalleViewAtencionTests`
+    (2.3): la vista solo hace `get_object_or_404` + delega en `operaciones`,
+    sin repetir autorización; `PermissionDenied` desde la operación se
+    captura y se muestra como mensaje (no 403 — el ajeno sí puede ver el
+    ticket si tiene alcance, pero no puede participar)."""
+
+    def setUp(self):
+        self._preparar_escenario()
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+
+    def test_comentar_view_exitoso(self):
+        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:comentar", args=[self.ticket.pk]), {"contenido": "Ya lo reviso."}
+        )
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertEqual(self.ticket.comentarios.count(), 1)
+
+    def test_comentar_view_rechaza_get(self):
+        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:comentar", args=[self.ticket.pk]))
+        self.assertEqual(respuesta.status_code, 405)
+
+    def test_comentar_view_sin_autorizacion_no_crea_comentario(self):
+        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:comentar", args=[self.ticket.pk]), {"contenido": "No autorizado."}
+        )
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertEqual(self.ticket.comentarios.count(), 0)
+
+    def test_solicitar_informacion_view_exitoso(self):
+        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:solicitar_informacion", args=[self.ticket.pk]), {"mensaje": "¿Confirmas?"}
+        )
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertEqual(self.ticket.solicitudes_informacion.count(), 1)
+
+    def test_responder_solicitud_view_exitoso(self):
+        solicitud = solicitar_informacion(self.ticket, self.responsable_directo, "¿Confirmas?")
+        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:responder_solicitud", args=[self.ticket.pk, solicitud.pk]),
+            {"contenido": "Confirmado."},
+        )
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        solicitud.refresh_from_db()
+        self.assertEqual(solicitud.estado, SolicitudInformacion.Estado.RESPONDIDA)
+
+    def test_responder_solicitud_view_no_destinatario_no_responde(self):
+        solicitud = solicitar_informacion(self.ticket, self.responsable_directo, "¿Confirmas?")
+        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:responder_solicitud", args=[self.ticket.pk, solicitud.pk]),
+            {"contenido": "Intento no autorizado."},
+        )
+        self.assertEqual(respuesta.status_code, 302)
+        solicitud.refresh_from_db()
+        self.assertEqual(solicitud.estado, SolicitudInformacion.Estado.PENDIENTE)
+
+    def test_detalle_view_expone_contexto_de_comunicacion(self):
+        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertIn("comentarios", respuesta.context)
+        self.assertIn("solicitudes", respuesta.context)
+        self.assertTrue(respuesta.context["puede_comentar"])
+        self.assertFalse(respuesta.context["puede_solicitar_informacion"])
+
+
+# ---------------------------------------------------------------------------
+# 2.5 — Resolución, cierre, cancelación y reapertura (CU-019, RQF-059).
+# Reutiliza `_EscenarioAtencionMixin` (mismo escenario de 2.3/2.4).
+# `tomar_ticket`/`asignar_ticket`/`reasignar_ticket` (2.3) NO generan
+# `RegistroAuditoria` (decisión explícita: no se corrige retroactivamente
+# en 2.5) — solo resolver/cerrar/cancelar/reabrir lo hacen.
+# ---------------------------------------------------------------------------
+
+
+class AutorizacionFinalizacionTests(_EscenarioAtencionMixin, TestCase):
+    """V1 aprobado: consultar ≠ gestionar asignación ≠ participar ≠
+    finalizar. Alcance de `tickets.atender` (gestor_area) no concede por
+    sí solo resolver/cerrar/cancelar/reabrir."""
+
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_solo_responsable_actual_puede_resolver(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.assertTrue(puede_resolver_ticket(self.responsable_directo, self.ticket))
+        self.assertFalse(puede_resolver_ticket(self.gestor_area, self.ticket))
+        self.assertFalse(puede_resolver_ticket(self.solicitante, self.ticket))
+        self.assertFalse(puede_resolver_ticket(self.ajeno, self.ticket))
+
+    def test_solicitante_o_responsable_pueden_cerrar(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.ticket.refresh_from_db()
+        self.assertTrue(puede_cerrar_ticket(self.solicitante, self.ticket))
+        self.assertTrue(puede_cerrar_ticket(self.responsable_directo, self.ticket))
+        self.assertFalse(puede_cerrar_ticket(self.gestor_area, self.ticket))
+        self.assertFalse(puede_cerrar_ticket(self.ajeno, self.ticket))
+
+    def test_solicitante_o_responsable_pueden_cancelar_desde_radicado(self):
+        self.assertTrue(puede_cancelar_ticket(self.solicitante, self.ticket))
+        self.assertFalse(puede_cancelar_ticket(self.gestor_area, self.ticket))
+        self.assertFalse(puede_cancelar_ticket(self.ajeno, self.ticket))
+
+    def test_solicitante_o_responsable_pueden_cancelar_desde_en_atencion(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.assertTrue(puede_cancelar_ticket(self.solicitante, self.ticket))
+        self.assertTrue(puede_cancelar_ticket(self.responsable_directo, self.ticket))
+        self.assertFalse(puede_cancelar_ticket(self.gestor_area, self.ticket))
+
+    def test_solo_responsable_actual_puede_reabrir(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.ticket.refresh_from_db()
+        self.assertTrue(puede_reabrir_ticket(self.responsable_directo, self.ticket))
+        self.assertFalse(puede_reabrir_ticket(self.solicitante, self.ticket))
+        self.assertFalse(puede_reabrir_ticket(self.gestor_area, self.ticket))
+
+
+class ResolverTicketTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+
+    def test_responsable_actual_resuelve_correctamente(self):
+        resolucion = resolver_ticket(self.ticket, self.responsable_directo, "Se reemplazó el equipo.")
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.RESUELTO)
+        self.assertEqual(resolucion.ticket_id, self.ticket.pk)
+        self.assertEqual(resolucion.resuelto_por_id, self.responsable_directo.id)
+        self.assertEqual(resolucion.descripcion, "Se reemplazó el equipo.")
+
+    def test_resolver_bloqueado_por_solicitud_pendiente(self):
+        solicitar_informacion(self.ticket, self.responsable_directo, "¿Confirmas el equipo?")
+        with self.assertRaises(ValidationError):
+            resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.EN_ATENCION)
+        self.assertFalse(ResolucionTicket.objects.filter(ticket=self.ticket).exists())
+
+    def test_resolver_permitido_tras_responder_la_solicitud(self):
+        solicitud = solicitar_informacion(self.ticket, self.responsable_directo, "¿Confirmas el equipo?")
+        responder_solicitud(solicitud, self.solicitante, "Sí, confirmado.")
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.RESUELTO)
+
+    def test_descripcion_vacia_es_rechazada(self):
+        with self.assertRaises(ValidationError):
+            resolver_ticket(self.ticket, self.responsable_directo, "   ")
+
+    def test_gestor_por_alcance_no_puede_resolver(self):
+        with self.assertRaises(PermissionDenied):
+            resolver_ticket(self.ticket, self.gestor_area, "Intento no autorizado.")
+
+    def test_ajeno_no_puede_resolver(self):
+        with self.assertRaises(PermissionDenied):
+            resolver_ticket(self.ticket, self.ajeno, "Intento no autorizado.")
+
+    def test_doble_submit_resolver_no_duplica_nada(self):
+        # "resolución solo puede existir una vez" + "doble submit no
+        # duplica ninguno de los anteriores" (puntos 15 aprobados).
+        resolver_ticket(self.ticket, self.responsable_directo, "Primera resolución.")
+        self.ticket.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            resolver_ticket(self.ticket, self.responsable_directo, "Segunda resolución.")
+
+        self.assertEqual(ResolucionTicket.objects.filter(ticket=self.ticket).count(), 1)
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.RESUELTO
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            _auditorias_de_ticket(self.ticket).filter(datos_nuevos={"estado": "RESUELTO"}).count(), 1
+        )
+
+    def test_resolver_genera_exactamente_un_historial(self):
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.RESUELTO
+            ).count(),
+            1,
+        )
+
+    def test_resolver_genera_exactamente_una_auditoria_de_cambio_de_estado(self):
+        # `self.setUp` ya ejecuta TOMAR, que desde 2.C también genera su
+        # propia `RegistroAuditoria` (RQF-119) — se filtra explícitamente
+        # por el `datos_nuevos` de ESTA transición para no confundirla.
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        auditorias = _auditorias_de_ticket(self.ticket).filter(
+            accion=RegistroAuditoria.Accion.ACTUALIZAR, datos_nuevos={"estado": "RESUELTO"}
+        )
+        self.assertEqual(auditorias.count(), 1)
+        registro = auditorias.get()
+        self.assertEqual(registro.usuario_id, self.responsable_directo.id)
+        self.assertEqual(registro.origen, RegistroAuditoria.Origen.USUARIO)
+        self.assertEqual(registro.datos_anteriores, {"estado": "EN_ATENCION"})
+        self.assertEqual(registro.datos_nuevos, {"estado": "RESUELTO"})
+
+    def test_responsable_se_preserva_tras_resolver(self):
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.usuario_responsable_id, self.responsable_directo.id)
+
+    def test_resolver_de_nuevo_tras_reabrir_funciona(self):
+        # 2.C — corrección: `RESUELTO → REABRIR → EN_ATENCION` es una
+        # transición aprobada, y un ticket reabierto SÍ puede resolverse
+        # de nuevo. `ResolucionTicket.ticket` pasó de `OneToOneField` a
+        # `ForeignKey` (related_name="resoluciones") exactamente para esto.
+        primera = resolver_ticket(self.ticket, self.responsable_directo, "Primera resolución.")
+        self.ticket.refresh_from_db()
+        reabrir_ticket(self.ticket, self.responsable_directo, "Falta un detalle.")
+        self.ticket.refresh_from_db()
+
+        segunda = resolver_ticket(self.ticket, self.responsable_directo, "Segunda resolución.")
+        self.ticket.refresh_from_db()
+
+        self.assertEqual(self.ticket.estado, Ticket.Estado.RESUELTO)
+        self.assertEqual(ResolucionTicket.objects.filter(ticket=self.ticket).count(), 2)
+        self.assertNotEqual(primera.pk, segunda.pk)
+
+    def test_primera_resolucion_permanece_intacta_tras_la_segunda(self):
+        primera = resolver_ticket(self.ticket, self.responsable_directo, "Primera resolución.")
+        self.ticket.refresh_from_db()
+        reabrir_ticket(self.ticket, self.responsable_directo, "Falta un detalle.")
+        self.ticket.refresh_from_db()
+        resolver_ticket(self.ticket, self.responsable_directo, "Segunda resolución.")
+
+        primera.refresh_from_db()
+        self.assertEqual(primera.descripcion, "Primera resolución.")
+        self.assertEqual(primera.resuelto_por_id, self.responsable_directo.id)
+
+    def test_segunda_resolucion_es_la_mas_reciente(self):
+        resolver_ticket(self.ticket, self.responsable_directo, "Primera resolución.")
+        self.ticket.refresh_from_db()
+        reabrir_ticket(self.ticket, self.responsable_directo, "Falta un detalle.")
+        self.ticket.refresh_from_db()
+        segunda = resolver_ticket(self.ticket, self.responsable_directo, "Segunda resolución.")
+
+        mas_reciente = self.ticket.resoluciones.order_by("-resuelto_en").first()
+        self.assertEqual(mas_reciente.pk, segunda.pk)
+        self.assertEqual(mas_reciente.descripcion, "Segunda resolución.")
+
+
+class ResolverConAdjuntoTests(_MediaAisladaMixin, _EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+
+    def test_adjunto_resolucion_queda_correctamente_asociado(self):
+        archivo = SimpleUploadedFile("evidencia.txt", b"contenido", content_type="text/plain")
+        resolucion = resolver_ticket(
+            self.ticket, self.responsable_directo, "Resuelto con evidencia.", archivos=[archivo]
+        )
+        self.assertEqual(resolucion.adjuntos.count(), 1)
+        adjunto = resolucion.adjuntos.get()
+        self.assertEqual(adjunto.tipo_relacion, Adjunto.TipoRelacion.RESOLUCION)
+        self.assertEqual(adjunto.nombre_original, "evidencia.txt")
+        self.assertEqual(adjunto.ticket_relacionado.pk, self.ticket.pk)
+
+    def test_adjuntos_de_resoluciones_distintas_no_se_mezclan(self):
+        # 2.C, punto 2: cada Adjunto.RESOLUCION apunta a SU resolución
+        # concreta — dos ciclos RESOLVER→REABRIR→RESOLVER no deben mezclar
+        # la evidencia de uno con la del otro.
+        archivo_a = SimpleUploadedFile("evidencia_a.txt", b"A", content_type="text/plain")
+        primera = resolver_ticket(
+            self.ticket, self.responsable_directo, "Primera resolución.", archivos=[archivo_a]
+        )
+        self.ticket.refresh_from_db()
+        reabrir_ticket(self.ticket, self.responsable_directo, "Falta un detalle.")
+        self.ticket.refresh_from_db()
+
+        archivo_b = SimpleUploadedFile("evidencia_b.txt", b"B", content_type="text/plain")
+        segunda = resolver_ticket(
+            self.ticket, self.responsable_directo, "Segunda resolución.", archivos=[archivo_b]
+        )
+
+        self.assertEqual(primera.adjuntos.count(), 1)
+        self.assertEqual(primera.adjuntos.get().nombre_original, "evidencia_a.txt")
+        self.assertEqual(segunda.adjuntos.count(), 1)
+        self.assertEqual(segunda.adjuntos.get().nombre_original, "evidencia_b.txt")
+
+
+class CerrarTicketTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.ticket.refresh_from_db()
+
+    def test_solicitante_puede_cerrar(self):
+        cerrar_ticket(self.ticket, self.solicitante)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.CERRADO)
+
+    def test_responsable_actual_puede_cerrar(self):
+        cerrar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.CERRADO)
+
+    def test_gestor_por_alcance_no_puede_cerrar(self):
+        with self.assertRaises(PermissionDenied):
+            cerrar_ticket(self.ticket, self.gestor_area)
+
+    def test_ajeno_no_puede_cerrar(self):
+        with self.assertRaises(PermissionDenied):
+            cerrar_ticket(self.ticket, self.ajeno)
+
+    def test_no_se_puede_cerrar_sin_estar_resuelto(self):
+        otro = crear_borrador(self.solicitante, self.servicio)
+        with self.assertRaises(ValidationError):
+            cerrar_ticket(otro, self.solicitante)
+
+    def test_cerrado_es_terminal_no_se_reabre(self):
+        cerrar_ticket(self.ticket, self.solicitante)
+        self.ticket.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            reabrir_ticket(self.ticket, self.responsable_directo, "Motivo.")
+
+    def test_cerrado_es_terminal_no_se_cancela(self):
+        cerrar_ticket(self.ticket, self.solicitante)
+        self.ticket.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            cancelar_ticket(self.ticket, self.solicitante, "Motivo.")
+
+    def test_doble_submit_cerrar_no_duplica_nada(self):
+        cerrar_ticket(self.ticket, self.solicitante)
+        self.ticket.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            cerrar_ticket(self.ticket, self.solicitante)
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.CERRADO
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            _auditorias_de_ticket(self.ticket).filter(datos_nuevos={"estado": "CERRADO"}).count(), 1
+        )
+
+    def test_cerrar_genera_exactamente_un_historial_y_una_auditoria(self):
+        cerrar_ticket(self.ticket, self.solicitante)
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.CERRADO
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            _auditorias_de_ticket(self.ticket).filter(datos_nuevos={"estado": "CERRADO"}).count(), 1
+        )
+
+    def test_responsable_se_preserva_tras_cerrar(self):
+        cerrar_ticket(self.ticket, self.solicitante)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.usuario_responsable_id, self.responsable_directo.id)
+
+
+class CancelarTicketTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_solicitante_cancela_desde_radicado(self):
+        cancelar_ticket(self.ticket, self.solicitante, "Ya no se necesita.")
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.CANCELADO)
+
+    def test_responsable_actual_cancela_desde_en_atencion(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        cancelar_ticket(self.ticket, self.responsable_directo, "No se puede atender.")
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.CANCELADO)
+
+    def test_motivo_obligatorio(self):
+        with self.assertRaises(ValidationError):
+            cancelar_ticket(self.ticket, self.solicitante, "   ")
+
+    def test_gestor_por_alcance_no_puede_cancelar(self):
+        with self.assertRaises(PermissionDenied):
+            cancelar_ticket(self.ticket, self.gestor_area, "Motivo.")
+
+    def test_ajeno_no_puede_cancelar(self):
+        with self.assertRaises(PermissionDenied):
+            cancelar_ticket(self.ticket, self.ajeno, "Motivo.")
+
+    def test_resuelto_no_se_puede_cancelar(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.ticket.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            cancelar_ticket(self.ticket, self.solicitante, "Motivo.")
+
+    def test_cancelado_es_terminal(self):
+        cancelar_ticket(self.ticket, self.solicitante, "Motivo.")
+        self.ticket.refresh_from_db()
+        # "Terminal" se verifica primero contra la propia tabla de estados
+        # (RN-018: ¿existe la transición?) — ninguna sale de CANCELADO.
+        self.assertFalse(puede_ejecutar(self.ticket, "TOMAR"))
+        self.assertFalse(puede_ejecutar(self.ticket, "CANCELAR"))
+        self.assertFalse(puede_ejecutar(self.ticket, "RESOLVER"))
+        # A nivel de operación, `tomar_ticket` la rechaza igual — el tipo
+        # exacto de excepción depende de qué chequeo llega primero
+        # (`puede_tomar` ya gatea por estado antes de llegar a
+        # `exigir_transicion`), así que se acepta cualquiera de los dos.
+        with self.assertRaises((PermissionDenied, ValidationError)):
+            tomar_ticket(self.ticket, self.responsable_directo)
+
+    def test_cancelar_no_elimina_fisicamente_el_ticket(self):
+        cancelar_ticket(self.ticket, self.solicitante, "Motivo.")
+        self.assertTrue(Ticket.objects.filter(pk=self.ticket.pk).exists())
+
+    def test_no_se_puede_eliminar_fisicamente_un_ticket_cancelado(self):
+        cancelar_ticket(self.ticket, self.solicitante, "Motivo.")
+        self.ticket.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            self.ticket.delete()
+        self.assertTrue(Ticket.objects.filter(pk=self.ticket.pk).exists())
+
+    def test_doble_submit_cancelar_no_duplica_nada(self):
+        cancelar_ticket(self.ticket, self.solicitante, "Primer motivo.")
+        self.ticket.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            cancelar_ticket(self.ticket, self.solicitante, "Segundo motivo.")
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.CANCELADO
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            _auditorias_de_ticket(self.ticket).filter(datos_nuevos={"estado": "CANCELADO"}).count(), 1
+        )
+
+    def test_cancelar_genera_historial_con_motivo_y_una_auditoria(self):
+        cancelar_ticket(self.ticket, self.solicitante, "Ya no se necesita.")
+        evento = HistorialTicket.objects.get(
+            ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.CANCELADO
+        )
+        self.assertEqual(evento.datos["motivo"], "Ya no se necesita.")
+        self.assertEqual(
+            _auditorias_de_ticket(self.ticket).filter(datos_nuevos={"estado": "CANCELADO"}).count(), 1
+        )
+
+    def test_responsable_se_preserva_tras_cancelar(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        cancelar_ticket(self.ticket, self.responsable_directo, "Motivo.")
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.usuario_responsable_id, self.responsable_directo.id)
+
+
+class ReabrirTicketTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.ticket.refresh_from_db()
+
+    def test_responsable_actual_reabre_correctamente(self):
+        reabrir_ticket(self.ticket, self.responsable_directo, "Faltó un detalle.")
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.EN_ATENCION)
+
+    def test_motivo_obligatorio(self):
+        with self.assertRaises(ValidationError):
+            reabrir_ticket(self.ticket, self.responsable_directo, "   ")
+
+    def test_solicitante_no_puede_reabrir(self):
+        with self.assertRaises(PermissionDenied):
+            reabrir_ticket(self.ticket, self.solicitante, "Motivo.")
+
+    def test_gestor_por_alcance_no_puede_reabrir(self):
+        with self.assertRaises(PermissionDenied):
+            reabrir_ticket(self.ticket, self.gestor_area, "Motivo.")
+
+    def test_cerrado_no_se_reabre(self):
+        cerrar_ticket(self.ticket, self.solicitante)
+        self.ticket.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            reabrir_ticket(self.ticket, self.responsable_directo, "Motivo.")
+
+    def test_reabrir_conserva_responsable_y_equipo(self):
+        reabrir_ticket(self.ticket, self.responsable_directo, "Motivo.")
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.usuario_responsable_id, self.responsable_directo.id)
+
+    def test_no_crea_una_nueva_resolucion_ni_elimina_la_existente(self):
+        reabrir_ticket(self.ticket, self.responsable_directo, "Motivo.")
+        self.assertEqual(ResolucionTicket.objects.filter(ticket=self.ticket).count(), 1)
+
+    def test_doble_submit_reabrir_no_duplica_nada(self):
+        reabrir_ticket(self.ticket, self.responsable_directo, "Primer motivo.")
+        self.ticket.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            reabrir_ticket(self.ticket, self.responsable_directo, "Segundo motivo.")
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.REABIERTO
+            ).count(),
+            1,
+        )
+        self.assertEqual(
+            _auditorias_de_ticket(self.ticket).filter(datos_nuevos={"estado": "EN_ATENCION"}).count(), 1
+        )
+
+    def test_reabrir_genera_historial_con_motivo_y_una_auditoria(self):
+        reabrir_ticket(self.ticket, self.responsable_directo, "Faltó un detalle.")
+        evento = HistorialTicket.objects.get(
+            ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.REABIERTO
+        )
+        self.assertEqual(evento.datos["motivo"], "Faltó un detalle.")
+        self.assertEqual(
+            _auditorias_de_ticket(self.ticket).filter(datos_nuevos={"estado": "EN_ATENCION"}).count(), 1
+        )
+
+
+class ConcurrenciaFinalizacionTests(_EscenarioAtencionMixin, TransactionTestCase):
+    """Punto 11 (aprobado): las 4 operaciones de 2.5 revalidan estado bajo
+    `select_for_update()` — mismo patrón que `ConcurrenciaTomarTicketTests`
+    (2.3) y `ConcurrenciaResponderSolicitudTests` (2.4), con hilos reales
+    contra Postgres."""
+
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_dos_resoluciones_concurrentes_solo_una_gana(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        resultados = {}
+        barrera = threading.Barrier(2)
+
+        def _intentar_resolver(clave, descripcion):
+            barrera.wait()
+            try:
+                ticket = Ticket.objects.get(pk=self.ticket.pk)
+                resolver_ticket(ticket, self.responsable_directo, descripcion)
+                resultados[clave] = "ok"
+            except ValidationError:
+                resultados[clave] = "ya_resuelto"
+            finally:
+                connection.close()
+
+        hilo_a = threading.Thread(target=_intentar_resolver, args=("a", "Resolución A"))
+        hilo_b = threading.Thread(target=_intentar_resolver, args=("b", "Resolución B"))
+        hilo_a.start()
+        hilo_b.start()
+        hilo_a.join()
+        hilo_b.join()
+
+        valores = list(resultados.values())
+        self.assertEqual(valores.count("ok"), 1)
+        self.assertEqual(valores.count("ya_resuelto"), 1)
+        ticket = Ticket.objects.get(pk=self.ticket.pk)
+        self.assertEqual(ticket.estado, Ticket.Estado.RESUELTO)
+        self.assertEqual(ResolucionTicket.objects.filter(ticket=ticket).count(), 1)
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=ticket, tipo_evento=HistorialTicket.TipoEvento.RESUELTO
+            ).count(),
+            1,
+        )
+        self.assertEqual(_auditorias_de_ticket(ticket).filter(datos_nuevos={"estado": "RESUELTO"}).count(), 1)
+
+    def test_cerrar_mientras_otro_reabre_solo_uno_gana(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.ticket.refresh_from_db()
+        resultados = {}
+        barrera = threading.Barrier(2)
+
+        def _cerrar():
+            barrera.wait()
+            try:
+                ticket = Ticket.objects.get(pk=self.ticket.pk)
+                cerrar_ticket(ticket, self.solicitante)
+                resultados["cerrar"] = "ok"
+            except ValidationError:
+                resultados["cerrar"] = "fallo"
+            finally:
+                connection.close()
+
+        def _reabrir():
+            barrera.wait()
+            try:
+                ticket = Ticket.objects.get(pk=self.ticket.pk)
+                reabrir_ticket(ticket, self.responsable_directo, "Reapertura.")
+                resultados["reabrir"] = "ok"
+            except ValidationError:
+                resultados["reabrir"] = "fallo"
+            finally:
+                connection.close()
+
+        hilo_a = threading.Thread(target=_cerrar)
+        hilo_b = threading.Thread(target=_reabrir)
+        hilo_a.start()
+        hilo_b.start()
+        hilo_a.join()
+        hilo_b.join()
+
+        valores = list(resultados.values())
+        self.assertEqual(valores.count("ok"), 1)
+        self.assertEqual(valores.count("fallo"), 1)
+        ticket = Ticket.objects.get(pk=self.ticket.pk)
+        self.assertIn(ticket.estado, [Ticket.Estado.CERRADO, Ticket.Estado.EN_ATENCION])
+
+    def test_cancelar_mientras_otro_toma_solo_uno_gana(self):
+        """CANCELAR admite tanto RADICADO como EN_ATENCION (a diferencia de
+        TOMAR, que exige exclusivamente RADICADO) — así que, a diferencia
+        de las otras 3 carreras de esta clase, aquí "solo uno gana" no
+        aplica simétricamente: si TOMAR corre y comete primero, CANCELAR
+        igual procede después (el ticket sigue en un estado que cancelar
+        acepta, EN_ATENCION). El invariante real bajo `select_for_update()`
+        es que CANCELAR siempre termina ganando — corra antes o después de
+        TOMAR, siempre encuentra un estado que le permite ejecutarse —
+        mientras que TOMAR solo tiene éxito si comete antes que CANCELAR."""
+        resultados = {}
+        barrera = threading.Barrier(2)
+
+        def _cancelar():
+            barrera.wait()
+            try:
+                ticket = Ticket.objects.get(pk=self.ticket.pk)
+                cancelar_ticket(ticket, self.solicitante, "Motivo.")
+                resultados["cancelar"] = "ok"
+            except (PermissionDenied, ValidationError):
+                resultados["cancelar"] = "fallo"
+            finally:
+                connection.close()
+
+        def _tomar():
+            barrera.wait()
+            try:
+                ticket = Ticket.objects.get(pk=self.ticket.pk)
+                tomar_ticket(ticket, self.responsable_directo)
+                resultados["tomar"] = "ok"
+            except (PermissionDenied, ValidationError):
+                resultados["tomar"] = "fallo"
+            finally:
+                connection.close()
+
+        hilo_a = threading.Thread(target=_cancelar)
+        hilo_b = threading.Thread(target=_tomar)
+        hilo_a.start()
+        hilo_b.start()
+        hilo_a.join()
+        hilo_b.join()
+
+        self.assertEqual(resultados["cancelar"], "ok")
+        ticket = Ticket.objects.get(pk=self.ticket.pk)
+        self.assertEqual(ticket.estado, Ticket.Estado.CANCELADO)
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=ticket, tipo_evento=HistorialTicket.TipoEvento.CANCELADO
+            ).count(),
+            1,
+        )
+
+    def test_reabrir_dos_veces_concurrente_solo_una_gana(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.ticket.refresh_from_db()
+        resultados = {}
+        barrera = threading.Barrier(2)
+
+        def _reabrir(clave):
+            barrera.wait()
+            try:
+                ticket = Ticket.objects.get(pk=self.ticket.pk)
+                reabrir_ticket(ticket, self.responsable_directo, f"Motivo {clave}.")
+                resultados[clave] = "ok"
+            except ValidationError:
+                resultados[clave] = "ya_reabierto"
+            finally:
+                connection.close()
+
+        hilo_a = threading.Thread(target=_reabrir, args=("a",))
+        hilo_b = threading.Thread(target=_reabrir, args=("b",))
+        hilo_a.start()
+        hilo_b.start()
+        hilo_a.join()
+        hilo_b.join()
+
+        valores = list(resultados.values())
+        self.assertEqual(valores.count("ok"), 1)
+        self.assertEqual(valores.count("ya_reabierto"), 1)
+        ticket = Ticket.objects.get(pk=self.ticket.pk)
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+        self.assertEqual(
+            HistorialTicket.objects.filter(
+                ticket=ticket, tipo_evento=HistorialTicket.TipoEvento.REABIERTO
+            ).count(),
+            1,
+        )
+
+
+class FinalizacionViewsTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+
+    def test_resolver_view_exitoso(self):
+        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:resolver", args=[self.ticket.pk]), {"descripcion": "Resuelto vía vista."}
+        )
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.RESUELTO)
+
+    def test_resolver_view_rechaza_get(self):
+        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:resolver", args=[self.ticket.pk]))
+        self.assertEqual(respuesta.status_code, 405)
+
+    def test_resolver_view_sin_autorizacion_no_cambia_estado(self):
+        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:resolver", args=[self.ticket.pk]), {"descripcion": "Intento no autorizado."}
+        )
+        self.assertEqual(respuesta.status_code, 302)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.EN_ATENCION)
+
+    def test_cerrar_view_exitoso(self):
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.ticket.refresh_from_db()
+        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(reverse("tickets:cerrar", args=[self.ticket.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.CERRADO)
+
+    def test_cancelar_view_exitoso(self):
+        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:cancelar", args=[self.ticket.pk]), {"motivo": "Ya no se necesita."}
+        )
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.CANCELADO)
+
+    def test_reabrir_view_exitoso(self):
+        resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
+        self.ticket.refresh_from_db()
+        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("tickets:reabrir", args=[self.ticket.pk]), {"motivo": "Faltó un detalle."}
+        )
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.EN_ATENCION)
+
+    def test_detalle_view_expone_contexto_de_finalizacion(self):
+        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertTrue(respuesta.context["puede_resolver"])
+        self.assertFalse(respuesta.context["puede_cerrar"])
+        self.assertIn("resolucion_actual", respuesta.context)
+        self.assertIn("resoluciones_anteriores", respuesta.context)
+
+    def test_detalle_view_expone_resolucion_actual_y_anteriores(self):
+        resolver_ticket(self.ticket, self.responsable_directo, "Primera resolución.")
+        self.ticket.refresh_from_db()
+        reabrir_ticket(self.ticket, self.responsable_directo, "Falta un detalle.")
+        self.ticket.refresh_from_db()
+        resolver_ticket(self.ticket, self.responsable_directo, "Segunda resolución.")
+        self.ticket.refresh_from_db()
+
+        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertEqual(respuesta.context["resolucion_actual"].descripcion, "Segunda resolución.")
+        anteriores = respuesta.context["resoluciones_anteriores"]
+        self.assertEqual(len(anteriores), 1)
+        self.assertEqual(anteriores[0].descripcion, "Primera resolución.")
+
+
+# ---------------------------------------------------------------------------
+# 2.C — Cierre técnico Sprint 2: RQF-119 (auditoría de responsable/
+# asignación, deuda cerrada — TOMAR/ASIGNAR/REASIGNAR de 2.3 ahora también
+# alimentan RegistroAuditoria, no solo HistorialTicket).
+# ---------------------------------------------------------------------------
+
+
+class AuditoriaAsignacionTests(_EscenarioAtencionMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario()
+
+    def test_tomar_genera_exactamente_una_auditoria_de_asignacion(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        auditorias = _auditorias_de_ticket(self.ticket).filter(accion=RegistroAuditoria.Accion.ACTUALIZAR)
+        self.assertEqual(auditorias.count(), 1)
+        registro = auditorias.get()
+        self.assertEqual(registro.usuario_id, self.responsable_directo.id)
+        self.assertEqual(registro.origen, RegistroAuditoria.Origen.USUARIO)
+        self.assertEqual(
+            registro.datos_anteriores, {"usuario_responsable_id": None, "equipo_responsable_id": None}
+        )
+        self.assertEqual(
+            registro.datos_nuevos,
+            {"usuario_responsable_id": self.responsable_directo.id, "equipo_responsable_id": None},
+        )
+
+    def test_asignar_genera_exactamente_una_auditoria(self):
+        asignar_ticket(self.ticket, self.gestor_area, usuario=self.responsable_directo)
+        auditorias = _auditorias_de_ticket(self.ticket).filter(accion=RegistroAuditoria.Accion.ACTUALIZAR)
+        self.assertEqual(auditorias.count(), 1)
+        registro = auditorias.get()
+        self.assertEqual(registro.usuario_id, self.gestor_area.id)
+        self.assertEqual(
+            registro.datos_nuevos,
+            {"usuario_responsable_id": self.responsable_directo.id, "equipo_responsable_id": None},
+        )
+
+    def test_asignar_solo_equipo_tambien_audita(self):
+        asignar_ticket(self.ticket, self.gestor_area, equipo=self.equipo)
+        auditorias = _auditorias_de_ticket(self.ticket).filter(accion=RegistroAuditoria.Accion.ACTUALIZAR)
+        self.assertEqual(auditorias.count(), 1)
+        registro = auditorias.get()
+        self.assertEqual(
+            registro.datos_nuevos,
+            {"usuario_responsable_id": None, "equipo_responsable_id": self.equipo.id},
+        )
+
+    def test_reasignar_genera_exactamente_una_auditoria_con_datos_correctos(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        reasignar_ticket(self.ticket, self.gestor_area, usuario=self.miembro_equipo)
+
+        auditorias = _auditorias_de_ticket(self.ticket).filter(
+            accion=RegistroAuditoria.Accion.ACTUALIZAR, usuario=self.gestor_area
+        )
+        self.assertEqual(auditorias.count(), 1)
+        registro = auditorias.get()
+        self.assertEqual(registro.datos_anteriores["usuario_responsable_id"], self.responsable_directo.id)
+        self.assertEqual(registro.datos_nuevos["usuario_responsable_id"], self.miembro_equipo.id)
+
+    def test_doble_intento_fallido_de_tomar_no_genera_auditoria_adicional(self):
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            tomar_ticket(self.ticket, self.miembro_equipo)
+        self.assertEqual(
+            _auditorias_de_ticket(self.ticket).filter(accion=RegistroAuditoria.Accion.ACTUALIZAR).count(), 1
+        )
+
+    def test_no_audita_comentarios_ni_adjuntos(self):
+        # Punto 5 (aprobado): no se audita comunicación por este cambio —
+        # solo TOMAR/ASIGNAR/REASIGNAR generan RegistroAuditoria de Ticket.
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        comentar_ticket(self.ticket, self.responsable_directo, "Un comentario cualquiera.")
+        self.assertEqual(
+            _auditorias_de_ticket(self.ticket).filter(accion=RegistroAuditoria.Accion.ACTUALIZAR).count(), 1
+        )

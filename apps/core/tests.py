@@ -854,11 +854,13 @@ class AuditoriaTests(TestCase):
 
 
 class ApplicationShellTests(TestCase):
-    """Application Shell autenticado (incremento 0.5) — sin CU propio.
+    """Application Shell autenticado (incremento 0.5; rediseño 2.UI.1:
+    topbar + dock flotante, sin sidebar) — sin CU propio.
 
     Comportamiento real únicamente: autenticación requerida, información
-    organizacional real renderizada, y navegación condicionada a is_staff.
-    Nada sobre colores/tamaños/CSS — eso no es competencia de estas pruebas.
+    organizacional real renderizada, y navegación condicionada a is_staff /
+    alcances de `tickets.atender`. Nada sobre colores/tamaños/CSS — eso no
+    es competencia de estas pruebas.
     """
 
     def setUp(self):
@@ -924,7 +926,129 @@ class ApplicationShellTests(TestCase):
 
     def test_servicios_visible_en_navegacion_para_cualquier_autenticado(self):
         # Regresión por el cambio en core.navegacion (Incremento 1.1):
-        # "Servicios" es el primer módulo funcional real agregado al sidebar.
+        # "Servicios" es el primer módulo funcional real agregado al dock.
         self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertContains(respuesta, "Servicios")
+
+    def test_shell_autenticado_contiene_dock(self):
+        # 2.UI.1: el shell autenticado se navega desde el dock flotante,
+        # no desde un sidebar — regresión de estructura, no de estilo.
+        self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:inicio"))
+        self.assertContains(respuesta, 'class="dock"')
+        self.assertContains(respuesta, "dock__list")
+
+    def test_shell_ya_no_contiene_sidebar(self):
+        # 2.UI.1: el sidebar permanente desaparece del shell (eliminado,
+        # no solo ocultado) — sustituido por topbar + dock.
+        self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:inicio"))
+        self.assertNotContains(respuesta, 'class="sidebar"')
+
+    def test_shell_no_autenticado_no_renderiza_dock(self):
+        # Login es la única página servida sin sesión — no debe traer el
+        # dock (que depende de navegación autenticada).
+        respuesta = self.client.get(reverse("core:login"))
+        self.assertNotContains(respuesta, 'class="dock"')
+
+    def test_cola_atencion_visible_en_navegacion_solo_con_permiso_tickets_atender(self):
+        # 2.3/2.UI.1: "Cola de atención" solo aparece en el dock si el
+        # usuario tiene `tickets.atender` en algún alcance — no es un
+        # destino visible para cualquier autenticado, a diferencia de
+        # "Mis tickets" o "Servicios".
+        self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:inicio"))
+        self.assertNotContains(respuesta, "Cola de atención")
+
+        permiso, _ = Permiso.objects.get_or_create(
+            codigo="tickets.atender",
+            defaults={"nombre": "Atender tickets (tomar, asignar, reasignar)"},
+        )
+        rol = RolFuncional.objects.create(nombre="Rol atender dock")
+        RolPermiso.objects.create(rol=rol, permiso=permiso)
+        AsignacionRol.objects.create(
+            usuario=self.usuario, rol=rol, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL
+        )
+        respuesta = self.client.get(reverse("core:inicio"))
+        self.assertContains(respuesta, "Cola de atención")
+
+    def test_rutas_principales_del_dock_siguen_resolviendo(self):
+        # 2.UI.1 es exclusivamente visual/navegación: no debe romper ninguna
+        # URL existente de los módulos ya implementados.
+        for nombre in (
+            "core:inicio",
+            "core:perfil",
+            "core:logout",
+            "catalogo:lista",
+            "tickets:mis_tickets",
+            "tickets:cola",
+            "admin:index",
+        ):
+            reverse(nombre)
+
+
+class MensajesGlobalesTests(TestCase):
+    """2.C, punto 4 — el shell venía generando `messages.success`/
+    `messages.error` desde 2.1 sin renderizarlos nunca (ningún template
+    incluía `{% for message in messages %}`). Corregido en
+    `templates/base.html`: verifica que el shell autenticado los muestre,
+    con la clase `alert--<tag>` correcta (ERROR se remapea a "danger" vía
+    `MESSAGE_TAGS`, ver `config/settings.py`)."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="msgshell24c", password=CLAVE_PRUEBA)
+
+    def _renderizar_inicio_con_mensaje(self, nivel, texto):
+        from django.contrib.messages import add_message
+        from django.contrib.messages.storage.fallback import FallbackStorage
+
+        from apps.core.views import inicio_view
+
+        request = RequestFactory().get(reverse("core:inicio"))
+        request.user = self.usuario
+        request.session = self.client.session
+        storage = FallbackStorage(request)
+        request._messages = storage
+        add_message(request, nivel, texto)
+        return inicio_view(request)
+
+    def test_shell_autenticado_renderiza_messages(self):
+        from django.contrib.messages import constants
+
+        respuesta = self._renderizar_inicio_con_mensaje(constants.INFO, "Mensaje informativo de prueba.")
+        contenido = respuesta.content.decode()
+        self.assertIn("Mensaje informativo de prueba.", contenido)
+        self.assertIn('class="messages"', contenido)
+
+    def test_mensaje_success_es_visible_y_cerrable(self):
+        from django.contrib.messages import constants
+
+        respuesta = self._renderizar_inicio_con_mensaje(constants.SUCCESS, "Operación exitosa.")
+        contenido = respuesta.content.decode()
+        self.assertIn("Operación exitosa.", contenido)
+        self.assertIn("alert--success", contenido)
+        self.assertIn('data-action="cerrar-mensaje"', contenido)
+
+    def test_mensaje_error_es_visible_como_danger(self):
+        # RQF/convención del proyecto: ERROR se remapea a "danger" para
+        # reutilizar los tokens/clases ya existentes (--danger), no un
+        # nombre de clase "error" aislado.
+        from django.contrib.messages import constants
+
+        respuesta = self._renderizar_inicio_con_mensaje(constants.ERROR, "Algo salió mal.")
+        contenido = respuesta.content.decode()
+        self.assertIn("Algo salió mal.", contenido)
+        self.assertIn("alert--danger", contenido)
+
+    def test_mensaje_warning_es_visible(self):
+        from django.contrib.messages import constants
+
+        respuesta = self._renderizar_inicio_con_mensaje(constants.WARNING, "Advertencia de prueba.")
+        contenido = respuesta.content.decode()
+        self.assertIn("Advertencia de prueba.", contenido)
+        self.assertIn("alert--warning", contenido)
+
+    def test_sin_mensajes_no_renderiza_el_contenedor(self):
+        respuesta = self.client.get(reverse("core:login"))
+        self.assertNotContains(respuesta, 'class="messages"')

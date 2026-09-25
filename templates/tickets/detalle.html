@@ -11,9 +11,257 @@
 
   <section class="card">
     <h1>{{ servicio.nombre }}</h1>
-    <span class="badge badge--info">{{ ticket.get_estado_display }}</span>
+    <span class="badge
+      {% if ticket.estado == 'RESUELTO' %}badge--success
+      {% elif ticket.estado == 'CANCELADO' %}badge--danger
+      {% elif ticket.estado == 'BORRADOR' %}badge--warning
+      {% else %}badge--info{% endif %}">{{ ticket.get_estado_display }}</span>
     <p class="text-muted">Radicado: {{ ticket.radicado }}</p>
     <p class="text-muted">Radicado el {{ ticket.radicado_en|date:"d/m/Y H:i" }}</p>
+  </section>
+
+  <section class="card">
+    <h3>Atención</h3>
+    <p class="text-muted">
+      Responsable: {% if ticket.usuario_responsable %}{{ ticket.usuario_responsable }}{% else %}Sin asignar{% endif %}
+    </p>
+    <p class="text-muted">
+      Equipo: {% if ticket.equipo_responsable %}{{ ticket.equipo_responsable }}{% else %}—{% endif %}
+    </p>
+
+    {% if puede_tomar %}
+      <form method="post" action="{% url 'tickets:tomar' ticket.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn--primary">Tomar</button>
+      </form>
+    {% endif %}
+
+    {% if puede_asignar or puede_reasignar %}
+      <form method="post" action="{% if puede_asignar %}{% url 'tickets:asignar' ticket.pk %}{% else %}{% url 'tickets:reasignar' ticket.pk %}{% endif %}" class="form">
+        {% csrf_token %}
+        <div class="field">
+          <label for="id_usuario_responsable">Usuario</label>
+          <select name="usuario_id" id="id_usuario_responsable">
+            <option value="">—</option>
+            {% for usuario in usuarios_disponibles %}
+              <option value="{{ usuario.pk }}">{{ usuario }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="id_equipo_responsable">Equipo</label>
+          <select name="equipo_id" id="id_equipo_responsable">
+            <option value="">—</option>
+            {% for equipo in equipos_disponibles %}
+              <option value="{{ equipo.pk }}">{{ equipo }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <button type="submit" class="btn btn--secondary">{% if puede_asignar %}Asignar{% else %}Reasignar{% endif %}</button>
+      </form>
+    {% endif %}
+  </section>
+
+  {% if resolucion_actual or puede_resolver or puede_cerrar or puede_cancelar or puede_reabrir %}
+    <section class="card">
+      <h3>Finalizar</h3>
+
+      {% if resolucion_actual %}
+        <h4>Resolución actual</h4>
+        <p><strong>Resuelto por {{ resolucion_actual.resuelto_por }}</strong> — {{ resolucion_actual.resuelto_en|date:"d/m/Y H:i" }}</p>
+        <p>{{ resolucion_actual.descripcion }}</p>
+        {% for adjunto in resolucion_actual.adjuntos.all %}
+          <p><a href="{% url 'tickets:descargar_adjunto' adjunto.pk %}">{{ adjunto.nombre_original }}</a></p>
+        {% endfor %}
+      {% endif %}
+
+      {% if resoluciones_anteriores %}
+        <h4>Resoluciones anteriores</h4>
+        <ul class="plain-list">
+          {% for anterior in resoluciones_anteriores %}
+            <li>
+              <span class="text-muted">{{ anterior.resuelto_por }} — {{ anterior.resuelto_en|date:"d/m/Y H:i" }}</span>
+              <p>{{ anterior.descripcion }}</p>
+              {% for adjunto in anterior.adjuntos.all %}
+                <p><a href="{% url 'tickets:descargar_adjunto' adjunto.pk %}">{{ adjunto.nombre_original }}</a></p>
+              {% endfor %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+
+      {% if puede_resolver %}
+        <form method="post" action="{% url 'tickets:resolver' ticket.pk %}" enctype="multipart/form-data" class="form">
+          {% csrf_token %}
+          <div class="field">
+            <label for="id_descripcion_resolucion">Descripción de la resolución</label>
+            <textarea name="descripcion" id="id_descripcion_resolucion" required></textarea>
+          </div>
+          <div class="field">
+            <label for="id_resolucion_archivo">Adjuntar evidencia (opcional)</label>
+            <input type="file" name="archivo" id="id_resolucion_archivo">
+          </div>
+          <button type="submit" class="btn btn--primary">Resolver</button>
+        </form>
+      {% endif %}
+
+      {% if puede_cerrar %}
+        <form method="post" action="{% url 'tickets:cerrar' ticket.pk %}" onsubmit="return confirm('¿Confirmas cerrar este ticket?');">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--primary">Cerrar</button>
+        </form>
+      {% endif %}
+
+      {% if puede_reabrir %}
+        <form method="post" action="{% url 'tickets:reabrir' ticket.pk %}" class="form">
+          {% csrf_token %}
+          <div class="field">
+            <label for="id_motivo_reabrir">Motivo de reapertura</label>
+            <textarea name="motivo" id="id_motivo_reabrir" required></textarea>
+          </div>
+          <button type="submit" class="btn btn--secondary">Reabrir</button>
+        </form>
+      {% endif %}
+
+      {% if puede_cancelar %}
+        <form method="post" action="{% url 'tickets:cancelar' ticket.pk %}" class="form">
+          {% csrf_token %}
+          <div class="field">
+            <label for="id_motivo_cancelar">Motivo de cancelación</label>
+            <textarea name="motivo" id="id_motivo_cancelar" required></textarea>
+          </div>
+          <button type="submit" class="btn btn--secondary">Cancelar ticket</button>
+        </form>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  <section class="card">
+    <h3>Comunicación</h3>
+    <ul>
+      {% for comentario in comentarios %}
+        <li>
+          <strong>{{ comentario.autor }}</strong>
+          <span class="text-muted">{{ comentario.creado_en|date:"d/m/Y H:i" }}</span>
+          <p>{{ comentario.contenido }}</p>
+          {% for adjunto in comentario.adjuntos.all %}
+            <p><a href="{% url 'tickets:descargar_adjunto' adjunto.pk %}">{{ adjunto.nombre_original }}</a></p>
+          {% endfor %}
+        </li>
+      {% empty %}
+        <li class="text-muted">Sin comentarios todavía.</li>
+      {% endfor %}
+    </ul>
+
+    {% if adjuntos_ticket %}
+      <h4>Archivos adjuntos al ticket</h4>
+      <ul class="plain-list">
+        {% for adjunto in adjuntos_ticket %}
+          <li>
+            <a href="{% url 'tickets:descargar_adjunto' adjunto.pk %}">{{ adjunto.nombre_original }}</a>
+            <span class="text-muted">{{ adjunto.subido_por }} — {{ adjunto.creado_en|date:"d/m/Y H:i" }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+
+    {% if puede_comentar %}
+      <form method="post" action="{% url 'tickets:comentar' ticket.pk %}" enctype="multipart/form-data" class="form">
+        {% csrf_token %}
+        <div class="field">
+          <label for="id_contenido">Escribir comentario</label>
+          <textarea name="contenido" id="id_contenido" required></textarea>
+        </div>
+        <div class="field">
+          <label for="id_comentario_archivo">Adjuntar archivo (opcional)</label>
+          <input type="file" name="archivo" id="id_comentario_archivo">
+        </div>
+        <button type="submit" class="btn btn--primary">Comentar</button>
+      </form>
+
+      <form method="post" action="{% url 'tickets:adjuntar' ticket.pk %}" enctype="multipart/form-data" class="form">
+        {% csrf_token %}
+        <div class="field">
+          <label for="id_adjunto_directo">Adjuntar archivo al ticket</label>
+          <input type="file" name="archivo" id="id_adjunto_directo" required>
+        </div>
+        <button type="submit" class="btn btn--secondary">Adjuntar</button>
+      </form>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h3>Solicitudes de información</h3>
+    <ul>
+      {% for solicitud in solicitudes %}
+        <li>
+          <span class="badge {% if solicitud.estado == 'PENDIENTE' %}badge--warning{% else %}badge--success{% endif %}">
+            {{ solicitud.get_estado_display }}
+          </span>
+          <p><strong>{{ solicitud.solicitada_por }}</strong> — {{ solicitud.solicitada_en|date:"d/m/Y H:i" }}</p>
+          <p>{{ solicitud.mensaje }}</p>
+          {% for adjunto in solicitud.adjuntos.all %}
+            <p><a href="{% url 'tickets:descargar_adjunto' adjunto.pk %}">{{ adjunto.nombre_original }}</a></p>
+          {% endfor %}
+
+          {% if solicitud.estado == "RESPONDIDA" %}
+            <p>
+              <strong>Respuesta de {{ solicitud.respuesta.respondida_por }}</strong>
+              <span class="text-muted">{{ solicitud.respuesta.respondida_en|date:"d/m/Y H:i" }}</span>
+            </p>
+            <p>{{ solicitud.respuesta.contenido }}</p>
+            {% for adjunto in solicitud.respuesta.adjuntos.all %}
+              <p><a href="{% url 'tickets:descargar_adjunto' adjunto.pk %}">{{ adjunto.nombre_original }}</a></p>
+            {% endfor %}
+          {% elif usuario_es_destinatario_solicitudes %}
+            <form method="post" action="{% url 'tickets:responder_solicitud' ticket.pk solicitud.pk %}" enctype="multipart/form-data" class="form">
+              {% csrf_token %}
+              <div class="field">
+                <label for="id_respuesta_{{ solicitud.pk }}">Responder</label>
+                <textarea name="contenido" id="id_respuesta_{{ solicitud.pk }}" required></textarea>
+              </div>
+              <div class="field">
+                <label for="id_respuesta_archivo_{{ solicitud.pk }}">Adjuntar archivo (opcional)</label>
+                <input type="file" name="archivo" id="id_respuesta_archivo_{{ solicitud.pk }}">
+              </div>
+              <button type="submit" class="btn btn--primary">Enviar respuesta</button>
+            </form>
+          {% endif %}
+        </li>
+      {% empty %}
+        <li class="text-muted">Sin solicitudes de información.</li>
+      {% endfor %}
+    </ul>
+
+    {% if puede_solicitar_informacion %}
+      <form method="post" action="{% url 'tickets:solicitar_informacion' ticket.pk %}" enctype="multipart/form-data" class="form">
+        {% csrf_token %}
+        <div class="field">
+          <label for="id_mensaje_solicitud">Solicitar información</label>
+          <textarea name="mensaje" id="id_mensaje_solicitud" required></textarea>
+        </div>
+        <div class="field">
+          <label for="id_solicitud_archivo">Adjuntar archivo (opcional)</label>
+          <input type="file" name="archivo" id="id_solicitud_archivo">
+        </div>
+        <button type="submit" class="btn btn--secondary">Solicitar información</button>
+      </form>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h3>Línea de tiempo</h3>
+    <ul class="plain-list">
+      {% for evento in historial %}
+        <li>
+          <span class="badge badge--info">{{ evento.get_tipo_evento_display }}</span>
+          <span>{{ evento.actor }}</span>
+          <span class="text-muted">{{ evento.creado_en|date:"d/m/Y H:i" }}</span>
+        </li>
+      {% empty %}
+        <li class="text-muted">Sin eventos.</li>
+      {% endfor %}
+    </ul>
   </section>
 
   <section class="card">
