@@ -1,0 +1,238 @@
+{% extends "base.html" %}
+
+{% block title %}{{ workflow.nombre }} — v{{ version.numero }} — Órbita{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'workflows:lista' %}">Workflows</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <a href="{% url 'workflows:detalle' workflow.pk %}">{{ workflow.nombre }}</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">v{{ version.numero }}</span>
+  </nav>
+
+  <section class="card">
+    <h1>{{ workflow.nombre }} — v{{ version.numero }}</h1>
+    <span class="badge
+      {% if version.estado == 'ACTIVA' %}badge--success
+      {% elif version.estado == 'BORRADOR' %}badge--warning
+      {% else %}badge--info{% endif %}">{{ version.get_estado_display }}</span>
+    {% if not editable and puede_administrar %}
+      <p class="text-muted">Esta versión no admite edición ({{ version.get_estado_display }}) — solo lectura.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h3>Etapas</h3>
+    {% if etapas %}
+      <ul class="plain-list">
+        {% for etapa in etapas %}
+          <li>
+            <span class="badge badge--info">{{ etapa.get_tipo_display }}</span>
+            <strong>{{ etapa.nombre }}</strong>
+            {% if etapa.descripcion %}<span class="text-muted">— {{ etapa.descripcion }}</span>{% endif %}
+            {% if etapa.tipo == 'TAREA' and etapa.configuracion_tarea %}
+              <p class="text-muted">
+                Responsable:
+                {% if etapa.configuracion_tarea.usuario_responsable %}{{ etapa.configuracion_tarea.usuario_responsable }}
+                {% elif etapa.configuracion_tarea.equipo_responsable %}{{ etapa.configuracion_tarea.equipo_responsable }}
+                {% else %}sin configurar{% endif %}
+                {% if etapa.configuracion_tarea.permite_subtareas %}· admite subtareas{% endif %}
+              </p>
+            {% elif etapa.tipo == 'APROBACION' and etapa.configuracion_aprobacion %}
+              <p class="text-muted">
+                {{ etapa.configuracion_aprobacion.get_modo_display }}
+                {% if etapa.configuracion_aprobacion.politica %}· {{ etapa.configuracion_aprobacion.get_politica_display }}{% endif %}
+                · {{ etapa.configuracion_aprobacion.participantes.all|length }} participante{{ etapa.configuracion_aprobacion.participantes.all|length|pluralize }}
+              </p>
+            {% elif etapa.tipo == 'ESPERA' and etapa.configuracion %}
+              <p class="text-muted">
+                {% if etapa.configuracion.modo == 'DURACION' %}Espera {{ etapa.configuracion.duracion_valor }} {{ etapa.configuracion.duracion_unidad }}
+                {% elif etapa.configuracion.modo == 'FECHA' %}Espera hasta {{ etapa.configuracion.fecha_objetivo }}{% endif %}
+              </p>
+            {% endif %}
+
+            {% if editable %}
+              <div class="form-actions">
+                <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="etapa-{{ etapa.pk }}-editar">Editar</button>
+                <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="etapa-{{ etapa.pk }}-tipo">Cambiar tipo</button>
+                {% if etapa.tipo == 'TAREA' or etapa.tipo == 'APROBACION' or etapa.tipo == 'ESPERA' %}
+                  <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="etapa-{{ etapa.pk }}-configurar">Configurar</button>
+                {% endif %}
+                <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="etapa-{{ etapa.pk }}-transicion">+ Transición</button>
+                <form method="post" action="{% url 'workflows:eliminar_etapa' etapa.pk %}" onsubmit="return confirm('¿Eliminar esta etapa? Solo es posible si no tiene transiciones conectadas.');">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn--ghost">Eliminar</button>
+                </form>
+              </div>
+
+              <div id="etapa-{{ etapa.pk }}-editar" class="form" hidden>
+                <form method="post" action="{% url 'workflows:editar_etapa' etapa.pk %}" class="form">
+                  {% csrf_token %}
+                  <div class="field"><label for="id_etapa-{{ etapa.pk }}-editar-nombre">Nombre</label>{{ etapa.form_editar.nombre }}</div>
+                  <div class="field"><label for="id_etapa-{{ etapa.pk }}-editar-descripcion">Descripción</label>{{ etapa.form_editar.descripcion }}</div>
+                  <button type="submit" class="btn btn--secondary">Guardar</button>
+                </form>
+              </div>
+
+              <div id="etapa-{{ etapa.pk }}-tipo" class="form" hidden>
+                <form method="post" action="{% url 'workflows:cambiar_tipo_etapa' etapa.pk %}" class="form" onsubmit="return confirm('Cambiar el tipo elimina la configuración especializada actual de esta etapa. ¿Continuar?');">
+                  {% csrf_token %}
+                  <div class="field"><label for="id_etapa-{{ etapa.pk }}-tipo-tipo">Nuevo tipo</label>{{ etapa.form_tipo.tipo }}</div>
+                  <button type="submit" class="btn btn--secondary">Cambiar tipo</button>
+                </form>
+              </div>
+
+              {% if etapa.tipo == 'TAREA' %}
+                <div id="etapa-{{ etapa.pk }}-configurar" class="form" hidden>
+                  <form method="post" action="{% url 'workflows:configurar_etapa' etapa.pk %}" class="form">
+                    {% csrf_token %}
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-config-tipo_responsable">Tipo de responsable</label>{{ etapa.form_configurar_tarea.tipo_responsable }}</div>
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-config-usuario_responsable">Usuario</label>{{ etapa.form_configurar_tarea.usuario_responsable }}</div>
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-config-equipo_responsable">Equipo</label>{{ etapa.form_configurar_tarea.equipo_responsable }}</div>
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-config-permite_subtareas">{{ etapa.form_configurar_tarea.permite_subtareas }} Permite subtareas</label></div>
+                    <button type="submit" class="btn btn--secondary">Guardar configuración</button>
+                  </form>
+                </div>
+              {% elif etapa.tipo == 'APROBACION' %}
+                <div id="etapa-{{ etapa.pk }}-configurar" class="form" hidden>
+                  <form method="post" action="{% url 'workflows:configurar_etapa' etapa.pk %}" class="form">
+                    {% csrf_token %}
+                    {{ etapa.formset_participantes.management_form }}
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-config-modo">Modo</label>{{ etapa.form_configurar_aprobacion.modo }}</div>
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-config-politica">Política</label>{{ etapa.form_configurar_aprobacion.politica }}</div>
+                    <h4>Participantes</h4>
+                    {% for form_participante in etapa.formset_participantes %}
+                      <div class="field">
+                        {{ form_participante.tipo_aprobador }}
+                        {{ form_participante.usuario }}
+                        {{ form_participante.equipo }}
+                        {% if etapa.formset_participantes.can_delete %}{{ form_participante.DELETE }} Quitar{% endif %}
+                      </div>
+                    {% endfor %}
+                    <button type="submit" class="btn btn--secondary">Guardar configuración</button>
+                  </form>
+                </div>
+              {% elif etapa.tipo == 'ESPERA' %}
+                <div id="etapa-{{ etapa.pk }}-configurar" class="form" hidden>
+                  <form method="post" action="{% url 'workflows:configurar_etapa' etapa.pk %}" class="form">
+                    {% csrf_token %}
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-config-modo">Modo</label>{{ etapa.form_configurar_espera.modo }}</div>
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-config-duracion_valor">Duración</label>{{ etapa.form_configurar_espera.duracion_valor }}</div>
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-config-duracion_unidad">Unidad</label>{{ etapa.form_configurar_espera.duracion_unidad }}</div>
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-config-fecha_objetivo">Fecha objetivo</label>{{ etapa.form_configurar_espera.fecha_objetivo }}</div>
+                    <button type="submit" class="btn btn--secondary">Guardar configuración</button>
+                  </form>
+                </div>
+              {% endif %}
+
+              <div id="etapa-{{ etapa.pk }}-transicion" class="form" hidden>
+                <form method="post" action="{% url 'workflows:crear_transicion' etapa.pk %}" class="form">
+                  {% csrf_token %}
+                  <div class="field"><label for="id_etapa-{{ etapa.pk }}-transicion-etapa_destino">Etapa destino</label>{{ etapa.form_transicion.etapa_destino }}</div>
+                  <div class="field"><label for="id_etapa-{{ etapa.pk }}-transicion-nombre">Nombre (opcional)</label>{{ etapa.form_transicion.nombre }}</div>
+                  <div class="field"><label for="id_etapa-{{ etapa.pk }}-transicion-prioridad">Prioridad</label>{{ etapa.form_transicion.prioridad }}</div>
+                  {% if etapa.tipo == 'CONDICION' %}
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-transicion-variable">Variable</label>{{ etapa.form_transicion.variable }}</div>
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-transicion-operador">Operador</label>{{ etapa.form_transicion.operador }}</div>
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-transicion-valor">Valor</label>{{ etapa.form_transicion.valor }}</div>
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-transicion-es_fallback">{{ etapa.form_transicion.es_fallback }} Es el fallback (sin variable/operador/valor)</label></div>
+                  {% elif etapa.tipo == 'APROBACION' %}
+                    <div class="field"><label for="id_etapa-{{ etapa.pk }}-transicion-resultado_aprobacion">Resultado</label>{{ etapa.form_transicion.resultado_aprobacion }}</div>
+                  {% endif %}
+                  <button type="submit" class="btn btn--secondary">Crear transición</button>
+                </form>
+              </div>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="text-muted">Sin etapas todavía.</p>
+    {% endif %}
+
+    {% if editable %}
+      <h4>Agregar etapa</h4>
+      <form method="post" action="{% url 'workflows:crear_etapa' version.pk %}" class="form">
+        {% csrf_token %}
+        <div class="field"><label for="id_tipo">Tipo</label>{{ form_crear_etapa.tipo }}</div>
+        <div class="field"><label for="id_nombre">Nombre</label>{{ form_crear_etapa.nombre }}</div>
+        <div class="field"><label for="id_descripcion">Descripción (opcional)</label>{{ form_crear_etapa.descripcion }}</div>
+        <button type="submit" class="btn btn--primary">Agregar etapa</button>
+      </form>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h3>Transiciones</h3>
+    <ul class="plain-list">
+      {% for etapa in etapas %}
+        {% for transicion in etapa.transiciones_salientes.all %}
+          <li>
+            <span>{{ etapa.nombre }} → {{ transicion.etapa_destino.nombre }}</span>
+            {% if transicion.es_fallback %}<span class="badge badge--info">Por defecto</span>{% endif %}
+            {% if transicion.variable %}
+              <span class="text-muted">{{ transicion.variable }} {{ transicion.get_operador_display }} {{ transicion.valor }}</span>
+            {% endif %}
+            {% if transicion.resultado_aprobacion %}
+              <span class="badge badge--info">Si {{ transicion.get_resultado_aprobacion_display }}</span>
+            {% endif %}
+            {% if editable %}
+              <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="transicion-{{ transicion.pk }}-editar">Editar</button>
+              <form method="post" action="{% url 'workflows:eliminar_transicion' transicion.pk %}" onsubmit="return confirm('¿Eliminar esta transición?');">
+                {% csrf_token %}
+                <button type="submit" class="btn btn--ghost">Eliminar</button>
+              </form>
+            {% endif %}
+          </li>
+          {% if editable %}
+            <div id="transicion-{{ transicion.pk }}-editar" class="form" hidden>
+              <form method="post" action="{% url 'workflows:editar_transicion' transicion.pk %}" class="form">
+                {% csrf_token %}
+                <div class="field"><label for="id_transicion-{{ transicion.pk }}-etapa_destino">Etapa destino</label>{{ transicion.form_editar.etapa_destino }}</div>
+                <div class="field"><label for="id_transicion-{{ transicion.pk }}-nombre">Nombre</label>{{ transicion.form_editar.nombre }}</div>
+                <div class="field"><label for="id_transicion-{{ transicion.pk }}-prioridad">Prioridad</label>{{ transicion.form_editar.prioridad }}</div>
+                {% if etapa.tipo == 'CONDICION' %}
+                  <div class="field"><label for="id_transicion-{{ transicion.pk }}-variable">Variable</label>{{ transicion.form_editar.variable }}</div>
+                  <div class="field"><label for="id_transicion-{{ transicion.pk }}-operador">Operador</label>{{ transicion.form_editar.operador }}</div>
+                  <div class="field"><label for="id_transicion-{{ transicion.pk }}-valor">Valor</label>{{ transicion.form_editar.valor }}</div>
+                  <div class="field"><label for="id_transicion-{{ transicion.pk }}-es_fallback">{{ transicion.form_editar.es_fallback }} Es el fallback</label></div>
+                {% elif etapa.tipo == 'APROBACION' %}
+                  <div class="field"><label for="id_transicion-{{ transicion.pk }}-resultado_aprobacion">Resultado</label>{{ transicion.form_editar.resultado_aprobacion }}</div>
+                {% endif %}
+                <button type="submit" class="btn btn--secondary">Guardar transición</button>
+              </form>
+            </div>
+          {% endif %}
+        {% endfor %}
+      {% endfor %}
+    </ul>
+  </section>
+
+  {% if version.estado == 'BORRADOR' %}
+    <section class="card">
+      <h3>Validación</h3>
+      {% if errores %}
+        <div class="alert alert--danger">
+          <div class="alert__text">
+            <ul class="plain-list">
+              {% for error in errores %}<li>{{ error }}</li>{% endfor %}
+            </ul>
+          </div>
+        </div>
+        <p class="text-muted">Corrija los errores antes de activar esta versión.</p>
+      {% else %}
+        <div class="alert alert--success">
+          <div class="alert__text">Sin errores — lista para activar.</div>
+        </div>
+      {% endif %}
+
+      {% if puede_administrar and not errores %}
+        <form method="post" action="{% url 'workflows:activar_version' version.pk %}" onsubmit="return confirm('¿Activar esta versión? La versión activa actual pasará a Histórica.');">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--primary">Activar</button>
+        </form>
+      {% endif %}
+    </section>
+  {% endif %}
+{% endblock %}

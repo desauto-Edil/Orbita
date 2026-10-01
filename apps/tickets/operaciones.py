@@ -37,7 +37,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.catalogo.campos import ESTRATEGIAS_POR_TIPO
-from apps.catalogo.models import Campo
+from apps.catalogo.models import Campo, Servicio
+from apps.catalogo.operaciones import validar_ejecucion
 from apps.catalogo.visibilidad import servicios_visibles_para
 from apps.core.auditoria import registrar_evento
 from apps.core.models import RegistroAuditoria
@@ -73,6 +74,8 @@ from apps.tickets.models import (
     TicketServicio,
 )
 from apps.tickets.validaciones import calcular_estados_efectivos, validar_para_radicar
+from apps.workflows.models import InstanciaWorkflow
+from apps.workflows.motor import iniciar_workflow
 
 
 @transaction.atomic
@@ -86,14 +89,19 @@ def crear_borrador(usuario, servicio):
     if not servicios_visibles_para(usuario).filter(pk=servicio.pk).exists():
         raise PermissionDenied("El servicio no está activo o no es visible para este usuario.")
 
+    servicio = Servicio.objects.select_related("formulario__version_activa").get(pk=servicio.pk)
     formulario = servicio.formulario
     version = formulario.version_activa if formulario else None
     if version is None:
         raise ValidationError("El servicio no tiene un formulario activo utilizable todavía.")
 
-    ticket = Ticket.objects.create(solicitante=usuario, tipo=Ticket.Tipo.SERVICIO)
+    ticket = Ticket.objects.create(solicitante=usuario, tipo=servicio.tipo, entregables_materializados=False)
     TicketServicio.objects.create(ticket=ticket, servicio=servicio, formulario_version=version)
     RespuestaFormulario.objects.create(ticket=ticket, formulario_version=version)
+    from apps.tickets.entregables import materializar_entregables
+
+    materializar_entregables(ticket)
+    ticket.entregables_materializados = True
     return ticket
 
 
@@ -280,6 +288,10 @@ def radicar_ticket(ticket, actor):
     del usuario: el historial no se rellena retroactivamente para tickets
     radicados antes de que este modelo existiera).
     """
+    # 4.1: serializa la radicación para impedir dos instancias por Ticket,
+    # también si el caller conserva un objeto BORRADOR desactualizado.
+    ticket_original = ticket
+    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if not es_propietario_borrador(actor, ticket):
         raise PermissionDenied("Solo el solicitante puede radicar este ticket.")
     if ticket.estado != Ticket.Estado.BORRADOR:
@@ -292,6 +304,19 @@ def radicar_ticket(ticket, actor):
         )
 
     validar_para_radicar(ticket)
+
+    ticket.tipo = servicio.tipo
+    validar_ejecucion(servicio)
+    if servicio.workflow_id is not None:
+        # Es una ejecución interna derivada de una radicación autorizada,
+        # no una acción técnica del solicitante sobre el motor.
+        instancia = iniciar_workflow(
+            servicio.workflow, origen=RegistroAuditoria.Origen.SISTEMA,
+            datos_iniciales={"ticket_id": ticket.pk},
+        )
+        if instancia.estado == InstanciaWorkflow.Estado.ERROR:
+            raise ValidationError("No fue posible iniciar la ejecución; el ticket sigue en borrador.")
+        ticket.instancia_workflow = instancia
 
     ticket.radicado = uuid.uuid4()
     ticket.radicado_en = timezone.now()
@@ -308,7 +333,9 @@ def radicar_ticket(ticket, actor):
 
     historial.registrar(ticket, HistorialTicket.TipoEvento.RADICADO, actor)
 
-    return ticket
+    # Conserva el contrato anterior: el objeto recibido refleja el éxito.
+    ticket_original.refresh_from_db()
+    return ticket_original
 
 
 @transaction.atomic

@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+
+{% block title %}Nuevo workflow — Órbita{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'workflows:lista' %}">Workflows</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">Nuevo</span>
+  </nav>
+
+  <section class="card">
+    <h1>Nuevo workflow</h1>
+    <form method="post" class="form">
+      {% csrf_token %}
+      {{ form.non_field_errors }}
+      <div class="field">
+        <label for="id_nombre">Nombre</label>
+        {{ form.nombre }}
+        {{ form.nombre.errors }}
+      </div>
+      <div class="field">
+        <label for="id_descripcion">Descripción (opcional)</label>
+        {{ form.descripcion }}
+        {{ form.descripcion.errors }}
+      </div>
+      <button type="submit" class="btn btn--primary">Crear workflow</button>
+    </form>
+  </section>
+{% endblock %}

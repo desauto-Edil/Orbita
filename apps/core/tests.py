@@ -18,6 +18,8 @@ from django.test import RequestFactory, TestCase
 from django.urls import reverse
 from django.utils import timezone
 
+from apps.aprobaciones.models import Aprobacion, EsquemaAprobacion
+from apps.aprobaciones.operaciones import crear_esquema_aprobacion
 from apps.core.admin import RegistroAuditoriaAdmin
 from apps.core.auditoria import registrar_evento, serializar
 from apps.core.autorizacion import alcances_autorizados, usuario_tiene_permiso
@@ -38,6 +40,7 @@ from apps.core.models import (
     UsuarioArea,
     UsuarioUnidadNegocio,
 )
+from apps.tareas.operaciones import crear_tarea
 
 Usuario = get_user_model()
 
@@ -986,6 +989,145 @@ class ApplicationShellTests(TestCase):
             "admin:index",
         ):
             reverse(nombre)
+
+
+class MiTrabajoTests(TestCase):
+    """3.UI.5 — "Mi trabajo" (Tareas + Aprobaciones), sin CU propio: solo
+    composición de lectura sobre `apps.tareas.consultas`/`apps.aprobaciones.
+    consultas`, ya probadas por su propio dominio. No se duplican aquí las
+    pruebas de autorización de objeto de Tareas/Aprobaciones (detalle,
+    acciones) — solo composición, deduplicación, orden, pestañas, enlaces
+    y navegación, que es lo que este incremento agrega de verdad."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="mtrabajo", password=CLAVE_PRUEBA)
+
+    def _crear_esquema(self, participante):
+        return crear_esquema_aprobacion(
+            modo=EsquemaAprobacion.Modo.PARALELA,
+            politica=EsquemaAprobacion.Politica.CUALQUIERA,
+            participantes=[(Aprobacion.TipoAprobador.USUARIO, participante)],
+        )
+
+    def test_requiere_autenticacion(self):
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertIn(reverse("core:login"), respuesta.url)
+
+    def test_usuario_sin_trabajo_obtiene_empty_state(self):
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "No tienes trabajo pendiente.")
+
+    def test_tarea_asignada_aparece_en_todo_y_en_su_pestana(self):
+        crear_tarea(titulo="Revisar contrato", creada_por=self.usuario, usuario_responsable=self.usuario)
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        self.assertContains(respuesta, "Revisar contrato")
+        respuesta_tareas = self.client.get(reverse("core:mi_trabajo"), {"tab": "tareas"})
+        self.assertContains(respuesta_tareas, "Revisar contrato")
+
+    def test_tarea_de_otro_usuario_no_aparece(self):
+        otro = Usuario.objects.create_user(username="otro_mt", password=CLAVE_PRUEBA)
+        crear_tarea(titulo="Tarea ajena", creada_por=otro, usuario_responsable=otro)
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        self.assertNotContains(respuesta, "Tarea ajena")
+
+    def test_aprobacion_pendiente_aparece_en_todo_y_en_su_pestana(self):
+        esquema = self._crear_esquema(self.usuario)
+        aprobacion = esquema.participaciones.get()
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        self.assertContains(respuesta, f"Aprobación #{aprobacion.pk}")
+        respuesta_aprob = self.client.get(reverse("core:mi_trabajo"), {"tab": "aprobaciones"})
+        self.assertContains(respuesta_aprob, f"Aprobación #{aprobacion.pk}")
+
+    def test_aprobacion_no_asignada_no_aparece(self):
+        otro = Usuario.objects.create_user(username="otro_aprob_mt", password=CLAVE_PRUEBA)
+        esquema = self._crear_esquema(otro)
+        aprobacion_ajena = esquema.participaciones.get()
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        self.assertNotContains(respuesta, f"Aprobación #{aprobacion_ajena.pk}")
+
+    def test_tarea_de_equipo_sin_responsable_no_se_duplica_en_todo(self):
+        # Simultáneamente "asignada" (vía membresía de equipo) y
+        # "disponible para tomar" (sin usuario_responsable directo) —
+        # el caso real de solapamiento entre ambas consultas (punto 5).
+        equipo = Equipo.objects.create(nombre="Equipo Mi trabajo")
+        MiembroEquipo.objects.create(equipo=equipo, usuario=self.usuario, activo=True)
+        crear_tarea(titulo="Tarea de equipo sin tomar", creada_por=self.usuario, equipo_responsable=equipo)
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        self.assertContains(respuesta, "Tarea de equipo sin tomar", count=1)
+
+    def test_tab_invalido_cae_en_default_seguro(self):
+        crear_tarea(titulo="Con tab invalido", creada_por=self.usuario, usuario_responsable=self.usuario)
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"), {"tab": "no-existe"})
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "Con tab invalido")
+        self.assertContains(respuesta, 'breadcrumb__current">Todo')
+
+    def test_pestana_tareas_no_muestra_aprobaciones(self):
+        crear_tarea(titulo="Solo tarea", creada_por=self.usuario, usuario_responsable=self.usuario)
+        aprobacion = self._crear_esquema(self.usuario).participaciones.get()
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"), {"tab": "tareas"})
+        self.assertContains(respuesta, "Solo tarea")
+        self.assertNotContains(respuesta, f"Aprobación #{aprobacion.pk}")
+
+    def test_pestana_aprobaciones_no_muestra_tareas(self):
+        crear_tarea(titulo="Tarea oculta en pestaña", creada_por=self.usuario, usuario_responsable=self.usuario)
+        aprobacion = self._crear_esquema(self.usuario).participaciones.get()
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"), {"tab": "aprobaciones"})
+        self.assertContains(respuesta, f"Aprobación #{aprobacion.pk}")
+        self.assertNotContains(respuesta, "Tarea oculta en pestaña")
+
+    def test_enlaces_apuntan_a_detalles_reales(self):
+        tarea = crear_tarea(titulo="Con enlace", creada_por=self.usuario, usuario_responsable=self.usuario)
+        aprobacion = self._crear_esquema(self.usuario).participaciones.get()
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        self.assertContains(respuesta, reverse("tareas:detalle", args=[tarea.pk]))
+        self.assertContains(respuesta, reverse("aprobaciones:detalle", args=[aprobacion.pk]))
+
+    def test_enlaces_ver_todas_las_tareas_y_aprobaciones(self):
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        self.assertContains(respuesta, reverse("tareas:lista"))
+        self.assertContains(respuesta, reverse("aprobaciones:lista"))
+        self.assertContains(respuesta, "Ver todas las tareas")
+        self.assertContains(respuesta, "Ver todas las aprobaciones")
+
+    def test_contadores_reflejan_las_listas_reales(self):
+        crear_tarea(titulo="Contador 1", creada_por=self.usuario, usuario_responsable=self.usuario)
+        crear_tarea(titulo="Contador 2", creada_por=self.usuario, usuario_responsable=self.usuario)
+        self._crear_esquema(self.usuario)
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        self.assertContains(respuesta, "Tareas (2)")
+        self.assertContains(respuesta, "Aprobaciones (1)")
+
+    def test_mi_trabajo_visible_en_navegacion_para_cualquier_autenticado(self):
+        # Sin rol/permiso especial — solo autenticación (puntos 9/12/19:
+        # nada de rol hardcodeado).
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:inicio"))
+        self.assertContains(respuesta, "Mi trabajo")
+        self.assertContains(respuesta, reverse("core:mi_trabajo"))
+
+    def test_resto_de_navegacion_no_se_altera(self):
+        # Regresión mínima: agregar "Mi trabajo" no debe alterar el gate ya
+        # cubierto en detalle por `ApplicationShellTests` (Cola de
+        # atención/Administración siguen ausentes por defecto).
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:inicio"))
+        self.assertNotContains(respuesta, "Cola de atención")
+        self.assertNotContains(respuesta, "Administración")
 
 
 class MensajesGlobalesTests(TestCase):

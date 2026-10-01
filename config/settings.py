@@ -32,6 +32,9 @@ INSTALLED_APPS = [
     "apps.core",
     "apps.catalogo",
     "apps.tickets",
+    "apps.tareas",
+    "apps.workflows",
+    "apps.aprobaciones",
 ]
 
 if DEBUG:

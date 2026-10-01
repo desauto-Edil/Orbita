@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+
+{% block title %}{{ tarea.titulo }} — Órbita{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'tareas:lista' %}">Tareas</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">{{ tarea.titulo }}</span>
+  </nav>
+
+  <section class="card">
+    <h1>{{ tarea.titulo }}</h1>
+    <span class="badge
+      {% if tarea.estado == 'COMPLETADA' %}badge--success
+      {% elif tarea.estado == 'EN_PROGRESO' %}badge--info
+      {% else %}badge--warning{% endif %}">{{ tarea.get_estado_display }}</span>
+    <span class="badge badge--info">{{ tarea.get_origen_display }}</span>
+    {% if vencida %}<span class="badge badge--danger">Vencida</span>{% endif %}
+    {% if tarea.tarea_padre %}
+      <p class="text-muted">Subtarea de <a href="{% url 'tareas:detalle' tarea.tarea_padre.pk %}">{{ tarea.tarea_padre.titulo }}</a></p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h3>Información</h3>
+    {% if tarea.descripcion %}
+      <p>{{ tarea.descripcion }}</p>
+    {% else %}
+      <p class="text-muted">Sin descripción.</p>
+    {% endif %}
+    <p class="text-muted">
+      Fecha límite: {% if tarea.fecha_limite %}{{ tarea.fecha_limite|date:"d/m/Y H:i" }}{% else %}Sin fecha límite{% endif %}
+    </p>
+  </section>
+
+  {% if puede_tomar or puede_iniciar or puede_completar %}
+    <section class="card">
+      <h3>Acciones</h3>
+      {% if puede_tomar %}
+        <form method="post" action="{% url 'tareas:tomar' tarea.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--primary">Tomar</button>
+        </form>
+      {% endif %}
+      {% if puede_iniciar %}
+        <form method="post" action="{% url 'tareas:iniciar' tarea.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--primary">Iniciar</button>
+        </form>
+      {% endif %}
+      {% if puede_completar %}
+        <form method="post" action="{% url 'tareas:completar' tarea.pk %}" onsubmit="return confirm('¿Confirmas completar esta tarea?');">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--primary">Completar</button>
+        </form>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  <section class="card">
+    <h3>Responsable y delegación</h3>
+    <p class="text-muted">
+      Responsable: {% if tarea.usuario_responsable %}{{ tarea.usuario_responsable }}{% else %}Sin asignar{% endif %}
+    </p>
+    <p class="text-muted">
+      Equipo: {% if tarea.equipo_responsable %}{{ tarea.equipo_responsable }}{% else %}—{% endif %}
+    </p>
+    {% if delegado_actual %}
+      <p class="text-muted">Delegado vigente: {{ delegado_actual }}</p>
+    {% endif %}
+
+    {% if puede_asignar or puede_reasignar %}
+      <form method="post" action="{% if puede_asignar %}{% url 'tareas:asignar' tarea.pk %}{% else %}{% url 'tareas:reasignar' tarea.pk %}{% endif %}" class="form">
+        {% csrf_token %}
+        <div class="field">
+          <label for="id_usuario">Usuario</label>
+          {% if puede_asignar %}{{ asignacion_form.usuario }}{% else %}{{ reasignacion_form.usuario }}{% endif %}
+        </div>
+        <div class="field">
+          <label for="id_equipo">Equipo</label>
+          {% if puede_asignar %}{{ asignacion_form.equipo }}{% else %}{{ reasignacion_form.equipo }}{% endif %}
+        </div>
+        <button type="submit" class="btn btn--secondary">{% if puede_asignar %}Asignar{% else %}Reasignar{% endif %}</button>
+      </form>
+    {% endif %}
+
+    {% if puede_delegar %}
+      <form method="post" action="{% url 'tareas:delegar' tarea.pk %}" class="form">
+        {% csrf_token %}
+        <div class="field">
+          <label for="id_delegado_a">Delegar a</label>
+          {{ delegacion_form.delegado_a }}
+        </div>
+        <div class="field">
+          <label for="id_desde">Desde</label>
+          {{ delegacion_form.desde }}
+        </div>
+        <div class="field">
+          <label for="id_hasta">Hasta</label>
+          {{ delegacion_form.hasta }}
+        </div>
+        <div class="field">
+          <label for="id_motivo">Motivo (opcional)</label>
+          {{ delegacion_form.motivo }}
+        </div>
+        <button type="submit" class="btn btn--secondary">Delegar</button>
+      </form>
+    {% endif %}
+
+    {% if delegaciones %}
+      <h4>Historial de delegaciones</h4>
+      <ul class="plain-list">
+        {% for delegacion in delegaciones %}
+          <li class="text-muted">
+            {{ delegacion.delegado_a }} — {{ delegacion.desde|date:"d/m/Y H:i" }} a {{ delegacion.hasta|date:"d/m/Y H:i" }}
+            (por {{ delegacion.delegada_por }})
+          </li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+  </section>
+
+  {% if muestra_subtareas %}
+    <section class="card">
+      <h3>Subtareas</h3>
+      <ul class="plain-list">
+        {% for subtarea in subtareas %}
+          <li>
+            <a href="{% url 'tareas:detalle' subtarea.pk %}">{{ subtarea.titulo }}</a>
+            <span class="badge
+              {% if subtarea.estado == 'COMPLETADA' %}badge--success
+              {% elif subtarea.estado == 'EN_PROGRESO' %}badge--info
+              {% else %}badge--warning{% endif %}">{{ subtarea.get_estado_display }}</span>
+          </li>
+        {% empty %}
+          <li class="text-muted">Sin subtareas todavía.</li>
+        {% endfor %}
+      </ul>
+
+      {% if puede_crear_subtarea %}
+        <form method="post" action="{% url 'tareas:crear_subtarea' tarea.pk %}" class="form">
+          {% csrf_token %}
+          <div class="field">
+            <label for="id_titulo">Título</label>
+            {{ subtarea_form.titulo }}
+          </div>
+          <div class="field">
+            <label for="id_descripcion">Descripción (opcional)</label>
+            {{ subtarea_form.descripcion }}
+          </div>
+          <div class="field">
+            <label for="id_usuario_responsable">Usuario responsable (opcional)</label>
+            {{ subtarea_form.usuario_responsable }}
+          </div>
+          <div class="field">
+            <label for="id_equipo_responsable">Equipo responsable (opcional)</label>
+            {{ subtarea_form.equipo_responsable }}
+          </div>
+          <div class="field">
+            <label for="id_fecha_limite">Fecha límite (opcional)</label>
+            {{ subtarea_form.fecha_limite }}
+          </div>
+          <button type="submit" class="btn btn--secondary">Crear subtarea</button>
+        </form>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  <section class="card">
+    <h3>Comentarios</h3>
+    <ul>
+      {% for comentario in comentarios %}
+        <li>
+          <strong>{{ comentario.autor }}</strong>
+          <span class="text-muted">{{ comentario.creado_en|date:"d/m/Y H:i" }}</span>
+          <p>{{ comentario.contenido }}</p>
+          {% for adjunto in comentario.adjuntos.all %}
+            <p><a href="{% url 'tareas:descargar_evidencia' adjunto.pk %}">{{ adjunto.nombre_original }}</a></p>
+          {% endfor %}
+        </li>
+      {% empty %}
+        <li class="text-muted">Sin comentarios todavía.</li>
+      {% endfor %}
+    </ul>
+
+    {% if puede_comentar %}
+      <form method="post" action="{% url 'tareas:comentar' tarea.pk %}" class="form">
+        {% csrf_token %}
+        <div class="field">
+          <label for="id_contenido">Escribir comentario</label>
+          {{ comentario_form.contenido }}
+        </div>
+        <button type="submit" class="btn btn--primary">Comentar</button>
+      </form>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h3>Evidencias</h3>
+    {% if evidencias %}
+      <ul class="plain-list">
+        {% for evidencia in evidencias %}
+          <li>
+            <a href="{% url 'tareas:descargar_evidencia' evidencia.pk %}">{{ evidencia.nombre_original }}</a>
+            <span class="text-muted">{{ evidencia.subido_por }} — {{ evidencia.creado_en|date:"d/m/Y H:i" }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="empty-state">
+        <p>Sin evidencias adjuntas.</p>
+      </div>
+    {% endif %}
+
+    {% if puede_comentar %}
+      <form method="post" action="{% url 'tareas:adjuntar_evidencia' tarea.pk %}" enctype="multipart/form-data" class="form">
+        {% csrf_token %}
+        <div class="field">
+          <label for="id_archivo">Adjuntar evidencia</label>
+          {{ evidencia_form.archivo }}
+        </div>
+        <button type="submit" class="btn btn--secondary">Adjuntar</button>
+      </form>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h3>Historial</h3>
+    <ul class="plain-list">
+      {% for evento in historial %}
+        <li>
+          <span class="badge badge--info">{{ evento.get_tipo_evento_display }}</span>
+          <span>{{ evento.actor }}</span>
+          <span class="text-muted">{{ evento.creado_en|date:"d/m/Y H:i" }}</span>
+        </li>
+      {% empty %}
+        <li class="text-muted">Sin eventos.</li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endblock %}

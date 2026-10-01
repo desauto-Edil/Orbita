@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block title %}Aprobaciones — Órbita{% endblock %}
+
+{% block content_modifier %}content-area--wide{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h1>Aprobaciones</h1>
+    <p class="text-muted">Decisiones pendientes o visibles dentro de tu alcance (CU-024/025).</p>
+    <nav class="breadcrumb" aria-label="Pestañas de bandeja">
+      <a href="{% url 'aprobaciones:lista' %}?tab=pendientes" class="{% if tab == 'pendientes' %}breadcrumb__current{% endif %}">Pendientes</a>
+      <span class="breadcrumb__separator" aria-hidden="true">/</span>
+      <a href="{% url 'aprobaciones:lista' %}?tab=todas" class="{% if tab == 'todas' %}breadcrumb__current{% endif %}">Todas</a>
+    </nav>
+  </section>
+
+  {% if filas %}
+    <section class="card">
+      <ul class="list-row-group">
+        {% for fila in filas %}
+          <li class="list-row">
+            <a class="list-row__title" href="{% url 'aprobaciones:detalle' fila.aprobacion.pk %}">
+              {% if fila.contexto_workflow %}{{ fila.contexto_workflow.etapa.nombre }}{% else %}Esquema de aprobación #{{ fila.aprobacion.esquema_id }}{% endif %}
+            </a>
+            <span class="badge
+              {% if fila.aprobacion.estado == 'APROBADA' %}badge--success
+              {% elif fila.aprobacion.estado == 'RECHAZADA' %}badge--danger
+              {% elif fila.aprobacion.estado == 'DEVUELTA' %}badge--info
+              {% elif fila.aprobacion.estado == 'PENDIENTE' %}badge--warning
+              {% endif %}">{{ fila.aprobacion.get_estado_display }}</span>
+            <span class="text-muted">
+              {% if fila.aprobacion.aprobador_usuario %}{{ fila.aprobacion.aprobador_usuario }}
+              {% elif fila.aprobacion.aprobador_equipo %}{{ fila.aprobacion.aprobador_equipo }}
+              {% else %}Sin aprobador{% endif %}
+            </span>
+            {% if fila.aprobacion.esquema.modo == 'SECUENCIAL' %}
+              <span class="text-muted">Orden {{ fila.aprobacion.orden }}</span>
+            {% endif %}
+            {% if fila.contexto_workflow %}
+              <span class="text-muted">{{ fila.contexto_workflow.workflow.nombre }} · v{{ fila.contexto_workflow.version.numero }}</span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% else %}
+    <div class="empty-state">
+      <p>
+        {% if tab == "todas" %}No hay aprobaciones visibles dentro de tu alcance.
+        {% else %}No tienes aprobaciones pendientes.{% endif %}
+      </p>
+    </div>
+  {% endif %}
+{% endblock %}

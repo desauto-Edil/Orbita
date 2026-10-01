@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+
+{% block title %}Mi trabajo — Órbita{% endblock %}
+
+{% block content_modifier %}content-area--wide{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h1>Mi trabajo</h1>
+    <p class="text-muted">Tareas y aprobaciones que requieren tu atención.</p>
+    <nav class="breadcrumb" aria-label="Pestañas de Mi trabajo">
+      <a href="{% url 'core:mi_trabajo' %}?tab=todo" class="{% if tab == 'todo' %}breadcrumb__current{% endif %}">Todo</a>
+      <span class="breadcrumb__separator" aria-hidden="true">/</span>
+      <a href="{% url 'core:mi_trabajo' %}?tab=tareas" class="{% if tab == 'tareas' %}breadcrumb__current{% endif %}">Tareas{% if total_tareas %} ({{ total_tareas }}){% endif %}</a>
+      <span class="breadcrumb__separator" aria-hidden="true">/</span>
+      <a href="{% url 'core:mi_trabajo' %}?tab=aprobaciones" class="{% if tab == 'aprobaciones' %}breadcrumb__current{% endif %}">Aprobaciones{% if total_aprobaciones %} ({{ total_aprobaciones }}){% endif %}</a>
+    </nav>
+  </section>
+
+  {% if filas %}
+    <section class="card">
+      <ul class="list-row-group">
+        {% for fila in filas %}
+          <li class="list-row">
+            <a class="list-row__title" href="{{ fila.url }}">{{ fila.titulo }}</a>
+            <span class="badge{% if fila.estado_clase %} badge--{{ fila.estado_clase }}{% endif %}">{{ fila.estado }}</span>
+            <span class="text-muted">{% if fila.tipo == "tarea" %}Tarea{% else %}Aprobación{% endif %}</span>
+            {% if fila.fecha_relevante %}
+              <span class="text-muted">Vence: {{ fila.fecha_relevante|date:"d/m/Y H:i" }}</span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% else %}
+    <div class="empty-state">
+      <p>
+        {% if tab == "tareas" %}No tienes tareas pendientes.
+        {% elif tab == "aprobaciones" %}No tienes aprobaciones pendientes.
+        {% else %}No tienes trabajo pendiente.{% endif %}
+      </p>
+    </div>
+  {% endif %}
+
+  <section class="card">
+    <div class="form-actions">
+      <a class="btn btn--secondary" href="{% url 'tareas:lista' %}">Ver todas las tareas</a>
+      <a class="btn btn--secondary" href="{% url 'aprobaciones:lista' %}">Ver todas las aprobaciones</a>
+    </div>
+  </section>
+{% endblock %}

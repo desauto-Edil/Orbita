@@ -1,11 +1,10 @@
 /* Órbita — comportamiento del Application Shell (2.UI.1 + 2.C).
-   Sin dependencias externas. Dos responsabilidades: el popover "Más" del
-   dock flotante, y cerrar los mensajes globales (Django messages, 2.C).
-   Ambas se activan por click/tap; el popover también por teclado (Escape
-   cierra) y clic fuera. La autorización de qué aparece en el dock sigue
-   resolviéndose en el servidor (apps/core/navegacion.py), este script solo
-   abre/cierra lo que el servidor ya decidió renderizar — igual que un
-   mensaje: el servidor decide si existe, este script solo lo oculta. */
+   Sin dependencias externas. Tres responsabilidades: el popover "Más" del
+   dock flotante, cerrar los mensajes globales (Django messages, 2.C), y
+   (3.UI.4) mostrar/ocultar paneles inline de edición mediante
+   data-action="toggle-panel" + data-target="<id>" — sin lógica de dominio,
+   autorización ni validación: el servidor decide qué panel existe
+   (renderiza o no el formulario), este script solo alterna `hidden`. */
 
 (function () {
   "use strict";
@@ -49,6 +48,13 @@
       } else {
         abrirMas();
       }
+      return;
+    }
+
+    var togglePanel = event.target.closest('[data-action="toggle-panel"]');
+    if (togglePanel) {
+      var panel = document.getElementById(togglePanel.getAttribute("data-target"));
+      if (panel) panel.hidden = !panel.hidden;
       return;
     }
 

@@ -21,6 +21,15 @@ autenticado tiene (o puede tener) tickets propios — la relación
 solicitante↔Ticket, no un permiso funcional, gobierna qué ve cada usuario
 (`apps.tickets.autorizacion`).
 
+"Mi trabajo" (3.UI.5) tampoco lleva `permiso_codigo`, mismo criterio que
+"Mis tickets": la pertenencia depende de ser responsable/aprobador de
+objetos concretos (Tarea/Aprobación), no de un rol global — visible para
+cualquier autenticado. Deliberadamente sin `namespace` (mismo motivo
+documentado para "Inicio"): "core" agrupa también Perfil/login/logout, que
+no deben resaltar "Mi trabajo" al visitarlos; como es una sola pantalla sin
+subpáginas, la coincidencia exacta de `url_name` ya basta para resaltarla
+cuando corresponde.
+
 "Cola de atención" (2.3, CU-017) es el primer módulo real que aplica la
 decisión documentada arriba: su visibilidad se resuelve con
 `apps.core.autorizacion.alcances_autorizados(usuario, "tickets.atender")`
@@ -34,7 +43,25 @@ a "Cola de atención" resaltaría ambos ítems a la vez en `tickets:cola`.
 Se resalta solo por coincidencia exacta de `url_name` (mecanismo que
 `layout/dock.html` ya soporta sin cambios).
 
-"Administración" es la única excepción: su destino hoy es Django Admin,
+"Workflows" (3.1, CU-020) es el primer ítem que vive directamente dentro de
+"Más" desde su creación, no solo desde 2.UI.1 en adelante como
+"Administración" (X.6, decisión aprobada del usuario: no ocupa un sexto
+puesto en el dock principal). Se gatea con
+`usuario_tiene_permiso(usuario, "workflows.consultar")` (o
+`"workflows.administrar"`, mismo criterio de "quien administra también
+consulta" que `apps.workflows.autorizacion.puede_consultar_workflows`, sin
+importar ese módulo aquí — este archivo no depende del código de ningún
+dominio, como tampoco importa nada de `apps.tickets` para "Cola de
+atención").
+
+Hasta 3.UI.2 su destino era Django Admin (interfaz administrativa
+provisional, `apps/workflows/admin.py`, mismo criterio ya usado para
+Catálogo/Form Builder). **3.UI.3 lo reemplaza** por la interfaz funcional
+propia (`workflows:lista`) — Django Admin sigue existiendo como
+herramienta técnica (edición de Etapa/Transición mientras no existe el
+editor), pero deja de ser el destino de este ítem del dock.
+
+"Administración" es la única excepción histórica: su destino hoy es Django Admin,
 que ya está gobernado nativamente por `is_staff` (decisión de Sprint 0) —
 no se crea un `Permiso` de Órbita para duplicar esa gate. Además, a
 partir de 2.UI.1 no vive en el dock principal (que se mantiene a máximo
@@ -43,7 +70,7 @@ renderice dentro del popover "Más" en vez de ocupar un puesto permanente
 en el dock flotante.
 """
 
-from apps.core.autorizacion import alcances_autorizados
+from apps.core.autorizacion import alcances_autorizados, usuario_tiene_permiso
 
 
 def elementos_navegacion(usuario):
@@ -68,6 +95,11 @@ def elementos_navegacion(usuario):
             "namespace": "tickets",
         },
         {
+            "etiqueta": "Mi trabajo",
+            "url_name": "core:mi_trabajo",
+            "icono": "trabajo",
+        },
+        {
             "etiqueta": "Servicios",
             "url_name": "catalogo:lista",
             "icono": "servicios",
@@ -84,6 +116,19 @@ def elementos_navegacion(usuario):
                     "icono": "cola",
                 }
             )
+    if usuario.is_authenticated and (
+        usuario_tiene_permiso(usuario, "workflows.consultar")
+        or usuario_tiene_permiso(usuario, "workflows.administrar")
+    ):
+        elementos.append(
+            {
+                "etiqueta": "Workflows",
+                "url_name": "workflows:lista",
+                "icono": "settings",
+                "namespace": "workflows",
+                "en_mas": True,
+            }
+        )
     if usuario.is_authenticated and usuario.is_staff:
         elementos.append(
             {

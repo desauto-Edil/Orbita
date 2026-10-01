@@ -7,6 +7,9 @@ urlpatterns = [
     path("servicios/", include("apps.catalogo.urls")),
     path("formularios/", include("apps.catalogo.urls_formularios")),
     path("tickets/", include("apps.tickets.urls")),
+    path("tareas/", include("apps.tareas.urls")),
+    path("aprobaciones/", include("apps.aprobaciones.urls")),
+    path("workflows/", include("apps.workflows.urls")),
     path("", include("apps.core.urls")),
 ]
 

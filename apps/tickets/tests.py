@@ -2922,3 +2922,735 @@ class AuditoriaAsignacionTests(_EscenarioAtencionMixin, TestCase):
         self.assertEqual(
             _auditorias_de_ticket(self.ticket).filter(accion=RegistroAuditoria.Accion.ACTUALIZAR).count(), 1
         )
+
+
+class RadicacionProcesoTests(TestCase):
+    """4.1: catálogo común, entrada congelada y una ejecución por radicación."""
+
+    def setUp(self):
+        from apps.workflows.models import ConfiguracionEtapaTarea, Etapa, TransicionEtapa, Workflow, WorkflowVersion
+        from apps.workflows.versionamiento import activar_version as activar_workflow
+
+        self.usuario = Usuario.objects.create_user("proceso41")
+        self.servicio, self.formulario_version, _ = _crear_servicio_con_formulario(self.usuario, [])
+        self.workflow = Workflow.objects.create(nombre="Ejecución compartida")
+        self.version = WorkflowVersion.objects.create(workflow=self.workflow, numero=1)
+        inicio = Etapa.objects.create(version=self.version, tipo="INICIO", nombre="Inicio")
+        tarea = Etapa.objects.create(version=self.version, tipo="TAREA", nombre="Trabajar")
+        fin = Etapa.objects.create(version=self.version, tipo="FIN", nombre="Fin")
+        ConfiguracionEtapaTarea.objects.create(etapa=tarea)
+        TransicionEtapa.objects.create(etapa_origen=inicio, etapa_destino=tarea)
+        TransicionEtapa.objects.create(etapa_origen=tarea, etapa_destino=fin)
+        activar_workflow(self.workflow, self.version, self.usuario)
+        self.servicio.tipo = "PROCESO"
+        self.servicio.workflow = self.workflow
+        self.servicio.save()
+
+    def test_proceso_radica_instancia_sin_crear_definiciones(self):
+        from apps.workflows.models import InstanciaWorkflow, Workflow, WorkflowVersion
+
+        definiciones = Workflow.objects.count(), WorkflowVersion.objects.count()
+        ticket = crear_borrador(self.usuario, self.servicio)
+        self.assertEqual(ticket.tipo, "PROCESO")
+        self.assertIsNone(ticket.instancia_workflow_id)
+        self.assertEqual(ticket.detalle_servicio.formulario_version_id, self.formulario_version.pk)
+        radicar_ticket(ticket, self.usuario)
+        self.assertEqual(ticket.estado, "RADICADO")
+        self.assertEqual(ticket.instancia_workflow.workflow_version_id, self.version.pk)
+        self.assertEqual(ticket.instancia_workflow.ticket, ticket)
+        self.assertEqual(ticket.instancia_workflow.estado, "EN_ESPERA")
+        self.assertEqual((Workflow.objects.count(), WorkflowVersion.objects.count()), definiciones)
+        self.assertEqual(InstanciaWorkflow.objects.count(), 1)
+        evento = RegistroAuditoria.objects.get(modelo="workflows.instanciaworkflow", object_id=ticket.instancia_workflow_id)
+        self.assertEqual(evento.origen, "SISTEMA")
+        self.assertIsNone(evento.usuario_id)
+        self.assertEqual(ticket.historial.get(tipo_evento="RADICADO").actor, self.usuario)
+
+    def test_servicio_con_workflow_inicia_instancia_al_radicar(self):
+        from apps.workflows.models import InstanciaWorkflow
+
+        self.servicio.tipo = "SERVICIO"
+        self.servicio.save()
+        ticket = crear_borrador(self.usuario, self.servicio)
+        radicar_ticket(ticket, self.usuario)
+        self.assertEqual(ticket.tipo, "SERVICIO")
+        self.assertEqual(ticket.estado, "RADICADO")
+        self.assertIsNotNone(ticket.instancia_workflow_id)
+        self.assertEqual(ticket.instancia_workflow.workflow_version_id, self.version.pk)
+        self.assertEqual(InstanciaWorkflow.objects.count(), 1)
+
+    def test_tipo_se_resuelve_de_nuevo_al_radicar(self):
+        self.servicio.tipo = "SERVICIO"
+        self.servicio.save()
+        ticket = crear_borrador(self.usuario, self.servicio)
+        self.servicio.tipo = "PROCESO"
+        self.servicio.save()
+        radicar_ticket(ticket, self.usuario)
+        self.assertEqual(ticket.tipo, "PROCESO")
+        self.assertIsNotNone(ticket.instancia_workflow_id)
+
+    def test_formulario_congelado_y_workflow_vigente_al_radicar(self):
+        from apps.workflows.versionamiento import activar_version as activar_workflow, crear_nueva_version as clonar_workflow
+
+        ticket = crear_borrador(self.usuario, self.servicio)
+        nueva_entrada = crear_nueva_version(self.servicio.formulario, self.usuario)
+        activar_version(self.servicio.formulario, nueva_entrada, self.usuario)
+        nueva_ejecucion = clonar_workflow(self.workflow, self.usuario)
+        activar_workflow(self.workflow, nueva_ejecucion, self.usuario)
+        radicar_ticket(ticket, self.usuario)
+        self.assertEqual(ticket.detalle_servicio.formulario_version_id, self.formulario_version.pk)
+        self.assertEqual(ticket.respuesta_formulario.formulario_version_id, self.formulario_version.pk)
+        self.assertEqual(ticket.instancia_workflow.workflow_version_id, nueva_ejecucion.pk)
+        siguiente = clonar_workflow(self.workflow, self.usuario)
+        activar_workflow(self.workflow, siguiente, self.usuario)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.instancia_workflow.workflow_version_id, nueva_ejecucion.pk)
+        otro = crear_borrador(self.usuario, self.servicio)
+        radicar_ticket(otro, self.usuario)
+        self.assertEqual(otro.instancia_workflow.workflow_version_id, siguiente.pk)
+        self.assertNotEqual(otro.instancia_workflow_id, ticket.instancia_workflow_id)
+        self.assertEqual(otro.detalle_servicio.formulario_version_id, nueva_entrada.pk)
+
+    def test_no_revalida_formulario_actual_despues_de_congelar(self):
+        ticket = crear_borrador(self.usuario, self.servicio)
+        self.servicio.formulario = None
+        self.servicio.save()
+        radicar_ticket(ticket, self.usuario)
+        self.assertEqual(ticket.estado, "RADICADO")
+        self.assertEqual(ticket.detalle_servicio.formulario_version_id, self.formulario_version.pk)
+
+    def test_no_radica_proceso_sin_workflow_o_sin_version_activa(self):
+        from apps.workflows.models import InstanciaWorkflow
+
+        ticket = crear_borrador(self.usuario, self.servicio)
+        eventos = RegistroAuditoria.objects.count()
+        self.servicio.workflow = None
+        self.servicio.save()
+        with self.assertRaises(ValidationError):
+            radicar_ticket(ticket, self.usuario)
+        self.servicio.workflow = self.workflow
+        self.servicio.save()
+        self.workflow.version_activa = None
+        self.workflow.save()
+        with self.assertRaises(ValidationError):
+            radicar_ticket(ticket, self.usuario)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, "BORRADOR")
+        self.assertIsNone(ticket.radicado)
+        self.assertIsNone(ticket.instancia_workflow_id)
+        self.assertFalse(InstanciaWorkflow.objects.exists())
+        self.assertEqual(RegistroAuditoria.objects.count(), eventos)
+
+    def test_actor_ajeno_no_inicia_instancia(self):
+        from apps.workflows.models import InstanciaWorkflow
+
+        ticket = crear_borrador(self.usuario, self.servicio)
+        otro = Usuario.objects.create_user("ajeno41")
+        with self.assertRaises(PermissionDenied):
+            radicar_ticket(ticket, otro)
+        self.assertFalse(InstanciaWorkflow.objects.exists())
+
+    def test_doble_radicacion_con_objeto_obsoleto_no_duplica_instancia(self):
+        from apps.workflows.models import InstanciaWorkflow
+
+        ticket = crear_borrador(self.usuario, self.servicio)
+        obsoleto = Ticket.objects.get(pk=ticket.pk)
+        radicar_ticket(ticket, self.usuario)
+        with self.assertRaises(ValidationError):
+            radicar_ticket(obsoleto, self.usuario)
+        self.assertEqual(InstanciaWorkflow.objects.count(), 1)
+
+    def test_rollback_ante_excepcion_o_resultado_error_del_motor(self):
+        from unittest.mock import patch
+        from apps.tareas.models import Tarea
+        from apps.workflows.models import InstanciaEtapa, InstanciaWorkflow
+        from apps.workflows.motor import iniciar_workflow
+
+        ticket = crear_borrador(self.usuario, self.servicio)
+        eventos = RegistroAuditoria.objects.count()
+
+        def iniciar_y_fallar(*args, **kwargs):
+            iniciar_workflow(*args, **kwargs)
+            raise RuntimeError("Fallo después de crear instancia y tarea")
+
+        def iniciar_con_error(*args, **kwargs):
+            instancia = iniciar_workflow(*args, **kwargs)
+            instancia.estado = "ERROR"
+            instancia.save()
+            return instancia
+
+        for efecto, error in ((iniciar_y_fallar, RuntimeError), (iniciar_con_error, ValidationError)):
+            with self.subTest(error=error):
+                with patch("apps.tickets.operaciones.iniciar_workflow", side_effect=efecto):
+                    with self.assertRaises(error):
+                        radicar_ticket(ticket, self.usuario)
+                ticket.refresh_from_db()
+                self.assertEqual(ticket.estado, "BORRADOR")
+                self.assertIsNone(ticket.radicado)
+                self.assertIsNone(ticket.radicado_en)
+                self.assertIsNone(ticket.instancia_workflow_id)
+                self.assertFalse(ticket.historial.exists())
+                self.assertFalse(InstanciaWorkflow.objects.exists())
+                self.assertFalse(InstanciaEtapa.objects.exists())
+                self.assertFalse(Tarea.objects.exists())
+                self.assertEqual(RegistroAuditoria.objects.count(), eventos)
+
+    def test_fallo_posterior_al_inicio_revierte_radicacion_completa(self):
+        from unittest.mock import patch
+        from apps.workflows.models import InstanciaWorkflow
+
+        area = Area.objects.create(nombre="Mercadeo", codigo="MER41")
+        ServicioContextoAtencion.objects.create(servicio=self.servicio, tipo_alcance="AREA", area=area)
+        ticket = crear_borrador(self.usuario, self.servicio)
+        eventos = RegistroAuditoria.objects.count()
+        with patch("apps.tickets.operaciones.historial.registrar", side_effect=RuntimeError("Fallo historial")):
+            with self.assertRaises(RuntimeError):
+                radicar_ticket(ticket, self.usuario)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, "BORRADOR")
+        self.assertIsNone(ticket.radicado)
+        self.assertIsNone(ticket.instancia_workflow_id)
+        self.assertFalse(ticket.contextos_atencion.exists())
+        self.assertFalse(InstanciaWorkflow.objects.exists())
+        self.assertEqual(RegistroAuditoria.objects.count(), eventos)
+
+    def test_no_se_puede_quitar_instancia_ni_borrarla(self):
+        from django.db.models.deletion import ProtectedError
+
+        ticket = crear_borrador(self.usuario, self.servicio)
+        radicar_ticket(ticket, self.usuario)
+        instancia = ticket.instancia_workflow
+        ticket.instancia_workflow = None
+        with self.assertRaises(ValidationError):
+            ticket.save()
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.instancia_workflow_id, instancia.pk)
+        with self.assertRaises(ProtectedError):
+            instancia.delete()
+
+
+class _EscenarioEntregablesMixin:
+    def _preparar_entregables(self):
+        from apps.catalogo.models import DefinicionEntregable
+
+        self.solicitante42 = Usuario.objects.create_user("solicitante42")
+        self.responsable42 = Usuario.objects.create_user("responsable42")
+        self.nuevo42 = Usuario.objects.create_user("nuevo42")
+        self.miembro42 = Usuario.objects.create_user("miembro42")
+        self.ajeno42 = Usuario.objects.create_user("ajeno42")
+        self.equipo42 = Equipo.objects.create(nombre="Equipo entregables")
+        for usuario in (self.responsable42, self.nuevo42, self.miembro42):
+            MiembroEquipo.objects.create(equipo=self.equipo42, usuario=usuario)
+            _otorgar_tickets_atender(usuario)
+        self.servicio42, self.version42, _ = _crear_servicio_con_formulario(self.solicitante42, [])
+        self.definiciones42 = {}
+        for orden, tipo in enumerate(DefinicionEntregable.Tipo.values):
+            self.definiciones42[tipo] = DefinicionEntregable.objects.create(
+                servicio=self.servicio42, nombre=f"Salida {tipo}", tipo=tipo,
+                descripcion=f"Instrucciones {tipo}", obligatorio=True, orden=orden,
+            )
+        self.ticket42 = crear_borrador(self.solicitante42, self.servicio42)
+        radicar_ticket(self.ticket42, self.solicitante42)
+        self.ticket42 = asignar_ticket(self.ticket42, self.responsable42, equipo=self.equipo42)
+        self.ticket42 = tomar_ticket(self.ticket42, self.responsable42)
+
+    def _entregable(self, tipo):
+        return self.ticket42.entregables.get(tipo=tipo)
+
+
+class EntregablesTicketTests(_MediaAisladaMixin, _EscenarioEntregablesMixin, TestCase):
+    def setUp(self):
+        self._preparar_entregables()
+
+    def test_snapshot_y_materializacion_idempotente(self):
+        from apps.tickets.entregables import materializar_entregables
+
+        antes = list(self.ticket42.entregables.values())
+        eventos = RegistroAuditoria.objects.count()
+        materializar_entregables(self.ticket42)
+        self.assertEqual(list(self.ticket42.entregables.values()), antes)
+        self.assertEqual(RegistroAuditoria.objects.count(), eventos)
+        for entregable in self.ticket42.entregables.all():
+            definicion = self.definiciones42[entregable.tipo]
+            for campo in ("nombre", "descripcion", "tipo", "obligatorio", "orden"):
+                self.assertEqual(getattr(entregable, campo), getattr(definicion, campo))
+        eventos_materializacion = RegistroAuditoria.objects.filter(modelo="tickets.ticket", object_id=self.ticket42.pk, datos_nuevos__has_key="entregables")
+        self.assertEqual(eventos_materializacion.count(), 1)
+        self.assertEqual(len(eventos_materializacion.get().datos_nuevos["entregables"]), 4)
+
+    def test_modificar_retirar_y_agregar_definiciones_no_cambia_ticket_anterior(self):
+        from apps.catalogo.models import DefinicionEntregable
+        from apps.tickets.entregables import materializar_entregables
+
+        antes = list(self.ticket42.entregables.values())
+        definicion = self.definiciones42["TEXTO"]
+        definicion.nombre = "Otra expectativa"
+        definicion.tipo = "ENLACE"
+        definicion.obligatorio = False
+        definicion.orden = 20
+        definicion.descripcion = "Otras instrucciones"
+        definicion.save()
+        self.definiciones42["ARCHIVO"].activo = False
+        self.definiciones42["ARCHIVO"].save()
+        nueva = DefinicionEntregable.objects.create(servicio=self.servicio42, nombre="Nueva", tipo="TEXTO")
+        materializar_entregables(self.ticket42)
+        self.assertEqual(list(self.ticket42.entregables.values()), antes)
+        nuevo_ticket = crear_borrador(self.solicitante42, self.servicio42)
+        actualizado = nuevo_ticket.entregables.get(definicion=definicion)
+        self.assertEqual(actualizado.nombre, "Otra expectativa")
+        self.assertEqual(actualizado.tipo, "ENLACE")
+        self.assertFalse(actualizado.obligatorio)
+        self.assertEqual(actualizado.orden, 20)
+        self.assertFalse(nuevo_ticket.entregables.filter(definicion=self.definiciones42["ARCHIVO"]).exists())
+        self.assertTrue(nuevo_ticket.entregables.filter(definicion=nueva).exists())
+
+    def test_cero_expectativas_e_historicos_no_se_rellenan(self):
+        from apps.catalogo.models import DefinicionEntregable
+        from apps.tickets.entregables import materializar_entregables
+
+        servicio, version, _ = _crear_servicio_con_formulario(self.solicitante42, [])
+        vacio = crear_borrador(self.solicitante42, servicio)
+        historico = Ticket.objects.create(solicitante=self.solicitante42)
+        TicketServicio.objects.create(ticket=historico, servicio=servicio, formulario_version=version)
+        DefinicionEntregable.objects.create(servicio=servicio, nombre="Posterior", tipo="TEXTO")
+        self.assertEqual(materializar_entregables(vacio), [])
+        self.assertEqual(materializar_entregables(historico), [])
+        radicar_ticket(vacio, self.solicitante42)
+        self.assertFalse(vacio.entregables.exists())
+        self.assertEqual(crear_borrador(self.solicitante42, servicio).entregables.count(), 1)
+
+    def test_snapshot_inmutable_y_definicion_utilizada_protegida(self):
+        from django.db.models.deletion import ProtectedError
+
+        entregable = self._entregable("TEXTO")
+        entregable.nombre = "No permitido"
+        with self.assertRaises(ValidationError):
+            entregable.save()
+        with self.assertRaises(ProtectedError):
+            self.definiciones42["TEXTO"].delete()
+        entregable.refresh_from_db()
+        self.assertEqual(entregable.nombre, "Salida TEXTO")
+
+    def test_texto_y_enlace_validacion_y_satisfaccion(self):
+        from apps.tickets.entregables import registrar_resultado_entregable
+
+        texto = self._entregable("TEXTO")
+        enlace = self._entregable("ENLACE")
+        self.assertFalse(texto.satisfecho)
+        self.assertFalse(enlace.satisfecho)
+        texto = registrar_resultado_entregable(texto, self.responsable42, "  ")
+        self.assertFalse(texto.satisfecho)
+        texto = registrar_resultado_entregable(texto, self.responsable42, " Listo para recoger ")
+        self.assertTrue(texto.satisfecho)
+        self.assertEqual(texto.texto, "Listo para recoger")
+        for valor in ("no es enlace", "javascript:alert(1)"):
+            with self.assertRaises(ValidationError):
+                registrar_resultado_entregable(enlace, self.responsable42, valor)
+        enlace = registrar_resultado_entregable(enlace, self.responsable42, "https://intranet.example.com/privado")
+        self.assertTrue(enlace.satisfecho)
+        enlace = registrar_resultado_entregable(enlace, self.responsable42, "")
+        self.assertFalse(enlace.satisfecho)
+
+    def test_confirmacion_explicita_con_actor_fecha_y_evento_unico(self):
+        from apps.tickets.entregables import confirmar_entregable
+
+        entregable = self._entregable("CONFIRMACION")
+        self.assertFalse(entregable.satisfecho)
+        eventos = RegistroAuditoria.objects.count()
+        confirmado = confirmar_entregable(entregable, self.responsable42)
+        self.assertTrue(confirmado.satisfecho)
+        self.assertEqual(confirmado.confirmado_por, self.responsable42)
+        self.assertIsNotNone(confirmado.confirmado_en)
+        confirmar_entregable(entregable, self.responsable42)
+        self.assertEqual(RegistroAuditoria.objects.count(), eventos + 1)
+
+    def test_responsable_individual_permitido_equipo_y_solicitante_rechazados(self):
+        from apps.tickets.autorizacion import puede_escribir_entregables_finales
+        from apps.tickets.entregables import registrar_resultado_entregable
+
+        entregable = self._entregable("TEXTO")
+        self.assertTrue(puede_escribir_entregables_finales(self.responsable42, self.ticket42))
+        # Se mantiene la semántica anterior del helper general.
+        self.assertTrue(es_responsable_actual(self.miembro42, self.ticket42))
+        eventos = RegistroAuditoria.objects.count()
+        for usuario in (self.miembro42, self.solicitante42, self.ajeno42):
+            with self.subTest(usuario=usuario.pk):
+                self.assertFalse(puede_escribir_entregables_finales(usuario, self.ticket42))
+                with self.assertRaises(PermissionDenied):
+                    registrar_resultado_entregable(entregable, usuario, "Intruso")
+        self.assertEqual(RegistroAuditoria.objects.count(), eventos)
+        entregable.refresh_from_db()
+        self.assertFalse(entregable.satisfecho)
+        self.assertTrue(registrar_resultado_entregable(entregable, self.responsable42, "Resultado").satisfecho)
+
+    def test_equipo_sin_usuario_individual_no_puede_escribir(self):
+        from apps.tickets.entregables import registrar_resultado_entregable
+
+        # Fixture: ticket con equipo y sin responsable individual.
+        self.ticket42.usuario_responsable = None
+        self.ticket42.save()
+        for usuario in (self.miembro42, self.responsable42):
+            with self.assertRaises(PermissionDenied):
+                registrar_resultado_entregable(self._entregable("TEXTO"), usuario, "No permitido")
+
+    def test_reasignacion_revoca_anterior_incluso_si_sigue_en_equipo(self):
+        from apps.tickets.entregables import registrar_resultado_entregable
+
+        entregable = self._entregable("TEXTO")  # Conserva referencias previas.
+        registrar_resultado_entregable(entregable, self.responsable42, "Primero")
+        reasignar_ticket(self.ticket42, self.responsable42, usuario=self.nuevo42)
+        with self.assertRaises(PermissionDenied):
+            registrar_resultado_entregable(entregable, self.responsable42, "Ya no puede")
+        self.assertTrue(MiembroEquipo.objects.filter(equipo=self.equipo42, usuario=self.responsable42, activo=True).exists())
+        resultado = registrar_resultado_entregable(entregable, self.nuevo42, "Continuación")
+        self.assertEqual(resultado.texto, "Continuación")
+        MiembroEquipo.objects.filter(equipo=self.equipo42, usuario=self.responsable42).update(activo=False)
+        with self.assertRaises(PermissionDenied):
+            registrar_resultado_entregable(entregable, self.responsable42, "Tampoco puede")
+
+    def test_todas_las_mutaciones_exigen_responsable_y_tipo_correcto(self):
+        from apps.tickets.entregables import adjuntar_archivo_entregable, confirmar_entregable, registrar_resultado_entregable, retirar_archivo_entregable
+
+        archivo = self._entregable("ARCHIVO")
+        adjunto = adjuntar_archivo_entregable(archivo, self.responsable42, SimpleUploadedFile("uno.txt", b"uno"))
+        with self.assertRaises(PermissionDenied):
+            confirmar_entregable(self._entregable("CONFIRMACION"), self.solicitante42)
+        with self.assertRaises(PermissionDenied):
+            adjuntar_archivo_entregable(archivo, self.miembro42, SimpleUploadedFile("dos.txt", b"dos"))
+        with self.assertRaises(PermissionDenied):
+            retirar_archivo_entregable(adjunto, self.solicitante42)
+        with self.assertRaises(ValidationError):
+            confirmar_entregable(self._entregable("TEXTO"), self.responsable42)
+        with self.assertRaises(ValidationError):
+            registrar_resultado_entregable(archivo, self.responsable42, "No es archivo")
+        with self.assertRaises(ValidationError):
+            adjuntar_archivo_entregable(self._entregable("TEXTO"), self.responsable42, SimpleUploadedFile("t.txt", b"t"))
+
+    def test_archivos_multiples_retiro_y_descarga_protegida(self):
+        from apps.tickets.entregables import adjuntar_archivo_entregable, retirar_archivo_entregable
+
+        entregable = self._entregable("ARCHIVO")
+        self.assertFalse(entregable.satisfecho)
+        with self.assertRaises(ValidationError):
+            adjuntar_archivo_entregable(entregable, self.responsable42, SimpleUploadedFile("vacio.txt", b""))
+        archivos = [adjuntar_archivo_entregable(entregable, self.responsable42, SimpleUploadedFile(f"{i}.txt", b"contenido")) for i in range(2)]
+        self.assertEqual(entregable.archivos.count(), 2)
+        self.assertTrue(entregable.satisfecho)
+        self.assertFalse(self._entregable("TEXTO").archivos.exists())
+        for archivo in archivos:
+            self.assertEqual(archivo.entregable_id, entregable.pk)
+            self.assertEqual(archivo.ticket_relacionado, self.ticket42)
+            url = reverse("tickets:descargar_adjunto", args=[archivo.pk])
+            self.assertEqual(self.client.get(url).status_code, 302)
+            self.client.force_login(self.ajeno42)
+            self.assertEqual(self.client.get(url).status_code, 403)
+            self.client.force_login(self.solicitante42)
+            respuesta = self.client.get(url)
+            self.assertEqual(respuesta.status_code, 200)
+            # El cliente de tests cierra la respuesta al agotar el streaming.
+            # Un segundo close() emitiría request_finished fuera de su protección.
+            self.assertEqual(b"".join(respuesta.streaming_content), b"contenido")
+            self.assertTrue(respuesta.closed)
+            self.client.logout()
+        retirar_archivo_entregable(archivos[0], self.responsable42)
+        self.assertTrue(entregable.satisfecho)
+        retirar_archivo_entregable(archivos[1], self.responsable42)
+        self.assertFalse(entregable.satisfecho)
+        self.client.force_login(self.solicitante42)
+        self.assertEqual(self.client.get(reverse("tickets:descargar_adjunto", args=[archivos[0].pk])).status_code, 404)
+        self.assertTrue(archivos[0].archivo.storage.exists(archivos[0].archivo.name))
+
+    def test_consulta_pendientes_y_completar_no_transiciona_ticket(self):
+        from apps.catalogo.models import DefinicionEntregable
+        from apps.tickets.entregables import adjuntar_archivo_entregable, confirmar_entregable, entregables_obligatorios_pendientes, entregables_para_ticket, registrar_resultado_entregable
+
+        DefinicionEntregable.objects.create(servicio=self.servicio42, nombre="Opcional", tipo="TEXTO", obligatorio=False)
+        otro = crear_borrador(self.solicitante42, self.servicio42)
+        self.assertEqual(len(entregables_obligatorios_pendientes(otro, self.solicitante42)), 4)
+        self.assertEqual(entregables_para_ticket(otro, self.solicitante42).count(), 5)
+        with self.assertRaises(PermissionDenied):
+            entregables_para_ticket(otro, self.ajeno42)
+        registrar_resultado_entregable(self._entregable("TEXTO"), self.responsable42, "Listo")
+        registrar_resultado_entregable(self._entregable("ENLACE"), self.responsable42, "https://example.com/final")
+        adjuntar_archivo_entregable(self._entregable("ARCHIVO"), self.responsable42, SimpleUploadedFile("final.txt", b"final"))
+        confirmar_entregable(self._entregable("CONFIRMACION"), self.responsable42)
+        self.assertEqual(entregables_obligatorios_pendientes(self.ticket42, self.solicitante42), [])
+        self.ticket42.refresh_from_db()
+        self.assertEqual(self.ticket42.estado, "EN_ATENCION")
+
+    def test_resultados_y_archivos_auditados_y_rollback_sin_efectos_parciales(self):
+        from unittest.mock import patch
+        from apps.tickets.entregables import adjuntar_archivo_entregable, registrar_resultado_entregable, retirar_archivo_entregable
+
+        texto = self._entregable("TEXTO")
+        eventos = RegistroAuditoria.objects.count()
+        registrar_resultado_entregable(texto, self.responsable42, "Antes")
+        registrar_resultado_entregable(texto, self.responsable42, "Después")
+        self.assertEqual(RegistroAuditoria.objects.count(), eventos + 2)
+        evento = RegistroAuditoria.objects.filter(modelo="tickets.entregableticket", object_id=texto.pk).latest("pk")
+        self.assertEqual(evento.datos_anteriores, {"texto": "Antes"})
+        self.assertEqual(evento.datos_nuevos, {"texto": "Después"})
+        archivo = adjuntar_archivo_entregable(self._entregable("ARCHIVO"), self.responsable42, SimpleUploadedFile("a.txt", b"a"))
+        eventos = RegistroAuditoria.objects.count()
+        with patch("apps.tickets.entregables.registrar_evento", side_effect=RuntimeError("Auditoría")):
+            with self.assertRaises(RuntimeError):
+                registrar_resultado_entregable(texto, self.responsable42, "Fallido")
+            with self.assertRaises(RuntimeError):
+                retirar_archivo_entregable(archivo, self.responsable42)
+        texto.refresh_from_db()
+        archivo.refresh_from_db()
+        self.assertEqual(texto.texto, "Después")
+        self.assertIsNone(archivo.retirado_en)
+        self.assertTrue(archivo.archivo.storage.exists(archivo.archivo.name))
+        self.assertEqual(RegistroAuditoria.objects.count(), eventos)
+
+    def test_ticket_resuelto_no_admite_escritura(self):
+        from apps.tickets.entregables import registrar_resultado_entregable
+
+        resolver_ticket(self.ticket42, self.responsable42, "Resolución explícita")
+        with self.assertRaises(PermissionDenied):
+            registrar_resultado_entregable(self._entregable("TEXTO"), self.responsable42, "Tardío")
+
+    def test_fallo_materializacion_revierte_creacion_borrador(self):
+        from unittest.mock import patch
+
+        tickets = Ticket.objects.count()
+        eventos = RegistroAuditoria.objects.count()
+        with patch("apps.tickets.entregables.registrar_evento", side_effect=RuntimeError("Auditoría")):
+            with self.assertRaises(RuntimeError):
+                crear_borrador(self.solicitante42, self.servicio42)
+        self.assertEqual(Ticket.objects.count(), tickets)
+        self.assertEqual(RegistroAuditoria.objects.count(), eventos)
+
+
+    def test_proceso_tambien_congela_entregables_al_crear_borrador(self):
+        self.servicio42.tipo = "PROCESO"
+        self.servicio42.save()
+        ticket = crear_borrador(self.solicitante42, self.servicio42)
+        self.assertEqual(ticket.tipo, "PROCESO")
+        self.assertEqual(ticket.entregables.count(), 4)
+        self.assertIsNone(ticket.instancia_workflow_id)
+        self.assertEqual(ticket.detalle_servicio.formulario_version_id, self.version42.pk)
+
+    def test_no_puede_reabrirse_la_materializacion(self):
+        self.ticket42.entregables_materializados = False
+        with self.assertRaises(ValidationError):
+            self.ticket42.save()
+        self.ticket42.refresh_from_db()
+        self.assertTrue(self.ticket42.entregables_materializados)
+
+
+
+class ConcurrenciaEntregablesTests(_EscenarioEntregablesMixin, TransactionTestCase):
+    def setUp(self):
+        self._preparar_entregables()
+
+    def test_escritura_espera_reasignacion_y_revalida_responsable(self):
+        from apps.tickets.entregables import registrar_resultado_entregable
+
+        intentando_lock = threading.Event()
+        resultado = []
+        entregable = self._entregable("TEXTO")
+
+        def observar_lock(execute, sql, params, many, context):
+            if '"tickets_ticket"' in sql and "FOR UPDATE" in sql:
+                intentando_lock.set()
+            return execute(sql, params, many, context)
+
+        def escribir_como_anterior():
+            try:
+                with connection.execute_wrapper(observar_lock):
+                    registrar_resultado_entregable(entregable, self.responsable42, "No debe guardarse")
+                resultado.append("permitido")
+            except PermissionDenied:
+                resultado.append("rechazado")
+            except Exception as exc:
+                resultado.append(exc)
+            finally:
+                connection.close()
+
+        hilo = threading.Thread(target=escribir_como_anterior, daemon=True)
+        try:
+            with transaction.atomic():
+                Ticket.objects.select_for_update().get(pk=self.ticket42.pk)
+                hilo.start()
+                self.assertTrue(intentando_lock.wait(timeout=10), "La escritura no llegó al lock del Ticket")
+                reasignar_ticket(self.ticket42, self.responsable42, usuario=self.nuevo42)
+        finally:
+            hilo.join(timeout=15)
+        self.assertFalse(hilo.is_alive(), "La escritura no terminó tras liberar el Ticket")
+        self.assertEqual(resultado, ["rechazado"])
+        entregable.refresh_from_db()
+        self.assertEqual(entregable.texto, "")
+        actualizado = registrar_resultado_entregable(entregable, self.nuevo42, "Nuevo responsable")
+        self.assertEqual(actualizado.texto, "Nuevo responsable")
+
+    def test_materializacion_concurrente_no_duplica_expectativas_ni_auditoria(self):
+        from apps.tickets.entregables import materializar_entregables
+
+        # Punto intermedio de crear_borrador, antes de su materialización.
+        ticket = Ticket.objects.create(solicitante=self.solicitante42, entregables_materializados=False)
+        TicketServicio.objects.create(ticket=ticket, servicio=self.servicio42, formulario_version=self.version42)
+        barrera = threading.Barrier(2)
+        resultados = []
+
+        def materializar():
+            try:
+                barrera.wait(timeout=10)
+                resultados.append([e.pk for e in materializar_entregables(ticket)])
+            except Exception as exc:
+                resultados.append(exc)
+            finally:
+                connection.close()
+
+        hilos = [threading.Thread(target=materializar, daemon=True) for _ in range(2)]
+        for hilo in hilos:
+            hilo.start()
+        for hilo in hilos:
+            hilo.join(timeout=15)
+            self.assertFalse(hilo.is_alive())
+        self.assertEqual(len(resultados), 2)
+        self.assertTrue(all(isinstance(r, list) for r in resultados), resultados)
+        self.assertEqual(resultados[0], resultados[1])
+        self.assertEqual(ticket.entregables.count(), 4)
+        self.assertEqual(RegistroAuditoria.objects.filter(modelo="tickets.ticket", object_id=ticket.pk).count(), 1)
+
+
+class RadicacionEjecucionConfigurableTests(TestCase):
+    """4.3: la configuración, no la clasificación, determina el uso del motor."""
+
+    def setUp(self):
+        RadicacionProcesoTests.setUp(self)
+        self.servicio.tipo = "SERVICIO"
+        self.servicio.save()
+
+    def test_servicio_simple_y_ticket_historico_no_adquieren_instancia(self):
+        from apps.workflows.models import InstanciaWorkflow
+
+        self.servicio.workflow = None
+        self.servicio.save()
+        anterior = crear_borrador(self.usuario, self.servicio)
+        radicar_ticket(anterior, self.usuario)
+        self.assertIsNone(anterior.instancia_workflow_id)
+        self.servicio.workflow = self.workflow
+        self.servicio.save()
+        anterior.refresh_from_db()
+        self.assertIsNone(anterior.instancia_workflow_id)
+        with self.assertRaises(ValidationError):
+            radicar_ticket(anterior, self.usuario)
+        nuevo = crear_borrador(self.usuario, self.servicio)
+        radicar_ticket(nuevo, self.usuario)
+        self.assertIsNotNone(nuevo.instancia_workflow_id)
+        self.assertEqual(InstanciaWorkflow.objects.count(), 1)
+
+    def test_servicio_asociado_sin_activa_o_con_estructura_invalida_no_radica(self):
+        from apps.workflows.models import InstanciaWorkflow, WorkflowVersion
+
+        ticket = crear_borrador(self.usuario, self.servicio)
+        eventos = RegistroAuditoria.objects.count()
+        for version in (None, WorkflowVersion.objects.create(workflow=self.workflow, numero=2, estado="ACTIVA")):
+            with self.subTest(version=version):
+                self.workflow.version_activa = version
+                self.workflow.save()
+                with self.assertRaises(ValidationError):
+                    radicar_ticket(ticket, self.usuario)
+                ticket.refresh_from_db()
+                self.assertEqual(ticket.estado, "BORRADOR")
+                self.assertIsNone(ticket.radicado)
+                self.assertIsNone(ticket.instancia_workflow_id)
+        self.assertFalse(InstanciaWorkflow.objects.exists())
+        self.assertEqual(RegistroAuditoria.objects.count(), eventos)
+
+    def test_servicio_rollback_ante_fallo_despues_de_crear_instancia_y_tarea(self):
+        from unittest.mock import patch
+        from apps.tareas.models import Tarea
+        from apps.workflows.models import InstanciaWorkflow
+        from apps.workflows.motor import iniciar_workflow
+
+        ticket = crear_borrador(self.usuario, self.servicio)
+        eventos = RegistroAuditoria.objects.count()
+
+        def fallar(*args, **kwargs):
+            iniciar_workflow(*args, **kwargs)
+            raise RuntimeError("Fallo tras iniciar")
+
+        with patch("apps.tickets.operaciones.iniciar_workflow", side_effect=fallar):
+            with self.assertRaises(RuntimeError):
+                radicar_ticket(ticket, self.usuario)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, "BORRADOR")
+        self.assertIsNone(ticket.radicado)
+        self.assertIsNone(ticket.instancia_workflow_id)
+        self.assertFalse(InstanciaWorkflow.objects.exists())
+        self.assertFalse(Tarea.objects.exists())
+        self.assertFalse(ticket.historial.exists())
+        self.assertEqual(RegistroAuditoria.objects.count(), eventos)
+
+    def test_nueva_ejecucion_no_cambia_formulario_entregables_ni_instancia_anterior(self):
+        from apps.catalogo.models import DefinicionEntregable
+        from apps.workflows.versionamiento import crear_nueva_version as clonar, activar_version as activar
+
+        definicion = DefinicionEntregable.objects.create(servicio=self.servicio, nombre="Antes", tipo="TEXTO")
+        anterior = crear_borrador(self.usuario, self.servicio)
+        radicar_ticket(anterior, self.usuario)
+        instancia_id = anterior.instancia_workflow_id
+        nueva = clonar(self.workflow, self.usuario)
+        activar(self.workflow, nueva, self.usuario)
+        definicion.nombre = "Después"
+        definicion.save()
+        entrada_nueva = crear_nueva_version(self.servicio.formulario, self.usuario)
+        activar_version(self.servicio.formulario, entrada_nueva, self.usuario)
+        nuevo = crear_borrador(self.usuario, self.servicio)
+        radicar_ticket(nuevo, self.usuario)
+        anterior.refresh_from_db()
+        self.assertEqual(anterior.instancia_workflow_id, instancia_id)
+        self.assertEqual(anterior.instancia_workflow.workflow_version_id, self.version.pk)
+        self.assertEqual(anterior.entregables.get().nombre, "Antes")
+        self.assertEqual(anterior.detalle_servicio.formulario_version_id, self.formulario_version.pk)
+        self.assertEqual(nuevo.instancia_workflow.workflow_version_id, nueva.pk)
+        self.assertEqual(nuevo.entregables.get().nombre, "Después")
+        self.assertEqual(nuevo.detalle_servicio.formulario_version_id, entrada_nueva.pk)
+
+
+class ConcurrenciaRadicarWorkflowTests(TransactionTestCase):
+    def setUp(self):
+        RadicacionProcesoTests.setUp(self)
+
+    def test_radicacion_concurrente_crea_una_instancia_para_servicio_y_proceso(self):
+        from apps.workflows.models import InstanciaWorkflow, TareaWorkflow
+
+        for tipo in ("SERVICIO", "PROCESO"):
+            with self.subTest(tipo=tipo):
+                self.servicio.tipo = tipo
+                self.servicio.save()
+                ticket = crear_borrador(self.usuario, self.servicio)
+                barrera = threading.Barrier(2)
+                resultados = []
+                instancias = InstanciaWorkflow.objects.count()
+
+                def radicar():
+                    try:
+                        copia = Ticket.objects.get(pk=ticket.pk)
+                        barrera.wait(timeout=10)
+                        radicar_ticket(copia, self.usuario)
+                        resultados.append("radicado")
+                    except ValidationError:
+                        resultados.append("rechazado")
+                    except Exception as exc:
+                        resultados.append(exc)
+                    finally:
+                        connection.close()
+
+                hilos = [threading.Thread(target=radicar, daemon=True) for _ in range(2)]
+                for hilo in hilos:
+                    hilo.start()
+                for hilo in hilos:
+                    hilo.join(timeout=15)
+                    self.assertFalse(hilo.is_alive())
+                self.assertCountEqual(resultados, ["radicado", "rechazado"])
+                ticket.refresh_from_db()
+                self.assertEqual(ticket.tipo, tipo)
+                self.assertEqual(InstanciaWorkflow.objects.count(), instancias + 1)
+                self.assertEqual(TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow_id=ticket.instancia_workflow_id).count(), 1)
+                self.assertEqual(ticket.historial.filter(tipo_evento="RADICADO").count(), 1)
+                self.assertEqual(RegistroAuditoria.objects.filter(modelo="workflows.instanciaworkflow", object_id=ticket.instancia_workflow_id).count(), 1)

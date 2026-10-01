@@ -31,6 +31,7 @@ directa de `Formulario.version_activa` (que por eso es de solo lectura).
 """
 
 from django.contrib import admin, messages
+from django.core.exceptions import ValidationError
 from django.urls import reverse
 from django.utils.html import format_html
 
@@ -50,6 +51,7 @@ from apps.catalogo.models import (
     ServicioVisibilidad,
 )
 from apps.catalogo.versionamiento import activar_version, crear_nueva_version
+from apps.catalogo.operaciones import activar_servicio, desactivar_servicio
 
 
 class PermisoGlobalAdminMixin:
@@ -115,10 +117,33 @@ class ServicioContextoAtencionInline(admin.TabularInline):
 @admin.register(Servicio)
 class ServicioAdmin(PermisoGlobalAdminMixin, AdminAuditableMixin, admin.ModelAdmin):
     permiso_codigo = "catalogo.administrar"
-    list_display = ("nombre", "categoria", "formulario", "alcance_visibilidad", "activo")
-    list_filter = ("categoria", "alcance_visibilidad", "activo")
+    list_display = ("nombre", "tipo", "categoria", "formulario", "workflow", "alcance_visibilidad", "activo")
+    list_filter = ("tipo", "categoria", "alcance_visibilidad", "activo")
+    readonly_fields = ("activo",)
+    actions = ["activar_action", "desactivar_action"]
     search_fields = ("nombre",)
     inlines = [ServicioVisibilidadInline, ServicioResponsableInline, ServicioContextoAtencionInline]
+
+    def save_model(self, request, obj, form, change):
+        if not change:
+            obj.activo = False
+        super().save_model(request, obj, form, change)
+
+    @admin.action(description="Activar/publicar los elementos seleccionados")
+    def activar_action(self, request, queryset):
+        for servicio in queryset:
+            try:
+                activar_servicio(servicio, request.user)
+            except ValidationError as exc:
+                self.message_user(request, f"{servicio}: {' / '.join(exc.messages)}", level=messages.ERROR)
+            else:
+                self.message_user(request, f"{servicio}: activo.", level=messages.SUCCESS)
+
+    @admin.action(description="Desactivar los elementos seleccionados")
+    def desactivar_action(self, request, queryset):
+        for servicio in queryset:
+            desactivar_servicio(servicio, request.user)
+        self.message_user(request, "Elementos desactivados.", level=messages.SUCCESS)
 
     def save_formset(self, request, form, formset, change):
         """`ServicioVisibilidad`/`ServicioResponsable`/`ServicioContextoAtencion`

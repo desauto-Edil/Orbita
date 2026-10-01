@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}Tareas — Órbita{% endblock %}
+
+{% block content_modifier %}content-area--wide{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h1>Tareas</h1>
+    <p class="text-muted">Trabajo asignado a ti o disponible para tomar (CU-021).</p>
+    <nav class="breadcrumb" aria-label="Pestañas de bandeja">
+      <a href="{% url 'tareas:lista' %}?tab=mias" class="{% if tab == 'mias' %}breadcrumb__current{% endif %}">Asignadas a mí</a>
+      <span class="breadcrumb__separator" aria-hidden="true">/</span>
+      <a href="{% url 'tareas:lista' %}?tab=disponibles" class="{% if tab == 'disponibles' %}breadcrumb__current{% endif %}">Disponibles para tomar</a>
+    </nav>
+  </section>
+
+  {% if filas %}
+    <section class="card">
+      <ul class="list-row-group">
+        {% for fila in filas %}
+          <li class="list-row">
+            <a class="list-row__title" href="{% url 'tareas:detalle' fila.tarea.pk %}">{{ fila.tarea.titulo }}</a>
+            <span class="badge
+              {% if fila.tarea.estado == 'COMPLETADA' %}badge--success
+              {% elif fila.tarea.estado == 'EN_PROGRESO' %}badge--info
+              {% else %}badge--warning{% endif %}">{{ fila.tarea.get_estado_display }}</span>
+            <span class="text-muted">
+              {% if fila.tarea.usuario_responsable %}{{ fila.tarea.usuario_responsable }}
+              {% elif fila.tarea.equipo_responsable %}{{ fila.tarea.equipo_responsable }}
+              {% else %}Sin responsable{% endif %}
+            </span>
+            <span class="text-muted">{{ fila.tarea.get_origen_display }}</span>
+            <span class="text-muted">
+              {% if fila.tarea.fecha_limite %}{{ fila.tarea.fecha_limite|date:"d/m/Y H:i" }}{% else %}Sin fecha límite{% endif %}
+            </span>
+            {% if fila.vencida %}<span class="badge badge--danger">Vencida</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% else %}
+    <div class="empty-state">
+      <p>
+        {% if tab == "disponibles" %}No hay tareas disponibles para tomar.
+        {% else %}No tienes tareas asignadas.{% endif %}
+      </p>
+    </div>
+  {% endif %}
+{% endblock %}

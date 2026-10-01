@@ -327,6 +327,50 @@
   font-weight: 600;
 }
 
+/* --- Fila de bandeja (3.UI.1) — genérica, pensada para reutilizarse
+   también en las bandejas de Aprobaciones/Workflows (3.UI.2+), no
+   exclusiva de Tareas. Distinta de `.plain-list li` (que asume una sola
+   línea de texto): aquí cada fila trae varias columnas de metadatos que
+   deben apilarse en pantallas angostas en vez de desbordar. --- */
+
+.list-row-group {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+
+.list-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.list-row:last-child {
+  border-bottom: none;
+}
+
+.list-row__title {
+  font-weight: 600;
+  color: var(--text);
+  text-decoration: none;
+  flex: 1 1 220px;
+}
+
+.list-row__title:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 639px) {
+  .list-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--space-2);
+  }
+}
+
 /* --- Catálogo (1.1) --- */
 
 .catalogo-filtros {

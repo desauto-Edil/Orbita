@@ -500,11 +500,12 @@ def descargar_adjunto_view(request, adjunto_id):
     centralizada en `puede_consultar_ticket`: nunca se expone el adjunto
     solo por conocer su URL de MEDIA."""
     adjunto = get_object_or_404(
-        Adjunto.objects.select_related(
+        Adjunto.objects.filter(retirado_en__isnull=True).select_related(
             "ticket",
             "comentario__ticket",
             "solicitud__ticket",
             "respuesta_solicitud__solicitud__ticket",
+            "entregable__ticket",
         ),
         pk=adjunto_id,
     )

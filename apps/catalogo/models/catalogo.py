@@ -27,6 +27,15 @@ class Servicio(RegistroBase):
     deliberadamente separadas.
     """
 
+    class Tipo(models.TextChoices):
+        SERVICIO = "SERVICIO", "Servicio"
+        PROCESO = "PROCESO", "Proceso"
+
+    tipo = models.CharField(max_length=20, choices=Tipo.choices, default=Tipo.SERVICIO)
+    workflow = models.ForeignKey(
+        "workflows.Workflow", on_delete=models.PROTECT, null=True, blank=True, related_name="servicios"
+    )
+
     class AlcanceVisibilidad(models.TextChoices):
         PUBLICO_INTERNO = "PUBLICO_INTERNO", "Público interno"
         RESTRINGIDO = "RESTRINGIDO", "Restringido"
@@ -241,3 +250,27 @@ class ServicioContextoAtencion(RegistroBase):
 
     def __str__(self):
         return f"{self.servicio} — {self.tipo_alcance}"
+
+
+class DefinicionEntregable(RegistroBase):
+    """Salida esperada del catálogo. Las ejecuciones conservan su propio snapshot."""
+
+    class Tipo(models.TextChoices):
+        TEXTO = "TEXTO", "Texto"
+        ARCHIVO = "ARCHIVO", "Archivo"
+        ENLACE = "ENLACE", "Enlace"
+        CONFIRMACION = "CONFIRMACION", "Confirmación"
+
+    servicio = models.ForeignKey(Servicio, on_delete=models.CASCADE, related_name="definiciones_entregables")
+    nombre = models.CharField(max_length=150)
+    descripcion = models.TextField(blank=True)
+    tipo = models.CharField(max_length=20, choices=Tipo.choices)
+    obligatorio = models.BooleanField(default=False)
+    orden = models.PositiveIntegerField(default=0)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["orden", "pk"]
+
+    def __str__(self):
+        return self.nombre

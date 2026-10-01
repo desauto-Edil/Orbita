@@ -272,3 +272,18 @@ def puede_reabrir_ticket(usuario, ticket):
     if ticket.estado != Ticket.Estado.RESUELTO:
         return False
     return es_responsable_actual(usuario, ticket)
+
+
+def puede_escribir_entregables_finales(usuario, ticket):
+    """4.2: responsabilidad individual, distinta del alcance operativo del equipo.
+
+    Misma relación asignada por TOMAR/ASIGNAR/REASIGNAR; no crea rol,
+    permiso ni responsable alternativo. Las operaciones revalidan bajo lock.
+    """
+    return (
+        bool(getattr(usuario, "is_authenticated", False))
+        and bool(getattr(usuario, "is_active", False))
+        and ticket.estado == Ticket.Estado.EN_ATENCION
+        and ticket.usuario_responsable_id is not None
+        and ticket.usuario_responsable_id == usuario.pk
+    )

@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+
+{% block title %}{{ workflow.nombre }} — Órbita{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'workflows:lista' %}">Workflows</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">{{ workflow.nombre }}</span>
+  </nav>
+
+  <section class="card">
+    <h1>{{ workflow.nombre }}</h1>
+    {% if workflow.descripcion %}
+      <p class="text-muted">{{ workflow.descripcion }}</p>
+    {% endif %}
+    {% if workflow.version_activa %}
+      <span class="badge badge--success">v{{ workflow.version_activa.numero }} activa</span>
+    {% else %}
+      <span class="badge badge--warning">Sin versión activa</span>
+    {% endif %}
+  </section>
+
+  {% if puede_administrar %}
+    <section class="card">
+      <h3>Editar workflow</h3>
+      <form method="post" action="{% url 'workflows:editar' workflow.pk %}" class="form">
+        {% csrf_token %}
+        {{ form.non_field_errors }}
+        <div class="field">
+          <label for="id_nombre">Nombre</label>
+          {{ form.nombre }}
+          {{ form.nombre.errors }}
+        </div>
+        <div class="field">
+          <label for="id_descripcion">Descripción (opcional)</label>
+          {{ form.descripcion }}
+          {{ form.descripcion.errors }}
+        </div>
+        <button type="submit" class="btn btn--secondary">Guardar cambios</button>
+      </form>
+    </section>
+  {% endif %}
+
+  <section class="card">
+    <h3>Versiones</h3>
+    {% if versiones %}
+      <ul class="plain-list">
+        {% for version in versiones %}
+          <li>
+            <a href="{% url 'workflows:version_detalle' version.pk %}">v{{ version.numero }}</a>
+            <span class="badge
+              {% if version.estado == 'ACTIVA' %}badge--success
+              {% elif version.estado == 'BORRADOR' %}badge--warning
+              {% else %}badge--info{% endif %}">{{ version.get_estado_display }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="text-muted">Sin versiones todavía.</p>
+    {% endif %}
+
+    {% if puede_administrar %}
+      <form method="post" action="{% url 'workflows:crear_version' workflow.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn--primary">Crear nueva versión</button>
+      </form>
+    {% endif %}
+  </section>
+{% endblock %}

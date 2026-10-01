@@ -132,6 +132,13 @@
   border: 1px solid var(--glass-dark-border);
   border-radius: var(--radius-pill);
   box-shadow: var(--glass-shadow);
+  /* Red de seguridad (3.UI.5, punto 10): con 6 accesos posibles en el dock
+     (Inicio/Mis tickets/Mi trabajo/Servicios/Cola de atención/Más), nunca
+     debe desbordar el viewport ni quedar cortado contra el borde — si aun
+     así no cupiera en un ancho intermedio, se vuelve desplazable en vez de
+     recortarse u ocultar un acceso arbitrariamente. */
+  max-width: calc(100vw - var(--space-8));
+  overflow-x: auto;
 }
 
 .dock__item-wrap {
@@ -226,6 +233,29 @@
 
 /* --- Responsive --- */
 
+/* 3.UI.5, punto 10: al agregar "Mi trabajo" el dock puede llegar a 6
+   accesos (Inicio/Mis tickets/Mi trabajo/Servicios/Cola de
+   atención/Más). Con etiqueta visible completa ("Cola de atención" es la
+   más larga) 6 ítems no caben con comodidad por debajo de ~900px —
+   se resuelve extendiendo el mismo tratamiento "solo ícono" que ya existía
+   para móvil (<640px) hasta ese ancho, en vez de esconder un acceso
+   detrás de "Más" (ningún ítem deja de estar disponible: el `title` de
+   cada `.dock__item` sigue exponiendo la etiqueta como tooltip). */
+@media (max-width: 899px) {
+  .dock__item {
+    padding: 0 var(--space-3);
+  }
+
+  .dock__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
 @media (max-width: 639px) {
   .topbar {
     padding: 0 var(--space-4);
@@ -256,14 +286,8 @@
     padding: 0 var(--space-2);
   }
 
-  .dock__label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
-  }
+  /* `.dock__label` ya queda oculto por el bloque ≤899px de arriba —
+     aquí solo se ajusta lo específico de móvil (borde a borde). */
 
   .dock__popover {
     left: auto;

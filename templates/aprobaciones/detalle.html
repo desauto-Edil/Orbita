@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+
+{% block title %}Aprobación #{{ aprobacion.pk }} — Órbita{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'aprobaciones:lista' %}">Aprobaciones</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">Aprobación #{{ aprobacion.pk }}</span>
+  </nav>
+
+  <section class="card">
+    <h1>Aprobación #{{ aprobacion.pk }}</h1>
+    <span class="badge
+      {% if aprobacion.estado == 'APROBADA' %}badge--success
+      {% elif aprobacion.estado == 'RECHAZADA' %}badge--danger
+      {% elif aprobacion.estado == 'DEVUELTA' %}badge--info
+      {% elif aprobacion.estado == 'PENDIENTE' %}badge--warning
+      {% endif %}">{{ aprobacion.get_estado_display }}</span>
+    <span class="badge badge--info">{{ aprobacion.get_tipo_aprobador_display }}</span>
+  </section>
+
+  <section class="card">
+    <h3>Qué se está aprobando</h3>
+    {% if contexto_workflow %}
+      <dl class="definition-list">
+        <div>
+          <dt>Workflow</dt>
+          <dd>{{ contexto_workflow.workflow.nombre }}</dd>
+        </div>
+        <div>
+          <dt>Versión</dt>
+          <dd>v{{ contexto_workflow.version.numero }}</dd>
+        </div>
+        <div>
+          <dt>Etapa</dt>
+          <dd>{{ contexto_workflow.etapa.nombre }}</dd>
+        </div>
+      </dl>
+    {% else %}
+      <p class="text-muted">Esquema de aprobación #{{ aprobacion.esquema_id }}, sin vínculo a un Workflow.</p>
+    {% endif %}
+  </section>
+
+  <section class="card">
+    <h3>Esquema</h3>
+    <dl class="definition-list">
+      <div>
+        <dt>Modo</dt>
+        <dd>{{ esquema.get_modo_display }}</dd>
+      </div>
+      {% if esquema.politica %}
+        <div>
+          <dt>Política</dt>
+          <dd>{{ esquema.get_politica_display }}</dd>
+        </div>
+      {% endif %}
+      <div>
+        <dt>Resultado global</dt>
+        <dd>{% if esquema.resultado %}{{ esquema.get_resultado_display }}{% else %}En curso{% endif %}</dd>
+      </div>
+    </dl>
+  </section>
+
+  <section class="card">
+    <h3>Participación</h3>
+    <ul class="plain-list">
+      {% for participacion in participaciones %}
+        <li>
+          <span>
+            {% if participacion.aprobador_usuario %}{{ participacion.aprobador_usuario }}
+            {% elif participacion.aprobador_equipo %}{{ participacion.aprobador_equipo }}
+            {% else %}Sin aprobador{% endif %}
+          </span>
+          {% if esquema.modo == 'SECUENCIAL' %}<span class="text-muted">Orden {{ participacion.orden }}</span>{% endif %}
+          <span class="badge
+            {% if participacion.estado == 'APROBADA' %}badge--success
+            {% elif participacion.estado == 'RECHAZADA' %}badge--danger
+            {% elif participacion.estado == 'DEVUELTA' %}badge--info
+            {% elif participacion.estado == 'PENDIENTE' %}badge--warning
+            {% else %}badge--info{% endif %}">{{ participacion.get_estado_display }}</span>
+          {% if participacion.decidido_por %}
+            <span class="text-muted">{{ participacion.decidido_por }} — {{ participacion.decidida_en|date:"d/m/Y H:i" }}</span>
+          {% endif %}
+          {% if participacion.observacion %}
+            <p class="text-muted">{{ participacion.observacion }}</p>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+
+  {% if puede_decidir or puede_reasignar %}
+    <section class="card">
+      <h3>Acciones</h3>
+
+      {% if puede_decidir %}
+        <form method="post" action="{% url 'aprobaciones:decidir' aprobacion.pk %}" class="form">
+          {% csrf_token %}
+          <div class="field">
+            <label>Decisión</label>
+            {{ decision_form.decision }}
+          </div>
+          <div class="field">
+            <label for="id_observacion">Observación</label>
+            {{ decision_form.observacion }}
+          </div>
+          <button type="submit" class="btn btn--primary">Registrar decisión</button>
+        </form>
+      {% endif %}
+
+      {% if puede_reasignar %}
+        <form method="post" action="{% url 'aprobaciones:reasignar' aprobacion.pk %}" class="form">
+          {% csrf_token %}
+          <div class="field">
+            <label for="id_usuario">Usuario</label>
+            {{ reasignacion_form.usuario }}
+          </div>
+          <div class="field">
+            <label for="id_equipo">Equipo</label>
+            {{ reasignacion_form.equipo }}
+          </div>
+          <button type="submit" class="btn btn--secondary">Reasignar</button>
+        </form>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {% if reasignaciones %}
+    <section class="card">
+      <h3>Historial de reasignaciones</h3>
+      <ul class="plain-list">
+        {% for reasignacion in reasignaciones %}
+          <li class="text-muted">
+            {% if reasignacion.aprobador_anterior_usuario %}{{ reasignacion.aprobador_anterior_usuario }}{% elif reasignacion.aprobador_anterior_equipo %}{{ reasignacion.aprobador_anterior_equipo }}{% else %}—{% endif %}
+            →
+            {% if reasignacion.aprobador_nuevo_usuario %}{{ reasignacion.aprobador_nuevo_usuario }}{% elif reasignacion.aprobador_nuevo_equipo %}{{ reasignacion.aprobador_nuevo_equipo }}{% endif %}
+            (por {{ reasignacion.reasignado_por }} — {{ reasignacion.creado_en|date:"d/m/Y H:i" }})
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+{% endblock %}

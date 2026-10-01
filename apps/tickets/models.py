@@ -25,9 +25,8 @@ impiden que su `formulario_version` congelada cambie una vez creado el
 registro, sin importar el estado del ticket.
 
 **`RespuestaFormulario` cuelga de `Ticket`, no de `TicketServicio`** —
-mismo criterio de transversalidad ya aplicado a `Formulario` en 1.2: si en
-el futuro existe `TicketProceso`, sus respuestas de formulario no deberían
-exigir remodelar esta relación.
+mismo criterio de transversalidad ya aplicado a `Formulario` en 1.2.
+Desde 4.1, SERVICIO y PROCESO reutilizan TicketServicio y estas respuestas.
 
 **Persistencia de `RespuestaCampo` (corrección del usuario sobre la
 propuesta original)**: nueve columnas, cada una con integridad referencial
@@ -56,10 +55,11 @@ hace fallar el `save()`.
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
+from django.core.validators import URLValidator
 from django.db import models
 from django.db.models import Q, UniqueConstraint
 
-from apps.catalogo.models import Campo, FormularioVersion, Servicio
+from apps.catalogo.models import Campo, DefinicionEntregable, FormularioVersion, Servicio
 from apps.core.models import Area, Equipo, RegistroBase, UnidadNegocio
 
 
@@ -110,6 +110,28 @@ class Ticket(RegistroBase):
     equipo_responsable = models.ForeignKey(
         Equipo, on_delete=models.PROTECT, null=True, blank=True, related_name="tickets_responsable"
     )
+    # 4.1: la instancia ya congela su WorkflowVersion. No duplicar esa FK
+    # ni crear otra especialización de Ticket para PROCESO.
+    instancia_workflow = models.OneToOneField(
+        "workflows.InstanciaWorkflow", on_delete=models.PROTECT,
+        null=True, blank=True, editable=False, related_name="ticket",
+    )
+
+    # True por defecto también para históricos/directos. Solo crear_borrador
+    # abre una materialización nueva con False, dentro de su transacción.
+    entregables_materializados = models.BooleanField(default=True, editable=False)
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            anterior = Ticket.objects.filter(pk=self.pk).values(
+                "instancia_workflow_id", "entregables_materializados"
+            ).first()
+            if anterior is not None:
+                if anterior["instancia_workflow_id"] is not None and anterior["instancia_workflow_id"] != self.instancia_workflow_id:
+                    raise ValidationError("La instancia de Workflow de un Ticket no puede reemplazarse ni quitarse.")
+                if anterior["entregables_materializados"] and not self.entregables_materializados:
+                    raise ValidationError("No se puede reabrir la materialización de entregables de un Ticket.")
+        super().save(*args, **kwargs)
 
     def exigir_eliminable(self):
         if self.estado != Ticket.Estado.BORRADOR:
@@ -208,11 +230,10 @@ class HistorialTicket(models.Model):
 
 
 class TicketServicio(RegistroBase):
-    """Especialización de `Ticket` cuando `tipo == SERVICIO` — la única que
-    existe en 2.1. `TicketProceso` no se crea todavía (RN-022 la exige solo
-    cuando exista Procesos); `Ticket.tipo` ya admite `PROCESO` en el enum
-    para no bloquear esa extensión futura, pero ningún flujo de 2.x lo
-    produce.
+    """Vínculo con el catálogo para SERVICIO y PROCESO desde 4.1.
+
+    Conserva el nombre y las relaciones históricas; la entrada sigue
+    congelada al crear el borrador y no requiere un TicketProceso.
     """
 
     ticket = models.OneToOneField(Ticket, on_delete=models.CASCADE, related_name="detalle_servicio")
@@ -649,6 +670,7 @@ class Adjunto(RegistroBase):
         SOLICITUD = "SOLICITUD", "Solicitud de información"
         RESPUESTA_SOLICITUD = "RESPUESTA_SOLICITUD", "Respuesta a solicitud de información"
         RESOLUCION = "RESOLUCION", "Resolución"
+        ENTREGABLE = "ENTREGABLE", "Entregable"
 
     tipo_relacion = models.CharField(max_length=20, choices=TipoRelacion.choices)
     ticket = models.ForeignKey(
@@ -670,6 +692,13 @@ class Adjunto(RegistroBase):
     resolucion = models.ForeignKey(
         ResolucionTicket, on_delete=models.CASCADE, null=True, blank=True, related_name="adjuntos"
     )
+    entregable = models.ForeignKey(
+        "EntregableTicket", on_delete=models.CASCADE, null=True, blank=True, related_name="archivos"
+    )
+    # Retiro lógico de archivos de entregable: conserva trazabilidad y evita
+    # borrar un objeto del storage antes de confirmar una transacción SQL.
+    retirado_en = models.DateTimeField(null=True, blank=True, editable=False)
+
     archivo = models.FileField(upload_to="tickets/adjuntos/%Y/%m/")
     nombre_original = models.CharField(max_length=255)
     tipo_mime = models.CharField(max_length=255, blank=True)
@@ -681,6 +710,7 @@ class Adjunto(RegistroBase):
             models.CheckConstraint(
                 check=(
                     Q(
+                        entregable__isnull=True,
                         tipo_relacion="TICKET",
                         ticket__isnull=False,
                         comentario__isnull=True,
@@ -689,6 +719,7 @@ class Adjunto(RegistroBase):
                         resolucion__isnull=True,
                     )
                     | Q(
+                        entregable__isnull=True,
                         tipo_relacion="COMENTARIO",
                         ticket__isnull=True,
                         comentario__isnull=False,
@@ -697,6 +728,7 @@ class Adjunto(RegistroBase):
                         resolucion__isnull=True,
                     )
                     | Q(
+                        entregable__isnull=True,
                         tipo_relacion="SOLICITUD",
                         ticket__isnull=True,
                         comentario__isnull=True,
@@ -705,6 +737,7 @@ class Adjunto(RegistroBase):
                         resolucion__isnull=True,
                     )
                     | Q(
+                        entregable__isnull=True,
                         tipo_relacion="RESPUESTA_SOLICITUD",
                         ticket__isnull=True,
                         comentario__isnull=True,
@@ -713,12 +746,18 @@ class Adjunto(RegistroBase):
                         resolucion__isnull=True,
                     )
                     | Q(
+                        entregable__isnull=True,
                         tipo_relacion="RESOLUCION",
                         ticket__isnull=True,
                         comentario__isnull=True,
                         solicitud__isnull=True,
                         respuesta_solicitud__isnull=True,
                         resolucion__isnull=False,
+                    )
+                    | Q(
+                        tipo_relacion="ENTREGABLE", entregable__isnull=False,
+                        ticket__isnull=True, comentario__isnull=True, solicitud__isnull=True,
+                        respuesta_solicitud__isnull=True, resolucion__isnull=True,
                     )
                 ),
                 name="ck_adjunto_relacion_coherente",
@@ -738,7 +777,66 @@ class Adjunto(RegistroBase):
             return self.solicitud.ticket
         if self.tipo_relacion == self.TipoRelacion.RESPUESTA_SOLICITUD:
             return self.respuesta_solicitud.solicitud.ticket
+        if self.tipo_relacion == self.TipoRelacion.ENTREGABLE:
+            return self.entregable.ticket
         return self.resolucion.ticket
 
     def __str__(self):
         return self.nombre_original
+
+
+class EntregableTicket(RegistroBase):
+    """Expectativa congelada y resultado final V1. No representa una revisión."""
+
+    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="entregables")
+    definicion = models.ForeignKey(DefinicionEntregable, on_delete=models.PROTECT, related_name="ejecuciones")
+    nombre = models.CharField(max_length=150)
+    descripcion = models.TextField(blank=True)
+    tipo = models.CharField(max_length=20, choices=DefinicionEntregable.Tipo.choices)
+    obligatorio = models.BooleanField(default=False)
+    orden = models.PositiveIntegerField(default=0)
+    texto = models.TextField(blank=True)
+    enlace = models.URLField(max_length=2048, blank=True)
+    confirmado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    confirmado_en = models.DateTimeField(null=True, blank=True)
+    registrado_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+
+    class Meta:
+        ordering = ["orden", "pk"]
+        constraints = [
+            UniqueConstraint(fields=["ticket", "definicion"], name="uq_entregable_ticket_definicion"),
+            models.CheckConstraint(
+                condition=(Q(confirmado_por__isnull=True, confirmado_en__isnull=True)
+                           | Q(confirmado_por__isnull=False, confirmado_en__isnull=False)),
+                name="ck_entregable_confirmacion_coherente",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            campos = ("ticket_id", "definicion_id", "nombre", "descripcion", "tipo", "obligatorio", "orden")
+            anterior = type(self).objects.filter(pk=self.pk).values(*campos).first()
+            if anterior and any(anterior[campo] != getattr(self, campo) for campo in campos):
+                raise ValidationError("Las expectativas de un entregable materializado son inmutables.")
+        super().save(*args, **kwargs)
+
+    @property
+    def satisfecho(self):
+        if self.tipo == DefinicionEntregable.Tipo.TEXTO:
+            return bool(self.texto.strip())
+        if self.tipo == DefinicionEntregable.Tipo.ENLACE:
+            if not self.enlace:
+                return False
+            try:
+                URLValidator(schemes=["http", "https"])(self.enlace)
+            except ValidationError:
+                return False
+            return True
+        if self.tipo == DefinicionEntregable.Tipo.ARCHIVO:
+            return self.archivos.filter(retirado_en__isnull=True, tamano_bytes__gt=0).exclude(archivo="").exists()
+        if self.tipo == DefinicionEntregable.Tipo.CONFIRMACION:
+            return self.confirmado_por_id is not None and self.confirmado_en is not None
+        return False
+
+    def __str__(self):
+        return self.nombre
