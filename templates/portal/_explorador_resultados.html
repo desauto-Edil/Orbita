@@ -1,0 +1,22 @@
+{% comment %}Fragmento que el explorador de Inicio pide por fetch (`core:explorar`). Ya llega filtrado por visibilidad; aquí solo se presenta.{% endcomment %}
+{% if resultados %}
+  <p class="explorer__count text-muted" role="status">
+    {% if hay_mas %}Mostrando los primeros {{ resultados|length }}. Afina la búsqueda o elige una categoría para ver el resto.
+    {% else %}{{ resultados|length }} disponible{{ resultados|length|pluralize:"s" }}{% if filtrado %} para tu búsqueda{% endif %}.{% endif %}
+  </p>
+  <div class="svc-grid">
+    {% for servicio in resultados %}{% include "portal/_servicio_card.html" %}{% endfor %}
+  </div>
+{% elif filtrado %}
+  <div class="state" role="status">
+    <span class="state__icon" aria-hidden="true">{% include "components/icon.html" with name="search" %}</span>
+    <span class="state__title">No encontramos nada{% if texto %} para «{{ texto }}»{% endif %}</span>
+    <p class="state__text">Prueba con otras palabras o recorre las categorías.</p>
+  </div>
+{% else %}
+  <div class="state" role="status">
+    <span class="state__icon" aria-hidden="true">{% include "components/icon.html" with name="inbox" %}</span>
+    <span class="state__title">Todavía no hay nada disponible para ti</span>
+    <p class="state__text">Cuando haya servicios o procesos que puedas solicitar, aparecerán aquí.</p>
+  </div>
+{% endif %}

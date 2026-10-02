@@ -3,13 +3,10 @@
 {% block title %}{{ workflow.nombre }} — Órbita{% endblock %}
 
 {% block content %}
-  <nav class="breadcrumb" aria-label="Ruta de navegación">
-    <a href="{% url 'workflows:lista' %}">Workflows</a>
-    <span class="breadcrumb__separator" aria-hidden="true">/</span>
-    <span class="breadcrumb__current">{{ workflow.nombre }}</span>
-  </nav>
+  {% include "components/disenador_miga.html" with seccion="flujos" actual=workflow.nombre %}
 
   <section class="card">
+    <p><a class="btn btn--secondary btn--sm" href="{% url 'flujos:lienzo' workflow.pk %}">Abrir en el lienzo</a></p>
     <h1>{{ workflow.nombre }}</h1>
     {% if workflow.descripcion %}
       <p class="text-muted">{{ workflow.descripcion }}</p>
@@ -20,6 +17,18 @@
       <span class="badge badge--warning">Sin versión activa</span>
     {% endif %}
   </section>
+
+  {% if servicios_vinculados %}
+    <section class="card">
+      <h3>Usado por</h3>
+      <ul class="plain-list">
+        {% for servicio in servicios_vinculados %}
+          <li>{{ servicio.nombre }} <span class="badge">{{ servicio.get_tipo_display }}</span></li>
+        {% endfor %}
+      </ul>
+      <p class="text-muted" style="font-size: var(--text-sm);">Lo que se publique en este flujo afecta a los tickets nuevos de estos elementos; los tickets ya iniciados conservan su versión.</p>
+    </section>
+  {% endif %}
 
   {% if puede_administrar %}
     <section class="card">

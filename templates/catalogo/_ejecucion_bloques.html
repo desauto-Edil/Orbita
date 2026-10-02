@@ -1,0 +1,161 @@
+{% comment %}
+  Lista de bloques de un flujo y alta de bloques nuevos. La comparten Studio
+  (ancla = Servicio) y el Diseñador de Flujos (ancla = Flujo): TODAS las URLs
+  salen de `ancla` (ver `studio._ancla_urls_servicio` y
+  `flujos._ancla_urls_flujo`); nada aquí sabe de qué pantalla viene.
+  Espera: `bloques`, `editable_ejecucion`, `despues_de`, `aviso_agregar`,
+  `bloques_disponibles`, formularios `*_nuevo` y `ancla`.
+{% endcomment %}
+    <h3 style="margin-top: var(--space-6);">Flujo</h3>
+    {% if bloques %}
+      <ul class="list-row-group">
+        {% for fila in bloques %}
+          <li class="list-row" style="flex-direction: column; align-items: stretch;">
+            <div class="list-row" style="border-bottom: none; padding: 0;">
+              <span class="list-row__title">{{ forloop.counter }}. {{ fila.etapa.nombre }}</span>
+              <span class="badge badge--accent">{{ fila.tipo_empresarial_display }}</span>
+              <span class="text-muted">{{ fila.resumen }}</span>
+              {% if editable_ejecucion %}
+                <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="panel-bloque-{{ fila.etapa.pk }}">Editar</button>
+                {% if fila.puede_agregar_despues %}
+                  <a class="btn btn--ghost" href="{{ ancla.pagina_despues }}{{ fila.etapa.pk }}#agregar-bloque">+ Agregar después</a>
+                {% else %}
+                  <button type="button" class="btn btn--ghost" disabled title="Este bloque se bifurca: defina sus rutas o agregue el bloque al final del flujo.">+ Agregar después</button>
+                {% endif %}
+                <form method="post" action="{% url ancla.url_eliminar ancla.pk fila.etapa.pk %}" style="display:inline;">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn--ghost">Eliminar</button>
+                </form>
+              {% endif %}
+            </div>
+
+            {% if editable_ejecucion %}
+              <div id="panel-bloque-{{ fila.etapa.pk }}" hidden style="margin-top: var(--space-3);">
+                <form method="post" action="{% url ancla.url_editar ancla.pk fila.etapa.pk %}" class="form">
+                  {% csrf_token %}
+                  <div class="field">{{ fila.form_editar.nombre.label_tag }}{{ fila.form_editar.nombre }}</div>
+                  <div class="field">{{ fila.form_editar.descripcion.label_tag }}{{ fila.form_editar.descripcion }}</div>
+
+                  {% if fila.tipo_empresarial == "ACTIVIDAD" %}
+                    <div class="field">{{ fila.form_configurar.tipo_actor.label_tag }}{{ fila.form_configurar.tipo_actor }}</div>
+                    <div class="field">{{ fila.form_configurar.usuario.label_tag }}{{ fila.form_configurar.usuario }}</div>
+                    <div class="field">{{ fila.form_configurar.equipo.label_tag }}{{ fila.form_configurar.equipo }}</div>
+                    <div class="field">{{ fila.form_configurar.permite_subtareas }} {{ fila.form_configurar.permite_subtareas.label_tag }}</div>
+                  {% elif fila.tipo_empresarial == "ESPERA" %}
+                    <div class="field">{{ fila.form_configurar.modo.label_tag }}{{ fila.form_configurar.modo }}</div>
+                    <div class="field">{{ fila.form_configurar.duracion_valor.label_tag }}{{ fila.form_configurar.duracion_valor }} {{ fila.form_configurar.duracion_unidad }}</div>
+                    <div class="field">{{ fila.form_configurar.fecha_objetivo.label_tag }}{{ fila.form_configurar.fecha_objetivo }}</div>
+                  {% elif fila.tipo_empresarial == "APROBACION" %}
+                    <div class="field">{{ fila.form_configurar.modo.label_tag }}{{ fila.form_configurar.modo }}</div>
+                    <div class="field">{{ fila.form_configurar.politica.label_tag }}{{ fila.form_configurar.politica }}</div>
+                    <p class="text-muted" style="font-size: var(--text-xs);">Aprobadores, en orden:</p>
+                    {{ fila.formset_participantes.management_form }}
+                    {% for pform in fila.formset_participantes %}
+                      <div class="field">
+                        {{ pform.tipo }} {{ pform.usuario }} {{ pform.equipo }}
+                        {% if pform.DELETE %}{{ pform.DELETE }} eliminar{% endif %}
+                      </div>
+                    {% endfor %}
+                  {% endif %}
+                  <div class="form-actions">
+                    <button type="submit" class="btn btn--primary">Guardar bloque</button>
+                  </div>
+                </form>
+
+                {% if fila.tipo_empresarial == "APROBACION" %}
+                  <h4>Rutas</h4>
+                  <form method="post" action="{% url ancla.url_ruta ancla.pk fila.etapa.pk %}" class="form">
+                    {% csrf_token %}
+                    <div class="field">{{ fila.form_ruta.destino_aprobada.label_tag }}{{ fila.form_ruta.destino_aprobada }}</div>
+                    <div class="field">{{ fila.form_ruta.destino_devuelta.label_tag }}{{ fila.form_ruta.destino_devuelta }}</div>
+                    <div class="field">{{ fila.form_ruta.destino_rechazada.label_tag }}{{ fila.form_ruta.destino_rechazada }}</div>
+                    <div class="form-actions"><button type="submit" class="btn btn--secondary">Guardar rutas</button></div>
+                  </form>
+                {% endif %}
+
+                {% if fila.tipo_empresarial == "DECISION" %}
+                  <h4>Condiciones</h4>
+                  {% for item in fila.condicionales %}
+                    <form method="post" action="{% url ancla.url_cond_editar ancla.pk fila.etapa.pk item.transicion.pk %}" class="form">
+                      {% csrf_token %}
+                      Si {{ item.form.variable }} {{ item.form.operador }} {{ item.form.valor }}
+                      — Prioridad {{ item.form.prioridad }}
+                      — Ir a {{ item.form.destino }}
+                      <button type="submit" class="btn btn--secondary">Guardar</button>
+                      <button type="submit" class="btn btn--ghost" formaction="{% url ancla.url_cond_eliminar ancla.pk fila.etapa.pk item.transicion.pk %}">Eliminar</button>
+                    </form>
+                  {% endfor %}
+                  <form method="post" action="{% url ancla.url_cond_crear ancla.pk fila.etapa.pk %}" class="form">
+                    {% csrf_token %}
+                    Si {{ fila.form_condicional_nuevo.variable }} {{ fila.form_condicional_nuevo.operador }} {{ fila.form_condicional_nuevo.valor }}
+                    — Prioridad {{ fila.form_condicional_nuevo.prioridad }}
+                    — Ir a {{ fila.form_condicional_nuevo.destino }}
+                    <button type="submit" class="btn btn--secondary">Agregar condición</button>
+                  </form>
+                  <form method="post" action="{% url ancla.url_fallback ancla.pk fila.etapa.pk %}" class="form">
+                    {% csrf_token %}
+                    {{ fila.form_fallback.destino.label_tag }} {{ fila.form_fallback.destino }}
+                    <button type="submit" class="btn btn--secondary">Guardar</button>
+                  </form>
+                {% endif %}
+              </div>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="empty-state"><p>Todavía no hay bloques en esta ejecución.</p></div>
+    {% endif %}
+
+    {% if editable_ejecucion %}
+      {% if despues_de %}
+        <h3 id="agregar-bloque" style="margin-top: var(--space-6);">Agregar después de «{{ despues_de.nombre }}»</h3>
+        <p class="text-muted"><a href="{{ ancla.pagina }}#agregar-bloque">Mejor agregar al final del flujo</a></p>
+      {% else %}
+        <h3 id="agregar-bloque" style="margin-top: var(--space-6);">Agregar bloque</h3>
+        <p class="text-muted">Se agrega al final del flujo. Para insertarlo en medio, usa «+ Agregar después» en el bloque anterior.</p>
+      {% endif %}
+      {% if aviso_agregar %}<p class="text-muted">{{ aviso_agregar }}</p>{% endif %}
+        <div class="catalogo-grid">
+          {% for codigo, etiqueta, descripcion in bloques_disponibles %}
+            <div class="card">
+              <h4>{{ etiqueta }}</h4>
+              <p class="text-muted" style="font-size: var(--text-sm);">{{ descripcion }}</p>
+              <button type="button" class="btn btn--secondary" data-action="toggle-panel" data-target="panel-nuevo-{{ codigo }}">+ Agregar {{ etiqueta|lower }}</button>
+              <div id="panel-nuevo-{{ codigo }}" hidden style="margin-top: var(--space-3);">
+                <form method="post" action="{% url ancla.url_guardar_nuevo ancla.pk %}" class="form">
+                  {% csrf_token %}
+                  <input type="hidden" name="nuevo-tipo" value="{{ codigo }}">
+                  {% if despues_de %}<input type="hidden" name="despues_de" value="{{ despues_de.pk }}">{% endif %}
+                  <div class="field">{{ bloque_general_form.nombre.label_tag }}{{ bloque_general_form.nombre }}</div>
+                  <div class="field">{{ bloque_general_form.descripcion.label_tag }}{{ bloque_general_form.descripcion }}</div>
+
+                  {% if codigo == "ACTIVIDAD" %}
+                    <div class="field">{{ form_actividad_nuevo.tipo_actor.label_tag }}{{ form_actividad_nuevo.tipo_actor }}</div>
+                    <div class="field">{{ form_actividad_nuevo.usuario.label_tag }}{{ form_actividad_nuevo.usuario }}</div>
+                    <div class="field">{{ form_actividad_nuevo.equipo.label_tag }}{{ form_actividad_nuevo.equipo }}</div>
+                    <div class="field">{{ form_actividad_nuevo.permite_subtareas }} {{ form_actividad_nuevo.permite_subtareas.label_tag }}</div>
+                  {% elif codigo == "ESPERA" %}
+                    <div class="field">{{ form_espera_nuevo.modo.label_tag }}{{ form_espera_nuevo.modo }}</div>
+                    <div class="field">{{ form_espera_nuevo.duracion_valor.label_tag }}{{ form_espera_nuevo.duracion_valor }} {{ form_espera_nuevo.duracion_unidad }}</div>
+                    <div class="field">{{ form_espera_nuevo.fecha_objetivo.label_tag }}{{ form_espera_nuevo.fecha_objetivo }}</div>
+                  {% elif codigo == "APROBACION" %}
+                    <div class="field">{{ form_aprobacion_nuevo.modo.label_tag }}{{ form_aprobacion_nuevo.modo }}</div>
+                    <div class="field">{{ form_aprobacion_nuevo.politica.label_tag }}{{ form_aprobacion_nuevo.politica }}</div>
+                    <p class="text-muted" style="font-size: var(--text-xs);">Aprobadores, en orden (podrás ajustar las rutas después de crearla):</p>
+                    {{ formset_participantes_nuevo.management_form }}
+                    {% for pform in formset_participantes_nuevo %}
+                      <div class="field">{{ pform.tipo }} {{ pform.usuario }} {{ pform.equipo }}</div>
+                    {% endfor %}
+                  {% elif codigo == "DECISION" %}
+                    <p class="text-muted" style="font-size: var(--text-xs);">Las condiciones y la ruta «en otro caso» se configuran después de crear este bloque.</p>
+                  {% endif %}
+                  <div class="form-actions">
+                    <button type="submit" class="btn btn--primary">Agregar</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+    {% endif %}

@@ -1,0 +1,12 @@
+{% comment %}Tarjeta compacta de Servicio/Proceso (Inicio y explorador). Entra directo a la solicitud (V2: sin ficha intermedia). Espera `servicio` (con `categoria` cargada y `tono`). El tipo solo se rotula cuando es PROCESO: para quien solicita, lo protagonista es la necesidad, no la clasificación.{% endcomment %}
+<a class="svc-card" href="{% url 'tickets:solicitar' servicio.pk %}">
+  <span class="svc-card__tile tone-{{ servicio.tono }}" aria-hidden="true">
+    {% if servicio.tipo == "PROCESO" %}{% include "components/icon.html" with name="workflow" %}{% else %}{% include "components/icon.html" with name="tickets" %}{% endif %}
+  </span>
+  <span class="svc-card__body">
+    <span class="svc-card__name">{{ servicio.nombre }}</span>
+    <span class="svc-card__meta">{{ servicio.categoria.nombre }}</span>
+  </span>
+  {% if servicio.tipo == "PROCESO" %}<span class="badge">Proceso</span>{% endif %}
+  <span class="svc-card__go" aria-hidden="true">{% include "components/icon.html" with name="arrow-right" size="sm" %}</span>
+</a>

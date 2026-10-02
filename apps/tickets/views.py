@@ -7,13 +7,18 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.http import FileResponse, HttpResponseNotAllowed
+from django.db.models import Exists, OuterRef, Q
+from django.http import FileResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.views.decorators.http import require_GET, require_POST
 
 from apps.catalogo.campos import ESTRATEGIAS_POR_TIPO
 from apps.catalogo.models import Campo, Servicio
+from apps.catalogo.visibilidad import servicios_visibles_para
 from apps.core.models import Equipo
-from apps.tickets import operaciones
+from apps.tickets import entregables as entregables_ops
+from apps.tickets import entregas as entregas_ops
+from apps.tickets import operaciones, solicitud
 from apps.tickets.autorizacion import (
     es_propietario_borrador,
     puede_asignar,
@@ -21,14 +26,26 @@ from apps.tickets.autorizacion import (
     puede_cerrar_ticket,
     puede_comentar_ticket,
     puede_consultar_ticket,
+    puede_entregar_ticket,
+    puede_escribir_entregables_finales,
     puede_reabrir_ticket,
     puede_reasignar,
     puede_resolver_ticket,
+    puede_responder_entrega,
     puede_solicitar_informacion,
     puede_tomar,
     puede_ver_en_cola,
 )
-from apps.tickets.models import Adjunto, ArchivoRespuestaCampo, SolicitudInformacion, Ticket
+from apps.tickets.models import (
+    Adjunto,
+    ArchivoRespuestaCampo,
+    EntregableTicket,
+    EntregaTicket,
+    ResultadoEntregaTicket,
+    SolicitudInformacion,
+    Ticket,
+)
+from apps.tickets.validaciones import validar_para_radicar
 
 
 def _mensaje_error(exc):
@@ -83,11 +100,39 @@ def iniciar_borrador_view(request, servicio_id):
     return redirect("tickets:borrador", pk=ticket.pk)
 
 
-def _leer_respuestas_de_request(request, version):
+@login_required
+@require_GET
+def solicitar_view(request, servicio_id):
+    """V2 — entrada directa a la solicitud desde Inicio/Explorar, sin ficha
+    intermedia. GET idempotente: retoma el borrador vacío del usuario o crea
+    uno (`solicitud.obtener_o_crear_borrador`). El acceso por URL respeta la
+    visibilidad del Servicio igual que el catálogo: 404, no un filtrado
+    silencioso."""
+    servicio = get_object_or_404(
+        servicios_visibles_para(request.user).select_related("categoria", "formulario__version_activa"),
+        pk=servicio_id,
+    )
+    if solicitud.version_activa_de(servicio) is None:
+        return render(
+            request,
+            "tickets/solicitud_no_disponible.html",
+            {"servicio": servicio, "titulo_pagina": servicio.nombre},
+        )
+    try:
+        ticket = solicitud.obtener_o_crear_borrador(request.user, servicio)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+        return redirect("core:inicio")
+    return redirect("tickets:borrador", pk=ticket.pk)
+
+
+def _leer_respuestas_de_request(request, version, *, con_archivos=True):
     respuestas = {}
     for campo in version.campos.all():
         nombre = f"campo_{campo.id}"
         if campo.tipo == Campo.TipoCampo.ARCHIVO:
+            if not con_archivos:
+                continue
             if nombre in request.FILES:
                 respuestas[campo.id] = request.FILES[nombre]
             elif request.POST.get(f"{nombre}__eliminar"):
@@ -105,9 +150,8 @@ def _leer_respuestas_de_request(request, version):
 
 
 def _construir_campos_formulario(respuesta_formulario, version):
-    """Estructura reutilizada por `borrador_formulario_view` (editable),
-    `radicar_view` (para re-render con errores) y `detalle_view` (2.2,
-    solo lectura)."""
+    """Estructura de solo lectura que usa `detalle_view` (2.2). La
+    experiencia de solicitud (V2) usa `solicitud.construir_items`."""
     existentes = {
         rc.campo_id: rc
         for rc in respuesta_formulario.respuestas_campo.select_related("archivo", "campo").all()
@@ -128,32 +172,156 @@ def _construir_campos_formulario(respuesta_formulario, version):
     return campos_formulario
 
 
-@login_required
-def borrador_formulario_view(request, pk):
+def _borrador_propio(request, pk):
     ticket = get_object_or_404(Ticket, pk=pk)
     if not es_propietario_borrador(request.user, ticket) or ticket.estado != Ticket.Estado.BORRADOR:
         raise PermissionDenied
+    return ticket
 
-    respuesta_formulario = ticket.respuesta_formulario
-    version = respuesta_formulario.formulario_version
+
+def _render_workspace(request, ticket, *, errores=None, valores_envio=None):
+    contexto = solicitud.contexto_workspace(ticket, errores=errores, valores_envio=valores_envio)
+    contexto["titulo_pagina"] = f"Nuevo ticket — {contexto['servicio'].nombre}"
+    return render(request, "tickets/solicitud.html", contexto)
+
+
+def _guardar_envio(request, ticket, version):
+    """Guarda el envío actual del formulario campo a campo.
+
+    Lo que pasa la validación de su tipo se persiste con la operación de
+    dominio de siempre (`guardar_respuestas_borrador`); lo que no, NO se
+    guarda y se devuelve como error asociado a su campo, junto con el valor
+    enviado para que el usuario no tenga que reescribirlo. Así un campo mal
+    llenado no hace perder el resto del envío (ni los archivos ya subidos).
+
+    Devuelve `(errores, valores_con_error, error_general)`.
+    """
+    crudas = _leer_respuestas_de_request(request, version)
+    errores = solicitud.errores_de_formato(ticket, crudas)
+    validas = {campo_id: valor for campo_id, valor in crudas.items() if campo_id not in errores}
+    try:
+        operaciones.guardar_respuestas_borrador(ticket, request.user, validas)
+    except ValidationError as exc:
+        return {}, {}, _mensaje_error(exc)
+    return errores, {campo_id: crudas[campo_id] for campo_id in errores}, None
+
+
+@login_required
+def borrador_formulario_view(request, pk):
+    ticket = _borrador_propio(request, pk)
+    version = ticket.respuesta_formulario.formulario_version
 
     if request.method == "POST":
-        respuestas_crudas = _leer_respuestas_de_request(request, version)
-        try:
-            operaciones.guardar_respuestas_borrador(ticket, request.user, respuestas_crudas)
-        except ValidationError as exc:
-            messages.error(request, _mensaje_error(exc))
-        else:
+        errores, valores_con_error, error_general = _guardar_envio(request, ticket, version)
+        if error_general:
+            messages.error(request, error_general)
+            return redirect("tickets:borrador", pk=ticket.pk)
+        if not errores:
             messages.success(request, "Borrador guardado.")
             return redirect("tickets:borrador", pk=ticket.pk)
+        messages.warning(
+            request, "Guardamos lo que estaba correcto. Revisa los campos señalados para completarlos."
+        )
+        return _render_workspace(request, ticket, errores=errores, valores_envio=valores_con_error)
 
+    return _render_workspace(request, ticket)
+
+
+@login_required
+@require_POST
+def solicitud_estado_view(request, pk):
+    """V2 — estado efectivo (visible/requerido) de cada campo para el envío
+    actual, SIN guardar nada. El navegador solo aplica lo que responde el
+    servidor (`validaciones.calcular_estados_efectivos`); no evalúa reglas."""
+    ticket = _borrador_propio(request, pk)
+    version = ticket.respuesta_formulario.formulario_version
+    crudas = _leer_respuestas_de_request(request, version, con_archivos=False)
+    estados = solicitud.estados_en_vivo(ticket, crudas)
+    return JsonResponse({"campos": {str(campo_id): estado for campo_id, estado in estados.items()}})
+
+
+def _errores_para_revisar(ticket):
+    """Obligatoriedad y validez del estado YA guardado (`radicar_ticket`
+    ejecuta exactamente esta validación)."""
+    try:
+        validar_para_radicar(ticket)
+    except ValidationError as exc:
+        return exc.message_dict if hasattr(exc, "error_dict") else {}
+    return {}
+
+
+@login_required
+def revisar_view(request, pk):
+    """V2 — "Revisa tu solicitud". POST: guarda el envío del formulario y, si
+    todo está en orden, pasa a la revisión (PRG). GET: muestra lo guardado.
+    Si hay campos por corregir o completar, no avanza: vuelve al formulario
+    con el error junto a cada campo."""
+    ticket = _borrador_propio(request, pk)
+    version = ticket.respuesta_formulario.formulario_version
+
+    errores_formato, valores_con_error = {}, {}
+    if request.method == "POST":
+        errores_formato, valores_con_error, error_general = _guardar_envio(request, ticket, version)
+        if error_general:
+            messages.error(request, error_general)
+            return redirect("tickets:borrador", pk=ticket.pk)
+    elif request.method != "GET":
+        return HttpResponseNotAllowed(["GET", "POST"])
+
+    # Si un valor enviado tiene un error de formato, ese mensaje es el útil
+    # (el campo quedó sin guardar, así que además figuraría como pendiente).
+    errores = {**_errores_para_revisar(ticket), **errores_formato}
+    if errores:
+        messages.error(request, "Revisa los campos señalados antes de continuar.")
+        return _render_workspace(request, ticket, errores=errores, valores_envio=valores_con_error)
+
+    if request.method == "POST":
+        return redirect("tickets:revisar", pk=ticket.pk)
+
+    contexto = solicitud.contexto_workspace(ticket)
+    contexto["titulo_pagina"] = f"Revisa tu solicitud — {contexto['servicio'].nombre}"
+    return render(request, "tickets/solicitud_revision.html", contexto)
+
+
+@login_required
+@require_POST
+def enviar_view(request, pk):
+    """V2 — "Enviar solicitud": la radicación REAL (`operaciones.radicar_ticket`)
+    sobre lo ya guardado y revisado. Un segundo envío del mismo ticket (doble
+    clic) no falla: lleva a la misma confirmación."""
+    ticket = get_object_or_404(Ticket, pk=pk)
+    if not es_propietario_borrador(request.user, ticket):
+        raise PermissionDenied
+    if ticket.estado != Ticket.Estado.BORRADOR:
+        return redirect("tickets:enviada", pk=ticket.pk) if ticket.radicado else redirect("tickets:detalle", pk=ticket.pk)
+
+    try:
+        operaciones.radicar_ticket(ticket, request.user)
+    except ValidationError as exc:
+        errores = exc.message_dict if hasattr(exc, "error_dict") else None
+        if errores:
+            messages.error(request, "Revisa los campos señalados antes de enviar.")
+            return _render_workspace(request, ticket, errores=errores)
+        messages.error(request, _mensaje_error(exc))
+        return redirect("tickets:revisar", pk=ticket.pk)
+    return redirect("tickets:enviada", pk=ticket.pk)
+
+
+@login_required
+@require_GET
+def solicitud_enviada_view(request, pk):
+    """V2 — confirmación de radicación con los datos reales del Ticket."""
+    ticket = get_object_or_404(Ticket.objects.select_related("detalle_servicio__servicio__categoria"), pk=pk)
+    if not es_propietario_borrador(request.user, ticket):
+        raise PermissionDenied
+    if ticket.estado == Ticket.Estado.BORRADOR:
+        return redirect("tickets:borrador", pk=ticket.pk)
     contexto = {
         "ticket": ticket,
         "servicio": ticket.detalle_servicio.servicio,
-        "campos_formulario": _construir_campos_formulario(respuesta_formulario, version),
-        "titulo_pagina": f"Nuevo ticket — {ticket.detalle_servicio.servicio.nombre}",
+        "titulo_pagina": "Solicitud enviada",
     }
-    return render(request, "tickets/borrador_formulario.html", contexto)
+    return render(request, "tickets/solicitud_enviada.html", contexto)
 
 
 @login_required
@@ -167,15 +335,16 @@ def radicar_view(request, pk):
     servicio desactivado, etc.), las respuestas recién guardadas
     permanecen persistidas — el usuario no pierde lo que acaba de escribir
     y puede corregir solo lo que falta, en vez de perder todo el envío.
+
+    Desde V2 la interfaz radica por el recorrido revisar → enviar
+    (`revisar_view`/`enviar_view`); este endpoint directo conserva su
+    contrato original.
     """
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
-    ticket = get_object_or_404(Ticket, pk=pk)
-    if not es_propietario_borrador(request.user, ticket) or ticket.estado != Ticket.Estado.BORRADOR:
-        raise PermissionDenied
+    ticket = _borrador_propio(request, pk)
 
-    respuesta_formulario = ticket.respuesta_formulario
-    version = respuesta_formulario.formulario_version
+    version = ticket.respuesta_formulario.formulario_version
     respuestas_crudas = _leer_respuestas_de_request(request, version)
 
     try:
@@ -189,19 +358,8 @@ def radicar_view(request, pk):
     except ValidationError as exc:
         errores_por_campo = exc.message_dict if hasattr(exc, "error_dict") else None
         if errores_por_campo:
-            campos_formulario = _construir_campos_formulario(respuesta_formulario, version)
-            for item in campos_formulario:
-                lista = errores_por_campo.get(item["campo"].id)
-                if lista:
-                    item["errores"] = lista
             messages.error(request, "Revisa los campos señalados antes de radicar.")
-            contexto = {
-                "ticket": ticket,
-                "servicio": ticket.detalle_servicio.servicio,
-                "campos_formulario": campos_formulario,
-                "titulo_pagina": f"Nuevo ticket — {ticket.detalle_servicio.servicio.nombre}",
-            }
-            return render(request, "tickets/borrador_formulario.html", contexto)
+            return _render_workspace(request, ticket, errores=errores_por_campo)
         messages.error(request, _mensaje_error(exc))
         return redirect("tickets:borrador", pk=ticket.pk)
 
@@ -272,7 +430,40 @@ def detalle_view(request, pk):
         "puede_reabrir": puede_reabrir_ticket(request.user, ticket),
         "titulo_pagina": f"Ticket {ticket.radicado} — {ticket.detalle_servicio.servicio.nombre}",
     }
+    contexto.update(_contexto_entrega(request.user, ticket))
     return render(request, "tickets/detalle.html", contexto)
+
+
+def _contexto_entrega(usuario, ticket):
+    """4.5 — entregables del responsable, entregas históricas y respuesta del
+    solicitante. Los entregables en producción solo se muestran a quien
+    atiende (no al solicitante puro); las entregas realizadas, a cualquiera
+    que pueda consultar el ticket."""
+    puede_atender = puede_ver_en_cola(usuario, ticket)
+    entregables, pendientes = [], []
+    if puede_atender:
+        entregables = list(ticket.entregables.prefetch_related("archivos"))
+        for entregable in entregables:
+            entregable.archivos_vigentes = [a for a in entregable.archivos.all() if a.retirado_en is None]
+        pendientes = [e for e in entregables if e.obligatorio and not e.satisfecho]
+    entregas = list(
+        ticket.entregas.select_related("entregada_por", "resuelta_por")
+        .prefetch_related("resultados__adjuntos")
+        .order_by("-numero")
+    )
+    pendiente = next((e for e in entregas if e.estado == EntregaTicket.Estado.PENDIENTE), None)
+    if pendiente is not None:
+        pendiente.ticket = ticket
+    return {
+        "entregables": entregables,
+        "entregables_pendientes": pendientes,
+        "puede_escribir_entregables": puede_escribir_entregables_finales(usuario, ticket),
+        "puede_entregar": puede_entregar_ticket(usuario, ticket),
+        "entregas": entregas,
+        "entrega_pendiente": pendiente,
+        "puede_responder_entrega": pendiente is not None and puede_responder_entrega(usuario, pendiente),
+        "tiene_entrega_formal": bool(ticket.entrega_politica),
+    }
 
 
 @login_required
@@ -499,8 +690,11 @@ def descargar_adjunto_view(request, adjunto_id):
     """RQF-006/RQ-NFN-04 — misma autorización que `descargar_archivo_respuesta_view`,
     centralizada en `puede_consultar_ticket`: nunca se expone el adjunto
     solo por conocer su URL de MEDIA."""
+    # 4.5: un archivo retirado después de haber sido ENTREGADO sigue
+    # disponible — forma parte de la historia de una entrega.
+    en_entrega = Exists(ResultadoEntregaTicket.adjuntos.through.objects.filter(adjunto_id=OuterRef("pk")))
     adjunto = get_object_or_404(
-        Adjunto.objects.filter(retirado_en__isnull=True).select_related(
+        Adjunto.objects.filter(Q(retirado_en__isnull=True) | en_entrega).select_related(
             "ticket",
             "comentario__ticket",
             "solicitud__ticket",
@@ -513,3 +707,125 @@ def descargar_adjunto_view(request, adjunto_id):
     if not puede_consultar_ticket(request.user, ticket):
         raise PermissionDenied
     return FileResponse(adjunto.archivo.open("rb"), as_attachment=True, filename=adjunto.nombre_original)
+
+
+# --- 4.5 — Entregables del responsable, entrega formal y respuesta ---------
+
+
+def _post_ticket_o_405(request, pk):
+    if request.method != "POST":
+        return None
+    return get_object_or_404(Ticket, pk=pk)
+
+
+@login_required
+def entregable_resultado_view(request, pk, entregable_id):
+    ticket = _post_ticket_o_405(request, pk)
+    if ticket is None:
+        return HttpResponseNotAllowed(["POST"])
+    entregable = get_object_or_404(EntregableTicket, pk=entregable_id, ticket=ticket)
+    try:
+        entregables_ops.registrar_resultado_entregable(entregable, request.user, request.POST.get("valor", ""))
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Resultado guardado.")
+    return redirect("tickets:detalle", pk=pk)
+
+
+@login_required
+def entregable_confirmar_view(request, pk, entregable_id):
+    ticket = _post_ticket_o_405(request, pk)
+    if ticket is None:
+        return HttpResponseNotAllowed(["POST"])
+    entregable = get_object_or_404(EntregableTicket, pk=entregable_id, ticket=ticket)
+    try:
+        entregables_ops.confirmar_entregable(entregable, request.user)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Entregable confirmado.")
+    return redirect("tickets:detalle", pk=pk)
+
+
+@login_required
+def entregable_adjuntar_view(request, pk, entregable_id):
+    ticket = _post_ticket_o_405(request, pk)
+    if ticket is None:
+        return HttpResponseNotAllowed(["POST"])
+    entregable = get_object_or_404(EntregableTicket, pk=entregable_id, ticket=ticket)
+    archivo = request.FILES.get("archivo")
+    if archivo is None:
+        messages.error(request, "Seleccione un archivo.")
+        return redirect("tickets:detalle", pk=pk)
+    try:
+        entregables_ops.adjuntar_archivo_entregable(entregable, request.user, archivo)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Archivo adjuntado.")
+    return redirect("tickets:detalle", pk=pk)
+
+
+@login_required
+def entregable_retirar_archivo_view(request, pk, adjunto_id):
+    ticket = _post_ticket_o_405(request, pk)
+    if ticket is None:
+        return HttpResponseNotAllowed(["POST"])
+    adjunto = get_object_or_404(Adjunto, pk=adjunto_id, entregable__ticket=ticket)
+    try:
+        entregables_ops.retirar_archivo_entregable(adjunto, request.user)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Archivo retirado.")
+    return redirect("tickets:detalle", pk=pk)
+
+
+@login_required
+def entregar_view(request, pk):
+    ticket = _post_ticket_o_405(request, pk)
+    if ticket is None:
+        return HttpResponseNotAllowed(["POST"])
+    # Acción irreversible: se exige confirmación explícita en el envío.
+    if request.POST.get("confirmar") != "1":
+        messages.error(request, "Confirme la entrega para continuar.")
+        return redirect("tickets:detalle", pk=pk)
+    try:
+        entrega = entregas_ops.entregar_ticket(ticket, request.user)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        if entrega.estado == EntregaTicket.Estado.CERRADA_SIN_RESPUESTA:
+            messages.success(request, "Resultado entregado. El ticket quedó cerrado.")
+        else:
+            messages.success(request, "Resultado entregado al solicitante.")
+    return redirect("tickets:detalle", pk=pk)
+
+
+@login_required
+def aceptar_entrega_view(request, pk):
+    ticket = _post_ticket_o_405(request, pk)
+    if ticket is None:
+        return HttpResponseNotAllowed(["POST"])
+    try:
+        entregas_ops.aceptar_entrega(ticket, request.user)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Gracias: el ticket quedó cerrado.")
+    return redirect("tickets:detalle", pk=pk)
+
+
+@login_required
+def observar_entrega_view(request, pk):
+    ticket = _post_ticket_o_405(request, pk)
+    if ticket is None:
+        return HttpResponseNotAllowed(["POST"])
+    try:
+        entregas_ops.observar_entrega(ticket, request.user, request.POST.get("observaciones", ""))
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Observaciones enviadas. El responsable realizará los ajustes.")
+    return redirect("tickets:detalle", pk=pk)

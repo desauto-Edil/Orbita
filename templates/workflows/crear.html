@@ -3,11 +3,7 @@
 {% block title %}Nuevo workflow — Órbita{% endblock %}
 
 {% block content %}
-  <nav class="breadcrumb" aria-label="Ruta de navegación">
-    <a href="{% url 'workflows:lista' %}">Workflows</a>
-    <span class="breadcrumb__separator" aria-hidden="true">/</span>
-    <span class="breadcrumb__current">Nuevo</span>
-  </nav>
+  {% include "components/disenador_miga.html" with seccion="flujos" actual="Nuevo flujo" %}
 
   <section class="card">
     <h1>Nuevo workflow</h1>

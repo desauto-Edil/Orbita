@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ titulo_pagina }} — Órbita{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/solicitud.css' %}">{% endblock %}
+
+{% block content %}
+<section class="card sol-done" aria-labelledby="sol-nd-title">
+  <span class="sol-done__mark sol-done__mark--neutral" aria-hidden="true">{% include "components/icon.html" with name="info" size="lg" %}</span>
+  <h1 class="sol-title" id="sol-nd-title">Esta solicitud aún no está disponible</h1>
+  <p class="sol-done__service">{{ servicio.nombre }}</p>
+  <p class="sol-done__text">Todavía no tiene un formulario listo para completarse. Vuelve a intentarlo más tarde o consulta con el equipo responsable.</p>
+  <div class="sol-done__actions">
+    <a class="btn btn--primary" href="{% url 'core:inicio' %}">Ir al Inicio</a>
+  </div>
+</section>
+{% endblock %}

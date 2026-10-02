@@ -1,4 +1,5 @@
-/* Órbita — reset y base tipográfica (Incremento 0.5). */
+/* Órbita — reset, base tipográfica y utilidades de accesibilidad (V0).
+   Solo usa tokens semánticos de tokens.css. */
 
 *,
 *::before,
@@ -12,28 +13,49 @@ html {
 
 body {
   margin: 0;
-  background: var(--background);
-  color: var(--text);
+  background: var(--surface-page);
+  color: var(--text-primary);
   font-family: var(--font-sans);
-  font-size: var(--text-base);
-  line-height: 1.5;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-base);
   -webkit-font-smoothing: antialiased;
 }
+
+/* `hidden` siempre gana: varios componentes (popover, panel, modal) usan el
+   atributo y definen `display` propio; sin esto la mayor especificidad de la
+   clase lo dejaría visible. */
+[hidden] {
+  display: none !important;
+}
+
+/* --- Escala tipográfica única ---
+   h1 título de página · h2 título de sección · h3 título de card/componente
+   · h4 subtítulo. Las clases .t-* aplican la misma escala sin cambiar la
+   semántica del encabezado. */
 
 h1,
 h2,
 h3,
 h4 {
   margin: 0 0 var(--space-2);
-  font-weight: 700;
-  line-height: 1.25;
-  color: var(--text);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-tight);
+  color: var(--text-primary);
+  letter-spacing: -0.01em;
 }
 
-h1 { font-size: var(--text-2xl); }
-h2 { font-size: var(--text-xl); }
-h3 { font-size: var(--text-lg); }
-h4 { font-size: var(--text-md); }
+h1 { font-size: var(--font-size-page-title); }
+h2 { font-size: var(--font-size-section-title); }
+h3 { font-size: var(--font-size-card-title); }
+h4 { font-size: var(--font-size-body); }
+
+.t-display { font-size: var(--font-size-display); font-weight: var(--font-weight-bold); line-height: 1.15; letter-spacing: -0.02em; }
+.t-page-title { font-size: var(--font-size-page-title); font-weight: var(--font-weight-bold); line-height: var(--line-height-tight); letter-spacing: -0.01em; }
+.t-section-title { font-size: var(--font-size-section-title); font-weight: var(--font-weight-bold); line-height: var(--line-height-tight); }
+.t-card-title { font-size: var(--font-size-card-title); font-weight: var(--font-weight-semibold); line-height: var(--line-height-tight); }
+.t-body { font-size: var(--font-size-body); }
+.t-small { font-size: var(--font-size-small); }
+.t-caption { font-size: var(--font-size-caption); letter-spacing: 0.01em; }
 
 p {
   margin: 0 0 var(--space-3);
@@ -44,19 +66,21 @@ p {
 }
 
 .text-danger {
-  color: var(--danger);
+  color: var(--status-danger);
 }
 
 .field-errors {
   margin: 0 0 var(--space-2);
   padding: 0;
   list-style: none;
-  font-size: var(--text-sm, 0.875rem);
+  font-size: var(--font-size-small);
+  color: var(--status-danger);
 }
 
 a {
-  color: var(--text);
-  text-decoration-color: var(--border);
+  color: var(--text-primary);
+  text-decoration-color: var(--border-strong);
+  text-underline-offset: 2px;
 }
 
 a:hover {
@@ -77,22 +101,47 @@ button {
   font-family: inherit;
 }
 
-/* Accesibilidad: foco siempre visible, nunca solo por color */
+hr {
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+  margin: var(--space-4) 0;
+}
+
+::selection {
+  background: var(--color-primary-soft-hover);
+}
+
+/* --- Accesibilidad --- */
+
+/* Foco siempre visible y nunca solo por color: anillo con separación. */
 :focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
   border-radius: var(--radius-sm);
+}
+
+/* Texto solo para tecnologías de asistencia. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }
 
 .skip-link {
   position: absolute;
   left: var(--space-3);
   top: -48px;
-  background: var(--carbon);
-  color: var(--text-on-dark);
+  background: var(--surface-inverse);
+  color: var(--text-on-inverse);
   padding: var(--space-2) var(--space-4);
   border-radius: var(--radius-md);
-  z-index: 1000;
+  z-index: var(--z-skip-link);
   transition: top var(--duration-fast) var(--ease-standard);
 }
 

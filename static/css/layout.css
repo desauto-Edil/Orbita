@@ -1,6 +1,12 @@
-/* Órbita — Application Shell (Incremento 0.5; rediseñado en 2.UI.1:
-   topbar mínima + canvas amplio + dock flotante inferior, sin sidebar).
-   Breakpoints: móvil <640px · tablet/laptop 640–1279px · desktop ≥1280px. */
+/* Órbita — Application Shell (V0).
+
+   Solo dos niveles de navegación global:
+     NIVEL 0  Header global  (identidad · búsqueda · notificaciones · usuario)
+     NIVEL 1  Dock global adaptativo (Inicio · Mis tickets · Trabajo · Más)
+   Tabs, segmentos y filtros dentro de cada pantalla son controles locales
+   del módulo (components.css), no navegación global. No hay sidebar.
+
+   Breakpoints: móvil <640px · tablet 640–1023px · desktop ≥1024px. */
 
 .bare-content {
   min-height: 100vh;
@@ -16,77 +22,111 @@
   flex-direction: column;
 }
 
-/* --- Topbar --- */
+/* --- Header global (glass ligero, sticky) --- */
 
-.topbar {
-  height: var(--topbar-h);
+.app-header {
+  height: var(--header-h);
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: var(--space-4);
   padding: 0 var(--space-6);
-  /* Glass, sticky: el contenido pasa por debajo al hacer scroll — así el
-     blur tiene algo real que desenfocar, no solo decora. */
-  background: var(--glass-light-bg);
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  backdrop-filter: blur(var(--glass-blur));
-  border-bottom: 1px solid var(--glass-light-border);
+  background: var(--surface-glass);
+  -webkit-backdrop-filter: blur(var(--blur-md));
+  backdrop-filter: blur(var(--blur-md));
+  border-bottom: 1px solid var(--border-glass);
   position: sticky;
   top: 0;
-  z-index: 20;
+  z-index: var(--z-header);
 }
 
-.topbar__brand {
+.app-header__brand {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  font-weight: 700;
-  font-size: var(--text-md);
   flex-shrink: 0;
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-body-lg);
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+  text-decoration: none;
 }
 
-.topbar__brand-mark {
+.app-header__brand-mark {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: var(--radius-sm);
-  background: var(--accent);
-  color: var(--accent-contrast);
-  font-weight: 700;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-md);
+  background: var(--gradient-brand);
+  color: var(--color-on-primary);
+  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-small);
 }
 
-.topbar__divider {
-  width: 1px;
-  height: 20px;
-  background: var(--border);
-  flex-shrink: 0;
-}
-
-.topbar__title {
-  margin: 0;
-  font-size: var(--text-lg);
-  font-weight: 700;
-}
-
-.topbar__spacer {
-  flex: 1;
-}
-
-.topbar__user {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
+.app-header__search {
+  flex: 1 1 auto;
+  max-width: 440px;
   min-width: 0;
 }
 
-.topbar__user-name {
-  font-weight: 600;
-  font-size: var(--text-sm);
+.app-header__spacer {
+  flex: 1;
+}
+
+.app-header__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+/* --- Menú de usuario (header) --- */
+
+.user-menu {
+  position: relative;
+}
+
+.user-menu__trigger {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--control-h-md);
+  padding: 0 var(--space-2) 0 var(--space-1);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
+}
+
+.user-menu__trigger:hover,
+.user-menu__trigger[aria-expanded="true"] {
+  background: var(--surface-hover);
+  border-color: var(--border-strong);
+}
+
+.user-menu__name {
+  max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.user-menu__chevron {
+  width: 16px;
+  height: 16px;
+  color: var(--text-muted);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.user-menu__trigger[aria-expanded="true"] .user-menu__chevron {
+  transform: rotate(180deg);
 }
 
 /* --- Canvas --- */
@@ -98,7 +138,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-5);
-  max-width: 760px;
+  max-width: var(--content-narrow);
   width: 100%;
   margin: 0 auto;
 }
@@ -106,39 +146,47 @@
 /* Vistas de tablas/colas/grids aprovechan más ancho que formularios o
    textos — no se fuerza el mismo max-width estrecho a todo el contenido. */
 .content-area--wide {
-  max-width: 1200px;
+  max-width: var(--content-wide);
 }
 
-/* --- Dock flotante --- */
+/* Portada (Inicio): canvas amplio con gutters adaptativos; la composición
+   interna reparte el ancho, no una columna fija estrecha centrada. */
+.content-area--portal {
+  max-width: var(--content-portal);
+  padding-inline: clamp(var(--space-4), 3.2vw, var(--space-7));
+}
+
+/* --- Dock global (glass oscuro, flotante) ---
+   El ancho lo da el contenido: con 2, 3 o 4 destinos el dock se recalcula
+   solo, sin huecos para destinos ocultos (el servidor no los renderiza). */
 
 .dock {
   position: fixed;
   left: 50%;
-  bottom: var(--space-5);
+  bottom: var(--dock-offset);
   transform: translateX(-50%);
-  z-index: 40;
+  z-index: var(--z-dock);
+  max-width: calc(100vw - 2 * var(--space-3));
 }
 
 .dock__list {
   list-style: none;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: var(--space-1);
   margin: 0;
   padding: var(--space-2);
-  background: var(--glass-dark-bg);
-  -webkit-backdrop-filter: blur(var(--glass-blur));
-  backdrop-filter: blur(var(--glass-blur));
-  border: 1px solid var(--glass-dark-border);
+  background: var(--surface-glass-inverse);
+  -webkit-backdrop-filter: blur(var(--blur-md));
+  backdrop-filter: blur(var(--blur-md));
+  border: 1px solid var(--border-glass-inverse);
   border-radius: var(--radius-pill);
-  box-shadow: var(--glass-shadow);
-  /* Red de seguridad (3.UI.5, punto 10): con 6 accesos posibles en el dock
-     (Inicio/Mis tickets/Mi trabajo/Servicios/Cola de atención/Más), nunca
-     debe desbordar el viewport ni quedar cortado contra el borde — si aun
-     así no cupiera en un ancho intermedio, se vuelve desplazable en vez de
-     recortarse u ocultar un acceso arbitrariamente. */
-  max-width: calc(100vw - var(--space-8));
-  overflow-x: auto;
+  box-shadow: var(--shadow-float);
+  /* SIN `overflow` aquí, a propósito: el popover de "Más" es descendiente
+     de esta lista y se posiciona fuera de su caja (encima del dock). Un
+     `overflow-x: auto` (que fuerza `overflow-y` a `auto`) lo recorta por
+     completo. */
 }
 
 .dock__item-wrap {
@@ -155,113 +203,83 @@
   border: none;
   border-radius: var(--radius-pill);
   background: transparent;
-  color: var(--text-on-dark-muted);
+  color: var(--text-on-inverse-muted);
   text-decoration: none;
   font-family: inherit;
-  font-size: var(--text-sm);
-  font-weight: 600;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
   cursor: pointer;
   transition: background-color var(--duration-fast) var(--ease-standard),
     color var(--duration-fast) var(--ease-standard);
 }
 
-.dock__item:hover {
-  background: var(--carbon-soft);
-  color: var(--text-on-dark);
+.dock__item:hover,
+.dock__item[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text-on-inverse);
 }
 
 .dock__item.is-active {
-  background: var(--accent);
-  color: var(--accent-contrast);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
 }
 
-.dock__icon svg {
+/* El anillo de foco del dock es claro: el color de marca no contrasta con
+   el fondo oscuro. */
+.dock :focus-visible {
+  outline-color: var(--palette-neutral-0);
+}
+
+.dock__icon {
+  display: inline-flex;
+}
+
+.dock__icon .icon {
   width: 20px;
   height: 20px;
-  flex-shrink: 0;
 }
 
 .dock__label {
   white-space: nowrap;
 }
 
-.dock__popover {
-  position: absolute;
+/* Popover de "Más": se ancla al borde derecho de su botón (siempre el
+   último destino del dock), no centrado — un popover centrado se sale de la
+   pantalla cuando el dock está cerca del borde. Abre hacia arriba. */
+.dock__item-wrap > .popover {
   bottom: calc(100% + var(--space-3));
-  left: 50%;
-  transform: translateX(-50%);
-  min-width: 200px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  background: var(--glass-dark-bg);
-  -webkit-backdrop-filter: blur(var(--glass-blur-sm));
-  backdrop-filter: blur(var(--glass-blur-sm));
-  border: 1px solid var(--glass-dark-border);
-  border-radius: var(--radius-md);
-  box-shadow: var(--glass-shadow);
-  padding: var(--space-2);
-}
-
-/* `hidden` es un atributo HTML (no una clase): sin esta regla, la mayor
-   especificidad de `.dock__popover { display: flex; }` lo gana y el
-   popover queda siempre visible sin importar el atributo. */
-.dock__popover[hidden] {
-  display: none;
-}
-
-.dock__popover a,
-.dock__popover button {
-  display: block;
-  width: 100%;
-  text-align: left;
-  padding: var(--space-2) var(--space-3);
-  border-radius: var(--radius-sm);
-  border: none;
-  background: transparent;
-  color: var(--text-on-dark);
-  font-family: inherit;
-  font-size: var(--text-sm);
-  text-decoration: none;
-  cursor: pointer;
-}
-
-.dock__popover a:hover,
-.dock__popover button:hover {
-  background: var(--carbon-soft);
+  top: auto;
+  right: 0;
+  left: auto;
 }
 
 /* --- Responsive --- */
 
-/* 3.UI.5, punto 10: al agregar "Mi trabajo" el dock puede llegar a 6
-   accesos (Inicio/Mis tickets/Mi trabajo/Servicios/Cola de
-   atención/Más). Con etiqueta visible completa ("Cola de atención" es la
-   más larga) 6 ítems no caben con comodidad por debajo de ~900px —
-   se resuelve extendiendo el mismo tratamiento "solo ícono" que ya existía
-   para móvil (<640px) hasta ese ancho, en vez de esconder un acceso
-   detrás de "Más" (ningún ítem deja de estar disponible: el `title` de
-   cada `.dock__item` sigue exponiendo la etiqueta como tooltip). */
-@media (max-width: 899px) {
-  .dock__item {
-    padding: 0 var(--space-3);
+@media (max-width: 1023px) {
+  .app-header {
+    padding: 0 var(--space-5);
   }
 
-  .dock__label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip: rect(0 0 0 0);
-    white-space: nowrap;
+  .content-area {
+    padding: var(--space-5);
+    padding-bottom: var(--dock-clearance);
   }
 }
 
 @media (max-width: 639px) {
-  .topbar {
+  .app-header {
     padding: 0 var(--space-4);
+    gap: var(--space-2);
   }
 
-  .topbar__user-name {
+  /* La búsqueda se contrae a un botón de ícono; el nombre del usuario se
+     oculta (queda el avatar + flecha). */
+  .app-header__search {
+    flex: 0 0 auto;
+    max-width: none;
+  }
+
+  .user-menu__name {
     display: none;
   }
 
@@ -279,32 +297,40 @@
 
   .dock__list {
     width: 100%;
-    justify-content: space-between;
+    justify-content: space-around;
   }
 
   .dock__item {
-    padding: 0 var(--space-2);
+    padding: 0 var(--space-3);
+  }
+}
+
+/* Pantallas angostas: solo el destino activo muestra su etiqueta (los demás
+   conservan nombre accesible por `.sr-only`-equivalente y `title`); con 4
+   destinos las etiquetas completas no caben en ~360px. */
+@media (max-width: 479px) {
+  .dock__item:not(.is-active) .dock__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
   }
 
-  /* `.dock__label` ya queda oculto por el bloque ≤899px de arriba —
-     aquí solo se ajusta lo específico de móvil (borde a borde). */
-
-  .dock__popover {
-    left: auto;
-    right: 0;
-    transform: none;
+  .app-header__brand-name {
+    display: none;
   }
 }
 
 /* Fallback sin backdrop-filter: superficies casi sólidas en vez de
    transparentes sin desenfoque (legibilidad ante todo). */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
-  .topbar {
-    background: var(--glass-light-bg-fallback);
+  .app-header {
+    background: var(--surface-glass-fallback);
   }
 
-  .dock__list,
-  .dock__popover {
-    background: var(--glass-dark-bg-fallback);
+  .dock__list {
+    background: var(--surface-glass-inverse-fallback);
   }
 }

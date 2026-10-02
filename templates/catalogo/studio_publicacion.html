@@ -1,0 +1,104 @@
+<section class="card">
+  <h2>Publicación</h2>
+  <p class="text-muted">¿Está listo y quién puede utilizarlo?</p>
+
+  <ul class="plain-list">
+    {% for item in checklist %}
+      <li>
+        {% if item.ok %}
+          <span class="badge badge--success">✓</span>
+        {% else %}
+          <span class="badge badge--warning">○</span>
+        {% endif %}
+        {{ item.texto }}
+      </li>
+    {% endfor %}
+  </ul>
+
+  {% if errores %}
+    <div class="alert alert--danger" style="margin-top: var(--space-4);">
+      <div class="alert__text">
+        <strong>Pendientes antes de publicar:</strong>
+        <ul>
+          {% for error in errores %}<li>{{ error }}</li>{% endfor %}
+        </ul>
+      </div>
+    </div>
+  {% endif %}
+
+  <h3 style="margin-top: var(--space-6);">Visibilidad</h3>
+  {% if es_restringido %}
+    {% if concesiones %}
+      <p class="text-muted">Restringido. Pueden encontrarlo y solicitarlo:</p>
+      <ul class="plain-list">
+        {% for concesion in concesiones %}
+          <li>
+            {% if concesion.tipo_alcance == "USUARIO" %}{{ concesion.usuario }}
+            {% elif concesion.tipo_alcance == "AREA" %}{{ concesion.area }}
+            {% else %}{{ concesion.unidad_negocio }}{% endif %}
+            <span class="badge">{{ concesion.get_tipo_alcance_display }}</span>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="text-muted">Restringido, sin nadie con acceso todavía.</p>
+    {% endif %}
+  {% else %}
+    <p class="text-muted">Público interno — cualquier persona de la organización.</p>
+  {% endif %}
+  <a class="btn btn--ghost" href="{% url 'catalogo:studio' servicio.pk %}?tab=general">Cambiar visibilidad</a>
+
+  <h3 style="margin-top: var(--space-6);">Quién puede atenderlo</h3>
+  <p class="text-muted" style="font-size: var(--text-sm);">Personas o equipos configurados para atender este elemento. Además necesitan el permiso de atención de tickets; no es lo mismo que quién realiza cada actividad del flujo (eso se define en Ejecución).</p>
+  {% if responsables %}
+    <ul class="list-row-group">
+      {% for responsable in responsables %}
+        <li class="list-row">
+          <span class="list-row__title">{% if responsable.tipo_responsable == "USUARIO" %}{{ responsable.usuario }}{% else %}{{ responsable.equipo }}{% endif %}</span>
+          <span class="badge">{{ responsable.get_tipo_responsable_display }}</span>
+          <form method="post" action="{% url 'catalogo:studio_responsable_retirar' servicio.pk responsable.pk %}" style="display:inline;">
+            {% csrf_token %}
+            <button type="submit" class="btn btn--ghost">Retirar</button>
+          </form>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="empty-state"><p>Todavía no hay responsables configurados.</p></div>
+  {% endif %}
+
+  <form method="post" action="{% url 'catalogo:studio_responsable_agregar' servicio.pk %}" class="form" style="margin-top: var(--space-4);">
+    {% csrf_token %}
+    <div class="field">{{ form_responsable.tipo_responsable.label_tag }}{{ form_responsable.tipo_responsable }}</div>
+    <div class="field">{{ form_responsable.usuario.label_tag }}{{ form_responsable.usuario }}</div>
+    <div class="field">{{ form_responsable.equipo.label_tag }}{{ form_responsable.equipo }}</div>
+    <p class="text-muted" style="font-size: var(--text-xs);">Complete solo el selector que corresponda al tipo elegido.</p>
+    <div class="form-actions"><button type="submit" class="btn btn--secondary">+ Agregar responsable</button></div>
+  </form>
+
+  <div class="form-actions" style="margin-top: var(--space-5);">
+    <form method="post" action="{% url 'catalogo:studio_publicar' servicio.pk %}" class="form">
+      {% csrf_token %}
+      {% if impacto_compartido %}
+        <div class="alert alert--warning" style="margin-bottom: var(--space-3);">
+          <span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="alert" %}</span>
+          <div class="alert__text">
+            <strong>Esta publicación afecta a otros elementos.</strong> El flujo «{{ servicio.workflow.nombre }}» también lo usan:
+            <ul class="plain-list" style="margin: var(--space-2) 0;">
+              {% for otro in impacto_compartido %}<li>{{ otro.nombre }}</li>{% endfor %}
+            </ul>
+            Sus tickets nuevos usarán la versión que publiques; los tickets ya iniciados conservan la suya.
+            <label class="choice" style="margin-top: var(--space-2);"><input type="checkbox" name="confirmo_compartido" value="1" required> Entiendo el impacto sobre estos elementos.</label>
+            <div class="field" style="margin-top: var(--space-2);">
+              <label for="confirmacion-nombre">Para confirmar, escribe el nombre del flujo: <strong>{{ servicio.workflow.nombre }}</strong></label>
+              <input id="confirmacion-nombre" type="text" name="confirmacion_nombre" autocomplete="off" required>
+            </div>
+          </div>
+        </div>
+      {% endif %}
+      <button type="submit" class="btn btn--primary" {% if not publicable %}disabled{% endif %}>
+        {% if servicio.activo %}Actualizar publicación{% else %}Publicar{% endif %}
+      </button>
+    </form>
+  </div>
+</section>

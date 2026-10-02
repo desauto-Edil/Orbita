@@ -1,0 +1,372 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Sistema visual — Órbita{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/sistema-visual.css' %}">{% endblock %}
+
+{% block content_modifier %}content-area--wide{% endblock %}
+
+{% block content %}
+  <header class="page-header">
+    <div>
+      <h1 class="page-header__title">Sistema visual</h1>
+      <p class="page-header__subtitle">Fundamentos, componentes y patrones de Órbita. Herramienta interna de diseño y desarrollo.</p>
+    </div>
+  </header>
+
+  <nav class="tabs sv-anchor-nav" aria-label="Secciones del catálogo visual">
+    <a class="tabs__tab" href="#foundations">Fundamentos</a>
+    <a class="tabs__tab" href="#components">Componentes</a>
+    <a class="tabs__tab" href="#patterns">Patrones</a>
+  </nav>
+
+  {# ====================================================================== #}
+  {# FOUNDATIONS                                                              #}
+  {# ====================================================================== #}
+
+  <section class="card sv-section" id="foundations" aria-labelledby="sv-foundations-title">
+    <h2 id="sv-foundations-title">Fundamentos</h2>
+
+    <h3>Color de marca y estados</h3>
+    <div class="sv-grid">
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--color-primary)"></span><span class="sv-swatch__name">--color-primary</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--color-primary-hover)"></span><span class="sv-swatch__name">--color-primary-hover</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--color-primary-soft)"></span><span class="sv-swatch__name">--color-primary-soft</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--gradient-brand)"></span><span class="sv-swatch__name">--gradient-brand (logo y avatar)</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--status-success)"></span><span class="sv-swatch__name">--status-success</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--status-warning)"></span><span class="sv-swatch__name">--status-warning</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--status-danger)"></span><span class="sv-swatch__name">--status-danger</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--status-info)"></span><span class="sv-swatch__name">--status-info</span></div>
+    </div>
+
+    <h3>Superficies y bordes</h3>
+    <div class="sv-grid">
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--surface-page)"></span><span class="sv-swatch__name">--surface-page</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--surface-card)"></span><span class="sv-swatch__name">--surface-card</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--surface-sunken)"></span><span class="sv-swatch__name">--surface-sunken</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--surface-glass)"></span><span class="sv-swatch__name">--surface-glass</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--border-subtle)"></span><span class="sv-swatch__name">--border-subtle</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--border-strong)"></span><span class="sv-swatch__name">--border-strong</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--text-primary)"></span><span class="sv-swatch__name">--text-primary</span></div>
+      <div class="sv-swatch"><span class="sv-swatch__chip" style="--swatch: var(--text-muted)"></span><span class="sv-swatch__name">--text-muted</span></div>
+    </div>
+
+    <h3>Tipografía</h3>
+    <div class="sv-stack">
+      <p class="t-display" style="margin:0">Título principal</p>
+      <p class="t-page-title" style="margin:0">Título de página</p>
+      <p class="t-section-title" style="margin:0">Título de sección</p>
+      <p class="t-card-title" style="margin:0">Título de componente / card</p>
+      <p class="t-body" style="margin:0">Texto de cuerpo: la información principal de cada pantalla, pensada para leerse con comodidad.</p>
+      <p class="t-small text-muted" style="margin:0">Texto pequeño para metadatos y ayudas.</p>
+      <p class="t-caption text-muted" style="margin:0">Caption para etiquetas y notas mínimas.</p>
+    </div>
+
+    <h3>Espaciado (base 4px)</h3>
+    <div class="sv-stack">
+      <div class="sv-space"><span class="sv-space__bar" style="--size: var(--space-1)"></span>space-1 · 4px</div>
+      <div class="sv-space"><span class="sv-space__bar" style="--size: var(--space-2)"></span>space-2 · 8px</div>
+      <div class="sv-space"><span class="sv-space__bar" style="--size: var(--space-3)"></span>space-3 · 12px</div>
+      <div class="sv-space"><span class="sv-space__bar" style="--size: var(--space-4)"></span>space-4 · 16px</div>
+      <div class="sv-space"><span class="sv-space__bar" style="--size: var(--space-5)"></span>space-5 · 24px</div>
+      <div class="sv-space"><span class="sv-space__bar" style="--size: var(--space-6)"></span>space-6 · 32px</div>
+      <div class="sv-space"><span class="sv-space__bar" style="--size: var(--space-7)"></span>space-7 · 40px</div>
+      <div class="sv-space"><span class="sv-space__bar" style="--size: var(--space-8)"></span>space-8 · 56px</div>
+    </div>
+
+    <h3>Radios</h3>
+    <div class="sv-grid">
+      <div class="sv-radius" style="--radius: var(--radius-sm)">sm · 8</div>
+      <div class="sv-radius" style="--radius: var(--radius-md)">md · 12</div>
+      <div class="sv-radius" style="--radius: var(--radius-lg)">lg · 18</div>
+      <div class="sv-radius" style="--radius: var(--radius-xl)">xl · 26</div>
+      <div class="sv-radius" style="--radius: var(--radius-pill)">pill</div>
+    </div>
+
+    <h3>Elevación</h3>
+    <div class="sv-grid">
+      <div class="sv-shadow" style="--shadow: var(--shadow-sm)">sm</div>
+      <div class="sv-shadow" style="--shadow: var(--shadow-md)">md</div>
+      <div class="sv-shadow" style="--shadow: var(--shadow-lg)">lg</div>
+      <div class="sv-shadow" style="--shadow: var(--shadow-float)">float</div>
+    </div>
+
+    <h3>Glass (solo en elementos flotantes)</h3>
+    <div class="sv-backdrop">
+      <div class="glass-panel">
+        <strong>Glass panel</strong>
+        <p class="text-muted" style="margin:0">Superficie translúcida con blur para dock, popovers, overlays y toolbars flotantes. El contenido principal usa superficies sólidas.</p>
+      </div>
+    </div>
+  </section>
+
+  {# ====================================================================== #}
+  {# COMPONENTS                                                               #}
+  {# ====================================================================== #}
+
+  <section class="card sv-section" id="components" aria-labelledby="sv-components-title">
+    <h2 id="sv-components-title">Componentes</h2>
+
+    <h3>Botones</h3>
+    <div class="sv-row">
+      <button type="button" class="btn btn--primary">Primario</button>
+      <button type="button" class="btn btn--secondary">Secundario</button>
+      <button type="button" class="btn btn--ghost">Ghost</button>
+      <button type="button" class="btn btn--danger">Peligro</button>
+      <button type="button" class="btn btn--primary" disabled>Deshabilitado</button>
+      <button type="button" class="btn btn--primary is-loading">Guardando</button>
+      <button type="button" class="btn btn--primary btn--sm">Pequeño</button>
+      <button type="button" class="btn btn--primary btn--lg">Grande</button>
+      <button type="button" class="btn btn--secondary">{% include "components/icon.html" with name="plus" %}Con icono</button>
+    </div>
+    <div class="sv-row">
+      <button type="button" class="btn-icon btn-icon--outline" aria-label="Buscar">{% include "components/icon.html" with name="search" %}</button>
+      <button type="button" class="btn-icon" aria-label="Más opciones">{% include "components/icon.html" with name="more" %}</button>
+      <span data-tooltip="Con tooltip"><button type="button" class="btn-icon btn-icon--outline" aria-label="Información">{% include "components/icon.html" with name="info" %}</button></span>
+      <div class="btn-group" role="group" aria-label="Grupo de botones">
+        <button type="button" class="btn btn--secondary">Día</button>
+        <button type="button" class="btn btn--secondary">Semana</button>
+        <button type="button" class="btn btn--secondary">Mes</button>
+      </div>
+    </div>
+
+    <h3>Campos de formulario</h3>
+    <div class="form">
+      <div class="field">
+        <label for="sv-input">Input</label>
+        <input id="sv-input" class="input" type="text" placeholder="Escribe aquí">
+        <span class="field__hint">Texto de ayuda del campo.</span>
+      </div>
+      <div class="field">
+        <label for="sv-select">Select</label>
+        <select id="sv-select" class="select"><option>Opción A</option><option>Opción B</option></select>
+      </div>
+      <div class="field">
+        <label for="sv-textarea">Textarea</label>
+        <textarea id="sv-textarea" class="textarea" placeholder="Comentario"></textarea>
+      </div>
+      <div class="field">
+        <label for="sv-invalid">Input con error</label>
+        <input id="sv-invalid" class="input is-invalid" type="text" value="Valor inválido" aria-invalid="true" aria-describedby="sv-invalid-error">
+        <ul class="field-errors" id="sv-invalid-error"><li>Este valor no es válido.</li></ul>
+      </div>
+      <div class="sv-row">
+        <label class="choice"><input type="checkbox" checked> Checkbox</label>
+        <label class="choice"><input type="radio" name="sv-radio" checked> Radio A</label>
+        <label class="choice"><input type="radio" name="sv-radio"> Radio B</label>
+        <label class="switch"><input type="checkbox" role="switch" checked><span class="switch__track" aria-hidden="true"></span>Switch</label>
+      </div>
+    </div>
+    <div class="search" style="max-width:360px">
+      <span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" %}</span>
+      <input class="search__input" type="search" placeholder="Buscar" aria-label="Buscar (demostración)">
+    </div>
+
+    <h3>Uploader</h3>
+    <label class="uploader">
+      <input type="file" multiple>
+      <span class="uploader__icon" aria-hidden="true">{% include "components/icon.html" with name="upload" size="lg" %}</span>
+      <span class="uploader__title">Arrastra archivos o haz clic para seleccionarlos</span>
+      <span class="uploader__hint">Cualquier formato permitido por la política del ticket</span>
+      <span class="uploader__name"></span>
+    </label>
+
+    <h3>Cards y superficies</h3>
+    <div class="sv-grid" style="grid-template-columns: repeat(auto-fill, minmax(220px, 1fr))">
+      <div class="card"><h3>Card</h3><p class="text-muted" style="margin:0">Superficie sólida estándar.</p></div>
+      <div class="card card--raised"><h3>Card elevada</h3><p class="text-muted" style="margin:0">Sombra media.</p></div>
+      <a class="card card--interactive" href="#components" style="text-decoration:none"><h3>Card interactiva</h3><p class="text-muted" style="margin:0">Elevación mínima al pasar.</p></a>
+      <div class="surface-sunken"><strong>Superficie hundida</strong><p class="text-muted" style="margin:0">Para agrupar dentro de una card.</p></div>
+    </div>
+
+    <h3>Badges y estados</h3>
+    <div class="sv-row">
+      <span class="badge">Neutral</span>
+      <span class="badge badge--accent">Acento</span>
+      <span class="badge badge--success badge--dot">Aprobada</span>
+      <span class="badge badge--warning badge--dot">Pendiente</span>
+      <span class="badge badge--danger badge--dot">Rechazada</span>
+      <span class="badge badge--info badge--dot">En atención</span>
+    </div>
+
+    <h3>Avatares</h3>
+    <div class="sv-row">
+      <span class="avatar avatar--sm" aria-hidden="true">A</span>
+      <span class="avatar" aria-hidden="true">M</span>
+      <span class="avatar avatar--lg" aria-hidden="true">L</span>
+      <span class="avatar-group" aria-label="Participantes: 4">
+        <span class="avatar" aria-hidden="true">A</span>
+        <span class="avatar" aria-hidden="true">B</span>
+        <span class="avatar" aria-hidden="true">C</span>
+        <span class="avatar avatar--neutral" aria-hidden="true">+2</span>
+      </span>
+    </div>
+
+    <h3>Tabs</h3>
+    <nav class="tabs" aria-label="Ejemplo de tabs">
+      <a class="tabs__tab is-active" href="#components" aria-current="page">Cola <span class="tabs__count">3</span></a>
+      <a class="tabs__tab" href="#components">Mi trabajo</a>
+      <a class="tabs__tab" href="#components">Historial</a>
+    </nav>
+
+    <h3>Segmented control</h3>
+    <div class="segmented" role="group" aria-label="Ejemplo de segmentos">
+      <button type="button" class="segmented__item" aria-pressed="true">Todo</button>
+      <button type="button" class="segmented__item" aria-pressed="false">Tareas</button>
+      <button type="button" class="segmented__item" aria-pressed="false">Aprobaciones</button>
+    </div>
+
+    <h3>Breadcrumb y paginación</h3>
+    <nav class="breadcrumb" aria-label="Ruta de ejemplo">
+      <a href="#components">Servicios</a><span class="breadcrumb__separator" aria-hidden="true">/</span>
+      <a href="#components">Tecnología</a><span class="breadcrumb__separator" aria-hidden="true">/</span>
+      <span class="breadcrumb__current" aria-current="page">Soporte</span>
+    </nav>
+    <nav aria-label="Paginación de ejemplo">
+      <ul class="pagination">
+        <li><a class="pagination__link" href="#components" aria-disabled="true" aria-label="Anterior">{% include "components/icon.html" with name="chevron-left" size="sm" %}</a></li>
+        <li><a class="pagination__link" href="#components" aria-current="page">1</a></li>
+        <li><a class="pagination__link" href="#components">2</a></li>
+        <li><a class="pagination__link" href="#components">3</a></li>
+        <li><a class="pagination__link" href="#components" aria-label="Siguiente">{% include "components/icon.html" with name="chevron-right" size="sm" %}</a></li>
+      </ul>
+    </nav>
+
+    <h3>Tabla (densidad productiva)</h3>
+    <div class="table-shell">
+      <table class="table">
+        <thead><tr><th scope="col">Radicado</th><th scope="col">Servicio</th><th scope="col">Estado</th><th scope="col" class="table__num">Días</th></tr></thead>
+        <tbody>
+          <tr><td>TK-0001</td><td>Soporte de equipos</td><td><span class="badge badge--info badge--dot">En atención</span></td><td class="table__num">2</td></tr>
+          <tr><td>TK-0002</td><td>Acceso a sistemas</td><td><span class="badge badge--warning badge--dot">Pendiente</span></td><td class="table__num">5</td></tr>
+          <tr><td>TK-0003</td><td>Compra de insumos</td><td><span class="badge badge--success badge--dot">Cerrado</span></td><td class="table__num">1</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Dropdown / popover</h3>
+    <div class="sv-popover-demo">
+      <div class="popover-host" style="display:inline-block">
+        <button type="button" class="btn btn--secondary" data-popover-toggle="sv-dropdown" aria-haspopup="menu" aria-expanded="false" aria-controls="sv-dropdown">
+          Acciones {% include "components/icon.html" with name="chevron-down" size="sm" %}
+        </button>
+        <div class="popover" id="sv-dropdown" role="menu" aria-label="Acciones de ejemplo" style="right:auto;left:0" hidden>
+          <div class="menu__group" role="group" aria-labelledby="sv-g1">
+            <div class="menu__label" id="sv-g1">Gestión</div>
+            <a class="menu__item" role="menuitem" href="#components">{% include "components/icon.html" with name="studio" %}Editar</a>
+            <a class="menu__item" role="menuitem" href="#components" aria-current="page">{% include "components/icon.html" with name="workflow" %}Elemento activo</a>
+          </div>
+          <div class="menu__group" role="group" aria-labelledby="sv-g2">
+            <div class="menu__label" id="sv-g2">Zona sensible</div>
+            <button type="button" class="menu__item menu__item--danger" role="menuitem">{% include "components/icon.html" with name="x-circle" %}Eliminar</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <h3>Modal y toast</h3>
+    <div class="sv-row">
+      <button type="button" class="btn btn--secondary" data-modal-open="sv-modal">Abrir modal</button>
+      <button type="button" class="btn btn--secondary" data-toast="success" data-toast-text="Cambios guardados.">Toast éxito</button>
+      <button type="button" class="btn btn--secondary" data-toast="warning" data-toast-text="Revisa los campos obligatorios.">Toast advertencia</button>
+      <button type="button" class="btn btn--secondary" data-toast="danger" data-toast-text="No se pudo completar la acción.">Toast error</button>
+    </div>
+    <dialog class="modal" id="sv-modal" aria-labelledby="sv-modal-title">
+      <div class="modal__header">
+        <h2 class="modal__title" id="sv-modal-title">Título del diálogo</h2>
+        <button type="button" class="btn-icon btn-icon--sm" data-modal-close aria-label="Cerrar">{% include "components/icon.html" with name="x" %}</button>
+      </div>
+      <div class="modal__body"><p style="margin:0">Contenido del diálogo. Se cierra con Escape, con el botón o al hacer clic en el fondo.</p></div>
+      <div class="modal__footer">
+        <button type="button" class="btn btn--ghost" data-modal-close>Cancelar</button>
+        <button type="button" class="btn btn--primary" data-modal-close>Aceptar</button>
+      </div>
+    </dialog>
+
+    <h3>Alertas</h3>
+    <div class="sv-stack">
+      <div class="alert alert--success"><span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="check-circle" %}</span><span class="alert__text">Operación completada.</span></div>
+      <div class="alert alert--info"><span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="info" %}</span><span class="alert__text">Información útil para quien lee.</span></div>
+      <div class="alert alert--warning"><span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="alert" %}</span><span class="alert__text">Atención: revisa antes de continuar.</span></div>
+      <div class="alert alert--danger"><span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="x-circle" %}</span><span class="alert__text">No se pudo completar la acción.</span></div>
+    </div>
+
+    <h3>Progreso</h3>
+    <div>
+      <div class="progress-label"><span>Entregables obligatorios</span><span>3 de 5</span></div>
+      <progress class="progress" max="5" value="3" aria-label="Entregables obligatorios completados">60%</progress>
+    </div>
+
+    <h3>Skeleton (cargando)</h3>
+    <div aria-busy="true" aria-label="Cargando">
+      <span class="skeleton skeleton--title"></span>
+      <span class="skeleton skeleton--text"></span>
+      <span class="skeleton skeleton--text" style="width:80%"></span>
+      <span class="skeleton skeleton--block"></span>
+    </div>
+  </section>
+
+  {# ====================================================================== #}
+  {# PATTERNS                                                                 #}
+  {# ====================================================================== #}
+
+  <section class="card sv-section" id="patterns" aria-labelledby="sv-patterns-title">
+    <h2 id="sv-patterns-title">Patrones</h2>
+
+    <h3>Page header</h3>
+    <div class="page-header">
+      <div>
+        <nav class="breadcrumb" aria-label="Ruta del ejemplo"><a href="#patterns">Servicios</a><span class="breadcrumb__separator" aria-hidden="true">/</span><span class="breadcrumb__current">Soporte</span></nav>
+        <h1 class="page-header__title" style="font-size:var(--font-size-section-title)">Título de la página</h1>
+        <p class="page-header__subtitle">Descripción breve de lo que el usuario puede hacer aquí.</p>
+      </div>
+      <div class="page-header__actions">
+        <button type="button" class="btn btn--secondary">Secundaria</button>
+        <button type="button" class="btn btn--primary">{% include "components/icon.html" with name="plus" %}Acción principal</button>
+      </div>
+    </div>
+
+    <h3>Toolbar y filtros</h3>
+    <div class="toolbar">
+      <div class="segmented" role="group" aria-label="Vista"><button type="button" class="segmented__item" aria-pressed="true">Lista</button><button type="button" class="segmented__item" aria-pressed="false">Tablero</button></div>
+      <span class="toolbar__spacer"></span>
+      <button type="button" class="btn btn--ghost btn--sm">Exportar</button>
+    </div>
+    <div class="filter-bar">
+      <div class="search" style="min-width:220px"><span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" %}</span><input class="search__input" type="search" placeholder="Buscar tickets" aria-label="Buscar tickets (demostración)"></div>
+      <button type="button" class="chip is-active" aria-pressed="true">Abiertos</button>
+      <button type="button" class="chip" aria-pressed="false">Cerrados</button>
+      <button type="button" class="chip" aria-pressed="false">Míos</button>
+    </div>
+    <div class="toolbar toolbar--floating" style="align-self:flex-start">
+      <span class="t-small">3 seleccionados</span>
+      <button type="button" class="btn btn--primary btn--sm">Asignar</button>
+      <button type="button" class="btn btn--ghost btn--sm">Cancelar</button>
+    </div>
+
+    <h3>Confirmación</h3>
+    <div class="surface-sunken">
+      <p style="margin:0 0 var(--space-3)"><strong>¿Entregar el resultado al solicitante?</strong><br><span class="text-muted">Después de entregar no podrás editar los entregables.</span></p>
+      <div class="sv-row">
+        <button type="button" class="btn btn--primary btn--sm">Sí, entregar</button>
+        <button type="button" class="btn btn--ghost btn--sm">Cancelar</button>
+      </div>
+    </div>
+
+    <h3>Estados universales</h3>
+    <div class="sv-grid" style="grid-template-columns: repeat(auto-fill, minmax(260px, 1fr))">
+      <div class="state"><span class="state__icon" aria-hidden="true">{% include "components/icon.html" with name="inbox" %}</span><span class="state__title">Aún no hay nada aquí</span><p class="state__text">Estado vacío: explica qué verás cuando exista contenido.</p></div>
+      <div class="state"><span class="state__icon" aria-hidden="true">{% include "components/icon.html" with name="search" %}</span><span class="state__title">Sin resultados</span><p class="state__text">Prueba con otros filtros o términos de búsqueda.</p><p class="state__actions"><button type="button" class="btn btn--secondary btn--sm">Limpiar filtros</button></p></div>
+      <div class="state state--error"><span class="state__icon" aria-hidden="true">{% include "components/icon.html" with name="alert" %}</span><span class="state__title">No pudimos cargar esto</span><p class="state__text">Ocurrió un error inesperado. Intenta de nuevo.</p><p class="state__actions"><button type="button" class="btn btn--secondary btn--sm">Reintentar</button></p></div>
+      <div class="state state--forbidden"><span class="state__icon" aria-hidden="true">{% include "components/icon.html" with name="shield" %}</span><span class="state__title">Sin permisos</span><p class="state__text">No tienes autorización para ver este contenido.</p></div>
+      <div class="state state--blocked"><span class="state__icon" aria-hidden="true">{% include "components/icon.html" with name="lock" %}</span><span class="state__title">Bloqueado</span><p class="state__text">Esta acción no está disponible mientras haya trabajo en curso.</p></div>
+      <div class="state state--loading" aria-busy="true"><span class="state__icon" aria-hidden="true">{% include "components/icon.html" with name="inbox" %}</span><span class="state__title">Cargando</span><span class="skeleton skeleton--text" style="width:70%"></span></div>
+    </div>
+    <div class="sv-row">
+      <span class="inline-status inline-status--saving" role="status">Guardando…</span>
+      <span class="inline-status inline-status--saved" role="status">{% include "components/icon.html" with name="check" size="sm" %}Guardado</span>
+      <span class="inline-status inline-status--blocked" role="status">{% include "components/icon.html" with name="lock" size="sm" %}Bloqueado</span>
+    </div>
+  </section>
+{% endblock %}

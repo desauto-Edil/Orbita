@@ -1,0 +1,65 @@
+<section class="card">
+  <h2>Salida</h2>
+  <p class="text-muted">¿Qué resultado debemos producir? Un entregable admite, en ejecución, uno o varios archivos — no se configura una cantidad fija.</p>
+
+  {% if definiciones %}
+    <ul class="list-row-group">
+      {% for definicion in definiciones %}
+        <li class="list-row" style="flex-direction: column; align-items: stretch;">
+          <div class="list-row" style="border-bottom: none; padding: 0;">
+            <span class="list-row__title">{{ definicion.nombre }}</span>
+            <span class="badge">{{ definicion.get_tipo_display }}</span>
+            {% if definicion.obligatorio %}<span class="badge badge--warning">Obligatorio</span>{% endif %}
+            <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="panel-entregable-{{ definicion.pk }}">Editar</button>
+            <form method="post" action="{% url 'catalogo:studio_entregable_retirar' servicio.pk definicion.pk %}" style="display:inline;">
+              {% csrf_token %}
+              <button type="submit" class="btn btn--ghost">Retirar</button>
+            </form>
+          </div>
+          <div id="panel-entregable-{{ definicion.pk }}" hidden style="margin-top: var(--space-3);">
+            <form method="post" action="{% url 'catalogo:studio_entregable_editar' servicio.pk definicion.pk %}" class="form">
+              {% csrf_token %}
+              <div class="field">{{ definicion.form_editar.nombre.label_tag }}{{ definicion.form_editar.nombre }}</div>
+              <div class="field">{{ definicion.form_editar.descripcion.label_tag }}{{ definicion.form_editar.descripcion }}</div>
+              <div class="field">{{ definicion.form_editar.tipo.label_tag }}{{ definicion.form_editar.tipo }}</div>
+              <div class="field">{{ definicion.form_editar.obligatorio }} {{ definicion.form_editar.obligatorio.label_tag }}</div>
+              <div class="field">{{ definicion.form_editar.orden.label_tag }}{{ definicion.form_editar.orden }}</div>
+              <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar</button></div>
+            </form>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <div class="empty-state"><p>Todavía no hay entregables configurados.</p></div>
+  {% endif %}
+
+  <h3 style="margin-top: var(--space-6);">Agregar entregable</h3>
+  <form method="post" action="{% url 'catalogo:studio_entregable_crear' servicio.pk %}" class="form">
+    {% csrf_token %}
+    <div class="field">{{ entregable_form_nuevo.nombre.label_tag }}{{ entregable_form_nuevo.nombre }}</div>
+    <div class="field">{{ entregable_form_nuevo.descripcion.label_tag }}{{ entregable_form_nuevo.descripcion }}</div>
+    <div class="field">{{ entregable_form_nuevo.tipo.label_tag }}{{ entregable_form_nuevo.tipo }}</div>
+    <div class="field">{{ entregable_form_nuevo.obligatorio }} {{ entregable_form_nuevo.obligatorio.label_tag }}</div>
+    <div class="field">{{ entregable_form_nuevo.orden.label_tag }}{{ entregable_form_nuevo.orden }}</div>
+    <div class="form-actions"><button type="submit" class="btn btn--primary">Agregar entregable</button></div>
+  </form>
+</section>
+
+<section class="card" style="margin-top: var(--space-5);">
+  <h2>Entrega al solicitante</h2>
+  <p class="text-muted">Cuando el responsable entrega formalmente el resultado, ¿qué ocurre?</p>
+  {% if not politica_actual %}
+    <p class="text-muted">Sin política definida: los tickets de este elemento se resuelven y cierran manualmente, sin entrega formal.</p>
+  {% endif %}
+  <form method="post" action="{% url 'catalogo:studio_entrega_guardar' servicio.pk %}" class="form">
+    {% csrf_token %}
+    <div class="field">{{ form_politica.politica.label_tag }}{{ form_politica.politica }}</div>
+    <div class="field">
+      {{ form_politica.dias_observacion.label_tag }}{{ form_politica.dias_observacion }}
+      <span class="text-muted" style="font-size: var(--text-xs);">Solo con periodo de observaciones: si el solicitante no responde en ese plazo, el ticket se cierra automáticamente.</span>
+    </div>
+    <p class="text-muted" style="font-size: var(--text-xs);">Aplica a los tickets que se creen desde ahora; los ya creados conservan la política con la que nacieron.</p>
+    <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar política</button></div>
+  </form>
+</section>

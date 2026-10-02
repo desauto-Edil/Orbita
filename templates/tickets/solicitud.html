@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ titulo_pagina }} — Órbita{% endblock %}
+
+{% block content_modifier %}content-area--portal{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/solicitud.css' %}">{% endblock %}
+
+{% block content %}
+<div class="sol" data-solicitud data-estado-url="{% url 'tickets:solicitud_estado' ticket.pk %}" data-preview="open">
+
+  <header class="sol-head">
+    <a class="sol-back" href="{% url 'core:inicio' %}" data-sol-salir>
+      {% include "components/icon.html" with name="chevron-left" size="sm" %}Volver
+    </a>
+    <div class="sol-head__main">
+      <p class="sol-eyebrow">{% if servicio.tipo == "PROCESO" %}Proceso{% else %}Servicio{% endif %} · {{ servicio.categoria.nombre }}</p>
+      <h1 class="sol-title">{{ servicio.nombre }}</h1>
+      {% if servicio.descripcion %}<p class="sol-lede">{{ servicio.descripcion }}</p>{% endif %}
+    </div>
+    <div class="sol-head__side">
+      <button type="button" class="btn btn--secondary btn--sm" data-sol-preview-open hidden aria-controls="sol-preview" aria-expanded="false">
+        {% include "components/icon.html" with name="eye" %}<span data-sol-preview-open-label>Mostrar vista previa</span>
+      </button>
+    </div>
+    <div class="sol-progress" data-sol-progress>
+      <p class="sol-progress__text" data-sol-progress-text role="status" aria-live="polite">{% if progreso.total == 1 %}{{ progreso.completados }} de 1 campo obligatorio completado{% elif progreso.total %}{{ progreso.completados }} de {{ progreso.total }} campos obligatorios completados{% else %}Los campos de este formulario son opcionales{% endif %}</p>
+      <div class="sol-progress__bar" role="progressbar" aria-label="Avance de los campos obligatorios" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ progreso.porcentaje }}" data-sol-progress-bar>
+        <span data-sol-progress-fill style="width: {{ progreso.porcentaje }}%"></span>
+      </div>
+    </div>
+  </header>
+
+  <form class="form sol-form" id="sol-form" method="post" action="{% url 'tickets:borrador' ticket.pk %}" enctype="multipart/form-data" novalidate data-sol-guard>
+    {% csrf_token %}
+
+    <div class="sol-layout">
+      <section class="card sol-panel sol-main" aria-labelledby="sol-main-title">
+        <div class="sol-panel__head">
+          <h2 class="sol-panel__title" id="sol-main-title">Tu solicitud</h2>
+        </div>
+
+        {% if not servicio_activo %}
+          <div class="alert alert--warning sol-banner" role="alert">
+            <span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="alert" %}</span>
+            <span class="alert__text">Este servicio ya no está disponible, por lo que no podrás enviar esta solicitud. Puedes eliminar el borrador.</span>
+          </div>
+        {% endif %}
+
+        {% if servicio.instrucciones %}
+          <div class="sol-note">
+            <p class="sol-note__title">Antes de empezar</p>
+            <p class="sol-note__text">{{ servicio.instrucciones }}</p>
+          </div>
+        {% endif %}
+
+        {% if campos_con_error %}
+          <div class="sol-errors" role="alert" tabindex="-1" data-sol-error-summary>
+            <p class="sol-errors__title">Revisa {{ campos_con_error|length }} campo{{ campos_con_error|length|pluralize }}:</p>
+            <ul>
+              {% for item in campos_con_error %}
+                <li><a href="#campo_{{ item.id }}">{{ item.campo.etiqueta }}</a></li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+
+        <div class="sol-grid">
+          {% for item in items %}
+            {% include "tickets/_solicitud_campo.html" %}
+          {% empty %}
+            <div class="empty-state sol-field--completo">
+              <p>Este formulario todavía no tiene campos.</p>
+            </div>
+          {% endfor %}
+        </div>
+      </section>
+
+      <aside class="card sol-panel sol-preview" id="sol-preview" aria-labelledby="sol-preview-title" data-sol-preview>
+        <div class="sol-panel__head">
+          <h2 class="sol-panel__title" id="sol-preview-title">Vista previa</h2>
+          <button type="button" class="btn btn--ghost btn--sm" data-sol-preview-close hidden>Ocultar</button>
+        </div>
+        {% include "tickets/_solicitud_resumen.html" %}
+      </aside>
+      <div class="sol-backdrop" data-sol-preview-backdrop hidden></div>
+    </div>
+
+    <div class="sol-actions">
+      <p class="sol-status{% if tiene_respuestas_guardadas %} is-saved{% else %} is-new{% endif %}" data-sol-status role="status" aria-live="polite">
+        {% if tiene_respuestas_guardadas %}{% include "components/icon.html" with name="check-circle" size="sm" %}Borrador guardado{% else %}Borrador nuevo{% endif %}
+      </p>
+      <div class="sol-actions__buttons">
+        <button type="submit" class="btn btn--secondary">Guardar borrador</button>
+        <button type="submit" class="btn btn--primary" formaction="{% url 'tickets:revisar' ticket.pk %}">Revisar solicitud{% include "components/icon.html" with name="arrow-right" %}</button>
+      </div>
+    </div>
+  </form>
+
+  <form class="sol-discard" method="post" action="{% url 'tickets:eliminar' ticket.pk %}" onsubmit="return confirm('¿Eliminar este borrador? No se puede deshacer.');">
+    {% csrf_token %}
+    <button type="submit" class="btn btn--ghost btn--sm">Eliminar borrador</button>
+  </form>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}<script src="{% static 'js/solicitud.js' %}" defer></script>{% endblock %}

@@ -1,0 +1,174 @@
+<section class="card">
+  <h2>Entrada</h2>
+  <p class="text-muted">¿Qué debe proporcionar quien lo solicita?</p>
+
+  {% if formulario is None %}
+    <div class="empty-state">
+      <p>Este servicio todavía no tiene un formulario de entrada.</p>
+    </div>
+    <form method="post" action="{% url 'catalogo:studio_entrada_version' servicio.pk %}" class="form">
+      {% csrf_token %}
+      <div class="field">
+        <label for="id_nombre">Nombre del formulario</label>
+        {{ formulario_form.nombre }}
+      </div>
+      <div class="field">
+        <label for="id_descripcion">Descripción</label>
+        {{ formulario_form.descripcion }}
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn--primary">Crear formulario</button>
+      </div>
+    </form>
+  {% else %}
+    <div class="list-row" style="border-bottom: none; padding: 0;">
+      {% if version_entrada_activa %}
+        <span class="badge badge--success">Versión activa: v{{ version_entrada_activa.numero }}</span>
+      {% else %}
+        <span class="badge badge--warning">Sin versión activa todavía</span>
+      {% endif %}
+      {% if version_entrada_borrador %}
+        <span class="badge badge--info">Editando borrador v{{ version_entrada_borrador.numero }}</span>
+        <a class="btn btn--secondary" href="{% url 'formularios:previsualizar_version' version_entrada_borrador.pk %}" target="_blank" rel="noopener">Previsualizar</a>
+        <form method="post" action="{% url 'catalogo:studio_entrada_activar' servicio.pk version_entrada_borrador.pk %}" style="display:inline;">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--primary">Activar esta versión</button>
+        </form>
+      {% else %}
+        {% if version_entrada_activa %}
+          <a class="btn btn--secondary" href="{% url 'formularios:previsualizar_version' version_entrada_activa.pk %}" target="_blank" rel="noopener">Previsualizar</a>
+        {% endif %}
+        <form method="post" action="{% url 'catalogo:studio_entrada_version' servicio.pk %}" style="display:inline;">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--primary">{% if version_entrada_activa %}Editar formulario{% else %}Empezar a configurar{% endif %}</button>
+        </form>
+      {% endif %}
+    </div>
+
+    {% if not editable_entrada %}
+      <p class="text-muted" style="margin-top: var(--space-3);">Estás viendo la versión activa, de solo lectura. Pulsa «Editar formulario» para crear un borrador nuevo.</p>
+    {% endif %}
+
+    <h3 style="margin-top: var(--space-6);">Campos</h3>
+    {% if campos %}
+      <ul class="list-row-group">
+        {% for campo in campos %}
+          <li class="list-row" style="flex-direction: column; align-items: stretch;">
+            <div class="list-row" style="border-bottom: none; padding: 0;">
+              <span class="list-row__title">{{ campo.etiqueta }}</span>
+              <span class="badge">{{ campo.get_tipo_display }}</span>
+              {% if campo.obligatorio %}<span class="badge badge--warning">Obligatorio</span>{% endif %}
+              {% if editable_entrada %}
+                <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="panel-campo-{{ campo.pk }}">Editar</button>
+                <form method="post" action="{% url 'catalogo:studio_campo_eliminar' servicio.pk campo.pk %}" style="display:inline;">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn--ghost">Eliminar</button>
+                </form>
+              {% endif %}
+            </div>
+            {% if editable_entrada %}
+              <div id="panel-campo-{{ campo.pk }}" hidden style="margin-top: var(--space-3);">
+                <form method="post" action="{% url 'catalogo:studio_campo_editar' servicio.pk campo.pk %}" class="form">
+                  {% csrf_token %}
+                  <div class="field">{{ campo.form_editar.tipo.label_tag }}{{ campo.form_editar.tipo }}</div>
+                  <div class="field">{{ campo.form_editar.etiqueta.label_tag }}{{ campo.form_editar.etiqueta }}</div>
+                  <div class="field">{{ campo.form_editar.ayuda.label_tag }}{{ campo.form_editar.ayuda }}</div>
+                  <div class="field">{{ campo.form_editar.obligatorio }} {{ campo.form_editar.obligatorio.label_tag }}</div>
+                  <div class="field">{{ campo.form_editar.orden.label_tag }}{{ campo.form_editar.orden }}</div>
+                  <p class="text-muted" style="font-size: var(--text-xs);">Configuración adicional según el tipo elegido:</p>
+                  <div class="field">{{ campo.form_editar.longitud_maxima.label_tag }}{{ campo.form_editar.longitud_maxima }}</div>
+                  <div class="field">{{ campo.form_editar.minimo.label_tag }}{{ campo.form_editar.minimo }} {{ campo.form_editar.maximo.label_tag }}{{ campo.form_editar.maximo }}</div>
+                  <div class="field">{{ campo.form_editar.permite_decimales }} {{ campo.form_editar.permite_decimales.label_tag }}</div>
+                  <div class="field">{{ campo.form_editar.fecha_minima.label_tag }}{{ campo.form_editar.fecha_minima }} {{ campo.form_editar.fecha_maxima.label_tag }}{{ campo.form_editar.fecha_maxima }}</div>
+                  <div class="field">{{ campo.form_editar.minimo_selecciones.label_tag }}{{ campo.form_editar.minimo_selecciones }} {{ campo.form_editar.maximo_selecciones.label_tag }}{{ campo.form_editar.maximo_selecciones }}</div>
+                  <div class="field">{{ campo.form_editar.extensiones_permitidas.label_tag }}{{ campo.form_editar.extensiones_permitidas }}</div>
+                  <div class="field">{{ campo.form_editar.tamano_maximo_mb.label_tag }}{{ campo.form_editar.tamano_maximo_mb }}</div>
+                  <div class="field">{{ campo.form_editar.solo_activos }} {{ campo.form_editar.solo_activos.label_tag }}</div>
+                  <div class="form-actions">
+                    <button type="submit" class="btn btn--primary">Guardar campo</button>
+                  </div>
+                </form>
+
+                {% if campo.tipo == "LISTA" or campo.tipo == "MULTILISTA" %}
+                  <h4>Opciones</h4>
+                  <ul class="plain-list">
+                    {% for opcion in campo.opciones.all %}
+                      <li>
+                        {{ opcion.etiqueta }} ({{ opcion.valor }})
+                        <form method="post" action="{% url 'catalogo:studio_opcion_eliminar' servicio.pk campo.pk opcion.pk %}" style="display:inline;">
+                          {% csrf_token %}
+                          <button type="submit" class="btn btn--ghost">Eliminar</button>
+                        </form>
+                      </li>
+                    {% endfor %}
+                  </ul>
+                  <form method="post" action="{% url 'catalogo:studio_opcion_crear' servicio.pk campo.pk %}" class="form">
+                    {% csrf_token %}
+                    {{ campo.form_opcion_nueva.valor }} {{ campo.form_opcion_nueva.etiqueta }} {{ campo.form_opcion_nueva.orden }}
+                    <button type="submit" class="btn btn--secondary">Agregar opción</button>
+                  </form>
+                {% endif %}
+              </div>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="empty-state"><p>Todavía no hay campos en este formulario.</p></div>
+    {% endif %}
+
+    {% if campo_form_nuevo %}
+      <h3 style="margin-top: var(--space-6);">Agregar campo</h3>
+      <form method="post" action="{% url 'catalogo:studio_campo_crear' servicio.pk %}" class="form">
+        {% csrf_token %}
+        <div class="field">{{ campo_form_nuevo.tipo.label_tag }}{{ campo_form_nuevo.tipo }}</div>
+        <div class="field">{{ campo_form_nuevo.etiqueta.label_tag }}{{ campo_form_nuevo.etiqueta }}</div>
+        <div class="field">{{ campo_form_nuevo.ayuda.label_tag }}{{ campo_form_nuevo.ayuda }}</div>
+        <div class="field">{{ campo_form_nuevo.obligatorio }} {{ campo_form_nuevo.obligatorio.label_tag }}</div>
+        <div class="field">{{ campo_form_nuevo.orden.label_tag }}{{ campo_form_nuevo.orden }}</div>
+        <p class="text-muted" style="font-size: var(--text-xs);">Configuración adicional según el tipo elegido (déjala vacía si no aplica):</p>
+        <div class="field">{{ campo_form_nuevo.longitud_maxima.label_tag }}{{ campo_form_nuevo.longitud_maxima }}</div>
+        <div class="field">{{ campo_form_nuevo.minimo.label_tag }}{{ campo_form_nuevo.minimo }} {{ campo_form_nuevo.maximo.label_tag }}{{ campo_form_nuevo.maximo }}</div>
+        <div class="field">{{ campo_form_nuevo.permite_decimales }} {{ campo_form_nuevo.permite_decimales.label_tag }}</div>
+        <div class="field">{{ campo_form_nuevo.fecha_minima.label_tag }}{{ campo_form_nuevo.fecha_minima }} {{ campo_form_nuevo.fecha_maxima.label_tag }}{{ campo_form_nuevo.fecha_maxima }}</div>
+        <div class="field">{{ campo_form_nuevo.minimo_selecciones.label_tag }}{{ campo_form_nuevo.minimo_selecciones }} {{ campo_form_nuevo.maximo_selecciones.label_tag }}{{ campo_form_nuevo.maximo_selecciones }}</div>
+        <div class="field">{{ campo_form_nuevo.extensiones_permitidas.label_tag }}{{ campo_form_nuevo.extensiones_permitidas }}</div>
+        <div class="field">{{ campo_form_nuevo.tamano_maximo_mb.label_tag }}{{ campo_form_nuevo.tamano_maximo_mb }}</div>
+        <div class="field">{{ campo_form_nuevo.solo_activos }} {{ campo_form_nuevo.solo_activos.label_tag }}</div>
+        <div class="form-actions">
+          <button type="submit" class="btn btn--primary">Agregar campo</button>
+        </div>
+      </form>
+    {% endif %}
+
+    {% if editable_entrada and campos %}
+      <h3 style="margin-top: var(--space-6);">Reglas condicionales</h3>
+      {% if reglas %}
+        <ul class="plain-list">
+          {% for regla in reglas %}
+            <li>
+              Si «{{ regla.campo_origen.etiqueta }}» {{ regla.get_operador_display }} «{{ regla.valor }}» → {{ regla.get_efecto_display }} «{{ regla.campo_objetivo.etiqueta }}»
+              <form method="post" action="{% url 'catalogo:studio_regla_eliminar' servicio.pk regla.pk %}" style="display:inline;">
+                {% csrf_token %}
+                <button type="submit" class="btn btn--ghost">Eliminar</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      {% if regla_form_nueva %}
+        <form method="post" action="{% url 'catalogo:studio_regla_crear' servicio.pk %}" class="form">
+          {% csrf_token %}
+          <div class="field">{{ regla_form_nueva.campo_origen.label_tag }}{{ regla_form_nueva.campo_origen }}</div>
+          <div class="field">{{ regla_form_nueva.operador.label_tag }}{{ regla_form_nueva.operador }}</div>
+          <div class="field">{{ regla_form_nueva.valor.label_tag }}{{ regla_form_nueva.valor }}</div>
+          <div class="field">{{ regla_form_nueva.efecto.label_tag }}{{ regla_form_nueva.efecto }}</div>
+          <div class="field">{{ regla_form_nueva.campo_objetivo.label_tag }}{{ regla_form_nueva.campo_objetivo }}</div>
+          <div class="form-actions">
+            <button type="submit" class="btn btn--secondary">Agregar regla</button>
+          </div>
+        </form>
+      {% endif %}
+    {% endif %}
+  {% endif %}
+</section>

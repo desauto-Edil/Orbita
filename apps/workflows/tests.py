@@ -3496,8 +3496,10 @@ class NavegacionWorkflowsApuntaALaVistaFuncionalTests(TestCase):
         usuario = Usuario.objects.create_user(username="wf_nav", password=CLAVE_PRUEBA)
         _otorgar_workflows_consultar(usuario)
         elementos = elementos_navegacion(usuario)
-        item = next(e for e in elementos if e["etiqueta"] == "Workflows")
-        self.assertEqual(item["url_name"], "workflows:lista")
+        # Desde D1 los flujos viven dentro del Diseñador (entrada unificada).
+        item = next(e for e in elementos if e["etiqueta"] == "Diseñador")
+        self.assertEqual(item["url_name"], "core:disenador")
+        self.assertIn("workflows", item["namespaces"])
 
 
 class _EscenarioActoresEjecucion:

@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Diseñador — Órbita{% endblock %}
+
+{% block content_modifier %}content-area--portal{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/disenador.css' %}">{% endblock %}
+
+{% block content %}
+<div class="dis">
+  <header class="dis-head">
+    <h1 class="dis-title">Diseñador</h1>
+    <p class="dis-lede">Diseña los flujos de trabajo y los servicios que la organización ofrece.</p>
+  </header>
+
+  {% include "layout/disenador_tabs.html" %}
+
+  <div class="dis-grid">
+    {% if caps.ve_flujos %}
+      <section class="card dis-card" aria-labelledby="dis-flujos-titulo">
+        <div class="dis-card__head">
+          <span class="dis-tile" aria-hidden="true">{% include "components/icon.html" with name="workflow" %}</span>
+          <div>
+            <h2 class="dis-card__title" id="dis-flujos-titulo">Flujos</h2>
+            <p class="dis-card__text">Los pasos que sigue la organización para atender algo. Se diseñan una vez y se reutilizan en varios servicios.</p>
+          </div>
+        </div>
+        <dl class="dis-stats">
+          <div><dt>Publicados</dt><dd>{{ flujos.publicados }}</dd></div>
+          {% if caps.consultar_flujos %}<div><dt>En diseño</dt><dd>{{ flujos.en_diseno }}</dd></div>{% endif %}
+        </dl>
+        {% if flujos.total == 0 %}
+          <p class="dis-empty">
+            {% if caps.administrar_flujos %}Todavía no hay flujos. Crea el primero para poder usarlo en tus servicios.{% else %}Todavía no hay flujos publicados.{% endif %}
+          </p>
+        {% endif %}
+        <div class="dis-card__actions">
+          {% if caps.administrar_flujos %}
+            <a class="btn btn--primary" href="{% url 'flujos:nuevo' %}">{% include "components/icon.html" with name="plus" %}Nuevo flujo</a>
+          {% endif %}
+          <a class="btn btn--secondary" href="{% url 'core:disenador_flujos' %}">Ver flujos</a>
+        </div>
+      </section>
+    {% endif %}
+
+    {% if caps.ve_servicios %}
+      <section class="card dis-card" aria-labelledby="dis-servicios-titulo">
+        <div class="dis-card__head">
+          <span class="dis-tile" aria-hidden="true">{% include "components/icon.html" with name="tickets" %}</span>
+          <div>
+            <h2 class="dis-card__title" id="dis-servicios-titulo">Servicios y procesos</h2>
+            <p class="dis-card__text">Lo que las personas pueden solicitar: su formulario, su flujo (si lo necesita), lo que se entrega y cuándo se publica.</p>
+          </div>
+        </div>
+        <dl class="dis-stats">
+          <div><dt>Publicados</dt><dd>{{ servicios.publicados }}</dd></div>
+          <div><dt>En borrador</dt><dd>{{ servicios.borradores }}</dd></div>
+        </dl>
+        {% if servicios.total == 0 %}
+          <p class="dis-empty">Todavía no hay servicios ni procesos. Crea el primero y complétalo paso a paso.</p>
+        {% endif %}
+        <div class="dis-card__actions">
+          <a class="btn btn--primary" href="{% url 'catalogo:studio_crear' %}">{% include "components/icon.html" with name="plus" %}Nuevo servicio o proceso</a>
+          <a class="btn btn--secondary" href="{% url 'core:disenador_servicios' %}">Ver servicios</a>
+        </div>
+      </section>
+    {% endif %}
+  </div>
+
+  {% if flujos.recientes or servicios.recientes %}
+    <section class="dis-resume" aria-labelledby="dis-continuar">
+      <h2 class="dis-section-title" id="dis-continuar">Continúa donde lo dejaste</h2>
+      <div class="dis-grid">
+        {% if flujos.recientes %}
+          <div class="card dis-list-card">
+            <h3 class="dis-list-title">Flujos en diseño</h3>
+            <ul class="dis-list">
+              {% for flujo in flujos.recientes %}
+                <li class="dis-row">
+                  <div class="dis-row__main">
+                    <span class="dis-row__name">{{ flujo.nombre }}</span>
+                    <span class="dis-row__meta">Actualizado {{ flujo.actualizado_en|date:"j \d\e F" }}</span>
+                  </div>
+                  <div class="dis-row__actions">
+                    <span class="badge badge--info">En diseño</span>
+                    {% if caps.consultar_flujos %}<a class="btn btn--ghost btn--sm" href="{% url 'flujos:lienzo' flujo.pk %}">Abrir</a>{% endif %}
+                  </div>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+        {% if servicios.recientes %}
+          <div class="card dis-list-card">
+            <h3 class="dis-list-title">Servicios y procesos en borrador</h3>
+            <ul class="dis-list">
+              {% for servicio in servicios.recientes %}
+                <li class="dis-row">
+                  <div class="dis-row__main">
+                    <span class="dis-row__name">{{ servicio.nombre }}</span>
+                    <span class="dis-row__meta">{{ servicio.get_tipo_display }} · {{ servicio.categoria.nombre }}</span>
+                  </div>
+                  <div class="dis-row__actions">
+                    <span class="badge badge--warning">Borrador</span>
+                    <a class="btn btn--ghost btn--sm" href="{% url 'catalogo:studio' servicio.pk %}">Continuar</a>
+                  </div>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+      </div>
+    </section>
+  {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,12 @@
+{% comment %}
+  Pestañas LOCALES del módulo Trabajo ([Cola] [Mi trabajo]). No son navegación
+  global. `nav_trabajo_tabs` solo viene poblado cuando el usuario tiene ambas
+  vistas; con una sola, no se muestra nada.
+{% endcomment %}
+{% if nav_trabajo_tabs %}
+  <nav class="tabs" aria-label="Secciones de Trabajo">
+    {% for tab in nav_trabajo_tabs %}
+      <a class="tabs__tab{% if tab.activa %} is-active{% endif %}" href="{% url tab.url_name %}"{% if tab.activa %} aria-current="page"{% endif %}>{{ tab.etiqueta }}</a>
+    {% endfor %}
+  </nav>
+{% endif %}

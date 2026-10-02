@@ -1,12 +1,23 @@
-<!doctype html>
+{% load static %}<!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Página no encontrada — Órbita</title>
+  <link rel="stylesheet" href="{% static 'css/tokens.css' %}">
+  <link rel="stylesheet" href="{% static 'css/base.css' %}">
+  <link rel="stylesheet" href="{% static 'css/components.css' %}">
 </head>
 <body>
-  <h1>404</h1>
-  <p>La página que buscas no existe o fue movida.</p>
-  <p><a href="/">Volver al inicio</a></p>
+  <main class="bare-content" style="min-height:100vh;display:flex;align-items:center;justify-content:center;padding:var(--space-5);">
+    <section class="state " style="max-width:480px;background:var(--surface-card);">
+      <span class="state__icon" aria-hidden="true">
+        <svg class="icon" viewBox="0 0 24 24" focusable="false"><circle cx="11" cy="11" r="6.5"/><path d="m20 20-4-4"/></svg>
+      </span>
+      <h1 class="state__title" style="margin:0;">404</h1>
+      <p class="state__text">La página que buscas no existe o fue movida.</p>
+      <p class="state__actions"><a class="btn btn--primary" href="/">Volver al inicio</a></p>
+    </section>
+  </main>
 </body>
 </html>

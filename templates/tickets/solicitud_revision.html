@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ titulo_pagina }} — Órbita{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/solicitud.css' %}">{% endblock %}
+
+{% block content %}
+<div class="sol sol--revision">
+  <header class="sol-head sol-head--simple">
+    <a class="sol-back" href="{% url 'tickets:borrador' ticket.pk %}">
+      {% include "components/icon.html" with name="chevron-left" size="sm" %}Volver y editar
+    </a>
+    <div class="sol-head__main">
+      <p class="sol-eyebrow">Último paso</p>
+      <h1 class="sol-title">Revisa tu solicitud</h1>
+      <p class="sol-lede">Confirma que la información esté correcta antes de enviarla.</p>
+    </div>
+  </header>
+
+  {% if not servicio_activo %}
+    <div class="alert alert--warning" role="alert">
+      <span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="alert" %}</span>
+      <span class="alert__text">Este servicio ya no está disponible, por lo que no es posible enviar esta solicitud.</span>
+    </div>
+  {% endif %}
+
+  <section class="card sol-review" aria-label="Resumen de tu solicitud">
+    {% include "tickets/_solicitud_resumen.html" %}
+  </section>
+
+  <div class="sol-actions sol-actions--revision">
+    <a class="btn btn--secondary" href="{% url 'tickets:borrador' ticket.pk %}">Volver y editar</a>
+    <form method="post" action="{% url 'tickets:enviar' ticket.pk %}" data-sol-guard>
+      {% csrf_token %}
+      <button type="submit" class="btn btn--primary btn--lg"{% if not servicio_activo %} disabled{% endif %}>Enviar solicitud{% include "components/icon.html" with name="arrow-right" %}</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}<script src="{% static 'js/solicitud.js' %}" defer></script>{% endblock %}

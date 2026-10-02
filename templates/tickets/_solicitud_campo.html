@@ -1,0 +1,162 @@
+{% comment %}
+  Un campo del formulario de solicitud. Espera `item` (ver
+  `apps/tickets/solicitud.py::construir_items`). Jerarquía: etiqueta (con su
+  marca "Obligatorio"/check) → ayuda real del campo → control → pista de
+  restricciones / contador → aviso en vivo → error del servidor.
+
+  La representación sale del tipo de campo y de su cantidad de opciones; los
+  controles de selección son siempre inputs reales (radio/checkbox). Un campo
+  oculto por reglas se renderiza `hidden` y con sus controles `disabled`
+  (no se envía); el servidor decide qué es visible/requerido.
+{% endcomment %}{% with campo=item.campo cid=item.id %}
+<div class="sol-field sol-field--{{ item.ancho }}{% if item.errores %} has-error{% endif %}{% if item.completado %} is-complete{% endif %}"
+     id="field_{{ cid }}"
+     data-sol-field
+     data-campo="{{ cid }}"
+     data-control="{{ item.control }}"
+     data-etiqueta="{{ campo.etiqueta }}"
+     data-requerido="{% if item.requerido %}1{% else %}0{% endif %}"{% if item.es_origen %}
+     data-regla-origen{% endif %}{% if not item.visible %}
+     hidden{% endif %}>
+
+  {% if item.control == "switch" %}
+    <div class="sol-toggle">
+      <div class="sol-toggle__text">
+        <span class="sol-label" id="lbl_{{ cid }}">{{ campo.etiqueta }}<span class="sol-req">Obligatorio</span></span>
+        {% if campo.ayuda %}<p class="sol-help" id="help_{{ cid }}">{{ campo.ayuda }}</p>{% endif %}
+      </div>
+      <label class="switch">
+        <input type="checkbox" role="switch" id="campo_{{ cid }}" name="campo_{{ cid }}" data-sol-target
+               aria-labelledby="lbl_{{ cid }}"{% if campo.ayuda %} aria-describedby="help_{{ cid }}"{% endif %}{% if item.marcado %} checked{% endif %}{% if not item.visible %} disabled{% endif %}>
+        <span class="switch__track" aria-hidden="true"></span>
+        <span class="sol-switch__state" data-sol-switch-state>{% if item.marcado %}Sí{% else %}No{% endif %}</span>
+      </label>
+    </div>
+
+  {% else %}
+    {% if item.control == "tarjetas" or item.control == "chips" or item.control == "archivo" %}
+      <span class="sol-label" id="lbl_{{ cid }}">{{ campo.etiqueta }}{% include "tickets/_solicitud_marcas.html" %}</span>
+    {% else %}
+      <label class="sol-label" id="lbl_{{ cid }}" for="campo_{{ cid }}">{{ campo.etiqueta }}{% include "tickets/_solicitud_marcas.html" %}</label>
+    {% endif %}
+    {% if campo.ayuda %}<p class="sol-help" id="help_{{ cid }}">{{ campo.ayuda }}</p>{% endif %}
+
+    {% if item.control == "area" %}
+      <textarea id="campo_{{ cid }}" name="campo_{{ cid }}" rows="6" data-sol-target
+        {% if item.limite %}data-sol-limite="{{ item.limite }}"{% endif %}
+        {% if item.atributos.placeholder %}placeholder="{{ item.atributos.placeholder }}"{% endif %}
+        aria-required="{% if item.requerido %}true{% else %}false{% endif %}"
+        {% if item.describedby %}aria-describedby="{{ item.describedby }}"{% endif %}
+        {% if item.errores %}aria-invalid="true"{% endif %}{% if not item.visible %} disabled{% endif %}>{{ item.valor }}</textarea>
+
+    {% elif item.control == "select" %}
+      <div class="sol-select">
+        <select id="campo_{{ cid }}" name="campo_{{ cid }}" data-sol-target
+          aria-required="{% if item.requerido %}true{% else %}false{% endif %}"
+          {% if item.describedby %}aria-describedby="{{ item.describedby }}"{% endif %}
+          {% if item.errores %}aria-invalid="true"{% endif %}{% if not item.visible %} disabled{% endif %}>
+          <option value="">Selecciona una opción</option>
+          {% for opcion in item.opciones %}
+            <option value="{{ opcion.valor }}"{% if opcion.seleccionada %} selected{% endif %}>{{ opcion.etiqueta }}</option>
+          {% endfor %}
+        </select>
+        <span class="sol-select__icon" aria-hidden="true">{% include "components/icon.html" with name="chevron-down" size="sm" %}</span>
+      </div>
+
+    {% elif item.control == "multiselect" %}
+      <select id="campo_{{ cid }}" name="campo_{{ cid }}" data-sol-target multiple size="6"
+        aria-required="{% if item.requerido %}true{% else %}false{% endif %}"
+        {% if item.describedby %}aria-describedby="{{ item.describedby }}"{% endif %}
+        {% if item.errores %}aria-invalid="true"{% endif %}{% if not item.visible %} disabled{% endif %}>
+        {% for opcion in item.opciones %}
+          <option value="{{ opcion.valor }}"{% if opcion.seleccionada %} selected{% endif %}>{{ opcion.etiqueta }}</option>
+        {% endfor %}
+      </select>
+
+    {% elif item.control == "tarjetas" or item.control == "chips" %}
+      <div class="sol-choices sol-choices--{{ item.control }}{% if item.columnas %} sol-choices--c{{ item.columnas }}{% endif %}" id="campo_{{ cid }}" data-sol-target
+        role="{% if item.control == 'tarjetas' %}radiogroup{% else %}group{% endif %}" aria-labelledby="lbl_{{ cid }}"
+        {% if item.control == "tarjetas" %}aria-required="{% if item.requerido %}true{% else %}false{% endif %}"{% endif %}
+        {% if item.describedby %}aria-describedby="{{ item.describedby }}"{% endif %}>
+        {% for opcion in item.opciones %}
+          <label class="sol-choice">
+            <input type="{% if item.control == 'tarjetas' %}radio{% else %}checkbox{% endif %}" name="campo_{{ cid }}" value="{{ opcion.valor }}"{% if opcion.seleccionada %} checked{% endif %}{% if not item.visible %} disabled{% endif %}>
+            <span class="sol-choice__body">
+              <span class="sol-choice__mark" aria-hidden="true">{% include "components/icon.html" with name="check" %}</span>
+              <span class="sol-choice__label">{{ opcion.etiqueta }}</span>
+            </span>
+          </label>
+        {% endfor %}
+      </div>
+      {% if item.control == "tarjetas" %}
+        <button type="button" class="btn btn--ghost btn--sm sol-clear" data-sol-clear hidden>Quitar selección</button>
+      {% endif %}
+
+    {% elif item.control == "archivo" %}
+      <div class="sol-upload" data-sol-upload>
+        <label class="uploader sol-uploader">
+          <span class="uploader__icon" aria-hidden="true">{% include "components/icon.html" with name="upload" size="lg" %}</span>
+          <span class="uploader__title">Arrastra tu archivo aquí</span>
+          <span class="uploader__sub">o selecciónalo desde tu equipo</span>
+          {% if item.atributos.extensiones or item.atributos.tamano_maximo %}
+            <span class="uploader__hint">{{ item.atributos.extensiones }}{% if item.atributos.extensiones and item.atributos.tamano_maximo %} · {% endif %}{% if item.atributos.tamano_maximo %}máximo {{ item.atributos.tamano_maximo }}{% endif %}</span>
+          {% endif %}
+          <input type="file" id="campo_{{ cid }}" name="campo_{{ cid }}" data-sol-target
+            aria-labelledby="lbl_{{ cid }}"
+            {% if item.atributos.accept %}accept="{{ item.atributos.accept }}"{% endif %}
+            {% if item.describedby %}aria-describedby="{{ item.describedby }}"{% endif %}
+            {% if item.errores %}aria-invalid="true"{% endif %}{% if not item.visible %} disabled{% endif %}>
+        </label>
+        <ul class="sol-files" data-sol-files aria-label="Archivo de {{ campo.etiqueta }}">
+          {% if item.archivo %}
+            <li class="sol-file" data-sol-file-guardado>
+              <span class="sol-file__icon" aria-hidden="true">{% include "components/icon.html" with name="file" %}</span>
+              <span class="sol-file__name"><a href="{{ item.archivo.url }}">{{ item.archivo.nombre }}</a></span>
+              <span class="sol-file__size">{{ item.archivo.tamano }}</span>
+              <label class="sol-file__remove" title="Quitar archivo">
+                <input type="checkbox" name="campo_{{ cid }}__eliminar" value="1" aria-label="Quitar {{ item.archivo.nombre }}"{% if not item.visible %} disabled{% endif %}>
+                <span class="sol-file__remove-off" aria-hidden="true">{% include "components/icon.html" with name="x" size="sm" %}</span>
+                <span class="sol-file__remove-on" aria-hidden="true">Deshacer</span>
+              </label>
+              <span class="sol-file__note sol-file__note--quitar">Se quitará al guardar el borrador.</span>
+            </li>
+          {% endif %}
+        </ul>
+      </div>
+
+    {% else %}
+      <input type="{{ item.input_type }}" id="campo_{{ cid }}" name="campo_{{ cid }}" value="{{ item.valor }}" data-sol-target
+        {% if item.atributos.placeholder %}placeholder="{{ item.atributos.placeholder }}"{% endif %}
+        {% if item.atributos.maxlength %}maxlength="{{ item.atributos.maxlength }}"{% endif %}
+        {% if item.atributos.step %}step="{{ item.atributos.step }}"{% endif %}
+        {% if item.atributos.min is not None %}min="{{ item.atributos.min }}"{% endif %}
+        {% if item.atributos.max is not None %}max="{{ item.atributos.max }}"{% endif %}
+        {% if item.atributos.inputmode %}inputmode="{{ item.atributos.inputmode }}"{% endif %}
+        {% if item.control == "email" or item.control == "url" %}autocapitalize="off" spellcheck="false"{% endif %}
+        aria-required="{% if item.requerido %}true{% else %}false{% endif %}"
+        {% if item.describedby %}aria-describedby="{{ item.describedby }}"{% endif %}
+        {% if item.errores %}aria-invalid="true"{% endif %}{% if not item.visible %} disabled{% endif %}>
+    {% endif %}
+
+    {% if item.pista or item.limite %}
+      <div class="sol-meta">
+        {% if item.pista %}<p class="sol-hint" id="hint_{{ cid }}">{{ item.pista }}</p>{% endif %}
+        {% if item.limite %}<p class="sol-counter" id="count_{{ cid }}" data-sol-contador>{{ item.valor|length }} / {{ item.limite }}</p>{% endif %}
+      </div>
+    {% endif %}
+
+    {% if item.aviso_vivo %}
+      <p class="sol-error" id="live_{{ cid }}" role="status" data-sol-aviso hidden>
+        {% include "components/icon.html" with name="alert" size="sm" %}<span data-sol-aviso-texto></span>
+      </p>
+    {% endif %}
+  {% endif %}
+
+  {% if item.errores %}
+    <p class="sol-error" id="err_{{ cid }}" data-sol-error>
+      {% include "components/icon.html" with name="alert" size="sm" %}
+      <span>{{ item.errores|join:" " }}</span>
+    </p>
+  {% endif %}
+</div>
+{% endwith %}

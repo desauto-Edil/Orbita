@@ -10,6 +10,8 @@ correrlas manualmente vía Docker. Organizadas en clases por CU, en un
 regresiones.
 """
 
+from datetime import timedelta
+
 from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
@@ -40,6 +42,7 @@ from apps.core.models import (
     UsuarioArea,
     UsuarioUnidadNegocio,
 )
+from apps.tareas.models import Tarea
 from apps.tareas.operaciones import crear_tarea
 
 Usuario = get_user_model()
@@ -879,7 +882,9 @@ class ApplicationShellTests(TestCase):
         self.assertEqual(respuesta.status_code, 302)
         self.assertIn(reverse("core:login"), respuesta.url)
 
-    def test_inicio_renderiza_informacion_real_del_usuario(self):
+    def test_inicio_saluda_por_el_nombre_y_no_trae_datos_organizacionales(self):
+        # V1: Inicio es la portada cotidiana. Cargo, área y unidad pertenecen
+        # a Mi perfil: no se reserva ninguna tarjeta para ellos (ni su vacío).
         area = Area.objects.create(nombre="Tecnología", codigo="TEC-SHELL")
         unidad = UnidadNegocio.objects.create(nombre="Plataformas", codigo="PLAT-SHELL")
         UsuarioArea.objects.create(usuario=self.usuario, area=area, es_principal=True)
@@ -889,17 +894,16 @@ class ApplicationShellTests(TestCase):
         self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertEqual(respuesta.status_code, 200)
-        self.assertContains(respuesta, "Elena Camacho")
-        self.assertContains(respuesta, "Tecnología")
-        self.assertContains(respuesta, "Plataformas")
+        self.assertEqual(respuesta.context["saludo"]["nombre"], "Elena")
+        self.assertContains(respuesta, "Elena")
+        for ausente in ("Tecnología", "Plataformas", "Tu información organizacional", "Aún no tienes área"):
+            self.assertNotContains(respuesta, ausente)
 
-    def test_inicio_sin_area_ni_unidad_muestra_empty_state_real(self):
-        # "No existe el dominio" no equivale a "consulta con cero resultados"
-        # inventada: aquí sí hay un dominio real (Área/Unidad) consultado de
-        # verdad, solo que el usuario no tiene ninguna asignada todavía.
+    def test_perfil_conserva_la_informacion_organizacional(self):
+        area = Area.objects.create(nombre="Tecnología", codigo="TEC-SHELL-P")
+        UsuarioArea.objects.create(usuario=self.usuario, area=area, es_principal=True)
         self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("core:inicio"))
-        self.assertContains(respuesta, "Aún no tienes área ni unidad de negocio asignadas.")
+        self.assertContains(self.client.get(reverse("core:perfil")), "Tecnología")
 
     def test_administracion_visible_en_navegacion_solo_para_is_staff(self):
         self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
@@ -910,6 +914,7 @@ class ApplicationShellTests(TestCase):
         self.usuario.save()
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertContains(respuesta, "Administración")
+        self.assertContains(respuesta, "Configuración")
 
     def test_perfil_muestra_badge_principal_solo_en_la_relacion_marcada(self):
         area_principal = Area.objects.create(nombre="Finanzas", codigo="FIN-SHELL")
@@ -927,12 +932,15 @@ class ApplicationShellTests(TestCase):
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "Entrar")
 
-    def test_servicios_visible_en_navegacion_para_cualquier_autenticado(self):
-        # Regresión por el cambio en core.navegacion (Incremento 1.1):
-        # "Servicios" es el primer módulo funcional real agregado al dock.
+    def test_catalogo_sigue_accesible_para_cualquier_autenticado(self):
+        # V0: "Servicios" dejó el dock (solo hay Inicio/Mis tickets/Trabajo/Más),
+        # pero el catálogo —único punto de partida para crear un ticket— no
+        # puede quedar huérfano: Mis tickets enlaza a él y el buscador de
+        # necesidades de Inicio (V1) cae en él cuando no hay JavaScript.
         self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("core:inicio"))
-        self.assertContains(respuesta, "Servicios")
+        self.assertContains(self.client.get(reverse("tickets:mis_tickets")), "Nuevo ticket")
+        for vista in ("core:inicio", "tickets:mis_tickets"):
+            self.assertContains(self.client.get(reverse(vista)), reverse("catalogo:lista"))
 
     def test_shell_autenticado_contiene_dock(self):
         # 2.UI.1: el shell autenticado se navega desde el dock flotante,
@@ -955,14 +963,14 @@ class ApplicationShellTests(TestCase):
         respuesta = self.client.get(reverse("core:login"))
         self.assertNotContains(respuesta, 'class="dock"')
 
-    def test_cola_atencion_visible_en_navegacion_solo_con_permiso_tickets_atender(self):
-        # 2.3/2.UI.1: "Cola de atención" solo aparece en el dock si el
-        # usuario tiene `tickets.atender` en algún alcance — no es un
-        # destino visible para cualquier autenticado, a diferencia de
-        # "Mis tickets" o "Servicios".
+    def test_trabajo_con_cola_visible_en_navegacion_solo_con_permiso_tickets_atender(self):
+        # 2.3/V0: la Cola de atención vive dentro de "Trabajo", que solo
+        # aparece si el usuario tiene `tickets.atender` en algún alcance (o
+        # trabajo personal) — no es un destino visible para cualquier
+        # autenticado, a diferencia de "Mis tickets".
         self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
         respuesta = self.client.get(reverse("core:inicio"))
-        self.assertNotContains(respuesta, "Cola de atención")
+        self.assertNotContains(respuesta, "Trabajo")
 
         permiso, _ = Permiso.objects.get_or_create(
             codigo="tickets.atender",
@@ -974,7 +982,8 @@ class ApplicationShellTests(TestCase):
             usuario=self.usuario, rol=rol, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL
         )
         respuesta = self.client.get(reverse("core:inicio"))
-        self.assertContains(respuesta, "Cola de atención")
+        self.assertContains(respuesta, "Trabajo")
+        self.assertContains(respuesta, reverse("tickets:cola"))
 
     def test_rutas_principales_del_dock_siguen_resolviendo(self):
         # 2.UI.1 es exclusivamente visual/navegación: no debe romper ninguna
@@ -1027,6 +1036,24 @@ class MiTrabajoTests(TestCase):
         self.assertContains(respuesta, "Revisar contrato")
         respuesta_tareas = self.client.get(reverse("core:mi_trabajo"), {"tab": "tareas"})
         self.assertContains(respuesta_tareas, "Revisar contrato")
+
+    def test_usuario_con_tareas_gestionar_no_rompe_la_union_de_consultas(self):
+        # Regresión: para quien tiene `tareas.gestionar`, "disponibles para
+        # tomar" no usa `.distinct()` y `asignadas | disponibles` lanzaba
+        # TypeError ("No se puede combinar una consulta única con una no única").
+        permiso, _ = Permiso.objects.get_or_create(codigo="tareas.gestionar", defaults={"nombre": "tareas.gestionar"})
+        rol = RolFuncional.objects.create(nombre="Gestor de tareas mi trabajo")
+        RolPermiso.objects.create(rol=rol, permiso=permiso)
+        AsignacionRol.objects.create(usuario=self.usuario, rol=rol, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL)
+        otro = Usuario.objects.create_user(username="otro_gestion", password=CLAVE_PRUEBA)
+        crear_tarea(titulo="Propia gestor", creada_por=self.usuario, usuario_responsable=self.usuario)
+        crear_tarea(titulo="Libre para tomar", creada_por=otro)
+        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "Propia gestor")
+        self.assertContains(respuesta, "Libre para tomar")
+        self.assertContains(respuesta, "Tareas (2)")
 
     def test_tarea_de_otro_usuario_no_aparece(self):
         otro = Usuario.objects.create_user(username="otro_mt", password=CLAVE_PRUEBA)
@@ -1112,21 +1139,25 @@ class MiTrabajoTests(TestCase):
         self.assertContains(respuesta, "Tareas (2)")
         self.assertContains(respuesta, "Aprobaciones (1)")
 
-    def test_mi_trabajo_visible_en_navegacion_para_cualquier_autenticado(self):
-        # Sin rol/permiso especial — solo autenticación (puntos 9/12/19:
-        # nada de rol hardcodeado).
+    def test_trabajo_aparece_en_navegacion_solo_con_trabajo_personal(self):
+        # V0: sin rol/permiso especial (nada de rol hardcodeado), pero ya no
+        # para cualquier autenticado: "Trabajo" solo se muestra si hay algo
+        # que requiera acción del usuario (aquí, una tarea asignada).
         self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
         respuesta = self.client.get(reverse("core:inicio"))
-        self.assertContains(respuesta, "Mi trabajo")
+        self.assertNotContains(respuesta, reverse("core:mi_trabajo"))
+        crear_tarea(titulo="Trabajo visible", creada_por=self.usuario, usuario_responsable=self.usuario)
+        respuesta = self.client.get(reverse("core:inicio"))
+        self.assertContains(respuesta, "Trabajo")
         self.assertContains(respuesta, reverse("core:mi_trabajo"))
 
     def test_resto_de_navegacion_no_se_altera(self):
-        # Regresión mínima: agregar "Mi trabajo" no debe alterar el gate ya
-        # cubierto en detalle por `ApplicationShellTests` (Cola de
-        # atención/Administración siguen ausentes por defecto).
+        # Regresión mínima: el gate de Trabajo no alcanza a Cola ni a
+        # Administración (siguen ausentes por defecto).
         self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        crear_tarea(titulo="Solo tarea", creada_por=self.usuario, usuario_responsable=self.usuario)
         respuesta = self.client.get(reverse("core:inicio"))
-        self.assertNotContains(respuesta, "Cola de atención")
+        self.assertNotContains(respuesta, reverse("tickets:cola"))
         self.assertNotContains(respuesta, "Administración")
 
 
@@ -1194,3 +1225,912 @@ class MensajesGlobalesTests(TestCase):
     def test_sin_mensajes_no_renderiza_el_contenedor(self):
         respuesta = self.client.get(reverse("core:login"))
         self.assertNotContains(respuesta, 'class="messages"')
+
+
+def _otorgar_permiso_nav(usuario, codigo, tipo_alcance=None, area=None):
+    """Concede `codigo` al usuario por el mecanismo normal (Permiso → Rol →
+    Asignación): sin roles hardcodeados ni sembrado global."""
+    permiso, _ = Permiso.objects.get_or_create(codigo=codigo, defaults={"nombre": codigo})
+    rol = RolFuncional.objects.create(nombre=f"Rol nav {codigo} {usuario.username}")
+    RolPermiso.objects.create(rol=rol, permiso=permiso)
+    return AsignacionRol.objects.create(
+        usuario=usuario, rol=rol, tipo_alcance=tipo_alcance or AsignacionRol.TipoAlcance.GLOBAL, area=area
+    )
+
+
+class NavegacionGlobalTests(TestCase):
+    """V0 — Header + Dock adaptativo + panel "Más" + pestañas de Trabajo.
+
+    Solo comportamiento verificable del servidor: qué destinos recibe cada
+    usuario según sus capacidades reales (nunca por nombre de rol). Nada
+    sobre colores, tamaños ni CSS."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="nav_v0", password=CLAVE_PRUEBA)
+        self.client.login(username="nav_v0", password=CLAVE_PRUEBA)
+
+    def _get(self, vista="core:inicio"):
+        return self.client.get(reverse(vista))
+
+    @staticmethod
+    def _dock(respuesta):
+        return [i["etiqueta"] for i in respuesta.context["nav_dock"]]
+
+    @staticmethod
+    def _mas(respuesta):
+        return {g["etiqueta"]: [i["etiqueta"] for i in g["items"]] for g in respuesta.context["nav_mas_grupos"]}
+
+    def _con_tarea(self):
+        return crear_tarea(titulo="Trabajo pendiente", creada_por=self.usuario, usuario_responsable=self.usuario)
+
+    # --- Escenarios del dock (matriz de la fase V0) ---
+
+    def test_escenario_a_solo_solicita(self):
+        respuesta = self._get()
+        self.assertEqual(self._dock(respuesta), ["Inicio", "Mis tickets"])
+        self.assertEqual(self._mas(respuesta), {})
+        self.assertNotContains(respuesta, 'id="dock-more"')
+
+    def test_escenario_b_y_e_gestor_que_no_atiende_ve_mas_pero_no_trabajo(self):
+        _otorgar_permiso_nav(self.usuario, "catalogo.administrar")
+        respuesta = self._get()
+        self.assertEqual(self._dock(respuesta), ["Inicio", "Mis tickets"])
+        self.assertEqual(self._mas(respuesta), {"Gestión": ["Diseñador"]})
+        self.assertContains(respuesta, 'id="dock-more"')
+
+    def test_escenario_c_atiende_tickets_ve_trabajo_sin_mas(self):
+        _otorgar_permiso_nav(self.usuario, "tickets.atender")
+        respuesta = self._get()
+        self.assertEqual(self._dock(respuesta), ["Inicio", "Mis tickets", "Trabajo"])
+        self.assertEqual(self._mas(respuesta), {})
+        self.assertNotContains(respuesta, 'id="dock-more"')
+
+    def test_escenario_d_atiende_y_configura(self):
+        _otorgar_permiso_nav(self.usuario, "tickets.atender")
+        _otorgar_permiso_nav(self.usuario, "catalogo.administrar")
+        _otorgar_permiso_nav(self.usuario, "workflows.administrar")
+        respuesta = self._get()
+        self.assertEqual(self._dock(respuesta), ["Inicio", "Mis tickets", "Trabajo"])
+        # Studio y Workflows avanzados ya no son destinos separados: un solo Diseñador.
+        self.assertEqual(self._mas(respuesta), {"Gestión": ["Diseñador"]})
+
+    # --- Trabajo ---
+
+    def test_trabajo_con_cola_en_alcance_de_area(self):
+        # `tickets.atender` solo en un Área también habilita Trabajo (no se
+        # exige alcance global).
+        area = Area.objects.create(nombre="Área nav", codigo="AREA-NAV-V0")
+        _otorgar_permiso_nav(self.usuario, "tickets.atender", AsignacionRol.TipoAlcance.AREA, area)
+        respuesta = self._get()
+        self.assertIn("Trabajo", self._dock(respuesta))
+
+    def test_trabajo_solo_personal_abre_mi_trabajo(self):
+        self._con_tarea()
+        respuesta = self._get()
+        trabajo = next(i for i in respuesta.context["nav_dock"] if i["etiqueta"] == "Trabajo")
+        self.assertEqual(trabajo["url_name"], "core:mi_trabajo")
+
+    def test_aprobacion_pendiente_habilita_trabajo(self):
+        crear_esquema_aprobacion(
+            modo=EsquemaAprobacion.Modo.PARALELA,
+            politica=EsquemaAprobacion.Politica.CUALQUIERA,
+            participantes=[(Aprobacion.TipoAprobador.USUARIO, self.usuario)],
+        )
+        self.assertIn("Trabajo", self._dock(self._get()))
+
+    def test_tarea_completada_no_habilita_trabajo(self):
+        tarea = self._con_tarea()
+        Tarea.objects.filter(pk=tarea.pk).update(estado=Tarea.Estado.COMPLETADA)
+        self.assertNotIn("Trabajo", self._dock(self._get()))
+
+    def test_trabajo_abre_cola_cuando_hay_acceso_a_ella(self):
+        _otorgar_permiso_nav(self.usuario, "tickets.atender")
+        self._con_tarea()
+        respuesta = self._get()
+        trabajo = next(i for i in respuesta.context["nav_dock"] if i["etiqueta"] == "Trabajo")
+        self.assertEqual(trabajo["url_name"], "tickets:cola")
+
+    def test_pestanas_de_trabajo_solo_con_cola_y_trabajo_personal(self):
+        # Solo Cola: la pestaña no aporta nada → no se muestra.
+        _otorgar_permiso_nav(self.usuario, "tickets.atender")
+        respuesta = self._get("tickets:cola")
+        self.assertEqual(respuesta.context["nav_trabajo_tabs"], [])
+        self.assertNotContains(respuesta, "Secciones de Trabajo")
+
+        # Cola + trabajo personal: dos pestañas, la de la vista actual activa.
+        self._con_tarea()
+        respuesta = self._get("tickets:cola")
+        tabs = respuesta.context["nav_trabajo_tabs"]
+        self.assertEqual([(t["etiqueta"], t["activa"]) for t in tabs], [("Cola", True), ("Mi trabajo", False)])
+        self.assertContains(respuesta, "Secciones de Trabajo")
+        respuesta = self._get("core:mi_trabajo")
+        tabs = respuesta.context["nav_trabajo_tabs"]
+        self.assertEqual([(t["etiqueta"], t["activa"]) for t in tabs], [("Cola", False), ("Mi trabajo", True)])
+
+    def test_sin_cola_no_hay_pestanas_aunque_haya_trabajo_personal(self):
+        self._con_tarea()
+        respuesta = self._get("core:mi_trabajo")
+        self.assertEqual(respuesta.context["nav_trabajo_tabs"], [])
+
+    # --- Más ---
+
+    def test_el_disenador_se_abre_con_cualquiera_de_sus_capacidades(self):
+        _otorgar_permiso_nav(self.usuario, "catalogo.administrar")
+        self.assertEqual(self._mas(self._get()), {"Gestión": ["Diseñador"]})
+
+        for codigo in ("workflows.consultar", "workflows.administrar"):
+            otro = Usuario.objects.create_user(username=f"nav_d1_{codigo}", password=CLAVE_PRUEBA)
+            _otorgar_permiso_nav(otro, codigo)
+            self.client.login(username=otro.username, password=CLAVE_PRUEBA)
+            self.assertEqual(self._mas(self._get()), {"Gestión": ["Diseñador"]}, codigo)
+
+    def test_vincular_por_si_solo_no_abre_el_disenador(self):
+        # Elegir un flujo publicado es una acción DENTRO de configurar un servicio:
+        # sin `catalogo.administrar` ni poder consultar flujos no hay nada que hacer aquí.
+        _otorgar_permiso_nav(self.usuario, "workflows.vincular")
+        self.assertEqual(self._mas(self._get()), {})
+        self.assertEqual(self.client.get(reverse("core:disenador")).status_code, 403)
+
+    def test_configuracion_solo_para_is_staff(self):
+        self.assertEqual(self._mas(self._get()), {})
+        self.usuario.is_staff = True
+        self.usuario.save()
+        self.assertEqual(self._mas(self._get()), {"Administración": ["Configuración"]})
+
+    def test_mas_no_muestra_grupos_vacios(self):
+        _otorgar_permiso_nav(self.usuario, "workflows.administrar")
+        self.assertEqual(list(self._mas(self._get())), ["Gestión"])
+
+    def test_el_disenador_no_vive_en_trabajo(self):
+        _otorgar_permiso_nav(self.usuario, "tickets.atender")
+        _otorgar_permiso_nav(self.usuario, "catalogo.administrar")
+        _otorgar_permiso_nav(self.usuario, "workflows.administrar")
+        respuesta = self._get("tickets:cola")
+        self.assertNotIn("Diseñador", self._dock(respuesta))
+
+    # --- Destino activo ---
+
+    def test_trabajo_se_resalta_en_cola_mi_trabajo_y_detalles_de_tareas(self):
+        _otorgar_permiso_nav(self.usuario, "tickets.atender")
+        self._con_tarea()
+        for vista in ("tickets:cola", "core:mi_trabajo", "tareas:lista"):
+            self.assertEqual(self._get(vista).context["nav_item_activo"], "tickets:cola", vista)
+        self.assertEqual(self._get("tickets:mis_tickets").context["nav_item_activo"], "tickets:mis_tickets")
+
+    def test_el_recorrido_de_solicitud_no_resalta_mis_tickets(self):
+        from apps.tickets.operaciones import crear_borrador
+        from apps.tickets.tests import _crear_servicio_con_formulario
+
+        servicio, _version, _campos = _crear_servicio_con_formulario(self.usuario, [])
+        ticket = crear_borrador(self.usuario, servicio)
+        for nombre in ("tickets:borrador", "tickets:revisar"):
+            respuesta = self.client.get(reverse(nombre, args=[ticket.pk]))
+            self.assertEqual(respuesta.status_code, 200, nombre)
+            self.assertIsNone(respuesta.context["nav_item_activo"], nombre)
+        self.assertEqual(self._get("tickets:mis_tickets").context["nav_item_activo"], "tickets:mis_tickets")
+
+    def test_el_disenador_resalta_mas_en_todas_sus_partes_pero_el_catalogo_publico_no(self):
+        _otorgar_permiso_nav(self.usuario, "catalogo.administrar")
+        _otorgar_permiso_nav(self.usuario, "workflows.administrar")
+        for vista in ("core:disenador", "core:disenador_flujos", "core:disenador_servicios",
+                      "catalogo:studio_lista", "catalogo:studio_crear", "workflows:lista"):
+            respuesta = self._get(vista)
+            self.assertEqual(respuesta.status_code, 200, vista)
+            self.assertEqual(respuesta.context["nav_item_activo"], "core:disenador", vista)
+            self.assertTrue(respuesta.context["nav_mas_activo"], vista)
+        respuesta = self._get("catalogo:lista")
+        self.assertFalse(respuesta.context["nav_mas_activo"])
+
+    # --- Header ---
+
+    def test_menu_de_usuario_ofrece_perfil_y_cerrar_sesion(self):
+        respuesta = self._get()
+        contenido = respuesta.content.decode()
+        menu = contenido.split('id="menu-usuario"')[1].split("</header>")[0]
+        self.assertIn(reverse("core:perfil"), menu)
+        self.assertIn('method="post"', menu)
+        self.assertIn(reverse("core:logout"), menu)
+        self.assertIn("Cerrar sesión", menu)
+
+    def test_header_no_contiene_navegacion_de_modulos(self):
+        _otorgar_permiso_nav(self.usuario, "tickets.atender")
+        contenido = self._get().content.decode()
+        header = contenido.split('<header class="app-header">')[1].split("</header>")[0]
+        for vista in ("tickets:mis_tickets", "tickets:cola", "catalogo:lista", "core:mi_trabajo"):
+            self.assertNotIn(reverse(vista), header)
+
+    def test_hay_un_solo_dock_y_ningun_sidebar(self):
+        contenido = self._get().content.decode()
+        self.assertEqual(contenido.count('class="dock"'), 1)
+        self.assertNotIn('class="sidebar"', contenido)
+
+    # --- Catálogo visual interno ---
+
+    def test_sistema_visual_exige_autenticacion(self):
+        self.client.logout()
+        respuesta = self.client.get(reverse("core:sistema_visual"))
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertIn(reverse("core:login"), respuesta.url)
+
+    def test_sistema_visual_prohibido_para_no_staff(self):
+        self.assertEqual(self._get("core:sistema_visual").status_code, 403)
+
+    def test_sistema_visual_disponible_para_staff(self):
+        self.usuario.is_staff = True
+        self.usuario.save()
+        respuesta = self._get("core:sistema_visual")
+        self.assertEqual(respuesta.status_code, 200)
+        for seccion in ("Fundamentos", "Componentes", "Patrones"):
+            self.assertContains(respuesta, seccion)
+
+    # --- Compatibilidad del shell ---
+
+    def test_paginas_de_error_siguen_renderizando(self):
+        respuesta = self.client.get("/esta-ruta-no-existe/")
+        self.assertEqual(respuesta.status_code, 404)
+        self.assertContains(respuesta, "Volver al inicio", status_code=404)
+
+
+class InicioPortalTests(TestCase):
+    """V1 — Inicio / Mi Portal. Solo comportamiento verificable del servidor:
+    qué datos reales recibe la página (visibilidad del catálogo, frecuentes,
+    agenda, Trabajo, tickets recientes), cómo se reorganiza cuando faltan y
+    que el explorador respeta la visibilidad. Nada de CSS ni de texto
+    decorativo."""
+
+    def setUp(self):
+        from apps.catalogo.models import Categoria, Servicio
+
+        self.usuario = Usuario.objects.create_user(
+            username="portal_v1", password=CLAVE_PRUEBA, first_name="Yeimi Paola", last_name="Rojas"
+        )
+        self.otro = Usuario.objects.create_user(username="portal_otro", password=CLAVE_PRUEBA)
+        self.categoria = Categoria.objects.create(nombre="Tecnología")
+        self.Servicio = Servicio
+        self.Categoria = Categoria
+        self.client.login(username="portal_v1", password=CLAVE_PRUEBA)
+
+    # --- helpers ---
+
+    def _servicio(self, nombre, *, categoria=None, activo=True, publico=True, **extra):
+        return self.Servicio.objects.create(
+            nombre=nombre, categoria=categoria or self.categoria, activo=activo,
+            alcance_visibilidad=(
+                self.Servicio.AlcanceVisibilidad.PUBLICO_INTERNO if publico
+                else self.Servicio.AlcanceVisibilidad.RESTRINGIDO
+            ),
+            **extra,
+        )
+
+    def _inicio(self, **params):
+        return self.client.get(reverse("core:inicio"), params)
+
+    def _explorar(self, **params):
+        return self.client.get(reverse("core:explorar"), params)
+
+    def _servicio_con_formulario(self):
+        from apps.tickets.tests import _crear_servicio_con_formulario
+
+        servicio, _version, _campos = _crear_servicio_con_formulario(self.usuario, [])
+        return servicio
+
+    def _ticket(self, servicio, solicitante=None):
+        from apps.tickets.operaciones import crear_borrador
+
+        return crear_borrador(solicitante or self.usuario, servicio)
+
+    # --- Hero ---
+
+    def test_saludo_cambia_con_la_hora_y_usa_el_nombre_de_pila(self):
+        from datetime import datetime
+
+        from apps.core.inicio import saludo
+
+        def a_las(hora):
+            return timezone.make_aware(datetime(2026, 10, 2, hora, 0))
+
+        self.assertEqual(saludo(self.usuario, a_las(8))["momento"], "Buenos días")
+        self.assertEqual(saludo(self.usuario, a_las(15))["momento"], "Buenas tardes")
+        self.assertEqual(saludo(self.usuario, a_las(21))["momento"], "Buenas noches")
+        self.assertEqual(saludo(self.usuario, a_las(8))["nombre"], "Yeimi")
+
+    def test_sin_nombre_de_pila_se_usa_el_usuario(self):
+        from apps.core.inicio import saludo
+
+        self.assertEqual(saludo(self.otro)["nombre"], "portal_otro")
+
+    def test_hero_incluye_el_buscador_de_necesidades_con_respaldo_sin_js(self):
+        respuesta = self._inicio()
+        self.assertContains(respuesta, "data-explorer-search")
+        self.assertContains(respuesta, f'action="{reverse("catalogo:lista")}"')
+        self.assertContains(respuesta, "¿Qué necesitas hoy?")
+
+    # --- Explorar: catálogo según visibilidad ---
+
+    def test_solo_aparecen_servicios_visibles_activos_y_autorizados(self):
+        self._servicio("Visible para todos")
+        self._servicio("Servicio apagado", activo=False)
+        self._servicio("Restringido sin acceso", publico=False)
+        respuesta = self._explorar()
+        self.assertContains(respuesta, "Visible para todos")
+        self.assertNotContains(respuesta, "Servicio apagado")
+        self.assertNotContains(respuesta, "Restringido sin acceso")
+        self.assertEqual(self._inicio().context["total_servicios"], 1)
+
+    def test_una_concesion_hace_visible_un_servicio_restringido(self):
+        from apps.catalogo.models import ServicioVisibilidad
+
+        servicio = self._servicio("Solo con concesión", publico=False)
+        self.assertNotContains(self._explorar(), "Solo con concesión")
+        ServicioVisibilidad.objects.create(
+            servicio=servicio, tipo_alcance=ServicioVisibilidad.TipoAlcance.USUARIO, usuario=self.usuario
+        )
+        self.assertContains(self._explorar(), "Solo con concesión")
+        # …y sigue oculto para quien no tiene la concesión.
+        self.client.login(username="portal_otro", password=CLAVE_PRUEBA)
+        self.assertNotContains(self._explorar(), "Solo con concesión")
+
+    def test_el_explorador_busca_por_nombre_descripcion_o_categoria(self):
+        self._servicio("Soporte de equipos", descripcion="Reparación de laptops y monitores")
+        self._servicio("Compra de papelería", categoria=self.Categoria.objects.create(nombre="Compras"))
+        self.assertContains(self._explorar(q="laptops"), "Soporte de equipos")
+        self.assertContains(self._explorar(q="soporte"), "Soporte de equipos")
+        respuesta = self._explorar(q="compras")  # por nombre de categoría
+        self.assertContains(respuesta, "Compra de papelería")
+        self.assertNotContains(respuesta, "Soporte de equipos")
+        self.assertContains(self._explorar(q="zzz-nada"), "No encontramos nada")
+
+    def test_el_explorador_filtra_por_categoria_y_tolera_entradas_invalidas(self):
+        otra = self.Categoria.objects.create(nombre="Compras")
+        self._servicio("Servicio de tecnología")
+        self._servicio("Servicio de compras", categoria=otra)
+        respuesta = self._explorar(categoria=otra.pk)
+        self.assertContains(respuesta, "Servicio de compras")
+        self.assertNotContains(respuesta, "Servicio de tecnología")
+        for basura in ("abc", "", "0", "99999"):
+            self.assertEqual(self._explorar(categoria=basura).status_code, 200, basura)
+
+    def test_el_explorador_exige_autenticacion(self):
+        self.client.logout()
+        respuesta = self._explorar()
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertIn(reverse("core:login"), respuesta.url)
+
+    def test_el_explorador_acota_los_resultados(self):
+        from apps.core.inicio import LIMITE_RESULTADOS_EXPLORADOR
+
+        for i in range(LIMITE_RESULTADOS_EXPLORADOR + 2):
+            self._servicio(f"Servicio masivo {i:03d}")
+        respuesta = self._explorar()
+        self.assertContains(respuesta, 'class="svc-card"', count=LIMITE_RESULTADOS_EXPLORADOR)
+        self.assertContains(respuesta, f"Mostrando los primeros {LIMITE_RESULTADOS_EXPLORADOR}")
+
+    def test_las_tarjetas_entran_directo_a_la_solicitud_sin_ficha_intermedia(self):
+        servicio = self._servicio("Soporte de equipos")
+        respuesta = self._explorar()
+        self.assertContains(respuesta, reverse("tickets:solicitar", args=[servicio.pk]))
+        self.assertNotContains(respuesta, reverse("catalogo:detalle", args=[servicio.pk]))
+
+    def test_el_explorador_solo_acepta_get(self):
+        self.assertEqual(self.client.post(reverse("core:explorar")).status_code, 405)
+
+    def test_inicio_muestra_pocas_categorias_y_ver_todo(self):
+        from apps.core.inicio import LIMITE_CATEGORIAS_TILES
+
+        for i in range(LIMITE_CATEGORIAS_TILES + 2):
+            self._servicio(f"Servicio {i}", categoria=self.Categoria.objects.create(nombre=f"Categoría {i}"))
+        respuesta = self._inicio()
+        self.assertEqual(len(respuesta.context["categorias_tiles"]), LIMITE_CATEGORIAS_TILES)
+        self.assertEqual(len(respuesta.context["categorias"]), LIMITE_CATEGORIAS_TILES + 2)
+        self.assertContains(respuesta, 'id="explorador"')
+        self.assertContains(respuesta, "Ver todo")
+
+    def test_inicio_no_lista_servicios_ni_consulta_por_tarjeta(self):
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        self._servicio("Primero")
+        self._inicio()  # calentamiento (cachés de contenido/sesión)
+        with CaptureQueriesContext(connection) as pocas:
+            self._inicio()
+        for i in range(15):
+            self._servicio(f"Otro {i}")
+        with CaptureQueriesContext(connection) as muchas:
+            respuesta = self._inicio()
+        self.assertEqual(len(pocas), len(muchas))
+        # El catálogo completo no viaja en la portada: se pide al explorador.
+        self.assertNotContains(respuesta, "Otro 7")
+
+    def test_sin_servicios_disponibles_hay_estado_vacio_y_no_explorador(self):
+        respuesta = self._inicio()
+        self.assertEqual(respuesta.context["total_servicios"], 0)
+        # El vacío forma parte de la composición (estado visual propio)...
+        self.assertContains(respuesta, 'class="portal-empty"')
+        self.assertContains(respuesta, "Aún no hay nada para solicitar")
+        self.assertNotContains(respuesta, 'id="explorador"')
+        self.assertNotContains(respuesta, "Ver todo")
+
+    def test_con_servicios_el_estado_vacio_desaparece(self):
+        self._servicio("Algo disponible")
+        respuesta = self._inicio()
+        self.assertNotContains(respuesta, "portal-empty")
+        self.assertContains(respuesta, "cat-chip")
+
+    # --- Frecuentes y recientes ---
+
+    def test_sin_historial_no_hay_seccion_de_usados(self):
+        self._servicio("Algo disponible")
+        respuesta = self._inicio()
+        self.assertFalse(respuesta.context["tiene_usados"])
+        self.assertNotContains(respuesta, "Tus habituales")
+        self.assertNotContains(respuesta, "Usados recientemente")
+
+    def test_un_uso_es_reciente_y_dos_son_frecuentes(self):
+        servicio = self._servicio_con_formulario()
+        self._ticket(servicio)
+        respuesta = self._inicio()
+        self.assertEqual(respuesta.context["frecuentes"], [])
+        self.assertEqual(respuesta.context["recientes"], [servicio])
+        self.assertContains(respuesta, "Usados recientemente")
+
+        self._ticket(servicio)
+        respuesta = self._inicio()
+        self.assertEqual(respuesta.context["frecuentes"], [servicio])
+        self.assertEqual(respuesta.context["recientes"], [])
+        self.assertContains(respuesta, "Tus habituales")
+
+    def test_los_usados_son_solo_los_propios_y_siguen_la_visibilidad(self):
+        servicio = self._servicio_con_formulario()
+        self._ticket(servicio, solicitante=self.otro)
+        self.assertFalse(self._inicio().context["tiene_usados"])
+        self._ticket(servicio)
+        self.assertTrue(self._inicio().context["tiene_usados"])
+        # Un servicio que dejó de estar disponible ya no se ofrece.
+        self.Servicio.objects.filter(pk=servicio.pk).update(activo=False)
+        self.assertFalse(self._inicio().context["tiene_usados"])
+
+    # --- Tickets recientes ---
+
+    def test_tickets_recientes_son_los_propios_con_limite_y_sin_cancelados(self):
+        from apps.core.inicio import LIMITE_TICKETS_RECIENTES
+        from apps.tickets.models import Ticket
+
+        servicio = self._servicio_con_formulario()
+        propios = [self._ticket(servicio) for _ in range(LIMITE_TICKETS_RECIENTES + 2)]
+        ajeno = self._ticket(servicio, solicitante=self.otro)
+        cancelado = propios[-1]
+        Ticket.objects.filter(pk=cancelado.pk).update(estado=Ticket.Estado.CANCELADO)
+        respuesta = self._inicio()
+        ids = [t.pk for t in respuesta.context["tickets_recientes"]]
+        self.assertEqual(len(ids), LIMITE_TICKETS_RECIENTES)
+        self.assertNotIn(ajeno.pk, ids)
+        self.assertNotIn(cancelado.pk, ids)
+        self.assertContains(respuesta, "Tus tickets recientes")
+        self.assertContains(respuesta, reverse("tickets:mis_tickets"))
+
+    def test_un_borrador_enlaza_a_su_formulario(self):
+        servicio = self._servicio_con_formulario()
+        ticket = self._ticket(servicio)
+        self.assertContains(self._inicio(), reverse("tickets:borrador", args=[ticket.pk]))
+
+    def test_sin_tickets_no_hay_tarjeta_vacia(self):
+        respuesta = self._inicio()
+        self.assertEqual(respuesta.context["tickets_recientes"], [])
+        self.assertNotContains(respuesta, "Tus tickets recientes")
+
+    # --- Tu trabajo ---
+
+    def test_sin_capacidad_de_trabajo_no_hay_resumen(self):
+        respuesta = self._inicio()
+        self.assertIsNone(respuesta.context["trabajo"])
+        self.assertNotContains(respuesta, "Tu trabajo")
+        self.assertNotContains(respuesta, "Todo al día")
+
+    def test_resumen_cuenta_pendientes_reales_y_apunta_a_mi_trabajo(self):
+        crear_tarea(titulo="Mi tarea", creada_por=self.usuario, usuario_responsable=self.usuario)
+        hecha = crear_tarea(titulo="Hecha", creada_por=self.usuario, usuario_responsable=self.usuario)
+        Tarea.objects.filter(pk=hecha.pk).update(estado=Tarea.Estado.COMPLETADA)
+        crear_esquema_aprobacion(
+            modo=EsquemaAprobacion.Modo.PARALELA,
+            politica=EsquemaAprobacion.Politica.CUALQUIERA,
+            participantes=[(Aprobacion.TipoAprobador.USUARIO, self.usuario)],
+        )
+        respuesta = self._inicio()
+        trabajo = respuesta.context["trabajo"]
+        self.assertEqual((trabajo["tareas"], trabajo["aprobaciones"]), (1, 1))
+        self.assertFalse(trabajo["acceso_cola"])
+        self.assertEqual(trabajo["url"], reverse("core:mi_trabajo"))
+        self.assertContains(respuesta, "Tu trabajo")
+        self.assertNotContains(respuesta, reverse("tickets:cola"))
+
+    def test_con_capacidad_pero_sin_pendientes_solo_hay_una_senal_discreta(self):
+        # Sin pendientes a su nombre no se pinta la franja de Trabajo: solo
+        # "Todo al día" con el acceso. La Cola no se cuenta.
+        _otorgar_permiso_nav(self.usuario, "tickets.atender")
+        respuesta = self._inicio()
+        trabajo = respuesta.context["trabajo"]
+        self.assertTrue(trabajo["acceso_cola"])
+        self.assertFalse(trabajo["hay_pendientes"])
+        self.assertEqual(trabajo["url"], reverse("tickets:cola"))
+        self.assertContains(respuesta, "Todo al día")
+        self.assertNotContains(respuesta, "Tu trabajo")
+        self.assertNotContains(respuesta, "work-pills")
+        self.assertNotContains(respuesta, "Ir a Trabajo")  # el dock ya navega a Trabajo
+
+    def test_con_pendientes_y_cola_el_resumen_incluye_la_cola_sin_contarla(self):
+        _otorgar_permiso_nav(self.usuario, "tickets.atender")
+        crear_tarea(titulo="Pendiente", creada_por=self.usuario, usuario_responsable=self.usuario)
+        respuesta = self._inicio()
+        trabajo = respuesta.context["trabajo"]
+        self.assertTrue(trabajo["hay_pendientes"])
+        self.assertEqual(trabajo["url"], reverse("tickets:cola"))
+        self.assertContains(respuesta, "Tu trabajo")
+        self.assertContains(respuesta, "Cola de atención")
+        self.assertContains(respuesta, "Ir a Trabajo")
+        self.assertNotContains(respuesta, "Todo al día")
+
+    def test_ritmo_de_la_pagina_hero_cuerpo_trabajo_recientes(self):
+        # Retícula 1 → 2 → 1 → 1 columnas. El orden del DOM es también el
+        # orden móvil: hero, explorar, tu día, trabajo, recientes.
+        self._servicio("Algo disponible")
+        self._ticket(self._servicio_con_formulario())
+        crear_tarea(titulo="Pendiente", creada_por=self.usuario, usuario_responsable=self.usuario)
+        html = self._inicio().content.decode()
+        marcas = [
+            'class="portal-hero"', 'class="portal-body"', 'id="t-explorar"', 'id="t-agenda"',
+            'class="portal-trabajo"', 'class="portal-recientes"',
+        ]
+        posiciones = [html.index(m) for m in marcas]
+        self.assertEqual(posiciones, sorted(posiciones))
+        # Tu día pertenece al cuerpo de dos columnas, no al hero.
+        hero = html[html.index('class="portal-hero"'):html.index('class="portal-body"')]
+        self.assertNotIn("Tu día", hero)
+        self.assertNotIn("portal-agenda", hero)
+
+    def test_sin_pendientes_ni_tickets_no_hay_bandas(self):
+        html = self._inicio().content.decode()
+        self.assertNotIn('class="portal-trabajo"', html)
+        self.assertNotIn('class="portal-recientes"', html)
+
+    def test_inicio_es_una_sola_pagina_sin_paneles_administrativos(self):
+        # Gestionar el catálogo no agrega nada a Inicio (vive en Más › Studio).
+        _otorgar_permiso_nav(self.usuario, "catalogo.administrar")
+        respuesta = self._inicio()
+        self.assertIsNone(respuesta.context["trabajo"])
+        self.assertFalse(respuesta.context["agenda"]["hay_eventos"])
+
+    # --- Tu día / agenda ---
+
+    def _a_las(self, dia, hora=12, mes=10):
+        from datetime import datetime
+
+        return timezone.make_aware(datetime(2026, mes, dia, hora, 0))
+
+    def test_el_calendario_es_permanente_pero_sin_datos_ficticios(self):
+        # Tu día siempre muestra el mes; marcadores y lista salen solo de
+        # datos reales (aquí no hay ninguna fecha).
+        crear_tarea(titulo="Sin fecha", creada_por=self.usuario, usuario_responsable=self.usuario)
+        respuesta = self._inicio()
+        agenda_ctx = respuesta.context["agenda"]
+        self.assertFalse(agenda_ctx["hay_eventos"])
+        self.assertEqual(agenda_ctx["proximos"], [])
+        self.assertTrue(agenda_ctx["semanas"])
+        self.assertContains(respuesta, "Tu día")
+        self.assertContains(respuesta, 'aria-current="date"')
+        self.assertContains(respuesta, "Sin fechas pendientes.")
+        self.assertNotContains(respuesta, "cal__marca")
+
+    def test_la_fecha_vive_en_tu_dia_y_no_en_el_hero(self):
+        respuesta = self._inicio()
+        saludo_ctx = respuesta.context["saludo"]
+        self.assertEqual(
+            set(saludo_ctx), {"momento", "nombre", "dia", "dia_semana", "mes_anio"}
+        )
+        self.assertContains(respuesta, 'class="agenda-today__num"')
+        self.assertNotContains(respuesta, "portal-hero__date")
+
+    def test_agenda_usa_fechas_limite_de_tareas_propias_pendientes(self):
+        from apps.core.inicio import agenda
+
+        ahora = self._a_las(2)
+        crear_tarea(
+            titulo="Entregar informe", creada_por=self.usuario, usuario_responsable=self.usuario,
+            fecha_limite=self._a_las(5, 10),
+        )
+        hecha = crear_tarea(
+            titulo="Ya hecha", creada_por=self.usuario, usuario_responsable=self.usuario,
+            fecha_limite=self._a_las(6),
+        )
+        Tarea.objects.filter(pk=hecha.pk).update(estado=Tarea.Estado.COMPLETADA)
+        crear_tarea(
+            titulo="De otra persona", creada_por=self.otro, usuario_responsable=self.otro,
+            fecha_limite=self._a_las(7),
+        )
+        resultado = agenda(self.usuario, ahora=ahora)
+        self.assertEqual([e["titulo"] for e in resultado["proximos"]], ["Entregar informe"])
+        self.assertEqual(resultado["proximos"][0]["tipo"], "tarea")
+        # El día 5 queda marcado en el mes; los demás no.
+        marcados = [d["dia"] for semana in resultado["semanas"] for d in semana if d["n"] and d["en_mes"]]
+        self.assertEqual(marcados, [5])
+
+    def test_el_calendario_es_un_mes_con_semanas_desde_el_lunes(self):
+        from apps.core.inicio import agenda
+
+        crear_tarea(
+            titulo="Algo", creada_por=self.usuario, usuario_responsable=self.usuario, fecha_limite=self._a_las(20)
+        )
+        resultado = agenda(self.usuario, ahora=self._a_las(2))
+        self.assertEqual(resultado["titulo_mes"], "Octubre 2026")
+        primera = resultado["semanas"][0]
+        self.assertEqual(len(primera), 7)
+        self.assertFalse(primera[0]["en_mes"])  # lunes 28 de septiembre
+        self.assertEqual((primera[3]["dia"], primera[3]["en_mes"]), (1, True))  # jueves 1 de octubre
+        self.assertEqual([d["dia"] for s in resultado["semanas"] for d in s if d["hoy"]], [2])
+        self.assertEqual((resultado["mes_anterior"], resultado["mes_siguiente"]), ("2026-09", "2026-11"))
+
+    def test_tareas_vencidas_se_cuentan_aparte(self):
+        from apps.core.inicio import agenda
+
+        crear_tarea(
+            titulo="Atrasada", creada_por=self.usuario, usuario_responsable=self.usuario,
+            fecha_limite=self._a_las(1, 8),
+        )
+        resultado = agenda(self.usuario, ahora=self._a_las(2))
+        self.assertEqual(resultado["vencidas"], 1)
+        self.assertEqual(resultado["proximos"], [])
+
+    def test_agenda_incluye_el_plazo_de_responder_una_entrega(self):
+        from apps.core.inicio import agenda
+        from apps.tickets.models import EntregaTicket
+
+        ticket = self._ticket(self._servicio_con_formulario())
+        ajeno = self._ticket(self._servicio_con_formulario(), solicitante=self.otro)
+        ahora = timezone.now()
+        for t, estado in ((ticket, EntregaTicket.Estado.PENDIENTE), (ajeno, EntregaTicket.Estado.PENDIENTE)):
+            EntregaTicket.objects.create(
+                ticket=t, numero=1, entregada_por=self.otro, entregada_en=ahora,
+                politica="PERIODO_OBSERVACIONES", dias_observacion=3, vence_en=ahora + timedelta(days=2),
+                estado=estado,
+            )
+        resultado = agenda(self.usuario, ahora=ahora)
+        self.assertEqual([e["tipo"] for e in resultado["proximos"]], ["entrega"])
+        self.assertEqual(resultado["proximos"][0]["url"], reverse("tickets:detalle", args=[ticket.pk]))
+
+    def test_navegar_a_otro_mes_conserva_la_agenda_aunque_este_vacia(self):
+        crear_tarea(
+            titulo="Hoy mismo", creada_por=self.usuario, usuario_responsable=self.usuario,
+            fecha_limite=timezone.now() + timedelta(hours=1),
+        )
+        respuesta = self._inicio(mes="2031-01")
+        self.assertEqual(respuesta.context["agenda"]["titulo_mes"], "Enero 2031")
+        self.assertFalse(respuesta.context["agenda"]["es_mes_actual"])
+        # Valores inválidos o fuera de rango caen en el mes actual.
+        for basura in ("xx", "2026-13", "1900-01", "2026"):
+            self.assertTrue(self._inicio(mes=basura).context["agenda"]["es_mes_actual"], basura)
+
+    def test_con_fechas_reales_el_calendario_es_accesible_y_lista_lo_proximo(self):
+        crear_tarea(
+            titulo="Con fecha", creada_por=self.usuario, usuario_responsable=self.usuario,
+            fecha_limite=timezone.now() + timedelta(hours=1),
+        )
+        respuesta = self._inicio()
+        self.assertContains(respuesta, 'aria-current="date"')
+        self.assertContains(respuesta, 'scope="col"')
+        self.assertContains(respuesta, "Con fecha")
+        self.assertTrue(respuesta.context["agenda"]["hay_eventos"])
+
+    # --- Rutas y compatibilidad ---
+
+    def test_rutas_de_inicio_resuelven(self):
+        self.assertEqual(self._inicio().status_code, 200)
+        self.assertEqual(reverse("core:explorar"), "/explorar/")
+
+
+class DisenadorTests(TestCase):
+    """D1 — Diseñador: entrada unificada (Flujos + Servicios). Solo
+    comportamiento verificable del servidor: quién entra, qué sección y qué
+    acciones ve según capacidades reales (nunca por nombre de rol), qué datos
+    reales recibe cada pantalla y que las pantallas heredadas conservan su
+    camino de vuelta. Nada de estilos."""
+
+    def setUp(self):
+        from apps.catalogo.models import Categoria, Servicio
+        from apps.workflows.models import Workflow, WorkflowVersion
+
+        self.usuario = Usuario.objects.create_user(username="dis_d1", password=CLAVE_PRUEBA)
+        self.client.login(username="dis_d1", password=CLAVE_PRUEBA)
+        self.categoria = Categoria.objects.create(nombre="Comunicaciones")
+        self.Servicio, self.Workflow, self.WorkflowVersion = Servicio, Workflow, WorkflowVersion
+
+    # --- helpers ---
+
+    def _flujo(self, nombre, *, publicado=True, en_diseno=False):
+        flujo = self.Workflow.objects.create(nombre=nombre)
+        numero = 1
+        if publicado:
+            version = self.WorkflowVersion.objects.create(
+                workflow=flujo, numero=numero, estado=self.WorkflowVersion.Estado.ACTIVA
+            )
+            flujo.version_activa = version
+            flujo.save()
+            numero += 1
+        if en_diseno or not publicado:
+            self.WorkflowVersion.objects.create(
+                workflow=flujo, numero=numero, estado=self.WorkflowVersion.Estado.BORRADOR
+            )
+        return flujo
+
+    def _servicio(self, nombre, *, activo=True, flujo=None, tipo=None):
+        return self.Servicio.objects.create(
+            nombre=nombre, categoria=self.categoria, activo=activo, workflow=flujo,
+            tipo=tipo or self.Servicio.Tipo.SERVICIO,
+            alcance_visibilidad=self.Servicio.AlcanceVisibilidad.PUBLICO_INTERNO,
+        )
+
+    def _con(self, *codigos):
+        for codigo in codigos:
+            _otorgar_permiso_nav(self.usuario, codigo)
+
+    def _get(self, nombre):
+        return self.client.get(reverse(f"core:{nombre}"))
+
+    @staticmethod
+    def _claves(respuesta):
+        return [t["clave"] for t in respuesta.context["disenador_tabs"]]
+
+    # --- quién entra y qué sección ve ---
+
+    def test_sin_capacidades_no_entra_a_ninguna_pantalla(self):
+        for nombre in ("disenador", "disenador_flujos", "disenador_servicios"):
+            self.assertEqual(self._get(nombre).status_code, 403, nombre)
+
+    def test_exige_autenticacion(self):
+        self.client.logout()
+        respuesta = self._get("disenador")
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertIn(reverse("core:login"), respuesta.url)
+
+    def test_catalogo_administrar_ve_solo_servicios(self):
+        self._con("catalogo.administrar")
+        respuesta = self._get("disenador")
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(self._claves(respuesta), ["inicio", "servicios"])
+        self.assertContains(respuesta, reverse("catalogo:studio_crear"))
+        self.assertNotContains(respuesta, reverse("flujos:nuevo"))
+        self.assertEqual(self._get("disenador_servicios").status_code, 200)
+        self.assertEqual(self._get("disenador_flujos").status_code, 403)
+
+    def test_consultar_flujos_ve_solo_flujos_y_en_solo_lectura(self):
+        self._con("workflows.consultar")
+        flujo = self._flujo("Atención estándar")
+        respuesta = self._get("disenador_flujos")
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(self._claves(respuesta), ["inicio", "flujos"])
+        self.assertContains(respuesta, "Atención estándar")
+        self.assertContains(respuesta, reverse("flujos:lienzo", args=[flujo.pk]))  # abrir el flujo
+        self.assertContains(respuesta, reverse("workflows:detalle", args=[flujo.pk]))  # vista técnica
+        self.assertNotContains(respuesta, reverse("flujos:nuevo"))  # sin "Nuevo flujo"
+        self.assertEqual(self._get("disenador_servicios").status_code, 403)
+        self.assertNotContains(self._get("disenador"), reverse("catalogo:studio_crear"))
+
+    def test_administrar_flujos_ve_nuevo_flujo_y_vista_tecnica(self):
+        self._con("workflows.administrar")
+        self._flujo("Atención estándar")
+        for nombre in ("disenador", "disenador_flujos"):
+            self.assertContains(self._get(nombre), reverse("flujos:nuevo"), msg_prefix=nombre)
+
+    def test_vincular_sin_consultar_solo_ve_flujos_publicados_y_sin_acceso_a_su_definicion(self):
+        self._con("catalogo.administrar", "workflows.vincular")
+        publicado = self._flujo("Flujo publicado")
+        self._flujo("Flujo en borrador", publicado=False)
+        respuesta = self._get("disenador_flujos")
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual([f.nombre for f in respuesta.context["flujos"]], ["Flujo publicado"])
+        self.assertNotContains(respuesta, "Flujo en borrador")
+        self.assertNotContains(respuesta, reverse("workflows:detalle", args=[publicado.pk]))
+        self.assertNotContains(respuesta, reverse("flujos:lienzo", args=[publicado.pk]))
+        self.assertNotContains(respuesta, reverse("flujos:nuevo"))
+        self.assertNotContains(respuesta, "En diseño")
+
+    def test_quien_administra_servicios_y_flujos_ve_ambas_secciones(self):
+        self._con("catalogo.administrar", "workflows.administrar")
+        self.assertEqual(self._claves(self._get("disenador")), ["inicio", "flujos", "servicios"])
+
+    # --- datos reales ---
+
+    def test_la_biblioteca_muestra_estado_version_y_uso(self):
+        self._con("workflows.consultar")
+        compartido = self._flujo("Compartido", en_diseno=True)
+        self._servicio("Servicio uno", flujo=compartido)
+        self._servicio("Servicio dos", flujo=compartido)
+        self._flujo("Sin publicar", publicado=False)
+        respuesta = self._get("disenador_flujos")
+        por_nombre = {f.nombre: f for f in respuesta.context["flujos"]}
+        self.assertEqual(por_nombre["Compartido"].n_servicios, 2)
+        self.assertEqual(sorted(s.nombre for s in por_nombre["Compartido"].usado_por), ["Servicio dos", "Servicio uno"])
+        self.assertTrue(por_nombre["Compartido"].tiene_borrador)
+        self.assertEqual(por_nombre["Sin publicar"].n_servicios, 0)
+        self.assertContains(respuesta, "Usado por 2 servicios o procesos")
+        self.assertContains(respuesta, "Sin usar todavía")
+        self.assertContains(respuesta, "Publicado · v1")
+        self.assertContains(respuesta, "Sin publicar")
+        self.assertContains(respuesta, "Nueva versión en diseño")
+
+    def test_la_lista_de_servicios_muestra_tipo_estado_y_flujo(self):
+        self._con("catalogo.administrar")
+        flujo = self._flujo("Flujo de compras")
+        con_flujo = self._servicio("Compra de papelería", flujo=flujo)
+        self._servicio("Soporte simple", activo=False)
+        self._servicio("Proceso sin flujo", activo=False, tipo=self.Servicio.Tipo.PROCESO)
+        respuesta = self._get("disenador_servicios")
+        self.assertContains(respuesta, "Flujo: Flujo de compras")
+        self.assertContains(respuesta, "Sin flujo")
+        self.assertContains(respuesta, "Un proceso necesita un flujo para poder publicarse.")
+        self.assertContains(respuesta, reverse("catalogo:studio", args=[con_flujo.pk]))
+        self.assertContains(respuesta, "Borrador")
+        self.assertContains(respuesta, "Publicado")
+
+    def test_el_inicio_resume_cifras_y_lo_que_esta_en_curso(self):
+        from apps.core.disenador import LIMITE_RECIENTES
+
+        self._con("catalogo.administrar", "workflows.administrar")
+        self._flujo("Publicado")
+        self._flujo("En curso", publicado=False)
+        self._servicio("Publicado uno")
+        for i in range(LIMITE_RECIENTES + 2):
+            self._servicio(f"Borrador {i}", activo=False)
+        respuesta = self._get("disenador")
+        self.assertEqual(
+            (respuesta.context["flujos"]["publicados"], respuesta.context["flujos"]["en_diseno"]), (1, 1)
+        )
+        self.assertEqual(
+            (respuesta.context["servicios"]["publicados"], respuesta.context["servicios"]["borradores"]),
+            (1, LIMITE_RECIENTES + 2),
+        )
+        self.assertEqual(len(respuesta.context["servicios"]["recientes"]), LIMITE_RECIENTES)
+        self.assertEqual([f.nombre for f in respuesta.context["flujos"]["recientes"]], ["En curso"])
+        self.assertContains(respuesta, "Continúa donde lo dejaste")
+
+    def test_estados_vacios_segun_la_capacidad(self):
+        self._con("catalogo.administrar", "workflows.administrar")
+        respuesta = self._get("disenador")
+        self.assertContains(respuesta, "Todavía no hay flujos. Crea el primero")
+        self.assertContains(respuesta, "Todavía no hay servicios ni procesos")
+        self.assertNotContains(respuesta, "Continúa donde lo dejaste")
+        self.assertContains(self._get("disenador_flujos"), "Todavía no hay flujos. Crea el primero")
+        self.assertContains(self._get("disenador_servicios"), "Todavía no hay servicios ni procesos")
+
+    def test_sin_flujos_publicados_quien_solo_consulta_no_recibe_invitacion_a_crear(self):
+        self._con("workflows.consultar")
+        respuesta = self._get("disenador_flujos")
+        self.assertContains(respuesta, "Todavía no hay flujos creados.")
+        self.assertNotContains(respuesta, "Crea el primero")
+
+    def test_el_lenguaje_visible_no_expone_terminos_tecnicos(self):
+        self._con("catalogo.administrar", "workflows.administrar")
+        self._flujo("Flujo")
+        for nombre in ("disenador", "disenador_flujos", "disenador_servicios"):
+            html = self._get(nombre).content.decode()
+            for tecnico in ("WorkflowVersion", "Etapa", "Transición", "InstanciaWorkflow"):
+                self.assertNotIn(tecnico, html, (nombre, tecnico))
+
+    # --- pantallas heredadas ---
+
+    def test_las_pantallas_heredadas_vuelven_al_disenador(self):
+        self._con("catalogo.administrar", "workflows.administrar")
+        flujo = self._flujo("Flujo")
+        servicio = self._servicio("Servicio")
+        destinos = [
+            reverse("catalogo:studio_lista"),
+            reverse("catalogo:studio_crear"),
+            reverse("catalogo:studio", args=[servicio.pk]),
+            reverse("workflows:lista"),
+            reverse("workflows:crear"),
+            reverse("workflows:detalle", args=[flujo.pk]),
+            reverse("flujos:nuevo"),
+            reverse("flujos:lienzo", args=[flujo.pk]),
+        ]
+        for url in destinos:
+            respuesta = self.client.get(url)
+            self.assertEqual(respuesta.status_code, 200, url)
+            self.assertContains(respuesta, f'href="{reverse("core:disenador")}"', msg_prefix=url)

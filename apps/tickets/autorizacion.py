@@ -240,8 +240,11 @@ def puede_resolver_ticket(usuario, ticket):
     """CU-019/RQF-059 — exclusivamente el responsable actual, solo desde
     EN_ATENCION. Resolver es ejecutar el trabajo, no supervisarlo (mismo
     criterio que `puede_solicitar_informacion`, 2.4) — alcance de
-    `tickets.atender`, sin ser el responsable de ESTE ticket, no basta."""
-    if ticket.estado != Ticket.Estado.EN_ATENCION:
+    `tickets.atender`, sin ser el responsable de ESTE ticket, no basta.
+
+    4.5: un ticket con política de entrega congelada NO se resuelve por esta
+    vía — se entrega formalmente (`puede_entregar_ticket`)."""
+    if ticket.estado != Ticket.Estado.EN_ATENCION or ticket.entrega_politica:
         return False
     return es_responsable_actual(usuario, ticket)
 
@@ -250,7 +253,7 @@ def puede_cerrar_ticket(usuario, ticket):
     """CU-019/RQF-059 — solicitante O responsable actual, solo desde
     RESUELTO. Sin exigir motivo (V1 aprobado) — la propia acción de
     cerrar es la confirmación."""
-    if ticket.estado != Ticket.Estado.RESUELTO:
+    if ticket.estado != Ticket.Estado.RESUELTO or ticket.entrega_politica:
         return False
     return es_propietario_borrador(usuario, ticket) or es_responsable_actual(usuario, ticket)
 
@@ -268,8 +271,11 @@ def puede_reabrir_ticket(usuario, ticket):
     """CU-019/RQF-059 — exclusivamente el responsable actual, solo desde
     RESUELTO. Sin el solicitante (decisión explícita del usuario, evita
     reaperturas arbitrarias de quien no ejecuta el trabajo). CERRADO no se
-    reabre en V1 — ver `apps.tickets.estados`, sin esa entrada."""
-    if ticket.estado != Ticket.Estado.RESUELTO:
+    reabre en V1 — ver `apps.tickets.estados`, sin esa entrada.
+
+    4.5: con entrega formal, el ticket vuelve a atención únicamente por las
+    observaciones del solicitante (`puede_responder_entrega`)."""
+    if ticket.estado != Ticket.Estado.RESUELTO or ticket.entrega_politica:
         return False
     return es_responsable_actual(usuario, ticket)
 
@@ -286,4 +292,31 @@ def puede_escribir_entregables_finales(usuario, ticket):
         and ticket.estado == Ticket.Estado.EN_ATENCION
         and ticket.usuario_responsable_id is not None
         and ticket.usuario_responsable_id == usuario.pk
+    )
+
+
+# --- 4.5 — Entrega formal al solicitante ---------------------------------
+#
+# Entregar reutiliza la regla de responsable INDIVIDUAL de los entregables
+# finales (`puede_escribir_entregables_finales`); responder es exclusivo del
+# solicitante real. El cierre automático lo ejecuta el Sistema, sin actor.
+
+
+def puede_entregar_ticket(usuario, ticket):
+    """Responsable individual actual, ticket EN_ATENCION y con política de
+    entrega congelada. Sin política (tickets anteriores a 4.5) no hay entrega
+    formal: siguen el flujo resolver/cerrar."""
+    return bool(ticket.entrega_politica) and puede_escribir_entregables_finales(usuario, ticket)
+
+
+def puede_responder_entrega(usuario, entrega):
+    """Exclusivamente el solicitante del ticket, sobre una entrega que sigue
+    PENDIENTE y con el ticket RESUELTO. No es una Aprobación de Workflow."""
+    ticket = entrega.ticket
+    return (
+        bool(getattr(usuario, "is_authenticated", False))
+        and bool(getattr(usuario, "is_active", False))
+        and entrega.estado == "PENDIENTE"
+        and ticket.estado == Ticket.Estado.RESUELTO
+        and ticket.solicitante_id == usuario.pk
     )

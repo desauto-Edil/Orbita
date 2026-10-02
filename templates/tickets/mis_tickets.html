@@ -8,6 +8,7 @@
   <section class="card">
     <h1>Mis tickets</h1>
     <p class="text-muted">Borradores en curso y tickets ya radicados.</p>
+    <p><a class="btn btn--primary" href="{% url 'catalogo:lista' %}">{% include "components/icon.html" with name="plus" %}Nuevo ticket</a></p>
   </section>
 
   {% if tickets %}

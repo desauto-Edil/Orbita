@@ -1,0 +1,142 @@
+<section class="card">
+  <h2>Ejecución</h2>
+  <p class="text-muted">¿Qué debe hacer la organización?</p>
+
+  {% if workflow is None %}
+    <div class="empty-state">
+      <p>Este servicio todavía no tiene una ejecución configurada.</p>
+    </div>
+
+    <div class="catalogo-grid" style="margin-top: var(--space-4);">
+      <div class="card">
+        <h4>Empezar desde cero</h4>
+        <p class="text-muted" style="font-size: var(--text-sm);">Defines las etapas bloque por bloque.</p>
+        <form method="post" action="{% url 'catalogo:studio_ejecucion_configurar' servicio.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--primary">Configurar ejecución</button>
+        </form>
+      </div>
+
+      {% if puede_vincular_workflow %}
+        <div class="card">
+          <h4>Usar un flujo existente</h4>
+          <p class="text-muted" style="font-size: var(--text-sm);">Reutiliza las etapas de un flujo ya publicado. El flujo se comparte con los demás servicios que lo usan; si luego necesitas cambios propios, podrás crear una copia.</p>
+          {% if plantillas %}
+            <form method="get" action="{% url 'catalogo:studio' servicio.pk %}" class="form">
+              <input type="hidden" name="tab" value="ejecucion">
+              <div class="field">
+                <label for="plantilla-select">Flujo</label>
+                <select id="plantilla-select" name="plantilla">
+                  {% for p in plantillas %}
+                    <option value="{{ p.pk }}"{% if plantilla_elegida and plantilla_elegida.pk == p.pk %} selected{% endif %}>{{ p.nombre }} · {{ p.n_servicios }} servicio{{ p.n_servicios|pluralize }}</option>
+                  {% endfor %}
+                </select>
+              </div>
+              <button type="submit" class="btn btn--secondary">Ver etapas</button>
+            </form>
+          {% else %}
+            <p class="text-muted">Todavía no hay flujos publicados para reutilizar.</p>
+          {% endif %}
+        </div>
+      {% endif %}
+    </div>
+
+    {% if puede_vincular_workflow and plantilla_elegida %}
+      <h3 style="margin-top: var(--space-6);">Etapas de «{{ plantilla_elegida.nombre }}»</h3>
+      {% if plantilla_bloques %}
+        <ul class="list-row-group">
+          {% for fila in plantilla_bloques %}
+            <li class="list-row">
+              <span class="list-row__title">{{ forloop.counter }}. {{ fila.etapa.nombre }}</span>
+              <span class="badge badge--accent">{{ fila.tipo_empresarial_display }}</span>
+              <span class="text-muted">{{ fila.resumen }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-muted">Este flujo no tiene bloques configurados.</p>
+      {% endif %}
+      <p class="text-muted" style="font-size: var(--text-sm);">
+        Este elemento <strong>usará el mismo flujo</strong> que {{ plantilla_elegida.n_servicios }} servicio{{ plantilla_elegida.n_servicios|pluralize }} más.
+        Cada ticket tiene su propia ejecución: compartir el flujo no mezcla los tickets entre servicios.
+        {% if plantilla_tiene_decisiones %}Las decisiones usan campos del formulario: comprueba que existan en este servicio.{% endif %}
+      </p>
+      <form method="post" action="{% url 'catalogo:studio_ejecucion_vincular' servicio.pk %}">
+        {% csrf_token %}
+        <input type="hidden" name="plantilla" value="{{ plantilla_elegida.pk }}">
+        <button type="submit" class="btn btn--primary">Usar este flujo</button>
+      </form>
+    {% endif %}
+  {% else %}
+    {% if compartido_con %}
+      <div class="alert alert--warning" role="status" style="margin-top: var(--space-3);">
+        <span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="alert" %}</span>
+        <div class="alert__text">
+          <strong>Este flujo se comparte con otros elementos.</strong> También lo usan:
+          <ul class="plain-list" style="margin: var(--space-2) 0;">
+            {% for otro in compartido_con %}
+              <li>{{ otro.nombre }} <span class="badge">{{ otro.get_tipo_display }}</span></li>
+            {% endfor %}
+          </ul>
+          Lo que se publique en este flujo afectará a los tickets <em>nuevos</em> de todos ellos; los tickets ya iniciados conservan la versión con la que empezaron.
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="list-row" style="border-bottom: none; padding: 0; margin-top: var(--space-3);">
+      {% if version_ejecucion_activa %}
+        <span class="badge badge--success">Versión activa: v{{ version_ejecucion_activa.numero }}</span>
+      {% else %}
+        <span class="badge badge--warning">Sin versión activa todavía</span>
+      {% endif %}
+      {% if version_ejecucion_borrador %}
+        <span class="badge badge--info">Editando borrador v{{ version_ejecucion_borrador.numero }}{% if compartido_con %} (compartido){% endif %}</span>
+        {% if compartido_con and puede_ejecucion %}
+          <form method="post" action="{% url 'catalogo:studio_ejecucion_copia' servicio.pk %}" style="display:inline;">
+            {% csrf_token %}
+            <button type="submit" class="btn btn--secondary">Crear copia propia</button>
+          </form>
+        {% endif %}
+      {% elif puede_ejecucion %}
+        {% if compartido_con %}
+          <button type="button" class="btn btn--primary" data-action="toggle-panel" data-target="panel-compartido">Editar ejecución…</button>
+        {% else %}
+          <form method="post" action="{% url 'catalogo:studio_ejecucion_configurar' servicio.pk %}" style="display:inline;">
+            {% csrf_token %}
+            <button type="submit" class="btn btn--primary">Editar ejecución</button>
+          </form>
+        {% endif %}
+      {% endif %}
+    </div>
+
+    {% if compartido_con and puede_ejecucion and not version_ejecucion_borrador %}
+      <div id="panel-compartido" class="surface-sunken" hidden style="margin-top: var(--space-3);">
+        <p><strong>Este flujo lo usan otros elementos. ¿Qué quieres hacer?</strong></p>
+        <form method="post" action="{% url 'catalogo:studio_ejecucion_copia' servicio.pk %}">
+          {% csrf_token %}
+          <p class="text-muted" style="font-size: var(--text-sm);"><strong>Crear copia:</strong> este elemento pasa a tener su propio flujo, igual al actual. Los demás siguen con el original, que no cambia.</p>
+          <button type="submit" class="btn btn--primary">Crear copia propia</button>
+        </form>
+        <hr>
+        <form method="post" action="{% url 'catalogo:studio_ejecucion_configurar' servicio.pk %}">
+          {% csrf_token %}
+          <p class="text-muted" style="font-size: var(--text-sm);"><strong>Modificar compartido:</strong> los cambios se preparan en un borrador y solo afectan a los demás cuando se publiquen (se pedirá una confirmación adicional).</p>
+          <label class="choice"><input type="checkbox" name="confirmo_compartido" value="1" required> Entiendo que modificaré un flujo usado por {{ compartido_con|length|add:1 }} elementos.</label>
+          <div class="form-actions" style="margin-top: var(--space-3);">
+            <button type="submit" class="btn btn--secondary">Modificar compartido</button>
+            <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="panel-compartido">Cancelar</button>
+          </div>
+        </form>
+      </div>
+    {% endif %}
+
+    {% if not editable_ejecucion %}
+      <p class="text-muted" style="margin-top: var(--space-3);">
+        {% if puede_ejecucion %}Estás viendo la versión activa, de solo lectura. Pulsa «Editar ejecución» para crear un borrador nuevo.
+        {% else %}Estás viendo la versión activa, de solo lectura. No tienes autorización para modificar flujos.{% endif %}
+      </p>
+    {% endif %}
+
+    {% include "catalogo/_ejecucion_bloques.html" %}
+  {% endif %}
+</section>

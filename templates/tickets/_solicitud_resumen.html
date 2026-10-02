@@ -1,0 +1,26 @@
+{% comment %}
+  Resumen humano de la solicitud: lo usan la vista previa (que el JS
+  reconstruye con la misma estructura mientras el usuario escribe) y la
+  revisión. Espera `servicio` y `resumen` (filas con etiqueta/valor ya
+  presentables: nunca ids, códigos ni JSON).
+{% endcomment %}<div class="sol-summary">
+  <p class="sol-eyebrow">{% if servicio.tipo == "PROCESO" %}Proceso{% else %}Servicio{% endif %} · {{ servicio.categoria.nombre }}</p>
+  <p class="sol-summary__title">{{ servicio.nombre }}</p>
+  <dl class="sol-summary__list" data-sol-summary-list>
+    {% for fila in resumen %}
+      <div class="sol-summary__row">
+        <dt>{{ fila.etiqueta }}</dt>
+        <dd>
+          {% if fila.tipo == "lista" %}
+            <ul class="sol-summary__chips">{% for valor in fila.valores %}<li>{{ valor }}</li>{% endfor %}</ul>
+          {% elif fila.tipo == "largo" %}
+            <span class="sol-summary__long">{{ fila.texto }}</span>
+          {% else %}
+            {{ fila.texto }}
+          {% endif %}
+        </dd>
+      </div>
+    {% endfor %}
+  </dl>
+  <p class="sol-summary__empty" data-sol-summary-empty{% if resumen %} hidden{% endif %}>A medida que completes el formulario, verás aquí cómo queda tu solicitud.</p>
+</div>

@@ -88,7 +88,7 @@ _CLONADORES_CONFIGURACION_POR_TIPO = {
 
 
 @transaction.atomic
-def crear_workflow(actor, *, nombre, descripcion=""):
+def crear_workflow(actor, *, nombre, descripcion="", clonar_desde=None):
     """3.UI.3 — cierra un GAP real: `workflows.administrar` (ver docstring
     de `apps.workflows.autorizacion.PERMISO_ADMINISTRAR`) ya documentaba
     "crear/editar Workflow" como parte de su alcance, pero hasta ahora esa
@@ -103,7 +103,14 @@ def crear_workflow(actor, *, nombre, descripcion=""):
     `clonar_desde`: como el Workflow es nuevo, `workflow.version_activa` es
     `None`, así que `crear_nueva_version` ya construye por su propio
     comportamiento existente una v1 vacía (nada de esa lógica se
-    reimplementa aquí). Alta de `Workflow` + v1 en una sola transacción."""
+    reimplementa aquí). Alta de `Workflow` + v1 en una sola transacción.
+
+    `clonar_desde` (opcional, 4.6): una `WorkflowVersion` de OTRO workflow de
+    la que se copia la estructura a la v1 del nuevo — así se usa un flujo
+    existente como plantilla sin compartirlo. Se delega tal cual a
+    `crear_nueva_version`, que ya preserva etapas, transiciones y la
+    configuración de tareas/aprobaciones; sin él, el comportamiento es el de
+    siempre."""
     workflow = Workflow.objects.create(nombre=nombre, descripcion=descripcion)
     registrar_evento(
         accion=RegistroAuditoria.Accion.CREAR,
@@ -113,7 +120,7 @@ def crear_workflow(actor, *, nombre, descripcion=""):
         datos_anteriores=None,
         datos_nuevos=serializar(workflow),
     )
-    crear_nueva_version(workflow, actor)
+    crear_nueva_version(workflow, actor, clonar_desde=clonar_desde)
     return workflow
 
 

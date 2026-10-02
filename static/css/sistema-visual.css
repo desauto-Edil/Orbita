@@ -1,0 +1,95 @@
+/* Órbita — estilos exclusivos del catálogo visual interno (core/sistema_visual.html).
+   Solo maqueta de la propia página (muestras de color, escalas); ningún
+   componente del producto depende de este archivo. */
+
+.sv-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.sv-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: var(--space-3);
+}
+
+.sv-swatch {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.sv-swatch__chip {
+  height: 56px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: var(--swatch);
+}
+
+.sv-swatch__name {
+  font-family: var(--font-mono);
+  color: var(--text-secondary);
+}
+
+.sv-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.sv-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.sv-space {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.sv-space__bar {
+  height: 12px;
+  width: var(--size);
+  border-radius: 3px;
+  background: var(--text-primary);
+}
+
+.sv-radius,
+.sv-shadow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 72px;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.sv-radius { border-radius: var(--radius); }
+.sv-shadow { border-radius: var(--radius-lg); box-shadow: var(--shadow); border-color: transparent; }
+
+.sv-backdrop {
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--gradient-brand);
+}
+
+.sv-anchor-nav {
+  position: sticky;
+  top: var(--header-h);
+  z-index: var(--z-base);
+  background: var(--surface-page);
+}
+
+.sv-popover-demo {
+  min-height: 260px;
+}

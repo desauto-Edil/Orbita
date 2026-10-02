@@ -1,90 +1,108 @@
-"""Navegación del dock. Application Shell (Incremento 0.5, rediseñado en
-2.UI.1) — sin CU propio.
+"""Navegación global de Órbita (Fase visual V0) — sin CU propio.
 
-Declara únicamente destinos reales: no hay entradas para módulos futuros
-(Procesos, Gacetas, Conocimiento, Analítica) mientras no exista una URL
-real detrás — evita URLs ficticias y entradas ocultas. Agregar un módulo
-en su sprint correspondiente es sumar una entrada aquí, no rediseñar el
-shell.
+Hay exactamente DOS niveles de navegación global:
 
-"Servicios" (1.1, CU-011) es el primer módulo funcional real agregado
-desde 0.5 — confirma que la extensibilidad ya estaba bien pensada. No
-lleva `permiso_codigo`: RQF-036 es "Rol: Usuario" (cualquier autenticado
-puede navegar el catálogo). El filtrado de *qué servicios concretos* ve
-cada usuario no ocurre aquí — ocurre en `apps.catalogo.visibilidad`, que
-es un mecanismo de datos (`ServicioVisibilidad`), no de autorización
-funcional. No se mezclan: ver `apps/catalogo/admin.py` para esa
-distinción explícita.
+  NIVEL 0  Header global (identidad, búsqueda, notificaciones, menú de
+           usuario con "Mi perfil" y "Cerrar sesión"). No contiene módulos.
+  NIVEL 1  Dock global adaptativo: Inicio · Mis tickets · Trabajo · Más.
 
-"Mis tickets" (2.1, CU-015) tampoco lleva `permiso_codigo`: cualquier
-autenticado tiene (o puede tener) tickets propios — la relación
-solicitante↔Ticket, no un permiso funcional, gobierna qué ve cada usuario
-(`apps.tickets.autorizacion`).
+Tabs, segmentos y filtros dentro de una pantalla son controles locales del
+módulo, no navegación global. Este archivo es la ÚNICA fuente de qué
+destinos ve cada usuario; `layout/dock.html` solo los pinta.
 
-"Mi trabajo" (3.UI.5) tampoco lleva `permiso_codigo`, mismo criterio que
-"Mis tickets": la pertenencia depende de ser responsable/aprobador de
-objetos concretos (Tarea/Aprobación), no de un rol global — visible para
-cualquier autenticado. Deliberadamente sin `namespace` (mismo motivo
-documentado para "Inicio"): "core" agrupa también Perfil/login/logout, que
-no deben resaltar "Mi trabajo" al visitarlos; como es una sola pantalla sin
-subpáginas, la coincidencia exacta de `url_name` ya basta para resaltarla
-cuando corresponde.
+Regla de autorización (principio del proyecto: ROL + ALCANCE + RELACIÓN CON
+EL OBJETO): ningún destino se decide comparando nombres/IDs de rol. Cada uno
+depende de una capacidad real que ya existe en el dominio:
 
-"Cola de atención" (2.3, CU-017) es el primer módulo real que aplica la
-decisión documentada arriba: su visibilidad se resuelve con
-`apps.core.autorizacion.alcances_autorizados(usuario, "tickets.atender")`
-(verdadero si el usuario tiene el permiso en algún alcance — GLOBAL, AREA
-o UNIDAD), no con `usuario_tiene_permiso()` sin argumentos, que
-ocultaría el enlace a un Gestor con el permiso solo en un Área o Unidad.
-Deliberadamente sin `namespace` (mismo criterio que "Inicio"): "Mis
-tickets" ya usa `namespace="tickets"` para resaltarse en todas las
-subpáginas del módulo (borrador/detalle/etc.) — darle el mismo namespace
-a "Cola de atención" resaltaría ambos ítems a la vez en `tickets:cola`.
-Se resalta solo por coincidencia exacta de `url_name` (mecanismo que
-`layout/dock.html` ya soporta sin cambios).
+  Inicio, Mis tickets   Cualquier autenticado (la relación solicitante↔Ticket
+                        gobierna qué ve cada quien, no un permiso global).
+  Trabajo               `tickets.atender` en algún alcance (→ Cola) O trabajo
+                        personal pendiente: tareas asignadas/disponibles no
+                        completadas o aprobaciones pendientes (→ Mi trabajo).
+                        Si no se cumple ninguna, el destino no se renderiza y
+                        el dock se recalcula sin hueco.
+  Más › Gestión         Diseñador (Flujos + Servicios, antes Studio y
+                        Workflows avanzados como destinos separados):
+                        `catalogo.administrar` o `workflows.consultar|
+                        administrar`. Qué ve cada quien dentro lo decide
+                        `apps/core/disenador.py` por capacidades.
+  Más › Administración  Configuración (por ahora Django Admin, interfaz
+                        administrativa provisional desde Sprint 0): `is_staff`,
+                        la compuerta nativa de Django Admin. No se crea un
+                        Permiso de Órbita para duplicarla ni se usa
+                        "Administrador" como autorización implícita.
 
-"Workflows" (3.1, CU-020) es el primer ítem que vive directamente dentro de
-"Más" desde su creación, no solo desde 2.UI.1 en adelante como
-"Administración" (X.6, decisión aprobada del usuario: no ocupa un sexto
-puesto en el dock principal). Se gatea con
-`usuario_tiene_permiso(usuario, "workflows.consultar")` (o
-`"workflows.administrar"`, mismo criterio de "quien administra también
-consulta" que `apps.workflows.autorizacion.puede_consultar_workflows`, sin
-importar ese módulo aquí — este archivo no depende del código de ningún
-dominio, como tampoco importa nada de `apps.tickets` para "Cola de
-atención").
+"Más" solo se renderiza si el usuario tiene al menos un destino dentro; los
+grupos vacíos tampoco. El Diseñador nunca va dentro de Trabajo.
 
-Hasta 3.UI.2 su destino era Django Admin (interfaz administrativa
-provisional, `apps/workflows/admin.py`, mismo criterio ya usado para
-Catálogo/Form Builder). **3.UI.3 lo reemplaza** por la interfaz funcional
-propia (`workflows:lista`) — Django Admin sigue existiendo como
-herramienta técnica (edición de Etapa/Transición mientras no existe el
-editor), pero deja de ser el destino de este ítem del dock.
+Trabajo agrupa dos vistas hermanas — Cola (tickets disponibles para tomar por
+su relación con el equipo) y Mi trabajo (lo que requiere algo del usuario).
+El destino del dock abre Cola si el usuario tiene acceso a ella y, si no,
+Mi trabajo; las pestañas locales solo existen cuando ambas son útiles.
 
-"Administración" es la única excepción histórica: su destino hoy es Django Admin,
-que ya está gobernado nativamente por `is_staff` (decisión de Sprint 0) —
-no se crea un `Permiso` de Órbita para duplicar esa gate. Además, a
-partir de 2.UI.1 no vive en el dock principal (que se mantiene a máximo
-~5 accesos): se marca `"en_mas": True` para que `layout/dock.html` la
-renderice dentro del popover "Más" en vez de ocupar un puesto permanente
-en el dock flotante.
+Este módulo no depende del código de ningún dominio de forma permanente: las
+consultas de "trabajo personal" se importan de forma perezosa y son las mismas
+que ya alimentan la pantalla Mi trabajo, sin reglas nuevas.
 """
 
-from apps.core.autorizacion import alcances_autorizados, usuario_tiene_permiso
+from apps.core.autorizacion import alcances_autorizados
+from apps.core.disenador import accede_al_disenador
+
+VISTA_COLA = "tickets:cola"
+# Solicitar un ticket no es navegar "Mis tickets": mientras dura el recorrido
+# de solicitud (entrar → completar → revisar → enviar → confirmar) ningún
+# destino del dock queda resaltado por pertenecer al namespace `tickets`.
+VISTAS_SOLICITUD = (
+    "tickets:solicitar",
+    "tickets:iniciar",
+    "tickets:borrador",
+    "tickets:solicitud_estado",
+    "tickets:revisar",
+    "tickets:enviar",
+    "tickets:enviada",
+)
+VISTA_MI_TRABAJO = "core:mi_trabajo"
+
+# Orden fijo de los grupos de "Más".
+GRUPOS_MAS = ("Gestión", "Administración")
 
 
-def elementos_navegacion(usuario):
-    """Ítems de navegación visibles para `usuario`, en el orden a mostrar.
+def _acceso_a_cola(usuario):
+    """`tickets.atender` en cualquier alcance (GLOBAL, AREA o UNIDAD): no
+    `usuario_tiene_permiso()` sin argumentos, que ocultaría el destino a
+    quien tiene el permiso solo en un Área o Unidad."""
+    alcances = alcances_autorizados(usuario, "tickets.atender")
+    return bool(alcances["global"] or alcances["areas"] or alcances["unidades_negocio"])
 
-    `namespace`, cuando está presente, se usa en `layout/dock.html` para
-    resaltar el ítem activo también en subpáginas del módulo (ej. el detalle
-    de un servicio, no solo el listado) — Inicio no lo lleva a propósito:
-    "core" agrupa también Perfil/login/logout, que no deben resaltar Inicio.
 
-    `en_mas`, cuando está presente y es verdadero, indica que el ítem no se
-    renderiza como acceso directo del dock sino dentro del popover "Más"
-    (junto a Perfil y Cerrar sesión, que no pasan por esta función porque no
-    tienen condición de autorización propia).
+def _tiene_trabajo_personal(usuario):
+    """¿Hay algo en Mi trabajo que requiera acción del usuario? Misma
+    población que lista `core.views.mi_trabajo_view` (tareas asignadas o
+    disponibles para tomar, y aprobaciones pendientes), excluyendo tareas ya
+    completadas: una tarea terminada no "requiere algo de mí"."""
+    from apps.aprobaciones.consultas import aprobaciones_pendientes_para
+    from apps.tareas.consultas import tareas_asignadas_a, tareas_disponibles_para_tomar
+    from apps.tareas.models import Tarea
+
+    if aprobaciones_pendientes_para(usuario).exists():
+        return True
+    return (
+        tareas_asignadas_a(usuario).exclude(estado=Tarea.Estado.COMPLETADA).exists()
+        or tareas_disponibles_para_tomar(usuario).exclude(estado=Tarea.Estado.COMPLETADA).exists()
+    )
+
+
+def _construir_elementos(usuario, acceso_cola, trabajo_personal):
+    """Lista de destinos a partir de las capacidades ya resueltas (se evalúan
+    una sola vez por request, ver `construir_navegacion`).
+
+    Claves de cada destino:
+      etiqueta / url_name / icono   lo que se pinta.
+      destinos                      `url_name` adicionales que lo resaltan
+                                    como activo (Trabajo agrupa dos vistas).
+      namespaces / prefijos         resaltado por namespace de URL o por
+                                    prefijo de nombre de vista (subpáginas).
+      en_mas + grupo                el destino vive dentro de "Más".
     """
     elementos = [
         {"etiqueta": "Inicio", "url_name": "core:inicio", "icono": "home"},
@@ -92,73 +110,145 @@ def elementos_navegacion(usuario):
             "etiqueta": "Mis tickets",
             "url_name": "tickets:mis_tickets",
             "icono": "tickets",
-            "namespace": "tickets",
-        },
-        {
-            "etiqueta": "Mi trabajo",
-            "url_name": "core:mi_trabajo",
-            "icono": "trabajo",
-        },
-        {
-            "etiqueta": "Servicios",
-            "url_name": "catalogo:lista",
-            "icono": "servicios",
-            "namespace": "catalogo",
+            "namespaces": ("tickets",),
+            "excluir_vistas": VISTAS_SOLICITUD,
         },
     ]
-    if usuario.is_authenticated:
-        alcances = alcances_autorizados(usuario, "tickets.atender")
-        if alcances["global"] or alcances["areas"] or alcances["unidades_negocio"]:
-            elementos.append(
-                {
-                    "etiqueta": "Cola de atención",
-                    "url_name": "tickets:cola",
-                    "icono": "cola",
-                }
-            )
-    if usuario.is_authenticated and (
-        usuario_tiene_permiso(usuario, "workflows.consultar")
-        or usuario_tiene_permiso(usuario, "workflows.administrar")
-    ):
+    if acceso_cola or trabajo_personal:
         elementos.append(
             {
-                "etiqueta": "Workflows",
-                "url_name": "workflows:lista",
-                "icono": "settings",
-                "namespace": "workflows",
-                "en_mas": True,
+                "etiqueta": "Trabajo",
+                "url_name": VISTA_COLA if acceso_cola else VISTA_MI_TRABAJO,
+                "icono": "trabajo",
+                "destinos": (VISTA_COLA, VISTA_MI_TRABAJO),
+                # Detalles de Tarea/Aprobación pertenecen a "Trabajo".
+                "namespaces": ("tareas", "aprobaciones"),
             }
         )
-    if usuario.is_authenticated and usuario.is_staff:
+
+    if accede_al_disenador(usuario):
         elementos.append(
             {
-                "etiqueta": "Administración",
+                "etiqueta": "Diseñador",
+                "url_name": "core:disenador",
+                "icono": "studio",
+                # Studio ("catalogo:studio*") y el editor técnico de Flujos
+                # (namespace `workflows`) son partes del Diseñador. Sin
+                # `namespaces` para "catalogo": el catálogo público
+                # ("catalogo:lista", "catalogo:detalle") comparte namespace con
+                # Studio y no debe resaltar este destino.
+                "prefijos": ("core:disenador", "catalogo:studio"),
+                "namespaces": ("workflows", "formularios", "flujos"),
+                "en_mas": True,
+                "grupo": "Gestión",
+            }
+        )
+    if usuario.is_staff:
+        elementos.append(
+            {
+                "etiqueta": "Configuración",
                 "url_name": "admin:index",
                 "icono": "settings",
-                "namespace": "admin",
+                "namespaces": ("admin",),
                 "en_mas": True,
+                "grupo": "Administración",
             }
         )
     return elementos
 
 
-def item_activo(elementos, resolver_match):
-    """Determina, de una sola vez, cuál `url_name` de `elementos` debe
-    resaltarse como activo para la vista actual — para que `layout/dock.html`
-    no tenga que repetir la comparación por cada `<a>`.
+def elementos_navegacion(usuario):
+    """Destinos visibles para `usuario`, en el orden a mostrar (primero los
+    del dock, luego los de "Más" por grupo). Vacío si no está autenticado."""
+    if not usuario.is_authenticated:
+        return []
+    acceso_cola = _acceso_a_cola(usuario)
+    return _construir_elementos(usuario, acceso_cola, acceso_cola or _tiene_trabajo_personal(usuario))
 
-    Coincidencia exacta de `url_name` tiene prioridad sobre coincidencia por
-    `namespace`: dos ítems pueden compartir namespace (ej. "Mis tickets" y
-    "Cola de atención", ambos bajo `tickets`) sin que visitar uno resalte
-    también al otro — solo cae a la coincidencia por namespace cuando
-    ningún ítem coincide de forma exacta con la vista actual.
-    """
+
+def _coincide_exacto(item, vista):
+    return vista in item.get("destinos", (item["url_name"],))
+
+
+def _coincide_amplio(item, resolver_match):
+    if resolver_match.view_name in item.get("excluir_vistas", ()):
+        return False
+    if any(resolver_match.namespace == ns for ns in item.get("namespaces", ())):
+        return True
+    return any(resolver_match.view_name.startswith(prefijo) for prefijo in item.get("prefijos", ()))
+
+
+def item_activo(elementos, resolver_match):
+    """`url_name` del destino que corresponde a la vista actual, o None.
+
+    La coincidencia exacta de vista tiene prioridad sobre la de namespace o
+    prefijo: dos destinos pueden compartir namespace sin que visitar uno
+    resalte también al otro."""
     if resolver_match is None:
         return None
     for item in elementos:
-        if item["url_name"] == resolver_match.view_name:
+        if _coincide_exacto(item, resolver_match.view_name):
             return item["url_name"]
     for item in elementos:
-        if item.get("namespace") and item["namespace"] == resolver_match.namespace:
+        if _coincide_amplio(item, resolver_match):
             return item["url_name"]
     return None
+
+
+def grupos_mas(elementos):
+    """Destinos de "Más" agrupados, solo grupos con al menos un destino."""
+    grupos = []
+    for nombre in GRUPOS_MAS:
+        items = [e for e in elementos if e.get("en_mas") and e.get("grupo") == nombre]
+        if items:
+            grupos.append({"etiqueta": nombre, "items": items})
+    return grupos
+
+
+def construir_navegacion(usuario, resolver_match):
+    """Todo lo que necesitan el dock, "Más" y las pestañas de Trabajo, con
+    cada capacidad evaluada una sola vez por request.
+
+    Las pestañas locales [Cola] [Mi trabajo] solo existen cuando el usuario
+    tiene AMBAS vistas (con una sola, la pestaña no aporta nada). Solo se
+    consulta el trabajo personal "de más" cuando se está dentro de Trabajo y
+    hace falta saber si mostrar las pestañas."""
+    if not usuario.is_authenticated:
+        return {
+            "nav_items": [],
+            "nav_item_activo": None,
+            "nav_dock": [],
+            "nav_mas_grupos": [],
+            "nav_mas_activo": False,
+            "nav_trabajo_tabs": [],
+        }
+
+    vista = resolver_match.view_name if resolver_match else None
+    en_trabajo = vista in (VISTA_COLA, VISTA_MI_TRABAJO)
+
+    acceso_cola = _acceso_a_cola(usuario)
+    # Con acceso a Cola, "Trabajo" ya es visible: el trabajo personal solo
+    # se consulta si hace falta (no hay Cola) o para decidir las pestañas.
+    trabajo_personal = _tiene_trabajo_personal(usuario) if (not acceso_cola or en_trabajo) else False
+
+    elementos = _construir_elementos(usuario, acceso_cola, acceso_cola or trabajo_personal)
+    activo = item_activo(elementos, resolver_match)
+    for item in elementos:
+        item["activo"] = item["url_name"] == activo
+
+    grupos = grupos_mas(elementos)
+    pestanas = []
+    if en_trabajo and acceso_cola and trabajo_personal:
+        pestanas = [
+            {"etiqueta": "Cola", "url_name": VISTA_COLA, "activa": vista == VISTA_COLA},
+            {"etiqueta": "Mi trabajo", "url_name": VISTA_MI_TRABAJO, "activa": vista == VISTA_MI_TRABAJO},
+        ]
+
+    return {
+        "nav_items": elementos,
+        "nav_item_activo": activo,
+        "nav_dock": [e for e in elementos if not e.get("en_mas")],
+        "nav_mas_grupos": grupos,
+        "nav_mas_activo": any(i["activo"] for g in grupos for i in g["items"]),
+        "nav_trabajo_tabs": pestanas,
+    }

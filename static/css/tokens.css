@@ -1,37 +1,115 @@
-/* Órbita — design tokens (Incremento 0.5).
-   Identidad oficial única: carbón + superficies cálidas + blanco + lima.
-   Sustituye la paleta violeta previa (nunca implementada en pantalla). */
+/* Órbita — design tokens (Fase visual V0).
+
+   Tres capas, de adentro hacia afuera:
+
+   1. PALETA PRIMITIVA  (--palette-*)  Valores crudos. Solo esta capa conoce
+      colores concretos; ningún componente la referencia directamente.
+   2. TOKENS SEMÁNTICOS (--color-*, --surface-*, --text-*, --border-*,
+      --status-*, --radius-*, --shadow-*, ...) Lo que usan los componentes.
+      Un tema oscuro futuro se resuelve redefiniendo SOLO esta capa bajo
+      `[data-theme="dark"]`, sin tocar ningún componente.
+   3. ALIAS LEGADOS    (--accent, --surface, --border, --success, ...)
+      Nombres de la identidad anterior (carbón + lima) que todavía usan
+      estilos en línea de plantillas ya existentes. Apuntan a la capa
+      semántica; no se usan en código nuevo y se retirarán cuando las
+      pantallas se rediseñen (fases V1+).
+
+   Identidad: carbón + superficies cálidas + blanco, con un único acento lima
+   (#d7ff3e) de uso estratégico: selección, CTA primario, indicadores. El
+   acento nunca cubre superficies grandes y siempre lleva texto oscuro encima
+   (`--color-on-primary`): el lima NO sirve como color de texto ni de foco
+   sobre fondo claro. */
 
 :root {
-  /* Neutros */
-  --carbon: #17181b;
-  --carbon-soft: #232428;
-  --carbon-border: #2e2f34;
-  --background: #f3f1ea;
-  --surface: #ffffff;
+  color-scheme: light;
+
+  /* ------------------------------------------------------------------ */
+  /* 1. Paleta primitiva                                                  */
+  /* ------------------------------------------------------------------ */
+
+  --palette-neutral-0: #ffffff;
+  --palette-neutral-25: #faf9f5;
+  --palette-neutral-50: #f3f1ea;
+  --palette-neutral-100: #ece9df;
+  --palette-neutral-200: #e7e4da;
+  --palette-neutral-300: #d3cfc0;
+  --palette-neutral-400: #adaa9c;
+  --palette-neutral-500: #8a887c;
+  --palette-neutral-600: #67655b;
+  --palette-neutral-700: #4a483f;
+  --palette-neutral-800: #2e2f34;
+  --palette-neutral-900: #17181b;
+  --palette-neutral-950: #17181b;
+
+  --palette-lime-50: #f6ffd0;
+  --palette-lime-100: #ecfba0;
+  --palette-lime-300: #e4ff6b;
+  --palette-lime-500: #d7ff3e;
+  --palette-lime-600: #c3eb27;
+  --palette-lime-700: #a9cc12;
+  --palette-ink: #14140f;
+
+  /* ------------------------------------------------------------------ */
+  /* 2. Tokens semánticos                                                 */
+  /* ------------------------------------------------------------------ */
+
+  /* Color de marca / acción */
+  --color-primary: var(--palette-lime-500);
+  --color-primary-hover: var(--palette-lime-600);
+  --color-primary-active: var(--palette-lime-700);
+  --color-primary-soft: var(--palette-lime-50);
+  --color-primary-soft-hover: var(--palette-lime-100);
+  /* Texto/icono SOBRE el acento (siempre oscuro). */
+  --color-on-primary: var(--palette-ink);
+  /* El foco es carbón: el lima no se ve sobre fondo claro. */
+  --color-focus-ring: var(--palette-neutral-900);
+  /* Uso MUY limitado: marca y avatar. */
+  --gradient-brand: linear-gradient(135deg, var(--palette-lime-300) 0%, var(--palette-lime-500) 55%, var(--palette-lime-600) 100%);
+
+  /* Superficies. El contenido principal vive en superficies sólidas; el
+     glass queda para elementos flotantes (dock, header, popovers, modales). */
+  --surface-page: var(--palette-neutral-50);
+  --surface-card: var(--palette-neutral-0);
+  --surface-raised: var(--palette-neutral-0);
   --surface-sunken: #f7f6f1;
-  --border: #e7e4da;
-  --text: #17181b;
-  --text-muted: #706e64;
-  --text-on-dark: #f3f1ea;
-  --text-on-dark-muted: #97968f;
+  --surface-hover: var(--palette-neutral-100);
+  --surface-glass: rgba(255, 255, 255, 0.72);
+  --surface-glass-strong: rgba(255, 255, 255, 0.9);
+  --surface-glass-inverse: rgba(23, 24, 27, 0.78);
+  --surface-inverse: var(--palette-neutral-950);
+  --surface-glass-fallback: #f7f6f1;
+  --surface-glass-inverse-fallback: #1c1d21;
+  --overlay-backdrop: rgba(23, 24, 27, 0.42);
 
-  /* Acento principal — uso estratégico: selección, CTA, foco, indicadores */
-  --accent: #d7ff3e;
-  --accent-hover: #c3eb27;
-  --accent-contrast: #14140f;
+  /* Texto */
+  --text-primary: var(--palette-neutral-900);
+  --text-secondary: var(--palette-neutral-700);
+  --text-muted: var(--palette-neutral-600);
+  --text-disabled: var(--palette-neutral-400);
+  --text-on-inverse: var(--palette-neutral-50);
+  --text-on-inverse-muted: #a3a29b;
+  --text-link: var(--text-primary);
 
-  /* Estados funcionales */
-  --success: #1f8f5f;
-  --success-soft: #def3e7;
-  --warning: #b9791a;
-  --warning-soft: #faeacb;
-  --danger: #c23b3b;
-  --danger-soft: #fae0df;
-  --info: #2569a6;
-  --info-soft: #ddebf9;
+  /* Bordes */
+  --border-subtle: #e7e4da;
+  --border-strong: var(--palette-neutral-300);
+  --border-focus: var(--palette-neutral-900);
+  --border-glass: rgba(23, 24, 27, 0.08);
+  --border-glass-inverse: rgba(255, 255, 255, 0.1);
 
-  /* Secundarios — categorización futura (sin consumidor real en 0.5) */
+  /* Estados funcionales: el color de texto/icono cumple contraste AA sobre
+     su -soft. Nunca se comunica un estado solo con color (siempre hay
+     texto o icono). */
+  --status-success: #17744c;
+  --status-success-soft: #ddf2e7;
+  --status-warning: #8f5a0b;
+  --status-warning-soft: #faebcb;
+  --status-danger: #a8312f;
+  --status-danger-soft: #fadfdd;
+  --status-info: #1a6e8c;
+  --status-info-soft: #dbeff6;
+
+  /* Categorías pastel (reservadas a categorización futura de dominios) */
   --tag-violet-bg: #ede7fb;
   --tag-violet-text: #5b3fc4;
   --tag-peach-bg: #fce6d4;
@@ -43,27 +121,23 @@
 
   /* Radios */
   --radius-sm: 8px;
-  --radius-md: 14px;
-  --radius-lg: 20px;
-  --radius-xl: 28px;
+  --radius-md: 12px;
+  --radius-lg: 18px;
+  --radius-xl: 26px;
   --radius-pill: 999px;
 
-  /* Sombras */
-  --shadow-sm: 0 1px 2px rgba(23, 24, 27, 0.05);
+  /* Sombras: cálidas, muy suaves; la sensación de capas viene de la suma de
+     superficie + sombra, no de sombras intensas. */
+  --shadow-xs: 0 1px 2px rgba(23, 24, 27, 0.05);
+  --shadow-sm: 0 1px 2px rgba(23, 24, 27, 0.05), 0 1px 3px rgba(23, 24, 27, 0.04);
   --shadow-md: 0 6px 20px rgba(23, 24, 27, 0.08);
   --shadow-lg: 0 20px 48px rgba(23, 24, 27, 0.14);
+  --shadow-float: 0 10px 32px rgba(23, 24, 27, 0.14);
 
-  /* Glass — dock, topbar, popovers y superficies flotantes/overlays.
-     Nunca en cards/formularios/tablas: esas siguen sólidas (--surface). */
-  --glass-blur: 20px;
-  --glass-blur-sm: 12px;
-  --glass-dark-bg: rgba(23, 24, 27, 0.78);
-  --glass-dark-bg-fallback: #1c1d21;
-  --glass-dark-border: rgba(255, 255, 255, 0.08);
-  --glass-light-bg: rgba(255, 255, 255, 0.62);
-  --glass-light-bg-fallback: #f7f6f1;
-  --glass-light-border: rgba(255, 255, 255, 0.6);
-  --glass-shadow: 0 8px 32px rgba(23, 24, 27, 0.12);
+  /* Blur (solo para superficies glass) */
+  --blur-sm: 10px;
+  --blur-md: 18px;
+  --blur-lg: 28px;
 
   /* Espaciado (base 4px) */
   --space-1: 4px;
@@ -74,31 +148,103 @@
   --space-6: 32px;
   --space-7: 40px;
   --space-8: 56px;
+  --space-9: 72px;
 
-  /* Tipografía */
-  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --text-xs: 12px;
-  --text-sm: 13px;
-  --text-base: 14px;
-  --text-md: 16px;
-  --text-lg: 18px;
-  --text-xl: 22px;
-  --text-2xl: 28px;
-  --text-3xl: 36px;
+  /* Tipografía. Sin dependencia de fuente externa: Inter si está instalada
+     en el sistema; si no, la fuente de interfaz del sistema operativo. */
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --font-size-caption: 12px;
+  --font-size-small: 13px;
+  --font-size-body: 14px;
+  --font-size-body-lg: 16px;
+  --font-size-card-title: 16px;
+  --font-size-section-title: 20px;
+  --font-size-page-title: 28px;
+  --font-size-display: 36px;
+  /* Saludo de la portada: crece con el viewport sin romper en móvil. */
+  --font-size-hero: clamp(30px, 1.2rem + 2.2vw, 52px);
+
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 700;
+
+  --line-height-tight: 1.25;
+  --line-height-base: 1.5;
 
   /* Controles */
   --control-h-sm: 32px;
   --control-h-md: 40px;
   --control-h-lg: 48px;
 
-  /* Transición */
+  /* Movimiento: corto y funcional. `prefers-reduced-motion` lo neutraliza
+     en base.css. */
   --duration-fast: 120ms;
   --duration-base: 200ms;
   --duration-slow: 320ms;
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 
-  /* Shell */
-  --topbar-h: 64px;
-  --dock-h: 56px;
-  --dock-clearance: 128px;
+  /* Capas */
+  --z-base: 1;
+  --z-header: 30;
+  --z-dock: 40;
+  --z-popover: 50;
+  --z-overlay: 60;
+  --z-modal: 70;
+  --z-toast: 80;
+  --z-skip-link: 100;
+
+  /* Layout */
+  --header-h: 64px;
+  --dock-h: 44px;
+  --dock-offset: 24px;
+  --dock-clearance: 120px;
+  --content-narrow: 760px;
+  --content-wide: 1200px;
+  --content-portal: 1360px;
+
+  /* ------------------------------------------------------------------ */
+  /* 3. Alias legados (no usar en código nuevo)                           */
+  /* ------------------------------------------------------------------ */
+
+  --background: var(--surface-page);
+  --surface: var(--surface-card);
+  --border: var(--border-subtle);
+  --text: var(--text-primary);
+  --text-on-dark: var(--text-on-inverse);
+  --text-on-dark-muted: var(--text-on-inverse-muted);
+
+  --accent: var(--color-primary);
+  --accent-hover: var(--color-primary-hover);
+  --accent-contrast: var(--color-on-primary);
+
+  --carbon: var(--surface-inverse);
+  --carbon-soft: rgba(255, 255, 255, 0.08);
+  --carbon-border: var(--border-glass-inverse);
+
+  --success: var(--status-success);
+  --success-soft: var(--status-success-soft);
+  --warning: var(--status-warning);
+  --warning-soft: var(--status-warning-soft);
+  --danger: var(--status-danger);
+  --danger-soft: var(--status-danger-soft);
+  --info: var(--status-info);
+  --info-soft: var(--status-info-soft);
+
+  --text-xs: var(--font-size-caption);
+  --text-sm: var(--font-size-small);
+  --text-base: var(--font-size-body);
+  --text-md: var(--font-size-body-lg);
+  --text-lg: 18px;
+  --text-xl: var(--font-size-section-title);
+  --text-2xl: var(--font-size-page-title);
+  --text-3xl: var(--font-size-display);
+
+  --topbar-h: var(--header-h);
+  --glass-blur: var(--blur-md);
+  --glass-blur-sm: var(--blur-sm);
+  --glass-shadow: var(--shadow-float);
 }

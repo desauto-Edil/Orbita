@@ -25,6 +25,7 @@ from apps.core.autorizacion import usuario_tiene_permiso
 PERMISO_ADMINISTRAR = "workflows.administrar"
 PERMISO_CONSULTAR = "workflows.consultar"
 PERMISO_EJECUTAR = "workflows.ejecutar"
+PERMISO_VINCULAR = "workflows.vincular"
 
 
 def puede_administrar_workflows(usuario):
@@ -36,6 +37,15 @@ def puede_consultar_workflows(usuario):
     # es una tercera decisión, es la relación natural entre los dos
     # permisos ya aprobados en X.5.
     return usuario_tiene_permiso(usuario, PERMISO_CONSULTAR) or puede_administrar_workflows(usuario)
+
+
+def puede_vincular_workflows(usuario):
+    """4.6 — elegir, desde Studio, un workflow YA PUBLICADO para un
+    Servicio/Proceso (compartiéndolo), sin poder crearlo, copiarlo ni
+    modificarlo. Quien administra workflows también puede vincularlos (mismo
+    criterio que administrar→consultar). Distinto de `workflows.ejecutar`:
+    vincular decide QUÉ flujo usa un servicio; ejecutar dispara instancias."""
+    return usuario_tiene_permiso(usuario, PERMISO_VINCULAR) or puede_administrar_workflows(usuario)
 
 
 def puede_ejecutar_workflows(usuario):

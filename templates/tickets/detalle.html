@@ -62,6 +62,182 @@
     {% endif %}
   </section>
 
+  {% if entregables %}
+    <section class="card">
+      <h3>Entregables</h3>
+      <p class="text-muted">Resultados que debes producir para este ticket.{% if tiene_entrega_formal %} Se entregan formalmente al solicitante cuando estén listos.{% endif %}</p>
+      <ul class="list-row-group">
+        {% for entregable in entregables %}
+          <li class="list-row" style="flex-direction: column; align-items: stretch;">
+            <div class="list-row" style="border-bottom: none; padding: 0;">
+              <span class="list-row__title">{{ entregable.nombre }}</span>
+              <span class="badge">{{ entregable.get_tipo_display }}</span>
+              {% if entregable.obligatorio %}<span class="badge badge--warning">Obligatorio</span>{% endif %}
+              {% if entregable.satisfecho %}<span class="badge badge--success">Listo</span>{% else %}<span class="badge">Pendiente</span>{% endif %}
+            </div>
+            {% if entregable.descripcion %}<p class="text-muted">{{ entregable.descripcion }}</p>{% endif %}
+
+            {% if entregable.tipo == "TEXTO" or entregable.tipo == "ENLACE" %}
+              {% if puede_escribir_entregables %}
+                <form method="post" action="{% url 'tickets:entregable_resultado' ticket.pk entregable.pk %}" class="form">
+                  {% csrf_token %}
+                  <div class="field">
+                    {% if entregable.tipo == "TEXTO" %}
+                      <textarea name="valor" aria-label="Resultado">{{ entregable.texto }}</textarea>
+                    {% else %}
+                      <input type="url" name="valor" value="{{ entregable.enlace }}" placeholder="https://" aria-label="Enlace">
+                    {% endif %}
+                  </div>
+                  <button type="submit" class="btn btn--secondary">Guardar</button>
+                </form>
+              {% elif entregable.tipo == "TEXTO" %}
+                {% if entregable.texto %}<p>{{ entregable.texto }}</p>{% endif %}
+              {% elif entregable.enlace %}
+                <p><a href="{{ entregable.enlace }}" rel="noopener noreferrer">{{ entregable.enlace }}</a></p>
+              {% endif %}
+            {% elif entregable.tipo == "ARCHIVO" %}
+              <ul class="plain-list">
+                {% for archivo in entregable.archivos_vigentes %}
+                  <li>
+                    <a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a>
+                    {% if puede_escribir_entregables %}
+                      <form method="post" action="{% url 'tickets:entregable_retirar_archivo' ticket.pk archivo.pk %}" style="display:inline;">
+                        {% csrf_token %}
+                        <button type="submit" class="btn btn--ghost">Retirar</button>
+                      </form>
+                    {% endif %}
+                  </li>
+                {% empty %}
+                  <li class="text-muted">Sin archivos.</li>
+                {% endfor %}
+              </ul>
+              {% if puede_escribir_entregables %}
+                <form method="post" action="{% url 'tickets:entregable_adjuntar' ticket.pk entregable.pk %}" enctype="multipart/form-data" class="form">
+                  {% csrf_token %}
+                  <div class="field"><input type="file" name="archivo" required aria-label="Archivo"></div>
+                  <button type="submit" class="btn btn--secondary">Adjuntar archivo</button>
+                </form>
+              {% endif %}
+            {% elif entregable.tipo == "CONFIRMACION" %}
+              {% if entregable.confirmado_en %}
+                <p class="text-muted">Confirmado por {{ entregable.confirmado_por }} — {{ entregable.confirmado_en|date:"d/m/Y H:i" }}</p>
+              {% elif puede_escribir_entregables %}
+                <form method="post" action="{% url 'tickets:entregable_confirmar' ticket.pk entregable.pk %}">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn--secondary">Confirmar</button>
+                </form>
+              {% endif %}
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {% if tiene_entrega_formal or entregas %}
+    <section class="card">
+      <h3>Entrega al solicitante</h3>
+
+      {% if puede_entregar %}
+        {% if entregables_pendientes %}
+          <div class="alert alert--warning">
+            <div class="alert__text">
+              <strong>Todavía no puedes entregar.</strong> Faltan entregables obligatorios:
+              <ul>{% for pendiente in entregables_pendientes %}<li>{{ pendiente.nombre }}</li>{% endfor %}</ul>
+            </div>
+          </div>
+        {% else %}
+          <p class="text-muted">Cuando estés listo, entrega formalmente los resultados al solicitante.</p>
+          <button type="button" class="btn btn--primary" data-action="toggle-panel" data-target="panel-entregar">Entregar al solicitante</button>
+          <div id="panel-entregar" hidden style="margin-top: var(--space-3);">
+            <form method="post" action="{% url 'tickets:entregar' ticket.pk %}" class="form">
+              {% csrf_token %}
+              <input type="hidden" name="confirmar" value="1">
+              <p>¿Confirmas que los resultados están listos para el solicitante? No podrás modificarlos mientras espera su respuesta.</p>
+              <button type="submit" class="btn btn--primary">Sí, entregar ahora</button>
+            </form>
+          </div>
+        {% endif %}
+      {% endif %}
+
+      {% if entrega_pendiente %}
+        <div class="alert alert--info" style="margin-top: var(--space-4);">
+          <div class="alert__text">
+            <strong>Resultado entregado el {{ entrega_pendiente.entregada_en|date:"d/m/Y H:i" }}.</strong>
+            {% if entrega_pendiente.vence_en %}Puedes responder hasta el {{ entrega_pendiente.vence_en|date:"d/m/Y H:i" }}; si no respondes, el ticket se cerrará automáticamente.{% endif %}
+          </div>
+        </div>
+        {% if puede_responder_entrega %}
+          <div class="form-actions">
+            <form method="post" action="{% url 'tickets:aceptar_entrega' ticket.pk %}" style="display:inline;">
+              {% csrf_token %}
+              <button type="submit" class="btn btn--primary">Todo está correcto</button>
+            </form>
+            <button type="button" class="btn btn--secondary" data-action="toggle-panel" data-target="panel-observar">Tengo observaciones</button>
+          </div>
+          <div id="panel-observar" hidden style="margin-top: var(--space-3);">
+            <form method="post" action="{% url 'tickets:observar_entrega' ticket.pk %}" class="form">
+              {% csrf_token %}
+              <div class="field">
+                <label for="id_observaciones">¿Qué debemos ajustar?</label>
+                <textarea name="observaciones" id="id_observaciones" required></textarea>
+              </div>
+              <button type="submit" class="btn btn--primary">Enviar observaciones</button>
+            </form>
+          </div>
+        {% endif %}
+      {% endif %}
+
+      {% if entregas %}
+        <h4 style="margin-top: var(--space-5);">Entregas</h4>
+        <ul class="list-row-group">
+          {% for entrega in entregas %}
+            <li class="list-row" style="flex-direction: column; align-items: stretch;">
+              <div class="list-row" style="border-bottom: none; padding: 0;">
+                <span class="list-row__title">Entrega {{ entrega.numero }}</span>
+                <span class="badge {% if entrega.estado == 'ACEPTADA' %}badge--success{% elif entrega.estado == 'OBSERVADA' %}badge--warning{% elif entrega.estado == 'PENDIENTE' %}badge--info{% endif %}">{{ entrega.get_estado_display }}</span>
+                <span class="text-muted">{{ entrega.entregada_por }} — {{ entrega.entregada_en|date:"d/m/Y H:i" }}</span>
+              </div>
+              {% if entrega.vence_en and entrega.estado == 'PENDIENTE' %}
+                <p class="text-muted">Plazo de observaciones: hasta el {{ entrega.vence_en|date:"d/m/Y H:i" }}</p>
+              {% endif %}
+              <ul class="plain-list">
+                {% for resultado in entrega.resultados.all %}
+                  <li>
+                    <strong>{{ resultado.nombre }}</strong>
+                    {% if resultado.tipo == "TEXTO" %}
+                      <p>{{ resultado.texto }}</p>
+                    {% elif resultado.tipo == "ENLACE" %}
+                      <p><a href="{{ resultado.enlace }}" rel="noopener noreferrer">{{ resultado.enlace }}</a></p>
+                    {% elif resultado.tipo == "ARCHIVO" %}
+                      {% for archivo in resultado.adjuntos.all %}
+                        <p><a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a></p>
+                      {% endfor %}
+                    {% elif resultado.tipo == "CONFIRMACION" %}
+                      <p class="text-muted">Confirmado por {{ resultado.confirmado_por }} — {{ resultado.confirmado_en|date:"d/m/Y H:i" }}</p>
+                    {% endif %}
+                  </li>
+                {% empty %}
+                  <li class="text-muted">Esta entrega no incluyó resultados específicos.</li>
+                {% endfor %}
+              </ul>
+              {% if entrega.estado == 'OBSERVADA' %}
+                <p><strong>Observaciones de {{ entrega.resuelta_por }}</strong> <span class="text-muted">{{ entrega.resuelta_en|date:"d/m/Y H:i" }}</span></p>
+                <p>{{ entrega.observaciones }}</p>
+              {% elif entrega.estado == 'ACEPTADA' %}
+                <p class="text-muted">Aceptada por {{ entrega.resuelta_por }} el {{ entrega.resuelta_en|date:"d/m/Y H:i" }}.</p>
+              {% elif entrega.estado == 'CERRADA_POR_VENCIMIENTO' %}
+                <p class="text-muted">Cerrada automáticamente el {{ entrega.resuelta_en|date:"d/m/Y H:i" }}: el plazo terminó sin respuesta.</p>
+              {% elif entrega.estado == 'CERRADA_SIN_RESPUESTA' %}
+                <p class="text-muted">Cerrada al entregar, sin esperar respuesta.</p>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </section>
+  {% endif %}
+
   {% if resolucion_actual or puede_resolver or puede_cerrar or puede_cancelar or puede_reabrir %}
     <section class="card">
       <h3>Finalizar</h3>
@@ -255,7 +431,10 @@
       {% for evento in historial %}
         <li>
           <span class="badge badge--info">{{ evento.get_tipo_evento_display }}</span>
-          <span>{{ evento.actor }}</span>
+          <span>{% if evento.actor %}{{ evento.actor }}{% else %}Sistema{% endif %}</span>
+          {% if evento.datos.causa == "ACEPTACION_SOLICITANTE" %}<span class="text-muted">(aceptado por el solicitante)</span>
+          {% elif evento.datos.causa == "VENCIMIENTO_SIN_RESPUESTA" %}<span class="text-muted">(plazo vencido sin respuesta)</span>
+          {% elif evento.datos.causa == "CIERRE_DIRECTO" %}<span class="text-muted">(al entregar)</span>{% endif %}
           <span class="text-muted">{{ evento.creado_en|date:"d/m/Y H:i" }}</span>
         </li>
       {% empty %}

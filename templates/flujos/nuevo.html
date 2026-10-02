@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Nuevo flujo — Diseñador — Órbita{% endblock %}
+
+{% block content_modifier %}content-area--portal{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/disenador.css' %}">{% endblock %}
+
+{% block content %}
+<div class="dis">
+  {% include "components/disenador_miga.html" with seccion="flujos" actual="Nuevo flujo" %}
+
+  <header class="dis-head">
+    <h1 class="dis-title">Nuevo flujo</h1>
+    <p class="dis-lede">Un flujo son los pasos que sigue la organización para atender algo. Lo diseñas una vez y luego lo usas en los servicios y procesos que lo necesiten.</p>
+  </header>
+
+  <section class="card dis-form-card">
+    <form method="post" class="form" novalidate>
+      {% csrf_token %}
+      {% if form.non_field_errors %}
+        <div class="alert alert--danger" role="alert"><div class="alert__text">{{ form.non_field_errors|join:" " }}</div></div>
+      {% endif %}
+      <div class="field">
+        <label for="{{ form.nombre.id_for_label }}">Nombre del flujo</label>
+        {{ form.nombre }}
+        {{ form.nombre.errors }}
+      </div>
+      <div class="field">
+        <label for="{{ form.descripcion.id_for_label }}">Descripción <span class="text-muted">(opcional)</span></label>
+        {{ form.descripcion }}
+        {{ form.descripcion.errors }}
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn--primary">Crear flujo</button>
+        <a class="btn btn--ghost" href="{% url 'core:disenador_flujos' %}">Cancelar</a>
+      </div>
+    </form>
+    <p class="dis-section__text">Se crea como borrador con un inicio y un fin. En el siguiente paso agregas los bloques.</p>
+  </section>
+</div>
+{% endblock %}

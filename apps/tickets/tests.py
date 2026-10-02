@@ -37,9 +37,11 @@ import shutil
 import tempfile
 import threading
 import uuid
+from datetime import timedelta
 
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.contrib.messages import get_messages
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, connection, transaction
@@ -87,10 +89,14 @@ from apps.tickets.autorizacion import (
     usuario_es_responsable_configurado,
 )
 from apps.tickets.estados import exigir_transicion, puede_ejecutar
+from apps.tickets.entregables import adjuntar_archivo_entregable, registrar_resultado_entregable, retirar_archivo_entregable
+from apps.tickets.entregas import aceptar_entrega, cerrar_entrega_vencida, entregar_ticket, observar_entrega
 from apps.tickets.models import (
     Adjunto,
     ArchivoRespuestaCampo,
     ComentarioTicket,
+    EntregaTicket,
+    ResultadoEntregaTicket,
     HistorialTicket,
     ResolucionTicket,
     RespuestaCampo,
@@ -100,6 +106,7 @@ from apps.tickets.models import (
     Ticket,
     TicketServicio,
 )
+from apps.tickets.tasks import cerrar_entregas_vencidas
 from apps.tickets.operaciones import (
     adjuntar_archivo_ticket,
     asignar_ticket,
@@ -371,9 +378,11 @@ class PersistenciaRespuestasTests(TestCase):
         respuesta = self._respuesta("FechaHora")
         # EstrategiaTemporal.normalizar (1.2, sin modificar) produce un
         # datetime naive; con USE_TZ=True, Django lo interpreta en la
-        # zona horaria activa al guardarlo y lo devuelve aware al leerlo
-        # — se compara sin tzinfo, no la representación con offset.
-        self.assertEqual(respuesta.valor_fecha_hora.replace(tzinfo=None).isoformat(), "2026-03-05T10:30:00")
+        # zona horaria activa al guardarlo y lo devuelve aware (en UTC) al
+        # leerlo — la hora que escribió el usuario se conserva en la zona
+        # activa (TIME_ZONE), sea cual sea; no se asume UTC.
+        hora_local = timezone.localtime(respuesta.valor_fecha_hora)
+        self.assertEqual(hora_local.replace(tzinfo=None).isoformat(), "2026-03-05T10:30:00")
 
     def test_guarda_booleano_en_columna_booleano(self):
         guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Booleano"].id: True})
@@ -3654,3 +3663,1380 @@ class ConcurrenciaRadicarWorkflowTests(TransactionTestCase):
                 self.assertEqual(TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow_id=ticket.instancia_workflow_id).count(), 1)
                 self.assertEqual(ticket.historial.filter(tipo_evento="RADICADO").count(), 1)
                 self.assertEqual(RegistroAuditoria.objects.filter(modelo="workflows.instanciaworkflow", object_id=ticket.instancia_workflow_id).count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4.5 — Entrega formal al solicitante y cierre del Ticket.
+# Entregable satisfecho != entrega formal != aceptación != Ticket cerrado.
+# ---------------------------------------------------------------------------
+
+PERIODO = Servicio.PoliticaEntrega.PERIODO_OBSERVACIONES
+DIRECTO = Servicio.PoliticaEntrega.CIERRE_DIRECTO
+
+
+class _EscenarioEntregaFormalMixin:
+    """Servicio con política de entrega + 3 entregables (TEXTO obligatorio,
+    ARCHIVO y ENLACE opcionales) y un Ticket EN_ATENCION tomado por un
+    responsable individual (con un compañero de equipo que NO lo es)."""
+
+    def _preparar_entrega_formal(self, politica=PERIODO, dias=3):
+        from apps.catalogo.models import DefinicionEntregable
+
+        self.solicitante45 = Usuario.objects.create_user("solicitante45", password=CLAVE_PRUEBA)
+        self.responsable45 = Usuario.objects.create_user("responsable45", password=CLAVE_PRUEBA)
+        self.companero45 = Usuario.objects.create_user("companero45", password=CLAVE_PRUEBA)
+        self.ajeno45 = Usuario.objects.create_user("ajeno45", password=CLAVE_PRUEBA)
+        self.equipo45 = Equipo.objects.create(nombre="Equipo 4.5")
+        for usuario in (self.responsable45, self.companero45):
+            MiembroEquipo.objects.create(equipo=self.equipo45, usuario=usuario)
+            _otorgar_tickets_atender(usuario)
+        self.servicio45, _, _ = _crear_servicio_con_formulario(self.solicitante45, [])
+        Servicio.objects.filter(pk=self.servicio45.pk).update(
+            politica_entrega=politica, dias_observacion=dias if politica == PERIODO else None
+        )
+        self.servicio45.refresh_from_db()
+        for orden, (nombre, tipo, obligatorio) in enumerate(
+            [("Resumen", "TEXTO", True), ("Archivo final", "ARCHIVO", False), ("Enlace", "ENLACE", False)]
+        ):
+            DefinicionEntregable.objects.create(
+                servicio=self.servicio45, nombre=nombre, tipo=tipo, obligatorio=obligatorio, orden=orden
+            )
+        self.ticket45 = crear_borrador(self.solicitante45, self.servicio45)
+        radicar_ticket(self.ticket45, self.solicitante45)
+        self.ticket45 = asignar_ticket(self.ticket45, self.responsable45, equipo=self.equipo45)
+        self.ticket45 = tomar_ticket(self.ticket45, self.responsable45)
+
+    def _ent(self, tipo):
+        return self.ticket45.entregables.get(tipo=tipo)
+
+    def _listo(self, texto="Resultado v1"):
+        registrar_resultado_entregable(self._ent("TEXTO"), self.responsable45, texto)
+
+    def _entregar(self):
+        return entregar_ticket(Ticket.objects.get(pk=self.ticket45.pk), self.responsable45)
+
+    def _ticket(self):
+        return Ticket.objects.get(pk=self.ticket45.pk)
+
+    def _vencer(self, entrega):
+        EntregaTicket.objects.filter(pk=entrega.pk).update(vence_en=timezone.now() - timedelta(minutes=1))
+
+    def _historial(self, tipo):
+        return HistorialTicket.objects.filter(ticket=self.ticket45, tipo_evento=tipo)
+
+
+class EntregaPoliticaCongeladaTests(_EscenarioEntregaFormalMixin, TestCase):
+    def test_ticket_congela_la_politica_del_servicio_al_crear_el_borrador(self):
+        self._preparar_entrega_formal(PERIODO, 3)
+        self.assertEqual(self.ticket45.entrega_politica, PERIODO)
+        self.assertEqual(self.ticket45.entrega_dias_observacion, 3)
+
+    def test_cambio_posterior_del_servicio_no_modifica_tickets_existentes(self):
+        self._preparar_entrega_formal(PERIODO, 3)
+        Servicio.objects.filter(pk=self.servicio45.pk).update(politica_entrega=DIRECTO, dias_observacion=None)
+        ticket = self._ticket()
+        self.assertEqual((ticket.entrega_politica, ticket.entrega_dias_observacion), (PERIODO, 3))
+        nuevo = crear_borrador(self.solicitante45, Servicio.objects.get(pk=self.servicio45.pk))
+        self.assertEqual((nuevo.entrega_politica, nuevo.entrega_dias_observacion), (DIRECTO, None))
+
+    def test_la_politica_del_ticket_no_puede_modificarse_despues(self):
+        self._preparar_entrega_formal(PERIODO, 3)
+        ticket = self._ticket()
+        ticket.entrega_politica = DIRECTO
+        ticket.entrega_dias_observacion = None
+        with self.assertRaises(ValidationError):
+            ticket.save()
+        self.assertEqual(self._ticket().entrega_politica, PERIODO)
+
+    def test_ticket_sin_politica_conserva_el_flujo_resolver_y_cerrar(self):
+        self._preparar_entrega_formal(politica="")
+        self.assertEqual(self.ticket45.entrega_politica, "")
+        with self.assertRaises(ValidationError):
+            entregar_ticket(self._ticket(), self.responsable45)
+        resolver_ticket(self._ticket(), self.responsable45, "Listo.")
+        cerrar_ticket(self._ticket(), self.solicitante45)
+        self.assertEqual(self._ticket().estado, Ticket.Estado.CERRADO)
+        self.assertFalse(EntregaTicket.objects.exists())  # sin entregas ficticias
+
+    def test_con_entrega_formal_no_se_puede_saltar_el_ciclo(self):
+        self._preparar_entrega_formal()
+        with self.assertRaises(ValidationError):
+            resolver_ticket(self._ticket(), self.responsable45, "Intento de saltar la entrega.")
+        self.assertFalse(puede_resolver_ticket(self.responsable45, self._ticket()))
+        self._listo()
+        self._entregar()
+        ticket = self._ticket()
+        with self.assertRaises(ValidationError):
+            cerrar_ticket(ticket, self.solicitante45)
+        with self.assertRaises(ValidationError):
+            reabrir_ticket(ticket, self.responsable45, "Reabrir sin observaciones.")
+        self.assertFalse(puede_cerrar_ticket(self.solicitante45, ticket))
+        self.assertFalse(puede_reabrir_ticket(self.responsable45, ticket))
+        self.assertEqual(self._ticket().estado, Ticket.Estado.RESUELTO)
+
+
+class EntregarTicketTests(_MediaAisladaMixin, _EscenarioEntregaFormalMixin, TestCase):
+    def setUp(self):
+        self._preparar_entrega_formal()
+
+    def test_solo_el_responsable_individual_actual_puede_entregar(self):
+        self._listo()
+        for usuario in (self.companero45, self.solicitante45, self.ajeno45):
+            with self.assertRaises(PermissionDenied):
+                entregar_ticket(self._ticket(), usuario)
+        self.assertFalse(EntregaTicket.objects.exists())
+        self.assertEqual(self._ticket().estado, Ticket.Estado.EN_ATENCION)
+
+    def test_entregables_obligatorios_pendientes_bloquean_y_se_informan(self):
+        with self.assertRaises(ValidationError) as contexto:
+            self._entregar()
+        self.assertIn("Resumen", str(contexto.exception))
+        self.assertFalse(EntregaTicket.objects.exists())
+        self.assertEqual(self._ticket().estado, Ticket.Estado.EN_ATENCION)
+
+    def test_completar_entregables_no_equivale_a_entregar(self):
+        self._listo()
+        self.assertTrue(self._ent("TEXTO").satisfecho)
+        self.assertEqual(self._ticket().estado, Ticket.Estado.EN_ATENCION)
+        self.assertFalse(EntregaTicket.objects.exists())
+
+    def test_entregar_crea_entrega_con_snapshot_historial_y_auditoria(self):
+        self._listo("Resultado final")
+        archivo = adjuntar_archivo_entregable(
+            self._ent("ARCHIVO"), self.responsable45, SimpleUploadedFile("pieza.txt", b"contenido")
+        )
+        entrega = self._entregar()
+        ticket = self._ticket()
+        self.assertEqual(ticket.estado, Ticket.Estado.RESUELTO)
+        self.assertEqual((entrega.numero, entrega.estado), (1, EntregaTicket.Estado.PENDIENTE))
+        self.assertEqual(entrega.entregada_por, self.responsable45)
+        self.assertEqual(entrega.vence_en, entrega.entregada_en + timedelta(days=3))
+        resultados = {r.nombre: r for r in entrega.resultados.all()}
+        self.assertEqual(set(resultados), {"Resumen", "Archivo final"})  # el ENLACE opcional no estaba listo
+        self.assertEqual(resultados["Resumen"].texto, "Resultado final")
+        self.assertEqual(list(resultados["Archivo final"].adjuntos.all()), [archivo])
+        evento = self._historial(HistorialTicket.TipoEvento.ENTREGADO).get()
+        self.assertEqual(evento.actor, self.responsable45)
+        self.assertEqual(evento.datos["entrega_id"], entrega.pk)
+        self.assertEqual(_auditorias_de_ticket(ticket).filter(datos_nuevos={"estado": "RESUELTO"}).count(), 1)
+        auditoria_entrega = RegistroAuditoria.objects.filter(
+            content_type=ContentType.objects.get_for_model(EntregaTicket), object_id=entrega.pk
+        )
+        self.assertEqual(auditoria_entrega.count(), 1)
+        self.assertEqual(auditoria_entrega.get().accion, RegistroAuditoria.Accion.CREAR)
+        self.assertEqual(auditoria_entrega.get().usuario, self.responsable45)
+
+    def test_doble_entrega_se_rechaza_sin_duplicar(self):
+        self._listo()
+        self._entregar()
+        with self.assertRaises(ValidationError):
+            self._entregar()
+        self.assertEqual(EntregaTicket.objects.filter(ticket=self.ticket45).count(), 1)
+        self.assertEqual(self._historial(HistorialTicket.TipoEvento.ENTREGADO).count(), 1)
+
+    def test_no_se_entrega_con_solicitudes_de_informacion_pendientes(self):
+        self._listo()
+        solicitar_informacion(self._ticket(), self.responsable45, "¿Puedes confirmar el formato?")
+        with self.assertRaises(ValidationError):
+            self._entregar()
+        self.assertFalse(EntregaTicket.objects.exists())
+
+    def test_no_se_entrega_mientras_el_trabajo_interno_sigue_en_curso(self):
+        from unittest import mock
+
+        self._listo()
+        with mock.patch("apps.tickets.entregas._trabajo_interno_en_curso", return_value=True):
+            with self.assertRaises(ValidationError):
+                self._entregar()
+        self.assertFalse(EntregaTicket.objects.exists())
+        self.assertTrue(self._entregar())  # sin trabajo en curso, la entrega procede
+
+    def test_sin_workflow_no_hay_trabajo_interno_pendiente(self):
+        from apps.tickets.entregas import _trabajo_interno_en_curso
+
+        self.assertIsNone(self._ticket().instancia_workflow_id)
+        self.assertFalse(_trabajo_interno_en_curso(self._ticket()))
+
+    def test_los_entregables_quedan_bloqueados_mientras_el_solicitante_responde(self):
+        self._listo()
+        self._entregar()
+        with self.assertRaises(PermissionDenied):
+            registrar_resultado_entregable(self._ent("TEXTO"), self.responsable45, "Cambio a escondidas")
+        self.assertEqual(self._ent("TEXTO").texto, "Resultado v1")
+
+    def test_politica_de_cierre_directo_entrega_y_cierra_sin_esperar(self):
+        Servicio.objects.filter(pk=self.servicio45.pk).update(politica_entrega=DIRECTO, dias_observacion=None)
+        ticket = crear_borrador(self.solicitante45, Servicio.objects.get(pk=self.servicio45.pk))
+        radicar_ticket(ticket, self.solicitante45)
+        ticket = tomar_ticket(ticket, self.responsable45)
+        registrar_resultado_entregable(ticket.entregables.get(tipo="TEXTO"), self.responsable45, "Hecho")
+        entrega = entregar_ticket(ticket, self.responsable45)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.CERRADO)
+        self.assertEqual(entrega.estado, EntregaTicket.Estado.CERRADA_SIN_RESPUESTA)
+        self.assertIsNone(entrega.vence_en)
+        cierre = HistorialTicket.objects.get(ticket=ticket, tipo_evento=HistorialTicket.TipoEvento.CERRADO)
+        self.assertEqual(cierre.datos["causa"], "CIERRE_DIRECTO")
+        self.assertEqual(HistorialTicket.objects.filter(ticket=ticket, tipo_evento="ENTREGADO").count(), 1)
+
+    def test_sin_entregables_configurados_la_entrega_formal_sigue_siendo_explicita(self):
+        from apps.catalogo.models import DefinicionEntregable
+
+        DefinicionEntregable.objects.filter(servicio=self.servicio45).update(activo=False)
+        ticket = crear_borrador(self.solicitante45, Servicio.objects.get(pk=self.servicio45.pk))
+        radicar_ticket(ticket, self.solicitante45)
+        ticket = tomar_ticket(ticket, self.responsable45)
+        self.assertFalse(ticket.entregables.exists())
+        entrega = entregar_ticket(ticket, self.responsable45)
+        self.assertEqual(entrega.resultados.count(), 0)
+
+
+class RespuestaEntregaTests(_EscenarioEntregaFormalMixin, TestCase):
+    def setUp(self):
+        self._preparar_entrega_formal()
+        self._listo()
+        self.entrega = self._entregar()
+
+    def test_aceptar_registra_actor_y_fecha_y_cierra_con_la_transicion_real(self):
+        aceptar_entrega(self._ticket(), self.solicitante45)
+        ticket, entrega = self._ticket(), EntregaTicket.objects.get(pk=self.entrega.pk)
+        self.assertEqual(ticket.estado, Ticket.Estado.CERRADO)
+        self.assertEqual(entrega.estado, EntregaTicket.Estado.ACEPTADA)
+        self.assertEqual(entrega.resuelta_por, self.solicitante45)
+        self.assertIsNotNone(entrega.resuelta_en)
+        cierre = self._historial(HistorialTicket.TipoEvento.CERRADO).get()
+        self.assertEqual(cierre.actor, self.solicitante45)
+        self.assertEqual(cierre.datos["causa"], "ACEPTACION_SOLICITANTE")
+        self.assertEqual(cierre.datos["entrega_id"], entrega.pk)
+        auditoria = _auditorias_de_ticket(ticket).get(datos_nuevos={"estado": "CERRADO"})
+        self.assertEqual((auditoria.origen, auditoria.usuario), (RegistroAuditoria.Origen.USUARIO, self.solicitante45))
+
+    def test_solo_el_solicitante_real_puede_responder(self):
+        for usuario in (self.responsable45, self.companero45, self.ajeno45):
+            with self.assertRaises(PermissionDenied):
+                aceptar_entrega(self._ticket(), usuario)
+            with self.assertRaises(PermissionDenied):
+                observar_entrega(self._ticket(), usuario, "No soy el solicitante.")
+        self.assertEqual(self._ticket().estado, Ticket.Estado.RESUELTO)
+        self.assertEqual(EntregaTicket.objects.get(pk=self.entrega.pk).estado, EntregaTicket.Estado.PENDIENTE)
+
+    def test_observar_exige_comentario(self):
+        for comentario in ("", "   ", None):
+            with self.assertRaises(ValidationError):
+                observar_entrega(self._ticket(), self.solicitante45, comentario)
+        self.assertEqual(self._ticket().estado, Ticket.Estado.RESUELTO)
+
+    def test_observar_conserva_la_entrega_y_devuelve_el_ticket_a_atencion(self):
+        observar_entrega(self._ticket(), self.solicitante45, "  Falta el logotipo.  ")
+        ticket, entrega = self._ticket(), EntregaTicket.objects.get(pk=self.entrega.pk)
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+        self.assertEqual(ticket.usuario_responsable, self.responsable45)  # mismo responsable
+        self.assertEqual(entrega.estado, EntregaTicket.Estado.OBSERVADA)
+        self.assertEqual(entrega.observaciones, "Falta el logotipo.")
+        self.assertEqual((entrega.resuelta_por, entrega.numero), (self.solicitante45, 1))
+        self.assertEqual(entrega.resultados.get().texto, "Resultado v1")  # snapshot intacto
+        evento = self._historial(HistorialTicket.TipoEvento.ENTREGA_OBSERVADA).get()
+        self.assertEqual(evento.actor, self.solicitante45)
+        self.assertEqual(self._historial(HistorialTicket.TipoEvento.CERRADO).count(), 0)
+        self.assertEqual(self._historial(HistorialTicket.TipoEvento.REABIERTO).count(), 0)
+
+    def test_responder_una_entrega_que_ya_no_esta_pendiente_falla(self):
+        aceptar_entrega(self._ticket(), self.solicitante45)
+        with self.assertRaises(ValidationError):
+            aceptar_entrega(self._ticket(), self.solicitante45)
+        with self.assertRaises(ValidationError):
+            observar_entrega(self._ticket(), self.solicitante45, "Tarde.")
+        self.assertEqual(self._historial(HistorialTicket.TipoEvento.CERRADO).count(), 1)
+
+    def test_no_se_puede_aceptar_tras_observar(self):
+        observar_entrega(self._ticket(), self.solicitante45, "Ajustar.")
+        with self.assertRaises(ValidationError):
+            aceptar_entrega(self._ticket(), self.solicitante45)
+        self.assertEqual(self._ticket().estado, Ticket.Estado.EN_ATENCION)
+
+    def test_pasado_el_plazo_el_solicitante_ya_no_puede_responder(self):
+        self._vencer(self.entrega)
+        with self.assertRaises(ValidationError):
+            aceptar_entrega(self._ticket(), self.solicitante45)
+        with self.assertRaises(ValidationError):
+            observar_entrega(self._ticket(), self.solicitante45, "Tarde.")
+        self.assertEqual(self._ticket().estado, Ticket.Estado.RESUELTO)  # solo el Sistema cierra
+
+
+class MultiplesCiclosEntregaTests(_MediaAisladaMixin, _EscenarioEntregaFormalMixin, TestCase):
+    def setUp(self):
+        self._preparar_entrega_formal()
+
+    def test_entrega_observacion_ajuste_y_nueva_entrega_sin_destruir_la_historia(self):
+        self._listo("Versión 1")
+        archivo = adjuntar_archivo_entregable(
+            self._ent("ARCHIVO"), self.responsable45, SimpleUploadedFile("v1.txt", b"uno")
+        )
+        primera = self._entregar()
+        observar_entrega(self._ticket(), self.solicitante45, "Cambiar el texto y el archivo.")
+
+        registrar_resultado_entregable(self._ent("TEXTO"), self.responsable45, "Versión 2")
+        retirar_archivo_entregable(archivo, self.responsable45)
+        nuevo = adjuntar_archivo_entregable(
+            self._ent("ARCHIVO"), self.responsable45, SimpleUploadedFile("v2.txt", b"dos")
+        )
+        segunda = self._entregar()
+
+        self.assertEqual((primera.numero, segunda.numero), (1, 2))
+        primera.refresh_from_db()
+        self.assertEqual(primera.estado, EntregaTicket.Estado.OBSERVADA)
+        r1 = {r.nombre: r for r in primera.resultados.all()}
+        r2 = {r.nombre: r for r in segunda.resultados.all()}
+        self.assertEqual(r1["Resumen"].texto, "Versión 1")
+        self.assertEqual(r2["Resumen"].texto, "Versión 2")
+        self.assertEqual(list(r1["Archivo final"].adjuntos.all()), [archivo])
+        self.assertEqual(list(r2["Archivo final"].adjuntos.all()), [nuevo])
+        self.assertEqual(self._ticket().estado, Ticket.Estado.RESUELTO)
+        aceptar_entrega(self._ticket(), self.solicitante45)
+        self.assertEqual(self._ticket().estado, Ticket.Estado.CERRADO)
+        self.assertEqual(EntregaTicket.objects.filter(ticket=self.ticket45).count(), 2)
+        self.assertEqual(self._historial(HistorialTicket.TipoEvento.ENTREGADO).count(), 2)
+
+    def test_un_archivo_retirado_despues_de_entregado_sigue_descargable_para_el_solicitante(self):
+        self._listo()
+        archivo = adjuntar_archivo_entregable(
+            self._ent("ARCHIVO"), self.responsable45, SimpleUploadedFile("entregado.txt", b"contenido")
+        )
+        self._entregar()
+        observar_entrega(self._ticket(), self.solicitante45, "Cambiar archivo.")
+        retirar_archivo_entregable(archivo, self.responsable45)
+        self.client.force_login(self.solicitante45)
+        respuesta = self.client.get(reverse("tickets:descargar_adjunto", args=[archivo.pk]))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(b"".join(respuesta.streaming_content), b"contenido")
+
+    def test_un_archivo_retirado_que_nunca_se_entrego_sigue_sin_descargarse(self):
+        archivo = adjuntar_archivo_entregable(
+            self._ent("ARCHIVO"), self.responsable45, SimpleUploadedFile("nunca.txt", b"x")
+        )
+        retirar_archivo_entregable(archivo, self.responsable45)
+        self.client.force_login(self.solicitante45)
+        self.assertEqual(self.client.get(reverse("tickets:descargar_adjunto", args=[archivo.pk])).status_code, 404)
+
+
+class EntregaModeloTests(_EscenarioEntregaFormalMixin, TestCase):
+    def setUp(self):
+        self._preparar_entrega_formal()
+        self._listo()
+        self.entrega = self._entregar()
+
+    def test_los_datos_de_una_entrega_son_inmutables_y_no_se_elimina(self):
+        self.entrega.numero = 9
+        with self.assertRaises(ValidationError):
+            self.entrega.save()
+        entrega = EntregaTicket.objects.get(pk=self.entrega.pk)
+        with self.assertRaises(ValidationError):
+            entrega.delete()
+
+    def test_a_lo_sumo_una_entrega_pendiente_por_ticket(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            EntregaTicket.objects.create(
+                ticket=self.ticket45, numero=2, entregada_por=self.responsable45, entregada_en=timezone.now(),
+                politica=PERIODO, dias_observacion=3, vence_en=timezone.now() + timedelta(days=3),
+            )
+
+    def test_servicio_rechaza_periodo_sin_dias(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Servicio.objects.filter(pk=self.servicio45.pk).update(dias_observacion=None)
+
+
+class CierreAutomaticoEntregaTests(_EscenarioEntregaFormalMixin, TestCase):
+    def setUp(self):
+        self._preparar_entrega_formal()
+        self._listo()
+        self.entrega = self._entregar()
+
+    def test_el_vencimiento_cierra_con_actor_sistema_y_se_distingue_de_la_aceptacion(self):
+        self._vencer(self.entrega)
+        cerrada = cerrar_entrega_vencida(self.entrega)
+        self.assertIsNotNone(cerrada)
+        ticket, entrega = self._ticket(), EntregaTicket.objects.get(pk=self.entrega.pk)
+        self.assertEqual(ticket.estado, Ticket.Estado.CERRADO)
+        self.assertEqual(entrega.estado, EntregaTicket.Estado.CERRADA_POR_VENCIMIENTO)
+        self.assertIsNone(entrega.resuelta_por)
+        cierre = self._historial(HistorialTicket.TipoEvento.CERRADO).get()
+        self.assertIsNone(cierre.actor)
+        self.assertEqual(cierre.datos["causa"], "VENCIMIENTO_SIN_RESPUESTA")
+        auditoria = _auditorias_de_ticket(ticket).get(datos_nuevos={"estado": "CERRADO"})
+        self.assertEqual((auditoria.origen, auditoria.usuario), (RegistroAuditoria.Origen.SISTEMA, None))
+        auditoria_entrega = RegistroAuditoria.objects.get(
+            content_type=ContentType.objects.get_for_model(EntregaTicket), object_id=entrega.pk,
+            accion=RegistroAuditoria.Accion.ACTUALIZAR,
+        )
+        self.assertEqual(auditoria_entrega.origen, RegistroAuditoria.Origen.SISTEMA)
+
+    def test_no_cierra_una_entrega_cuyo_plazo_no_ha_vencido(self):
+        self.assertIsNone(cerrar_entrega_vencida(self.entrega))
+        self.assertEqual(self._ticket().estado, Ticket.Estado.RESUELTO)
+
+    def test_es_idempotente(self):
+        self._vencer(self.entrega)
+        self.assertIsNotNone(cerrar_entrega_vencida(self.entrega))
+        self.assertIsNone(cerrar_entrega_vencida(self.entrega))
+        self.assertEqual(self._historial(HistorialTicket.TipoEvento.CERRADO).count(), 1)
+        self.assertEqual(_auditorias_de_ticket(self.ticket45).filter(datos_nuevos={"estado": "CERRADO"}).count(), 1)
+
+    def test_no_pisa_una_respuesta_ya_registrada(self):
+        aceptar_entrega(self._ticket(), self.solicitante45)
+        self._vencer(self.entrega)
+        self.assertIsNone(cerrar_entrega_vencida(self.entrega))
+        self.assertEqual(EntregaTicket.objects.get(pk=self.entrega.pk).estado, EntregaTicket.Estado.ACEPTADA)
+        self.assertEqual(self._historial(HistorialTicket.TipoEvento.CERRADO).get().datos["causa"], "ACEPTACION_SOLICITANTE")
+
+    def test_tras_el_cierre_automatico_el_solicitante_ya_no_puede_aceptar_ni_observar(self):
+        self._vencer(self.entrega)
+        cerrar_entrega_vencida(self.entrega)
+        with self.assertRaises(ValidationError):
+            aceptar_entrega(self._ticket(), self.solicitante45)
+        with self.assertRaises(ValidationError):
+            observar_entrega(self._ticket(), self.solicitante45, "Tarde.")
+
+    def test_la_tarea_periodica_cierra_solo_las_vencidas_y_es_idempotente(self):
+        self.assertEqual(cerrar_entregas_vencidas(), 0)  # nada vencido todavía
+        self.assertEqual(self._ticket().estado, Ticket.Estado.RESUELTO)
+        self._vencer(self.entrega)
+        self.assertEqual(cerrar_entregas_vencidas(), 1)
+        self.assertEqual(cerrar_entregas_vencidas(), 0)
+        self.assertEqual(self._ticket().estado, Ticket.Estado.CERRADO)
+        self.assertEqual(self._historial(HistorialTicket.TipoEvento.CERRADO).count(), 1)
+
+    def test_la_tarea_no_toca_las_entregas_observadas(self):
+        observar_entrega(self._ticket(), self.solicitante45, "Ajustar.")
+        self._vencer(self.entrega)
+        self.assertEqual(cerrar_entregas_vencidas(), 0)
+        self.assertEqual(self._ticket().estado, Ticket.Estado.EN_ATENCION)
+
+    def test_la_tarea_esta_programada_en_celery_beat(self):
+        from django_celery_beat.models import PeriodicTask
+
+        tarea = PeriodicTask.objects.get(name="tickets.cerrar_entregas_vencidas")
+        self.assertEqual(tarea.task, "apps.tickets.tasks.cerrar_entregas_vencidas")
+
+    def test_el_historial_acepta_actor_sistema_en_la_linea_de_tiempo(self):
+        self._vencer(self.entrega)
+        cerrar_entrega_vencida(self.entrega)
+        self.client.force_login(self.solicitante45)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket45.pk]))
+        self.assertContains(respuesta, "Sistema")
+        self.assertContains(respuesta, "plazo vencido sin respuesta")
+
+
+class EntregaVistasTests(_MediaAisladaMixin, _EscenarioEntregaFormalMixin, TestCase):
+    def setUp(self):
+        self._preparar_entrega_formal()
+
+    def _detalle(self, usuario):
+        self.client.force_login(usuario)
+        return self.client.get(reverse("tickets:detalle", args=[self.ticket45.pk]))
+
+    def test_el_responsable_ve_entregables_y_los_pendientes_bloquean_la_entrega(self):
+        respuesta = self._detalle(self.responsable45)
+        self.assertContains(respuesta, "Resultados que debes producir")
+        self.assertContains(respuesta, "Faltan entregables obligatorios")
+        self.assertNotContains(respuesta, "Sí, entregar ahora")
+
+    def test_el_responsable_produce_entregables_y_entrega_con_confirmacion(self):
+        self.client.force_login(self.responsable45)
+        self.client.post(
+            reverse("tickets:entregable_resultado", args=[self.ticket45.pk, self._ent("TEXTO").pk]),
+            {"valor": "Texto final"},
+        )
+        self.assertEqual(self._ent("TEXTO").texto, "Texto final")
+        self.assertContains(self._detalle(self.responsable45), "Sí, entregar ahora")
+        # Sin confirmación explícita no se entrega.
+        self.client.post(reverse("tickets:entregar", args=[self.ticket45.pk]))
+        self.assertFalse(EntregaTicket.objects.exists())
+        respuesta = self.client.post(reverse("tickets:entregar", args=[self.ticket45.pk]), {"confirmar": "1"})
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertEqual(EntregaTicket.objects.filter(ticket=self.ticket45).count(), 1)
+        self.assertEqual(self._ticket().estado, Ticket.Estado.RESUELTO)
+
+    def test_el_solicitante_no_puede_producir_entregables_ni_entregar(self):
+        self.client.force_login(self.solicitante45)
+        self.client.post(
+            reverse("tickets:entregable_resultado", args=[self.ticket45.pk, self._ent("TEXTO").pk]), {"valor": "Intruso"}
+        )
+        self.assertEqual(self._ent("TEXTO").texto, "")
+        self._listo()
+        self.client.post(reverse("tickets:entregar", args=[self.ticket45.pk]), {"confirmar": "1"})
+        self.assertFalse(EntregaTicket.objects.exists())
+
+    def test_el_solicitante_no_ve_los_entregables_en_produccion_pero_si_la_entrega(self):
+        self._listo("Resultado visible")
+        self.assertNotContains(self._detalle(self.solicitante45), "Resultados que debes producir")
+        self._entregar()
+        respuesta = self._detalle(self.solicitante45)
+        self.assertContains(respuesta, "Resultado entregado el")
+        self.assertContains(respuesta, "Resultado visible")
+        self.assertContains(respuesta, "Todo está correcto")
+        self.assertContains(respuesta, "Tengo observaciones")
+        self.assertContains(respuesta, "se cerrará automáticamente")
+
+    def test_el_responsable_no_ve_las_acciones_del_solicitante(self):
+        self._listo()
+        self._entregar()
+        respuesta = self._detalle(self.responsable45)
+        self.assertNotContains(respuesta, "Todo está correcto")
+        self.assertNotContains(respuesta, "Tengo observaciones")
+
+    def test_el_solicitante_acepta_por_http(self):
+        self._listo()
+        self._entregar()
+        self.client.force_login(self.solicitante45)
+        self.client.post(reverse("tickets:aceptar_entrega", args=[self.ticket45.pk]))
+        self.assertEqual(self._ticket().estado, Ticket.Estado.CERRADO)
+
+    def test_el_solicitante_observa_por_http_y_exige_comentario(self):
+        self._listo()
+        self._entregar()
+        self.client.force_login(self.solicitante45)
+        self.client.post(reverse("tickets:observar_entrega", args=[self.ticket45.pk]), {"observaciones": " "})
+        self.assertEqual(self._ticket().estado, Ticket.Estado.RESUELTO)
+        self.client.post(reverse("tickets:observar_entrega", args=[self.ticket45.pk]), {"observaciones": "Ajustar color."})
+        self.assertEqual(self._ticket().estado, Ticket.Estado.EN_ATENCION)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket45.pk]))
+        self.assertContains(respuesta, "Ajustar color.")
+        self.assertContains(respuesta, "Entrega 1")
+
+    def test_un_ajeno_no_ve_el_ticket_ni_responde(self):
+        self._listo()
+        self._entregar()
+        self.assertEqual(self._detalle(self.ajeno45).status_code, 403)
+        self.client.post(reverse("tickets:aceptar_entrega", args=[self.ticket45.pk]))
+        self.assertEqual(self._ticket().estado, Ticket.Estado.RESUELTO)
+
+    def test_los_ticket_sin_politica_no_muestran_la_seccion_de_entrega(self):
+        Servicio.objects.filter(pk=self.servicio45.pk).update(politica_entrega="", dias_observacion=None)
+        ticket = crear_borrador(self.solicitante45, Servicio.objects.get(pk=self.servicio45.pk))
+        radicar_ticket(ticket, self.solicitante45)
+        ticket = tomar_ticket(ticket, self.responsable45)
+        self.client.force_login(self.responsable45)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        self.assertNotContains(respuesta, "Entrega al solicitante")
+        self.assertContains(respuesta, "Resolver")  # flujo anterior intacto
+
+
+class ConcurrenciaEntregaFormalTests(_EscenarioEntregaFormalMixin, TransactionTestCase):
+    def setUp(self):
+        self._preparar_entrega_formal()
+
+    def _correr(self, *tareas):
+        barrera = threading.Barrier(len(tareas))
+        resultados = {}
+
+        def _envolver(clave, funcion):
+            barrera.wait()
+            try:
+                funcion()
+                resultados[clave] = "ok"
+            except (PermissionDenied, ValidationError):
+                resultados[clave] = "fallo"
+            finally:
+                connection.close()
+
+        hilos = [threading.Thread(target=_envolver, args=(clave, f)) for clave, f in tareas]
+        for hilo in hilos:
+            hilo.start()
+        for hilo in hilos:
+            hilo.join()
+        return list(resultados.values())
+
+    def test_dos_entregas_concurrentes_solo_una_gana(self):
+        self._listo()
+        valores = self._correr(("a", self._entregar), ("b", self._entregar))
+        self.assertEqual((valores.count("ok"), valores.count("fallo")), (1, 1))
+        self.assertEqual(EntregaTicket.objects.filter(ticket=self.ticket45).count(), 1)
+        self.assertEqual(self._historial(HistorialTicket.TipoEvento.ENTREGADO).count(), 1)
+
+    def test_aceptar_y_observar_concurrentes_solo_una_gana(self):
+        self._listo()
+        self._entregar()
+        valores = self._correr(
+            ("aceptar", lambda: aceptar_entrega(self._ticket(), self.solicitante45)),
+            ("observar", lambda: observar_entrega(self._ticket(), self.solicitante45, "Ajustar.")),
+        )
+        self.assertEqual((valores.count("ok"), valores.count("fallo")), (1, 1))
+        entrega = EntregaTicket.objects.get(ticket=self.ticket45)
+        ticket = self._ticket()
+        if entrega.estado == EntregaTicket.Estado.ACEPTADA:
+            self.assertEqual(ticket.estado, Ticket.Estado.CERRADO)
+            self.assertEqual(self._historial(HistorialTicket.TipoEvento.ENTREGA_OBSERVADA).count(), 0)
+        else:
+            self.assertEqual(entrega.estado, EntregaTicket.Estado.OBSERVADA)
+            self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+            self.assertEqual(self._historial(HistorialTicket.TipoEvento.CERRADO).count(), 0)
+
+    def test_dos_cierres_automaticos_concurrentes_solo_uno_cierra(self):
+        self._listo()
+        entrega = self._entregar()
+        self._vencer(entrega)
+        valores = self._correr(
+            ("a", lambda: cerrar_entrega_vencida(entrega)), ("b", lambda: cerrar_entrega_vencida(entrega))
+        )
+        self.assertEqual(valores, ["ok", "ok"])  # el perdedor es un no-op, no un error
+        self.assertEqual(self._historial(HistorialTicket.TipoEvento.CERRADO).count(), 1)
+        self.assertEqual(self._ticket().estado, Ticket.Estado.CERRADO)
+        self.assertEqual(_auditorias_de_ticket(self.ticket45).filter(datos_nuevos={"estado": "CERRADO"}).count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# Fase visual V2 — experiencia de solicitud (descubrir → completar →
+# previsualizar → revisar → enviar → confirmar). Solo comportamiento
+# verificable del servidor: acceso, versión congelada, estado de los campos,
+# errores por campo, revisión, radicación real y confirmación. Nada de
+# proporciones, colores ni animaciones.
+# ---------------------------------------------------------------------------
+
+
+def _especificacion_solicitud():
+    """Un formulario con un campo de cada familia visual."""
+    T = Campo.TipoCampo
+    return [
+        {"tipo": T.TEXTO, "etiqueta": "Asunto", "obligatorio": True, "orden": 1},
+        {"tipo": T.TEXTO_LARGO, "etiqueta": "Detalle", "orden": 2},
+        {
+            "tipo": T.LISTA, "etiqueta": "Prioridad", "orden": 3,
+            "opciones": [("alta", "Alta"), ("media", "Media"), ("baja", "Baja")],
+        },
+        {
+            "tipo": T.LISTA, "etiqueta": "Sede", "orden": 4,
+            "opciones": [(f"s{i}", f"Sede {i}") for i in range(6)],
+        },
+        {
+            "tipo": T.MULTILISTA, "etiqueta": "Canales", "orden": 5,
+            "opciones": [("web", "Web"), ("app", "Aplicación"), ("tel", "Teléfono")],
+        },
+        {"tipo": T.BOOLEANO, "etiqueta": "Urgente", "orden": 6},
+        {"tipo": T.FECHA, "etiqueta": "Fecha límite", "orden": 7},
+        {"tipo": T.NUMERO, "etiqueta": "Cantidad", "orden": 8},
+        {
+            "tipo": T.ARCHIVO, "etiqueta": "Adjunto", "orden": 9,
+            "configuracion": {"extensiones_permitidas": ["pdf"], "tamano_maximo_mb": 5},
+        },
+    ]
+
+
+def _items_por_etiqueta(respuesta):
+    return {item["campo"].etiqueta: item for item in respuesta.context["items"]}
+
+
+class _EscenarioSolicitudMixin:
+    """Usuario solicitante + servicio con el formulario de
+    `_especificacion_solicitud` y un borrador listo."""
+
+    def _preparar(self, especificacion=None, reglas_builder=None):
+        self.usuario = Usuario.objects.create_user(username="sol_ana", password=CLAVE_PRUEBA)
+        self.ajeno = Usuario.objects.create_user(username="sol_ajeno", password=CLAVE_PRUEBA)
+        self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
+            self.usuario, especificacion or _especificacion_solicitud(), reglas_builder
+        )
+        self.ticket = crear_borrador(self.usuario, self.servicio)
+        self.client.login(username="sol_ana", password=CLAVE_PRUEBA)
+
+    def _nombre(self, etiqueta):
+        return f"campo_{self.campos[etiqueta].id}"
+
+    def _url(self, nombre, *args):
+        return reverse(f"tickets:{nombre}", args=args or [self.ticket.pk])
+
+    def _respuesta(self, etiqueta):
+        return RespuestaCampo.objects.filter(
+            respuesta_formulario=self.ticket.respuesta_formulario, campo=self.campos[etiqueta]
+        ).first()
+
+
+class SolicitudEntradaTests(TestCase):
+    """Entrar a una solicitud desde Inicio/Explorar: directo, sin ficha ni
+    pregunta Servicio/Proceso, y sin dejar basura al navegar."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="ent_ana", password=CLAVE_PRUEBA)
+        self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
+            self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
+        )
+        self.client.login(username="ent_ana", password=CLAVE_PRUEBA)
+
+    def _entrar(self, servicio=None):
+        return self.client.get(reverse("tickets:solicitar", args=[(servicio or self.servicio).pk]))
+
+    def test_entrar_crea_el_borrador_y_lleva_directo_al_formulario(self):
+        respuesta = self._entrar()
+        ticket = Ticket.objects.get(solicitante=self.usuario)
+        self.assertRedirects(respuesta, reverse("tickets:borrador", args=[ticket.pk]))
+        self.assertEqual(ticket.estado, Ticket.Estado.BORRADOR)
+        self.assertEqual(ticket.detalle_servicio.servicio, self.servicio)
+
+    def test_entrar_es_idempotente_mientras_el_borrador_siga_vacio(self):
+        self._entrar()
+        self._entrar()
+        self._entrar()
+        self.assertEqual(Ticket.objects.filter(solicitante=self.usuario).count(), 1)
+
+    def test_un_borrador_con_respuestas_no_se_reutiliza(self):
+        self._entrar()
+        primero = Ticket.objects.get(solicitante=self.usuario)
+        guardar_respuestas_borrador(primero, self.usuario, {self.campos["Texto"].id: "Ya empecé"})
+        self._entrar()
+        self.assertEqual(Ticket.objects.filter(solicitante=self.usuario).count(), 2)
+
+    def test_un_borrador_de_otra_version_del_formulario_no_se_reutiliza(self):
+        self._entrar()
+        nueva = crear_nueva_version(self.servicio.formulario, actor=self.usuario)
+        activar_version(self.servicio.formulario, nueva, actor=self.usuario)
+        self._entrar()
+        self.assertEqual(Ticket.objects.filter(solicitante=self.usuario).count(), 2)
+
+    def test_el_borrador_de_otro_usuario_no_se_reutiliza(self):
+        otro = Usuario.objects.create_user(username="ent_otro", password=CLAVE_PRUEBA)
+        crear_borrador(otro, self.servicio)
+        self._entrar()
+        self.assertEqual(Ticket.objects.filter(solicitante=self.usuario).count(), 1)
+
+    def test_un_proceso_entra_por_la_misma_experiencia(self):
+        self.servicio.tipo = Servicio.Tipo.PROCESO
+        self.servicio.save()
+        entrada = self._entrar()
+        ticket = Ticket.objects.get(solicitante=self.usuario)
+        self.assertEqual(entrada.url, reverse("tickets:borrador", args=[ticket.pk]))
+        formulario = self.client.get(entrada.url)
+        self.assertTemplateUsed(formulario, "tickets/solicitud.html")
+        self.assertContains(formulario, "Proceso")
+
+    def test_servicio_no_visible_responde_404_y_no_crea_nada(self):
+        self.servicio.alcance_visibilidad = Servicio.AlcanceVisibilidad.RESTRINGIDO
+        self.servicio.save()
+        self.assertEqual(self._entrar().status_code, 404)
+        self.assertFalse(Ticket.objects.filter(solicitante=self.usuario).exists())
+
+    def test_servicio_inactivo_responde_404(self):
+        self.servicio.activo = False
+        self.servicio.save()
+        self.assertEqual(self._entrar().status_code, 404)
+
+    def test_servicio_sin_formulario_activo_muestra_el_estado_no_disponible(self):
+        otro = Servicio.objects.create(
+            nombre="Sin formulario", categoria=self.servicio.categoria,
+            alcance_visibilidad=Servicio.AlcanceVisibilidad.PUBLICO_INTERNO,
+        )
+        respuesta = self._entrar(otro)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTemplateUsed(respuesta, "tickets/solicitud_no_disponible.html")
+        self.assertFalse(Ticket.objects.filter(solicitante=self.usuario).exists())
+
+    def test_exige_autenticacion_y_solo_acepta_get(self):
+        self.assertEqual(self.client.post(reverse("tickets:solicitar", args=[self.servicio.pk])).status_code, 405)
+        self.client.logout()
+        respuesta = self._entrar()
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertIn(reverse("core:login"), respuesta.url)
+
+
+class SolicitudEspacioDeTrabajoTests(_EscenarioSolicitudMixin, TestCase):
+    """Qué recibe el formulario: versión congelada, representación por tipo,
+    progreso y vista previa humana."""
+
+    def setUp(self):
+        self._preparar()
+
+    def _abrir(self):
+        return self.client.get(self._url("borrador"))
+
+    def test_renderiza_el_workspace_con_la_version_congelada_del_ticket(self):
+        respuesta = self._abrir()
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTemplateUsed(respuesta, "tickets/solicitud.html")
+        self.assertEqual(len(respuesta.context["items"]), len(self.campos))
+
+        # Una versión nueva y activa después no altera un borrador ya creado.
+        nueva = crear_nueva_version(self.servicio.formulario, actor=self.usuario)
+        Campo.objects.create(version=nueva, tipo=Campo.TipoCampo.TEXTO, etiqueta="Campo nuevo", orden=99)
+        activar_version(self.servicio.formulario, nueva, actor=self.usuario)
+        self.assertNotIn("Campo nuevo", _items_por_etiqueta(self._abrir()))
+
+    def test_cada_campo_se_representa_segun_su_tipo_y_cantidad_de_opciones(self):
+        items = _items_por_etiqueta(self._abrir())
+        controles = {etiqueta: item["control"] for etiqueta, item in items.items()}
+        self.assertEqual(
+            controles,
+            {
+                "Asunto": "texto",
+                "Detalle": "area",
+                "Prioridad": "tarjetas",  # pocas opciones, selección única
+                "Sede": "select",  # muchas opciones, selección única
+                "Canales": "chips",  # pocas opciones, selección múltiple
+                "Urgente": "switch",
+                "Fecha límite": "fecha",
+                "Cantidad": "numero",
+                "Adjunto": "archivo",
+            },
+        )
+
+    def test_los_campos_cortos_comparten_fila_y_los_amplios_ocupan_toda_la_fila(self):
+        items = _items_por_etiqueta(self._abrir())
+        for corto in ("Asunto", "Sede", "Urgente", "Fecha límite", "Cantidad"):
+            self.assertEqual(items[corto]["ancho"], "medio", corto)
+        for amplio in ("Detalle", "Prioridad", "Canales", "Adjunto"):
+            self.assertEqual(items[amplio]["ancho"], "completo", amplio)
+
+    def test_el_html_usa_controles_semanticos_reales(self):
+        html = self._abrir().content.decode()
+        self.assertIn('type="radio"', html)  # tarjetas de selección única
+        self.assertIn('type="checkbox"', html)  # chips y switch
+        self.assertIn('role="switch"', html)
+        self.assertIn('type="file"', html)
+        self.assertIn('enctype="multipart/form-data"', html)
+
+    def test_el_progreso_cuenta_solo_obligatorios_completados(self):
+        progreso = self._abrir().context["progreso"]
+        self.assertEqual((progreso["completados"], progreso["total"]), (0, 1))
+        guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Asunto"].id: "Listo"})
+        progreso = self._abrir().context["progreso"]
+        self.assertEqual((progreso["completados"], progreso["total"], progreso["porcentaje"]), (1, 1, 100))
+
+    def test_la_vista_previa_muestra_etiquetas_humanas_no_valores_internos(self):
+        guardar_respuestas_borrador(
+            self.ticket,
+            self.usuario,
+            {
+                self.campos["Asunto"].id: "Diseño de pieza",
+                self.campos["Prioridad"].id: "alta",
+                self.campos["Canales"].id: ["web", "tel"],
+                self.campos["Fecha límite"].id: "2026-10-12",
+            },
+        )
+        filas = {f["etiqueta"]: f for f in self._abrir().context["resumen"]}
+        self.assertEqual(filas["Asunto"]["texto"], "Diseño de pieza")
+        self.assertEqual(filas["Prioridad"]["texto"], "Alta")  # la etiqueta, no el valor "alta"
+        self.assertEqual(filas["Canales"]["valores"], ["Web", "Teléfono"])
+        self.assertIn("octubre", filas["Fecha límite"]["texto"])  # fecha legible, no ISO
+        self.assertNotIn("Detalle", filas)  # sin responder: no se rellena con "Sin responder"
+        self.assertNotIn("Sede", filas)
+
+    def test_sin_respuestas_la_vista_previa_no_inventa_filas_de_texto(self):
+        etiquetas = [f["etiqueta"] for f in self._abrir().context["resumen"]]
+        self.assertEqual(etiquetas, ["Urgente"])  # un Sí/No siempre tiene valor: "No"
+
+    def test_los_valores_guardados_vuelven_a_los_controles(self):
+        guardar_respuestas_borrador(
+            self.ticket,
+            self.usuario,
+            {
+                self.campos["Asunto"].id: "Texto guardado",
+                self.campos["Prioridad"].id: "media",
+                self.campos["Canales"].id: ["app"],
+                self.campos["Urgente"].id: True,
+                self.campos["Cantidad"].id: "12",
+            },
+        )
+        items = _items_por_etiqueta(self._abrir())
+        self.assertEqual(items["Asunto"]["valor"], "Texto guardado")
+        self.assertEqual([o["valor"] for o in items["Prioridad"]["opciones"] if o["seleccionada"]], ["media"])
+        self.assertEqual(items["Canales"]["seleccion"], ["app"])
+        self.assertTrue(items["Urgente"]["marcado"])
+        self.assertEqual(items["Cantidad"]["valor"], "12")  # sin ceros decimales de más
+
+    def test_solo_el_propietario_ve_su_borrador(self):
+        self.client.logout()
+        self.client.login(username="sol_ajeno", password=CLAVE_PRUEBA)
+        self.assertEqual(self._abrir().status_code, 403)
+
+    def test_un_ticket_ya_radicado_no_vuelve_al_workspace(self):
+        guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Asunto"].id: "x"})
+        radicar_ticket(self.ticket, self.usuario)
+        self.assertEqual(self._abrir().status_code, 403)
+
+    def test_servicio_desactivado_se_avisa_en_el_borrador(self):
+        self.servicio.activo = False
+        self.servicio.save()
+        respuesta = self._abrir()
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertFalse(respuesta.context["servicio_activo"])
+
+
+class SolicitudCamposCondicionalesTests(_EscenarioSolicitudMixin, TestCase):
+    """Las reglas las decide el servidor (`validaciones.calcular_estados_efectivos`);
+    el workspace y el endpoint de estado solo las reflejan."""
+
+    def setUp(self):
+        def reglas(campos):
+            for efecto in (ReglaCondicional.Efecto.MOSTRAR, ReglaCondicional.Efecto.REQUERIR):
+                ReglaCondicional.objects.create(
+                    campo_origen=campos["Urgente"], operador=ReglaCondicional.Operador.IGUAL_A,
+                    valor="true", campo_objetivo=campos["Justificación"], efecto=efecto,
+                )
+
+        especificacion = [
+            {"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Asunto", "obligatorio": True, "orden": 1},
+            {"tipo": Campo.TipoCampo.BOOLEANO, "etiqueta": "Urgente", "orden": 2},
+            {"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Justificación", "orden": 3},
+        ]
+        self._preparar(especificacion, reglas)
+
+    def _estado(self, datos=None):
+        return self.client.post(self._url("solicitud_estado"), datos or {})
+
+    def test_el_campo_condicional_nace_oculto_y_el_origen_se_marca(self):
+        items = _items_por_etiqueta(self.client.get(self._url("borrador")))
+        self.assertFalse(items["Justificación"]["visible"])
+        self.assertTrue(items["Urgente"]["es_origen"])
+        self.assertFalse(items["Asunto"]["es_origen"])
+
+    def test_el_html_de_un_campo_oculto_va_oculto_y_sin_enviarse(self):
+        html = self.client.get(self._url("borrador")).content.decode()
+        bloque = html.split(f'id="field_{self.campos["Justificación"].id}"')[1].split("</div>")[0]
+        self.assertIn("hidden", bloque)
+        self.assertIn("disabled", bloque)
+
+    def test_el_endpoint_refleja_visibilidad_y_obligatoriedad_dinamica(self):
+        justificacion = str(self.campos["Justificación"].id)
+        apagado = self._estado({self._nombre("Asunto"): "x"}).json()["campos"][justificacion]
+        self.assertEqual(apagado, {"visible": False, "requerido": False})
+        encendido = self._estado({self._nombre("Urgente"): "on"}).json()["campos"][justificacion]
+        self.assertEqual(encendido, {"visible": True, "requerido": True})
+
+    def test_el_progreso_incorpora_el_campo_requerido_cuando_aparece(self):
+        guardar_respuestas_borrador(
+            self.ticket, self.usuario, {self.campos["Asunto"].id: "x", self.campos["Urgente"].id: True}
+        )
+        progreso = self.client.get(self._url("borrador")).context["progreso"]
+        self.assertEqual((progreso["completados"], progreso["total"]), (1, 2))
+
+    def test_el_endpoint_no_guarda_nada(self):
+        antes = RespuestaCampo.objects.count()
+        self._estado({self._nombre("Asunto"): "no se guarda", self._nombre("Urgente"): "on"})
+        self.assertEqual(RespuestaCampo.objects.count(), antes)
+
+    def test_el_endpoint_usa_lo_ya_guardado_igual_que_el_guardado_real(self):
+        guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Urgente"].id: True})
+        justificacion = str(self.campos["Justificación"].id)
+        # Sin enviar "Urgente" ahora, el servidor ve el booleano ausente como "no marcado".
+        estado = self._estado({}).json()["campos"][justificacion]
+        self.assertFalse(estado["visible"])
+
+    def test_el_endpoint_solo_acepta_post_del_propietario_sobre_un_borrador(self):
+        self.assertEqual(self.client.get(self._url("solicitud_estado")).status_code, 405)
+        self.client.logout()
+        self.client.login(username="sol_ajeno", password=CLAVE_PRUEBA)
+        self.assertEqual(self._estado().status_code, 403)
+        self.client.logout()
+        self.assertEqual(self._estado().status_code, 302)  # a login
+
+    def test_el_endpoint_rechaza_un_ticket_ya_radicado(self):
+        guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Asunto"].id: "x"})
+        radicar_ticket(self.ticket, self.usuario)
+        self.assertEqual(self._estado().status_code, 403)
+
+    def test_guardar_un_campo_oculto_no_lo_persiste(self):
+        self.client.post(
+            self._url("borrador"), {self._nombre("Asunto"): "x", self._nombre("Justificación"): "no aplica"}
+        )
+        self.assertIsNone(self._respuesta("Justificación"))
+
+    def test_revisar_exige_el_campo_que_la_regla_volvio_requerido(self):
+        respuesta = self.client.post(
+            self._url("revisar"), {self._nombre("Asunto"): "x", self._nombre("Urgente"): "on"}
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTemplateUsed(respuesta, "tickets/solicitud.html")
+        items = _items_por_etiqueta(respuesta)
+        self.assertTrue(items["Justificación"]["visible"])
+        self.assertEqual(items["Justificación"]["errores"], ["Este campo es obligatorio."])
+
+
+class SolicitudGuardadoYErroresTests(_MediaAisladaMixin, _EscenarioSolicitudMixin, TestCase):
+    """Guardar borrador y revisar: errores junto a cada campo, sin perder el
+    resto del envío."""
+
+    def setUp(self):
+        self._preparar()
+
+    def test_guardar_borrador_valido_persiste_y_vuelve_al_formulario(self):
+        respuesta = self.client.post(self._url("borrador"), {self._nombre("Asunto"): "Hola"})
+        self.assertRedirects(respuesta, self._url("borrador"))
+        self.assertEqual(self._respuesta("Asunto").valor_texto, "Hola")
+        mensajes = [str(m) for m in get_messages(respuesta.wsgi_request)]
+        self.assertIn("Borrador guardado.", mensajes)
+
+    def test_un_valor_invalido_se_reporta_en_su_campo_y_no_hace_perder_el_resto(self):
+        respuesta = self.client.post(
+            self._url("borrador"), {self._nombre("Asunto"): "Sí se guarda", self._nombre("Cantidad"): "abc"}
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTemplateUsed(respuesta, "tickets/solicitud.html")
+        items = _items_por_etiqueta(respuesta)
+        self.assertTrue(items["Cantidad"]["errores"])
+        self.assertEqual(items["Cantidad"]["valor"], "abc")  # se conserva lo que escribió
+        self.assertFalse(items["Asunto"]["errores"])
+        self.assertEqual(self._respuesta("Asunto").valor_texto, "Sí se guarda")
+        self.assertIsNone(self._respuesta("Cantidad"))
+
+    def test_los_errores_se_resumen_con_enlaces_a_cada_campo(self):
+        respuesta = self.client.post(self._url("borrador"), {self._nombre("Cantidad"): "abc"})
+        self.assertEqual([i["campo"].etiqueta for i in respuesta.context["campos_con_error"]], ["Cantidad"])
+        self.assertContains(respuesta, f'href="#campo_{self.campos["Cantidad"].id}"')
+        self.assertContains(respuesta, f'id="err_{self.campos["Cantidad"].id}"')
+        self.assertContains(respuesta, 'aria-invalid="true"')
+
+    def test_opcion_invalida_en_lista_se_reporta_en_su_campo(self):
+        respuesta = self.client.post(self._url("borrador"), {self._nombre("Prioridad"): "inexistente"})
+        self.assertTrue(_items_por_etiqueta(respuesta)["Prioridad"]["errores"])
+
+    def test_revisar_sin_obligatorios_no_avanza_y_señala_el_campo(self):
+        respuesta = self.client.post(self._url("revisar"), {self._nombre("Detalle"): "Lo conservo"})
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTemplateUsed(respuesta, "tickets/solicitud.html")
+        items = _items_por_etiqueta(respuesta)
+        self.assertEqual(items["Asunto"]["errores"], ["Este campo es obligatorio."])
+        self.assertEqual(self._respuesta("Detalle").valor_texto, "Lo conservo")
+        self.assertEqual(Ticket.objects.get(pk=self.ticket.pk).estado, Ticket.Estado.BORRADOR)
+
+    def test_revisar_con_todo_en_orden_guarda_y_pasa_a_la_revision(self):
+        respuesta = self.client.post(self._url("revisar"), {self._nombre("Asunto"): "Necesito algo"})
+        self.assertRedirects(respuesta, self._url("revisar"))
+        self.assertEqual(self._respuesta("Asunto").valor_texto, "Necesito algo")
+        self.assertEqual(Ticket.objects.get(pk=self.ticket.pk).estado, Ticket.Estado.BORRADOR)  # aún no se envía
+
+    def test_la_revision_muestra_solo_lo_aplicable_y_en_lenguaje_humano(self):
+        self.client.post(
+            self._url("revisar"),
+            {self._nombre("Asunto"): "Necesito algo", self._nombre("Prioridad"): "baja"},
+        )
+        respuesta = self.client.get(self._url("revisar"))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTemplateUsed(respuesta, "tickets/solicitud_revision.html")
+        filas = {f["etiqueta"]: f for f in respuesta.context["resumen"]}
+        self.assertEqual(filas["Asunto"]["texto"], "Necesito algo")
+        self.assertEqual(filas["Prioridad"]["texto"], "Baja")
+        self.assertNotIn("Detalle", filas)
+        self.assertContains(respuesta, "Revisa tu solicitud")
+        self.assertContains(respuesta, "Volver y editar")
+        self.assertContains(respuesta, "Enviar solicitud")
+        self.assertContains(respuesta, reverse("tickets:enviar", args=[self.ticket.pk]))
+        self.assertNotContains(respuesta, "campo_")  # ni ids ni nombres internos
+
+    def test_volver_y_editar_recupera_lo_escrito(self):
+        self.client.post(self._url("revisar"), {self._nombre("Asunto"): "Se conserva"})
+        items = _items_por_etiqueta(self.client.get(self._url("borrador")))
+        self.assertEqual(items["Asunto"]["valor"], "Se conserva")
+
+    def test_revisar_por_get_con_pendientes_vuelve_al_formulario_con_errores(self):
+        respuesta = self.client.get(self._url("revisar"))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTemplateUsed(respuesta, "tickets/solicitud.html")
+        self.assertTrue(_items_por_etiqueta(respuesta)["Asunto"]["errores"])
+
+    def test_revisar_es_solo_del_propietario(self):
+        self.client.logout()
+        self.client.login(username="sol_ajeno", password=CLAVE_PRUEBA)
+        self.assertEqual(self.client.get(self._url("revisar")).status_code, 403)
+        self.assertEqual(self.client.post(self._url("revisar"), {}).status_code, 403)
+
+    # --- adjuntos ---
+
+    def test_un_adjunto_valido_se_guarda_se_ve_y_llega_a_la_revision(self):
+        archivo = SimpleUploadedFile("brief.pdf", b"%PDF-1.4 contenido", content_type="application/pdf")
+        respuesta = self.client.post(
+            self._url("revisar"), {self._nombre("Asunto"): "Con adjunto", self._nombre("Adjunto"): archivo}
+        )
+        self.assertRedirects(respuesta, self._url("revisar"))
+        self.assertEqual(self._respuesta("Adjunto").archivo.nombre_original, "brief.pdf")
+        filas = {f["etiqueta"]: f for f in self.client.get(self._url("revisar")).context["resumen"]}
+        self.assertEqual(filas["Adjunto"]["valores"], ["brief.pdf"])
+
+    def test_un_adjunto_guardado_reaparece_con_su_descarga_en_el_formulario(self):
+        archivo = SimpleUploadedFile("brief.pdf", b"%PDF-1.4 contenido", content_type="application/pdf")
+        self.client.post(self._url("borrador"), {self._nombre("Adjunto"): archivo})
+        item = _items_por_etiqueta(self.client.get(self._url("borrador")))["Adjunto"]
+        self.assertEqual(item["archivo"]["nombre"], "brief.pdf")
+        self.assertEqual(
+            item["archivo"]["url"], reverse("tickets:descargar_archivo", args=[self._respuesta("Adjunto").archivo.pk])
+        )
+
+    def test_un_adjunto_con_extension_no_permitida_se_rechaza_en_su_campo(self):
+        archivo = SimpleUploadedFile("malo.exe", b"MZ", content_type="application/octet-stream")
+        respuesta = self.client.post(
+            self._url("borrador"), {self._nombre("Asunto"): "Sigue", self._nombre("Adjunto"): archivo}
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertIn("Extensión no permitida", " ".join(_items_por_etiqueta(respuesta)["Adjunto"]["errores"]))
+        self.assertIsNone(self._respuesta("Adjunto"))
+        self.assertEqual(self._respuesta("Asunto").valor_texto, "Sigue")
+
+    def test_un_adjunto_vacio_se_rechaza_en_su_campo(self):
+        archivo = SimpleUploadedFile("vacio.pdf", b"", content_type="application/pdf")
+        respuesta = self.client.post(self._url("borrador"), {self._nombre("Adjunto"): archivo})
+        self.assertTrue(_items_por_etiqueta(respuesta)["Adjunto"]["errores"])
+        self.assertIsNone(self._respuesta("Adjunto"))
+
+    def test_quitar_un_adjunto_guardado(self):
+        archivo = SimpleUploadedFile("brief.pdf", b"%PDF-1.4 contenido", content_type="application/pdf")
+        self.client.post(self._url("borrador"), {self._nombre("Adjunto"): archivo})
+        self.client.post(self._url("borrador"), {f"{self._nombre('Adjunto')}__eliminar": "1"})
+        self.assertIsNone(self._respuesta("Adjunto"))
+
+
+class SolicitudPrecedenciaDeErroresTests(_EscenarioSolicitudMixin, TestCase):
+    def setUp(self):
+        self._preparar([{"tipo": Campo.TipoCampo.NUMERO, "etiqueta": "Monto", "obligatorio": True}])
+
+    def test_el_error_de_formato_prevalece_sobre_el_de_obligatoriedad(self):
+        # El campo quedó sin guardar, así que además figuraría como pendiente: se muestra el útil.
+        respuesta = self.client.post(self._url("revisar"), {self._nombre("Monto"): "abc"})
+        errores = _items_por_etiqueta(respuesta)["Monto"]["errores"]
+        self.assertNotIn("Este campo es obligatorio.", errores)
+        self.assertEqual(len(errores), 1)
+
+
+class SolicitudEnvioTests(_EscenarioSolicitudMixin, TestCase):
+    """Enviar = la radicación REAL (`operaciones.radicar_ticket`) + confirmación."""
+
+    def setUp(self):
+        self._preparar()
+        guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Asunto"].id: "Listo para enviar"})
+
+    def test_enviar_radica_de_verdad_y_lleva_a_la_confirmacion(self):
+        respuesta = self.client.post(self._url("enviar"))
+        self.assertRedirects(respuesta, self._url("enviada"))
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.RADICADO)
+        self.assertIsNotNone(self.ticket.radicado)
+        self.assertIsNotNone(self.ticket.radicado_en)
+        self.assertEqual(
+            HistorialTicket.objects.filter(ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.RADICADO).count(), 1
+        )
+
+    def test_la_confirmacion_muestra_solo_datos_reales_del_ticket(self):
+        self.client.post(self._url("enviar"))
+        self.ticket.refresh_from_db()
+        respuesta = self.client.get(self._url("enviada"))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTemplateUsed(respuesta, "tickets/solicitud_enviada.html")
+        self.assertContains(respuesta, "Solicitud enviada")
+        self.assertContains(respuesta, str(self.ticket.radicado))
+        self.assertContains(respuesta, self.servicio.nombre)
+        self.assertContains(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertContains(respuesta, reverse("core:inicio"))
+
+    def test_un_doble_envio_no_falla_ni_radica_dos_veces(self):
+        self.client.post(self._url("enviar"))
+        segundo = self.client.post(self._url("enviar"))
+        self.assertRedirects(segundo, self._url("enviada"))
+        self.assertEqual(
+            HistorialTicket.objects.filter(ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.RADICADO).count(), 1
+        )
+
+    def test_enviar_con_obligatorios_pendientes_no_radica_y_vuelve_al_formulario(self):
+        self._respuesta("Asunto").delete()
+        respuesta = self.client.post(self._url("enviar"))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTemplateUsed(respuesta, "tickets/solicitud.html")
+        self.assertEqual(_items_por_etiqueta(respuesta)["Asunto"]["errores"], ["Este campo es obligatorio."])
+        self.assertEqual(Ticket.objects.get(pk=self.ticket.pk).estado, Ticket.Estado.BORRADOR)
+
+    def test_enviar_con_el_servicio_desactivado_no_radica_y_explica_por_que(self):
+        self.servicio.activo = False
+        self.servicio.save()
+        respuesta = self.client.post(self._url("enviar"))
+        self.assertRedirects(respuesta, self._url("revisar"))
+        self.assertEqual(Ticket.objects.get(pk=self.ticket.pk).estado, Ticket.Estado.BORRADOR)
+        self.assertIn("ya no está activo", " ".join(str(m) for m in get_messages(respuesta.wsgi_request)))
+        pantalla = self.client.get(self._url("revisar"))
+        self.assertFalse(pantalla.context["servicio_activo"])
+
+    def test_enviar_solo_acepta_post(self):
+        self.assertEqual(self.client.get(self._url("enviar")).status_code, 405)
+
+    def test_un_ajeno_no_puede_enviar_ni_ver_la_confirmacion(self):
+        self.client.post(self._url("enviar"))
+        self.client.logout()
+        self.client.login(username="sol_ajeno", password=CLAVE_PRUEBA)
+        self.assertEqual(self.client.post(self._url("enviar")).status_code, 403)
+        self.assertEqual(self.client.get(self._url("enviada")).status_code, 403)
+
+    def test_la_confirmacion_de_un_borrador_vuelve_al_formulario(self):
+        self.assertRedirects(self.client.get(self._url("enviada")), self._url("borrador"))
+
+    def test_el_endpoint_directo_de_radicar_conserva_su_contrato(self):
+        respuesta = self.client.post(self._url("radicar"), {self._nombre("Asunto"): "Por el camino directo"})
+        self.assertRedirects(respuesta, self._url("detalle"))
+        self.assertEqual(Ticket.objects.get(pk=self.ticket.pk).estado, Ticket.Estado.RADICADO)
+
+    def test_el_detalle_de_un_borrador_sigue_llevando_al_formulario(self):
+        self.assertRedirects(self.client.get(self._url("detalle")), self._url("borrador"))
+
+
+class SolicitudControlesTests(_EscenarioSolicitudMixin, TestCase):
+    """V2.2 — el renderer entrega a cada control lo que el dominio realmente
+    configura (restricciones, ayuda, relaciones activas) y marca lo obligatorio
+    de forma accesible. Nada de estilos."""
+
+    def setUp(self):
+        T = Campo.TipoCampo
+        self.area_zeta = Area.objects.create(nombre="Zeta")
+        self.area_alfa = Area.objects.create(nombre="Alfa")
+        self.area_inactiva = Area.objects.create(nombre="Inactiva", activo=False)
+        self.inactivo = Usuario.objects.create_user(username="zz_inactivo", password=CLAVE_PRUEBA, is_active=False)
+        self._preparar(
+            [
+                {"tipo": T.NUMERO, "etiqueta": "Monto", "obligatorio": True, "orden": 1,
+                 "configuracion": {"minimo": 1, "maximo": 10, "permite_decimales": False}},
+                {"tipo": T.NUMERO, "etiqueta": "Precio", "orden": 2,
+                 "configuracion": {"permite_decimales": True, "minimo": 0.5}},
+                {"tipo": T.FECHA, "etiqueta": "Entrega", "orden": 3,
+                 "configuracion": {"fecha_minima": "2026-10-01", "fecha_maxima": "2026-12-31"}},
+                {"tipo": T.FECHA_HORA, "etiqueta": "Reunión", "orden": 4,
+                 "configuracion": {"fecha_minima": "2026-10-01"}},
+                {"tipo": T.CORREO, "etiqueta": "Contacto", "orden": 5},
+                {"tipo": T.URL, "etiqueta": "Enlace", "orden": 6},
+                {"tipo": T.TEXTO_LARGO, "etiqueta": "Resumen", "ayuda": "Cuéntanos qué necesitas", "orden": 7,
+                 "configuracion": {"longitud_maxima": 200}},
+                {"tipo": T.TEXTO, "etiqueta": "Título", "orden": 8,
+                 "configuracion": {"longitud_maxima": 50, "placeholder": "Ej.: campaña de verano"}},
+                {"tipo": T.USUARIO, "etiqueta": "Responsable", "orden": 9},
+                {"tipo": T.AREA, "etiqueta": "Área", "orden": 10},
+                {"tipo": T.ARCHIVO, "etiqueta": "Adjunto", "orden": 11,
+                 "configuracion": {"extensiones_permitidas": ["pdf", "png"], "tamano_maximo_mb": 10}},
+                {"tipo": T.LISTA, "etiqueta": "Tipo", "orden": 12,
+                 "opciones": [("a", "Uno"), ("b", "Dos"), ("c", "Tres"), ("d", "Cuatro")]},
+                {"tipo": T.LISTA, "etiqueta": "Sí o no", "orden": 13, "opciones": [("si", "Sí"), ("no", "No")]},
+                {"tipo": T.MULTILISTA, "etiqueta": "Canal", "orden": 14,
+                 "opciones": [("x", "X"), ("y", "Y"), ("z", "Z")],
+                 "configuracion": {"minimo_selecciones": 1, "maximo_selecciones": 2}},
+            ]
+        )
+
+    def _abrir(self):
+        return self.client.get(self._url("borrador"))
+
+    def test_los_numeros_llevan_sus_restricciones_reales_y_sin_localizar(self):
+        respuesta = self._abrir()
+        items = _items_por_etiqueta(respuesta)
+        monto = items["Monto"]
+        self.assertEqual((monto["atributos"]["min"], monto["atributos"]["max"], monto["atributos"]["step"]), ("1", "10", "1"))
+        self.assertEqual(monto["pista"], "Entre 1 y 10 · Sin decimales")
+        precio = items["Precio"]
+        self.assertEqual((precio["atributos"]["min"], precio["atributos"]["step"]), ("0.5", "any"))  # punto, no coma
+        self.assertEqual(precio["pista"], "Mínimo 0.5")
+        self.assertContains(respuesta, 'min="0.5"')
+        self.assertContains(respuesta, 'step="any"')
+
+    def test_las_fechas_llevan_sus_limites_reales(self):
+        items = _items_por_etiqueta(self._abrir())
+        self.assertEqual((items["Entrega"]["atributos"]["min"], items["Entrega"]["atributos"]["max"]), ("2026-10-01", "2026-12-31"))
+        self.assertEqual(items["Entrega"]["pista"], "Entre el 1 de octubre de 2026 y el 31 de diciembre de 2026")
+        self.assertEqual(items["Reunión"]["atributos"]["min"], "2026-10-01T00:00")  # igual que lo lee el dominio
+
+    def test_correo_y_url_usan_controles_semanticos_con_aviso_asociado(self):
+        respuesta = self._abrir()
+        items = _items_por_etiqueta(respuesta)
+        self.assertEqual((items["Contacto"]["input_type"], items["Enlace"]["input_type"]), ("email", "url"))
+        for etiqueta in ("Contacto", "Enlace", "Monto", "Entrega"):
+            self.assertTrue(items[etiqueta]["aviso_vivo"], etiqueta)
+            self.assertIn(f"live_{items[etiqueta]['id']}", items[etiqueta]["describedby"])
+        self.assertContains(respuesta, f'id="live_{self.campos["Contacto"].id}"')
+
+    def test_el_texto_largo_con_limite_muestra_contador_y_no_usa_maxlength(self):
+        respuesta = self._abrir()
+        items = _items_por_etiqueta(respuesta)
+        resumen, titulo = items["Resumen"], items["Título"]
+        self.assertEqual(resumen["limite"], 200)
+        self.assertNotIn("maxlength", resumen["atributos"])  # el salto de línea cuenta distinto en navegador y servidor
+        self.assertContains(respuesta, 'data-sol-limite="200"')
+        self.assertContains(respuesta, f'id="count_{resumen["id"]}"')
+        self.assertEqual(titulo["atributos"]["maxlength"], 50)  # una línea: sin ambigüedad
+        self.assertEqual(titulo["atributos"]["placeholder"], "Ej.: campaña de verano")
+        self.assertIsNone(titulo["limite"])
+
+    def test_la_ayuda_y_la_pista_se_asocian_al_control_solo_si_existen(self):
+        items = _items_por_etiqueta(self._abrir())
+        self.assertEqual(items["Resumen"]["describedby"], f"help_{items['Resumen']['id']} count_{items['Resumen']['id']}")
+        self.assertEqual(items["Título"]["describedby"], "")
+        self.assertEqual(items["Monto"]["describedby"], f"hint_{items['Monto']['id']} live_{items['Monto']['id']}")
+
+    def test_lo_obligatorio_se_comunica_con_texto_y_con_aria(self):
+        respuesta = self._abrir()
+        self.assertContains(respuesta, "Obligatorio")
+        self.assertNotContains(respuesta, 'aria-hidden="true">*')
+        html = respuesta.content.decode()
+        bloque = html.split(f'id="campo_{self.campos["Monto"].id}"')[1].split(">")[0]
+        self.assertIn('aria-required="true"', bloque)
+        self.assertEqual(_items_por_etiqueta(respuesta)["Monto"]["requerido"], True)
+
+    def test_un_campo_obligatorio_completo_se_marca_como_completado(self):
+        guardar_respuestas_borrador(
+            self.ticket, self.usuario, {self.campos["Monto"].id: "5", self.campos["Título"].id: "Algo"}
+        )
+        items = _items_por_etiqueta(self._abrir())
+        self.assertTrue(items["Monto"]["completado"])
+        self.assertFalse(items["Título"]["completado"])  # completo pero no obligatorio
+
+    def test_las_tarjetas_se_reparten_segun_la_cantidad_de_opciones(self):
+        respuesta = self._abrir()
+        items = _items_por_etiqueta(respuesta)
+        self.assertEqual((items["Tipo"]["control"], items["Tipo"]["columnas"]), ("tarjetas", 2))  # 4 → 2×2
+        self.assertEqual(items["Sí o no"]["columnas"], 2)
+        self.assertContains(respuesta, "sol-choices--c2")
+
+    def test_las_opciones_multiples_muestran_su_rango_real(self):
+        items = _items_por_etiqueta(self._abrir())
+        self.assertEqual((items["Canal"]["control"], items["Canal"]["pista"]), ("chips", "Elige entre 1 y 2"))
+
+    def test_el_adjunto_solo_anuncia_las_restricciones_configuradas(self):
+        respuesta = self._abrir()
+        item = _items_por_etiqueta(respuesta)["Adjunto"]
+        self.assertEqual(item["atributos"]["accept"], ".pdf,.png")
+        self.assertContains(respuesta, "PDF, PNG · máximo 10 MB")
+        self.assertContains(respuesta, "Arrastra tu archivo aquí")  # un solo archivo: el campo no admite varios
+        self.assertNotContains(respuesta, " multiple")
+
+    def test_las_referencias_solo_listan_registros_activos_y_ordenados(self):
+        items = _items_por_etiqueta(self._abrir())
+        areas = [o["etiqueta"] for o in items["Área"]["opciones"]]
+        self.assertNotIn("Inactiva", areas)
+        self.assertLessEqual({"Alfa", "Zeta"}, set(areas))
+        self.assertEqual(areas, sorted(areas, key=str.casefold))
+        usuarios = [o["etiqueta"] for o in items["Responsable"]["opciones"]]
+        self.assertNotIn("zz_inactivo", usuarios)
+        self.assertEqual(usuarios, sorted(usuarios, key=str.casefold))
+
+    def test_una_referencia_inactiva_se_rechaza_en_su_campo(self):
+        respuesta = self.client.post(self._url("borrador"), {self._nombre("Área"): str(self.area_inactiva.pk)})
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTrue(_items_por_etiqueta(respuesta)["Área"]["errores"])
+        self.assertIsNone(self._respuesta("Área"))
+
+    def test_los_valores_fuera_de_rango_o_con_formato_invalido_se_rechazan_en_su_campo(self):
+        for etiqueta, valor in (("Monto", "11"), ("Monto", "5.5"), ("Monto", "0"), ("Contacto", "no-es-correo"), ("Enlace", "sin-esquema")):
+            respuesta = self.client.post(self._url("borrador"), {self._nombre(etiqueta): valor})
+            item = _items_por_etiqueta(respuesta)[etiqueta]
+            self.assertTrue(item["errores"], (etiqueta, valor))
+            self.assertEqual(item["valor"], valor)  # se conserva lo escrito
+            self.assertIsNone(self._respuesta(etiqueta))
+
+    def test_un_valor_valido_de_cada_familia_se_guarda_y_vuelve_al_control(self):
+        self.client.post(
+            self._url("borrador"),
+            {
+                self._nombre("Monto"): "7",
+                self._nombre("Precio"): "12.5",
+                self._nombre("Entrega"): "2026-11-15",
+                self._nombre("Contacto"): "prueba@ejemplo.com",
+                self._nombre("Enlace"): "https://ejemplo.com/ref",
+                self._nombre("Tipo"): "b",
+                self._nombre("Canal"): ["x", "z"],
+                self._nombre("Área"): str(self.area_alfa.pk),
+            },
+        )
+        items = _items_por_etiqueta(self._abrir())
+        self.assertEqual(items["Monto"]["valor"], "7")
+        self.assertEqual(items["Precio"]["valor"], "12.5")
+        self.assertEqual(items["Entrega"]["valor"], "2026-11-15")
+        self.assertEqual(items["Contacto"]["valor"], "prueba@ejemplo.com")
+        self.assertEqual([o["valor"] for o in items["Tipo"]["opciones"] if o["seleccionada"]], ["b"])
+        self.assertEqual(items["Canal"]["seleccion"], ["x", "z"])
+        self.assertEqual([o["etiqueta"] for o in items["Área"]["opciones"] if o["seleccionada"]], ["Alfa"])

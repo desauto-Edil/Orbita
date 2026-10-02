@@ -32,14 +32,19 @@ from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm
+from django.core.exceptions import PermissionDenied
 from django.db import connections
+from django.db.models import Q
 from django.db.utils import OperationalError
-from django.http import JsonResponse
+from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
+from django.template.loader import render_to_string
 from django.urls import reverse
+from django.views.decorators.http import require_GET
 
 from apps.aprobaciones.consultas import aprobaciones_pendientes_para
 from apps.aprobaciones.models import Aprobacion
+from apps.core import disenador, inicio
 from apps.tareas.consultas import tareas_asignadas_a, tareas_disponibles_para_tomar
 from apps.tareas.models import Tarea
 
@@ -116,28 +121,48 @@ def perfil_view(request):
 
 @login_required
 def inicio_view(request):
-    """Application Shell autenticado (incremento 0.5). Sin CU propio: usa
-    exclusivamente información organizacional real ya disponible desde 0.2
-    (área/unidad principal) — ningún dato de Tickets/Tareas/Procesos, que
-    todavía no existen.
-    """
+    """Inicio / Mi Portal (V1). Portada cotidiana de LECTURA: una sola página
+    que se adapta por capacidades y relaciones reales (nunca por nombre de
+    rol) y compone datos de otros dominios vía `apps.core.inicio`. No hay
+    cargo/área/unidad aquí: eso es Mi perfil. Los bloques sin datos reales no
+    se renderizan y la composición se reorganiza (ver `portal/inicio.html`)."""
     usuario = request.user
-    area_principal = (
-        usuario.areas.filter(activo=True, es_principal=True).select_related("area").first()
-    )
-    unidad_principal = (
-        usuario.unidades_negocio.filter(activo=True, es_principal=True)
-        .select_related("unidad_negocio")
-        .first()
-    )
-
+    categorias = inicio.categorias_con_servicios(usuario)
+    usados = inicio.servicios_usados(usuario)
     contexto = {
-        "usuario": usuario,
-        "area_principal": area_principal,
-        "unidad_principal": unidad_principal,
+        "saludo": inicio.saludo(usuario),
+        "categorias": categorias,
+        "categorias_tiles": categorias[: inicio.LIMITE_CATEGORIAS_TILES],
+        "total_servicios": sum(c["n"] for c in categorias),
+        "frecuentes": usados["frecuentes"],
+        "recientes": usados["recientes"],
+        "tiene_usados": bool(usados["frecuentes"] or usados["recientes"]),
+        "trabajo": inicio.resumen_trabajo(usuario),
+        "agenda": inicio.agenda(usuario, request.GET.get("mes")),
+        "tickets_recientes": inicio.tickets_recientes(usuario),
         "titulo_pagina": "Inicio",
     }
     return render(request, "portal/inicio.html", contexto)
+
+
+@login_required
+@require_GET
+def explorar_view(request):
+    """Fragmento HTML del explorador de Inicio ("Ver todo"). Mismas reglas de
+    visibilidad que el catálogo (`servicios_visibles_para`): no expone nada
+    que el usuario no pueda utilizar. Solo GET; el JS lo pide al abrir el
+    explorador o al buscar/filtrar, para no cargar el catálogo en Inicio."""
+    try:
+        categoria_id = int(request.GET.get("categoria", "")) or None
+    except ValueError:
+        categoria_id = None
+    texto = request.GET.get("q", "").strip()[:100]
+    resultados, hay_mas = inicio.buscar_servicios(request.user, texto, categoria_id)
+    contexto = {"resultados": resultados, "hay_mas": hay_mas, "texto": texto, "filtrado": bool(texto or categoria_id)}
+    # Sin `request`: es un fragmento que no usa el shell, así que no se
+    # ejecutan los context processors de navegación (varias consultas) en cada
+    # pulsación de tecla del buscador.
+    return HttpResponse(render_to_string("portal/_explorador_resultados.html", contexto))
 
 
 def _clase_badge_tarea(estado):
@@ -209,9 +234,17 @@ def mi_trabajo_view(request):
         tab = "todo"
 
     usuario = request.user
+    # Unión por pertenencia de `pk` (subconsultas), no `qs_a | qs_b`: Django
+    # no combina un QuerySet con `.distinct()` (`tareas_asignadas_a`) con uno
+    # sin él (`tareas_disponibles_para_tomar` para quien tiene
+    # `tareas.gestionar`) y lanza TypeError. Con `pk__in` la deduplicación
+    # sigue siendo por identidad de fila en SQL y no depende de cómo cada
+    # consulta de dominio decida usar `distinct`.
     tareas_qs = (
-        (tareas_asignadas_a(usuario) | tareas_disponibles_para_tomar(usuario))
-        .distinct()
+        Tarea.objects.filter(
+            Q(pk__in=tareas_asignadas_a(usuario).values("pk"))
+            | Q(pk__in=tareas_disponibles_para_tomar(usuario).values("pk"))
+        )
         .select_related("usuario_responsable", "equipo_responsable")
         .order_by("-creado_en")
     )
@@ -241,3 +274,62 @@ def mi_trabajo_view(request):
         "titulo_pagina": "Mi trabajo",
     }
     return render(request, "core/mi_trabajo.html", contexto)
+
+
+@login_required
+def sistema_visual_view(request):
+    """V0 — catálogo visual interno del sistema de diseño (fundamentos,
+    componentes y patrones). Herramienta de desarrollo/diseño, no una pantalla
+    de producto: sin datos de dominio ni lógica propia.
+
+    Protección mínima con el mecanismo que ya existe: `is_staff`, la misma
+    compuerta nativa de Django Admin. No introduce ningún rol ni permiso nuevo
+    y no aparece en la navegación; se abre por su URL (`/sistema-visual/`)."""
+    if not request.user.is_staff:
+        raise PermissionDenied
+    return render(request, "core/sistema_visual.html", {"titulo_pagina": "Sistema visual"})
+
+
+# --- Diseñador (D1) --------------------------------------------------------
+
+
+def _contexto_disenador(request, activa, titulo):
+    """Capacidades + pestañas locales. Quien no entra al Diseñador (ni
+    `catalogo.administrar` ni consultar Flujos) recibe 403, igual que si la
+    navegación no se lo ofreciera."""
+    caps = disenador.capacidades(request.user)
+    if not caps["accede"]:
+        raise PermissionDenied
+    return caps, {
+        "caps": caps,
+        "disenador_tabs": disenador.pestanas(caps, activa),
+        "titulo_pagina": titulo,
+    }
+
+
+@login_required
+def disenador_view(request):
+    caps, contexto = _contexto_disenador(request, "inicio", "Diseñador")
+    if caps["ve_flujos"]:
+        contexto["flujos"] = disenador.resumen_de_flujos(caps)
+    if caps["ve_servicios"]:
+        contexto["servicios"] = disenador.resumen_de_servicios()
+    return render(request, "core/disenador.html", contexto)
+
+
+@login_required
+def disenador_flujos_view(request):
+    caps, contexto = _contexto_disenador(request, "flujos", "Flujos — Diseñador")
+    if not caps["ve_flujos"]:
+        raise PermissionDenied
+    contexto["flujos"] = disenador.biblioteca_de_flujos(caps)
+    return render(request, "core/disenador_flujos.html", contexto)
+
+
+@login_required
+def disenador_servicios_view(request):
+    caps, contexto = _contexto_disenador(request, "servicios", "Servicios — Diseñador")
+    if not caps["ve_servicios"]:
+        raise PermissionDenied
+    contexto["servicios"] = disenador.lista_de_servicios()
+    return render(request, "core/disenador_servicios.html", contexto)

@@ -1,35 +1,219 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block title %}Inicio — Órbita{% endblock %}
 
-{% block content %}
-  <section class="card">
-    <h2>Hola, {{ usuario.get_full_name|default:usuario.get_username }}</h2>
-    <p class="text-muted">Bienvenido a Órbita.</p>
-  </section>
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/inicio.css' %}">{% endblock %}
 
-  <section class="card">
-    <h3>Tu información organizacional</h3>
-    {% if area_principal or unidad_principal %}
-      <dl class="definition-list">
-        {% if area_principal %}
-          <div>
-            <dt>Área principal</dt>
-            <dd>{{ area_principal.area.nombre }}</dd>
+{% block content_modifier %}content-area--portal{% endblock %}
+
+{% block content %}
+{% comment %}Retícula única, ritmo 1 → 2 → 1 → 1 columnas:
+   1. Hero + buscador (ancho completo)
+   2. Cuerpo: Explorar/Habituales (~65%) | Tu día (~35%), ambas columnas nacen sobre el mismo eje
+   3. Tu trabajo (ancho completo, solo con pendientes)
+   4. Tickets recientes (ancho completo, solo si hay)
+   El DOM ya está en el orden móvil (hero, explorar, tu día, trabajo, recientes). El servidor solo renderiza lo que tiene datos reales.{% endcomment %}
+<div class="portal">
+
+  {# ------------------- 1. HERO + buscador de necesidades ------------------- #}
+  <header class="portal-hero">
+    <h1 class="portal-hero__title">
+      {{ saludo.momento }}, {{ saludo.nombre }}.
+      <span class="portal-hero__ask">¿Qué necesitas hoy?</span>
+    </h1>
+
+    {# Descubrimiento de lo que se puede solicitar (distinto de la búsqueda global del header). Sin JS cae al catálogo con el mismo filtro `q`. #}
+    <form class="portal-search" role="search" method="get" action="{% url 'catalogo:lista' %}" data-explorer-search>
+      <span class="portal-search__icon" aria-hidden="true">{% include "components/icon.html" with name="compass" %}</span>
+      <label class="sr-only" for="portal-q">Buscar un servicio, proceso o necesidad</label>
+      <input id="portal-q" class="portal-search__input" type="search" name="q" autocomplete="off"
+             placeholder="Buscar un servicio, proceso o necesidad…">
+      <button type="submit" class="btn btn--primary">Buscar</button>
+    </form>
+  </header>
+
+  {# ------------------------------ 2. CUERPO ------------------------------ #}
+  <div class="portal-body">
+
+    <div class="portal-col portal-col--main">
+
+      <section class="portal-explorar" aria-labelledby="t-explorar">
+        <div class="portal-head">
+          <h2 id="t-explorar">Explorar</h2>
+          {% if total_servicios %}
+            <a class="portal-link" href="{% url 'catalogo:lista' %}" data-explorer-open>
+              Ver todo {% include "components/icon.html" with name="arrow-right" size="sm" %}
+            </a>
+          {% endif %}
+        </div>
+        {% if categorias_tiles %}
+          <div class="cat-cloud">
+            {% for categoria in categorias_tiles %}
+              <a class="cat-chip" href="{% url 'catalogo:lista' %}?categoria={{ categoria.id }}"
+                 data-explorer-open data-categoria="{{ categoria.id }}">
+                <span class="cat-chip__mono tone-{{ categoria.tono }}" aria-hidden="true">{{ categoria.nombre|slice:":1"|upper }}</span>
+                <span class="cat-chip__name">{{ categoria.nombre }}</span>
+                <span class="cat-chip__count">{{ categoria.n }}</span>
+                <span class="sr-only">disponible{{ categoria.n|pluralize }}</span>
+              </a>
+            {% endfor %}
+          </div>
+        {% else %}
+          {# Estado vacío con presencia propia (equilibra la columna del calendario) pero sobrio: sin caja punteada ni card pesada. Desaparece en cuanto hay servicios disponibles. #}
+          <div class="portal-empty">
+            <span class="portal-empty__icon" aria-hidden="true">{% include "components/icon.html" with name="compass" size="lg" %}</span>
+            <p class="portal-empty__title">Aún no hay nada para solicitar</p>
+            <p class="portal-empty__text">Cuando haya servicios o procesos disponibles para ti, los encontrarás aquí.</p>
           </div>
         {% endif %}
-        {% if unidad_principal %}
-          <div>
-            <dt>Unidad de negocio principal</dt>
-            <dd>{{ unidad_principal.unidad_negocio.nombre }}</dd>
-          </div>
+      </section>
+
+      {% if tiene_usados %}
+        <section class="portal-usados" aria-labelledby="t-usados">
+          <div class="portal-head"><h2 id="t-usados">{% if frecuentes %}Tus habituales{% else %}Usados recientemente{% endif %}</h2></div>
+          {% if frecuentes %}
+            <h3 class="portal-sub">Frecuentes</h3>
+            <div class="svc-grid">{% for servicio in frecuentes %}{% include "portal/_servicio_card.html" %}{% endfor %}</div>
+          {% endif %}
+          {% if recientes %}
+            {% if frecuentes %}<h3 class="portal-sub">Recientes</h3>{% endif %}
+            <div class="svc-grid">{% for servicio in recientes %}{% include "portal/_servicio_card.html" %}{% endfor %}</div>
+          {% endif %}
+        </section>
+      {% endif %}
+    </div>
+
+    {# Tu día: título alineado con "Explorar"; fecha, calendario, agenda real y "Todo al día" en una sola composición. #}
+    <aside class="portal-col portal-col--side portal-agenda" aria-labelledby="t-agenda">
+      <div class="portal-head"><h2 id="t-agenda">Tu día</h2></div>
+      <div class="agenda-card">
+        <p class="agenda-today">
+          <span class="agenda-today__num">{{ saludo.dia }}</span>
+          <span class="agenda-today__text"><strong>{{ saludo.dia_semana }}</strong>{{ saludo.mes_anio }}</span>
+        </p>
+
+        <div class="agenda-month">
+          <a class="btn-icon btn-icon--sm" href="?mes={{ agenda.mes_anterior }}" aria-label="Mes anterior">{% include "components/icon.html" with name="chevron-left" size="sm" %}</a>
+          <span class="agenda-month__title">{{ agenda.titulo_mes }}</span>
+          <a class="btn-icon btn-icon--sm" href="?mes={{ agenda.mes_siguiente }}" aria-label="Mes siguiente">{% include "components/icon.html" with name="chevron-right" size="sm" %}</a>
+        </div>
+        <table class="cal">
+          <caption class="sr-only">{{ agenda.titulo_mes }}: los días con actividad están indicados.</caption>
+          <thead>
+            <tr>{% for letra, nombre in agenda.dias_semana %}<th scope="col" abbr="{{ nombre }}">{{ letra }}</th>{% endfor %}</tr>
+          </thead>
+          <tbody>
+            {% for semana in agenda.semanas %}
+              <tr>
+                {% for dia in semana %}
+                  <td class="cal__dia{% if not dia.en_mes %} is-fuera{% endif %}{% if dia.hoy %} is-hoy{% endif %}{% if dia.n %} con-eventos{% endif %}"{% if dia.hoy %} aria-current="date"{% endif %}>
+                    <span class="cal__num">{{ dia.dia }}</span>
+                    {% if dia.n %}<span class="cal__marca" aria-hidden="true"></span><span class="sr-only">{{ dia.etiqueta }}: {{ dia.n }} con fecha</span>{% endif %}
+                  </td>
+                {% endfor %}
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% if not agenda.es_mes_actual %}<p class="agenda-back"><a class="portal-link" href="{% url 'core:inicio' %}">Volver a este mes</a></p>{% endif %}
+
+        {% if agenda.vencidas %}
+          <p class="agenda-overdue">{% include "components/icon.html" with name="alert" size="sm" %}{{ agenda.vencidas }} tarea{{ agenda.vencidas|pluralize }} vencida{{ agenda.vencidas|pluralize }}</p>
         {% endif %}
-      </dl>
-    {% else %}
-      <div class="empty-state">
-        <p>Aún no tienes área ni unidad de negocio asignadas.</p>
+
+        {% if agenda.proximos %}
+          <h3 class="portal-sub">Próximos días</h3>
+          <ul class="agenda-list">
+            {% for evento in agenda.proximos %}
+              <li class="agenda-item">
+                <span class="agenda-item__when">{% if evento.hoy %}Hoy{% else %}{{ evento.local|date:"j M" }}{% endif %}<small>{{ evento.local|date:"H:i" }}</small></span>
+                <a class="agenda-item__what" href="{{ evento.url }}">{{ evento.titulo }}<small>{{ evento.etiqueta }}</small></a>
+              </li>
+            {% endfor %}
+          </ul>
+          {% if agenda.total_proximos > agenda.proximos|length %}<p class="text-muted t-small">y {{ agenda.total_proximos|add:"-6" }} más.</p>{% endif %}
+        {% elif not agenda.vencidas %}
+          <p class="agenda-quiet">Sin fechas pendientes.</p>
+        {% endif %}
+
+        {# Con capacidad de Trabajo y nada pendiente a su nombre: señal discreta dentro de Tu día. #}
+        {% if trabajo and not trabajo.hay_pendientes %}
+          <p class="work-clear">{% include "components/icon.html" with name="check-circle" size="sm" %}Todo al día</p>
+        {% endif %}
       </div>
-    {% endif %}
-    <p><a class="btn btn--secondary" href="{% url 'core:perfil' %}">Ver mi perfil completo</a></p>
-  </section>
+    </aside>
+  </div>
+
+  {# ------------------- 3. TU TRABAJO (solo con pendientes) ------------------- #}
+  {% if trabajo and trabajo.hay_pendientes %}
+    <section class="portal-trabajo" aria-labelledby="t-trabajo">
+      <h2 id="t-trabajo" class="portal-trabajo__title">Tu trabajo</h2>
+      <ul class="work-pills">
+        {% if trabajo.tickets_a_cargo %}<li class="work-pill"><strong>{{ trabajo.tickets_a_cargo }}</strong> ticket{{ trabajo.tickets_a_cargo|pluralize }} a tu cargo</li>{% endif %}
+        {% if trabajo.tareas %}<li class="work-pill"><strong>{{ trabajo.tareas }}</strong> tarea{{ trabajo.tareas|pluralize }}</li>{% endif %}
+        {% if trabajo.tareas_por_tomar %}<li class="work-pill"><strong>{{ trabajo.tareas_por_tomar }}</strong> tarea{{ trabajo.tareas_por_tomar|pluralize }} por tomar</li>{% endif %}
+        {% if trabajo.aprobaciones %}<li class="work-pill"><strong>{{ trabajo.aprobaciones }}</strong> aprobaci{{ trabajo.aprobaciones|pluralize:"ón,ones" }}</li>{% endif %}
+        {% if trabajo.acceso_cola %}<li class="work-pill work-pill--cola">{% include "components/icon.html" with name="inbox" size="sm" %}Cola de atención</li>{% endif %}
+      </ul>
+      <a class="btn btn--primary btn--sm" href="{{ trabajo.url }}">Ir a Trabajo {% include "components/icon.html" with name="arrow-right" size="sm" %}</a>
+    </section>
+  {% endif %}
+
+  {# --------------------- 4. TICKETS RECIENTES (solo si hay) --------------------- #}
+  {% if tickets_recientes %}
+    <section class="portal-recientes" aria-labelledby="t-recientes">
+      <div class="portal-head">
+        <h2 id="t-recientes">Tus tickets recientes</h2>
+        <a class="portal-link" href="{% url 'tickets:mis_tickets' %}">Ver todos {% include "components/icon.html" with name="arrow-right" size="sm" %}</a>
+      </div>
+      <ul class="ticket-rows">
+        {% for ticket in tickets_recientes %}
+          <li>
+            <a class="ticket-row" href="{{ ticket.url_inicio }}">
+              <span class="ticket-row__icon" aria-hidden="true">{% include "components/icon.html" with name="tickets" %}</span>
+              <span class="ticket-row__main">
+                <span class="ticket-row__name">{{ ticket.detalle_servicio.servicio.nombre }}</span>
+                <span class="ticket-row__meta">
+                  {% if ticket.radicado %}Radicado {{ ticket.radicado|stringformat:"s"|slice:":8"|upper }}{% else %}Sin radicar{% endif %}
+                  · actualizado hace {{ ticket.actualizado_en|timesince }}
+                </span>
+              </span>
+              <span class="badge badge--dot {% if ticket.estado == 'BORRADOR' %}badge--warning{% elif ticket.estado == 'RESUELTO' or ticket.estado == 'CERRADO' %}badge--success{% else %}badge--info{% endif %}">{{ ticket.get_estado_display }}</span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+</div>
+
+{# Explorador ("Ver todo"): el contenido se pide por fetch al abrir/buscar; no se carga el catálogo en Inicio. #}
+{% if total_servicios %}
+  <dialog class="modal modal--explorer" id="explorador" aria-labelledby="explorador-titulo" data-url="{% url 'core:explorar' %}">
+    <div class="modal__header">
+      <div>
+        <h2 class="modal__title" id="explorador-titulo">Explorar</h2>
+        <p class="text-muted t-small" style="margin:0">Lo que puedes solicitar, por necesidad o categoría.</p>
+      </div>
+      <button type="button" class="btn-icon btn-icon--sm" data-modal-close aria-label="Cerrar explorador">{% include "components/icon.html" with name="x" %}</button>
+    </div>
+    <div class="explorer__controls">
+      <div class="search">
+        <span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" %}</span>
+        <label class="sr-only" for="explorador-q">Buscar en el explorador</label>
+        <input id="explorador-q" class="search__input" type="search" autocomplete="off" placeholder="Buscar un servicio, proceso o necesidad…">
+      </div>
+      <div class="explorer__chips" role="group" aria-label="Categorías">
+        <button type="button" class="chip is-active" data-categoria="" aria-pressed="true">Todas</button>
+        {% for categoria in categorias %}
+          <button type="button" class="chip" data-categoria="{{ categoria.id }}" aria-pressed="false">{{ categoria.nombre }} <span class="text-muted">{{ categoria.n }}</span></button>
+        {% endfor %}
+      </div>
+    </div>
+    <div class="modal__body explorer__results" id="explorador-resultados" aria-live="polite"></div>
+  </dialog>
+{% endif %}
 {% endblock %}
+
+{% block extra_scripts %}<script src="{% static 'js/inicio.js' %}" defer></script>{% endblock %}

@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block title %}Studio — Órbita{% endblock %}
+
+{% block content_modifier %}content-area--wide{% endblock %}
+
+{% block content %}
+  {% include "components/disenador_miga.html" with seccion="servicios" actual="Lista de Studio" %}
+  <section class="card">
+    <h1>Studio</h1>
+    <p class="text-muted">Configura los Servicios y Procesos de Órbita: entrada, ejecución, salida y publicación.</p>
+    <div class="form-actions">
+      <a class="btn btn--primary" href="{% url 'catalogo:studio_crear' %}">+ Crear Servicio o Proceso</a>
+    </div>
+  </section>
+
+  {% if servicios %}
+    <section class="card">
+      <ul class="list-row-group">
+        {% for servicio in servicios %}
+          <li class="list-row">
+            <a class="list-row__title" href="{% url 'catalogo:studio' servicio.pk %}">{{ servicio.nombre }}</a>
+            <span class="badge{% if servicio.tipo == 'PROCESO' %} badge--info{% endif %}">{{ servicio.get_tipo_display }}</span>
+            <span class="badge{% if servicio.activo %} badge--success{% else %} badge--warning{% endif %}">
+              {% if servicio.activo %}Publicado{% else %}Borrador{% endif %}
+            </span>
+            <span class="text-muted">{{ servicio.categoria }}</span>
+            <a class="btn btn--ghost" href="{% url 'catalogo:studio' servicio.pk %}">Configurar</a>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% else %}
+    <div class="empty-state">
+      <p>Todavía no hay servicios ni procesos. Crea el primero con «Crear Servicio o Proceso».</p>
+    </div>
+  {% endif %}
+{% endblock %}

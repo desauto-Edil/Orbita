@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Servicios — Diseñador — Órbita{% endblock %}
+
+{% block content_modifier %}content-area--portal{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/disenador.css' %}">{% endblock %}
+
+{% block content %}
+<div class="dis">
+  <header class="dis-head">
+    <h1 class="dis-title">Diseñador</h1>
+    <p class="dis-lede">Diseña los flujos de trabajo y los servicios que la organización ofrece.</p>
+  </header>
+
+  {% include "layout/disenador_tabs.html" %}
+
+  <section class="dis-section" aria-labelledby="dis-servicios">
+    <div class="dis-section__head">
+      <div>
+        <h2 class="dis-section-title" id="dis-servicios">Servicios y procesos</h2>
+        <p class="dis-section__text">Cada uno reúne su formulario, su flujo (cuando lo necesita), lo que se entrega y su publicación.</p>
+      </div>
+      <a class="btn btn--primary" href="{% url 'catalogo:studio_crear' %}">{% include "components/icon.html" with name="plus" %}Nuevo servicio o proceso</a>
+    </div>
+
+    {% if servicios %}
+      <div class="card dis-list-card">
+        <ul class="dis-list">
+          {% for servicio in servicios %}
+            <li class="dis-row">
+              <div class="dis-row__main">
+                <a class="dis-row__name dis-row__link" href="{% url 'catalogo:studio' servicio.pk %}">{{ servicio.nombre }}</a>
+                <span class="dis-row__meta">
+                  {{ servicio.get_tipo_display }} · {{ servicio.categoria.nombre }} ·
+                  {% if servicio.workflow %}Flujo: {{ servicio.workflow.nombre }}{% else %}Sin flujo{% endif %}
+                </span>
+                {% if servicio.tipo == "PROCESO" and not servicio.workflow %}
+                  <span class="dis-row__hint">{% include "components/icon.html" with name="alert" size="sm" %}Un proceso necesita un flujo para poder publicarse.</span>
+                {% endif %}
+              </div>
+              <div class="dis-row__actions">
+                <span class="badge{% if servicio.tipo == 'PROCESO' %} badge--info{% endif %}">{{ servicio.get_tipo_display }}</span>
+                <span class="badge{% if servicio.activo %} badge--success{% else %} badge--warning{% endif %}">{% if servicio.activo %}Publicado{% else %}Borrador{% endif %}</span>
+                <a class="btn btn--ghost btn--sm" href="{% url 'catalogo:studio' servicio.pk %}">Configurar</a>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% else %}
+      <div class="empty-state">
+        <p>Todavía no hay servicios ni procesos. Crea el primero con «Nuevo servicio o proceso».</p>
+      </div>
+    {% endif %}
+  </section>
+</div>
+{% endblock %}

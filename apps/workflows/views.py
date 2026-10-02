@@ -119,6 +119,10 @@ def detalle_view(request, pk):
         "workflow": workflow,
         "versiones": workflow.versiones.order_by("-numero"),
         "puede_administrar": administra,
+        # 4.6 — quien puede modificarlo debe saber qué elementos comparten
+        # este flujo (relación inversa de `Servicio.workflow`; este módulo no
+        # importa Catálogo).
+        "servicios_vinculados": list(workflow.servicios.order_by("nombre")) if administra else [],
         "form": (
             WorkflowForm(initial={"nombre": workflow.nombre, "descripcion": workflow.descripcion})
             if administra

@@ -60,6 +60,35 @@ class Servicio(RegistroBase):
         Formulario, on_delete=models.PROTECT, null=True, blank=True, related_name="servicios"
     )
 
+    class PoliticaEntrega(models.TextChoices):
+        """4.5 — qué ocurre después de entregar formalmente el resultado al
+        solicitante. Vacío (default) = sin política definida: los Tickets de
+        este Servicio conservan el flujo anterior a 4.5 (resolver y cerrar
+        manualmente, sin entrega formal). Ninguna política admite esperar
+        indefinidamente."""
+
+        CIERRE_DIRECTO = "CIERRE_DIRECTO", "Cierre al entregar, sin esperar respuesta"
+        PERIODO_OBSERVACIONES = "PERIODO_OBSERVACIONES", "Periodo de observaciones"
+
+    politica_entrega = models.CharField(
+        max_length=30, choices=PoliticaEntrega.choices, blank=True, default=""
+    )
+    # Solo con PERIODO_OBSERVACIONES: días que el solicitante tiene para
+    # aceptar u observar antes del cierre automático. Se congela en cada
+    # Ticket (`Ticket.entrega_dias_observacion`) al crear su borrador.
+    dias_observacion = models.PositiveSmallIntegerField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(politica_entrega="PERIODO_OBSERVACIONES", dias_observacion__isnull=False, dias_observacion__gte=1)
+                    | (~Q(politica_entrega="PERIODO_OBSERVACIONES") & Q(dias_observacion__isnull=True))
+                ),
+                name="ck_servicio_politica_entrega_coherente",
+            ),
+        ]
+
     def __str__(self):
         return self.nombre
 

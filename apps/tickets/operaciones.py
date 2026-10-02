@@ -95,7 +95,12 @@ def crear_borrador(usuario, servicio):
     if version is None:
         raise ValidationError("El servicio no tiene un formulario activo utilizable todavía.")
 
-    ticket = Ticket.objects.create(solicitante=usuario, tipo=servicio.tipo, entregables_materializados=False)
+    # 4.5: la política de entrega se congela aquí, igual que las expectativas
+    # de entregables — un cambio posterior en el Servicio no afecta este Ticket.
+    ticket = Ticket.objects.create(
+        solicitante=usuario, tipo=servicio.tipo, entregables_materializados=False,
+        entrega_politica=servicio.politica_entrega, entrega_dias_observacion=servicio.dias_observacion,
+    )
     TicketServicio.objects.create(ticket=ticket, servicio=servicio, formulario_version=version)
     RespuestaFormulario.objects.create(ticket=ticket, formulario_version=version)
     from apps.tickets.entregables import materializar_entregables
@@ -611,11 +616,33 @@ def _auditar_cambio_estado(ticket, actor, estado_anterior):
     registrar_evento(
         accion=RegistroAuditoria.Accion.ACTUALIZAR,
         instancia=ticket,
-        origen=RegistroAuditoria.Origen.USUARIO,
+        # 4.5: `actor=None` = cierre automático del Sistema (vencimiento).
+        origen=RegistroAuditoria.Origen.USUARIO if actor is not None else RegistroAuditoria.Origen.SISTEMA,
         usuario=actor,
         datos_anteriores={"estado": estado_anterior},
         datos_nuevos={"estado": ticket.estado},
     )
+
+
+def _transicionar_a_cerrado(ticket, actor, **datos):
+    """Única implementación de RESUELTO → CERRADO (historial + auditoría),
+    compartida por `cerrar_ticket` y por el cierre de una entrega (aceptación,
+    cierre directo y cierre automático por vencimiento — `apps.tickets.
+    entregas`). El llamador ya bloqueó el ticket y validó autorización/estado.
+    `actor=None` = Sistema. `datos` extiende el evento (p. ej. `causa`)."""
+    estado_anterior = ticket.estado
+    exigir_transicion(ticket, "CERRAR")
+    ticket.save()
+    historial.registrar(
+        ticket,
+        HistorialTicket.TipoEvento.CERRADO,
+        actor,
+        estado_anterior=estado_anterior,
+        estado_nuevo=ticket.estado,
+        **datos,
+    )
+    _auditar_cambio_estado(ticket, actor, estado_anterior)
+    return ticket
 
 
 @transaction.atomic
@@ -637,6 +664,8 @@ def resolver_ticket(ticket, actor, descripcion, archivos=None):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado != Ticket.Estado.EN_ATENCION:
         raise ValidationError("Solo un ticket EN_ATENCION puede resolverse.")
+    if ticket.entrega_politica:
+        raise ValidationError("Este ticket se completa con una entrega formal al solicitante.")
     if ticket.solicitudes_informacion.filter(estado=SolicitudInformacion.Estado.PENDIENTE).exists():
         raise ValidationError(
             "No es posible resolver mientras existan solicitudes de información pendientes."
@@ -675,22 +704,14 @@ def cerrar_ticket(ticket, actor):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado != Ticket.Estado.RESUELTO:
         raise ValidationError("Solo un ticket RESUELTO puede cerrarse.")
+    if ticket.entrega_politica:
+        raise ValidationError(
+            "Este ticket tiene entrega formal: se cierra cuando el solicitante acepta o vence su plazo."
+        )
     if not puede_cerrar_ticket(actor, ticket):
         raise PermissionDenied("No tiene autorización para cerrar este ticket.")
 
-    estado_anterior = ticket.estado
-    exigir_transicion(ticket, "CERRAR")
-    ticket.save()
-
-    historial.registrar(
-        ticket,
-        HistorialTicket.TipoEvento.CERRADO,
-        actor,
-        estado_anterior=estado_anterior,
-        estado_nuevo=ticket.estado,
-    )
-    _auditar_cambio_estado(ticket, actor, estado_anterior)
-    return ticket
+    return _transicionar_a_cerrado(ticket, actor)
 
 
 @transaction.atomic
@@ -734,6 +755,10 @@ def reabrir_ticket(ticket, actor, motivo):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado != Ticket.Estado.RESUELTO:
         raise ValidationError("Solo un ticket RESUELTO puede reabrirse.")
+    if ticket.entrega_politica:
+        raise ValidationError(
+            "Un ticket con entrega formal vuelve a atención solo por las observaciones del solicitante."
+        )
     if not puede_reabrir_ticket(actor, ticket):
         raise PermissionDenied("No tiene autorización para reabrir este ticket.")
     if not motivo or not motivo.strip():

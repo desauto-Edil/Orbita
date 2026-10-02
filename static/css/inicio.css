@@ -1,0 +1,795 @@
+/* Órbita — Inicio / Mi Portal (V1). Solo tokens del sistema central (V0).
+
+   UNA retícula para toda la página, con ritmo 1 → 2 → 1 → 1 columnas:
+
+     ┌──────────────────────────────────────────────┐
+     │ Hero + buscador                (ancho completo)│
+     ├───────────────────────────────┬──────────────┤
+     │ Explorar / Habituales  (~65%) │ Tu día (~35%) │  ← ambas nacen en el mismo eje
+     ├───────────────────────────────┴──────────────┤
+     │ Tu trabajo           (solo con pendientes)     │
+     ├──────────────────────────────────────────────┤
+     │ Tickets recientes             (solo si hay)    │
+     └──────────────────────────────────────────────┘
+
+   Gutters y espaciado vertical salen de dos variables (`--portal-gap-x`,
+   `--portal-gap-y`) usadas por toda la página. Los títulos de sección
+   comparten el mismo estilo (`.portal-head`) para que "Explorar" y "Tu día"
+   queden alineados. El servidor renderiza solo los bloques con datos reales;
+   no se ocultan columnas con CSS. El DOM ya está en el orden móvil (hero,
+   explorar, tu día, trabajo, recientes): bajo 760px todo se apila. */
+
+.portal {
+  --portal-gap-x: clamp(var(--space-5), 3vw, var(--space-7));
+  --portal-gap-y: clamp(var(--space-6), 3.4vw, var(--space-8));
+
+  display: flex;
+  flex-direction: column;
+  gap: var(--portal-gap-y);
+}
+
+/* ----------------------------------------------------------------------- */
+/* 1. Hero y buscador: una sola franja de ancho completo                    */
+/* ----------------------------------------------------------------------- */
+
+.portal-hero {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding-top: clamp(0px, 0.8vw, var(--space-4));
+}
+
+.portal-hero__title {
+  margin: 0;
+  font-size: var(--font-size-hero);
+  font-weight: var(--font-weight-bold);
+  line-height: 1.08;
+  letter-spacing: -0.02em;
+}
+
+/* La pregunta acompaña al saludo; no compite como segundo titular. */
+.portal-hero__ask {
+  display: block;
+  margin-top: var(--space-1);
+  color: var(--text-muted);
+  font-size: 0.62em;
+  font-weight: var(--font-weight-medium);
+  letter-spacing: -0.01em;
+}
+
+.portal-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 60px;
+  padding: var(--space-2) var(--space-2) var(--space-2) var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-md);
+  transition: border-color var(--duration-fast) var(--ease-standard),
+    box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+.portal-search:hover {
+  border-color: var(--border-strong);
+}
+
+/* El foco se muestra en el contenedor (el input no dibuja su propio anillo). */
+.portal-search:focus-within {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+  box-shadow: var(--shadow-lg);
+}
+
+.portal-search__icon {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+
+.portal-search__icon .icon {
+  width: 22px;
+  height: 22px;
+}
+
+.portal-search__input {
+  flex: 1;
+  min-width: 0;
+  height: 44px;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: var(--font-size-body-lg);
+}
+
+.portal-search__input::placeholder {
+  color: var(--text-muted);
+}
+
+/* ----------------------------------------------------------------------- */
+/* 2. Cuerpo: dos columnas que nacen sobre el mismo eje                     */
+/* ----------------------------------------------------------------------- */
+
+.portal-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: var(--portal-gap-y) var(--portal-gap-x);
+}
+
+.portal-col {
+  min-width: 0;
+}
+
+.portal-col--main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--portal-gap-y);
+}
+
+/* Tablet: ~60/40; desktop: ~65/35. Debajo de 760px, una columna. */
+@media (min-width: 760px) {
+  .portal-body { grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); }
+}
+
+@media (min-width: 1100px) {
+  .portal-body { grid-template-columns: minmax(0, 13fr) minmax(320px, 7fr); }
+}
+
+/* ----------------------------------------------------------------------- */
+/* Secciones                                                                */
+/* ----------------------------------------------------------------------- */
+
+.portal-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.portal-head h2 {
+  margin: 0;
+  font-size: var(--font-size-section-title);
+}
+
+.portal-sub {
+  margin: var(--space-4) 0 var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.portal-head + .portal-sub {
+  margin-top: 0;
+}
+
+.portal-link {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border-strong);
+  transition: border-color var(--duration-fast) var(--ease-standard);
+}
+
+.portal-link:hover {
+  border-color: var(--text-primary);
+}
+
+.portal-link .icon {
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.portal-link:hover .icon {
+  transform: translateX(2px);
+}
+
+/* Estado vacío de Explorar: con presencia propia para equilibrar la columna
+   de Tu día, pero sobrio — superficie cálida apenas diferenciada, sin caja
+   punteada ni sombra, con un único acento lima. Desaparece cuando hay
+   categorías. */
+.portal-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 300px;
+  padding: var(--space-7) var(--space-6);
+  border-radius: var(--radius-xl);
+  background: var(--surface-hover);
+}
+
+.portal-empty__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  margin-bottom: var(--space-3);
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.portal-empty__title {
+  margin: 0;
+  font-size: var(--font-size-section-title);
+  font-weight: var(--font-weight-bold);
+  letter-spacing: -0.01em;
+}
+
+.portal-empty__text {
+  margin: 0;
+  max-width: 38ch;
+  color: var(--text-muted);
+}
+
+/* Tono de categoría: tokens de categorización de V0 (pastel + texto). */
+.tone-1 { --tone-bg: var(--tag-violet-bg); --tone-fg: var(--tag-violet-text); }
+.tone-2 { --tone-bg: var(--tag-peach-bg); --tone-fg: var(--tag-peach-text); }
+.tone-3 { --tone-bg: var(--tag-sky-bg); --tone-fg: var(--tag-sky-text); }
+.tone-4 { --tone-bg: var(--tag-rose-bg); --tone-fg: var(--tag-rose-text); }
+
+/* ----------------------------------------------------------------------- */
+/* B. Explorar: categorías como chips ligeros que fluyen sobre el canvas    */
+/* ----------------------------------------------------------------------- */
+
+.cat-cloud {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 52px;
+  padding: var(--space-2) var(--space-5) var(--space-2) var(--space-2);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: inherit;
+  text-decoration: none;
+  transition: background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.cat-chip:hover {
+  background: var(--surface-card);
+  border-color: var(--border-strong);
+  transform: translateY(-1px);
+}
+
+.cat-chip__mono {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--tone-bg);
+  color: var(--tone-fg);
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-bold);
+}
+
+.cat-chip__name {
+  font-weight: var(--font-weight-semibold);
+}
+
+.cat-chip__count {
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ----------------------------------------------------------------------- */
+/* Tarjetas de Servicio/Proceso                                             */
+/*   · en el explorador (dialog): tarjetas con borde                        */
+/*   · en Habituales (canvas): filas ligeras, sin caja                      */
+/* ----------------------------------------------------------------------- */
+
+.svc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 250px), 1fr));
+  gap: var(--space-3);
+}
+
+.svc-grid + .svc-grid {
+  margin-top: var(--space-2);
+}
+
+.svc-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  color: inherit;
+  text-decoration: none;
+  transition: box-shadow var(--duration-fast) var(--ease-standard),
+    background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.svc-card:hover {
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+  border-color: var(--border-strong);
+}
+
+.portal-usados .svc-grid {
+  gap: var(--space-1) var(--space-4);
+}
+
+.portal-usados .svc-card {
+  padding: var(--space-2) var(--space-3);
+  border-color: transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+}
+
+.portal-usados .svc-card:hover {
+  background: var(--surface-card);
+  box-shadow: var(--shadow-sm);
+  transform: none;
+}
+
+.svc-card__tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background: var(--tone-bg);
+  color: var(--tone-fg);
+}
+
+.svc-card__body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.svc-card__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-weight-semibold);
+}
+
+.svc-card__meta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+}
+
+.svc-card__go {
+  display: inline-flex;
+  color: var(--text-muted);
+  opacity: 0;
+  transform: translateX(-4px);
+  transition: opacity var(--duration-fast) var(--ease-standard),
+    transform var(--duration-fast) var(--ease-standard);
+}
+
+.svc-card:hover .svc-card__go,
+.svc-card:focus-visible .svc-card__go {
+  opacity: 1;
+  transform: none;
+}
+
+/* ----------------------------------------------------------------------- */
+/* 3. Tu trabajo: banda compacta de ancho completo, solo con pendientes     */
+/* ----------------------------------------------------------------------- */
+
+.portal-trabajo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3) var(--space-5);
+  padding: var(--space-4) var(--space-6);
+  border-radius: var(--radius-pill);
+  background: var(--surface-inverse);
+  color: var(--text-on-inverse);
+}
+
+.portal-trabajo__title {
+  margin: 0;
+  color: var(--text-on-inverse);
+  font-size: var(--font-size-card-title);
+}
+
+.work-pills {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  list-style: none;
+}
+
+.work-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-glass-inverse);
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: var(--font-size-small);
+}
+
+.work-pill strong {
+  color: var(--color-primary);
+  font-size: var(--font-size-body-lg);
+}
+
+.work-pill--cola {
+  color: var(--text-on-inverse-muted);
+}
+
+/* ----------------------------------------------------------------------- */
+/* D. Tu día: fecha + calendario permanente                                 */
+/* ----------------------------------------------------------------------- */
+
+.agenda-card {
+  padding: var(--space-5);
+  border-radius: var(--radius-xl);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-sm);
+}
+
+/* "Todo al día": parte de Tu día, no un bloque aparte. */
+.work-clear {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--status-success-soft);
+  color: var(--status-success);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+}
+
+/* La fecha de hoy vive aquí (no en el hero): número grande + día y mes. */
+.agenda-today {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  margin: 0 0 var(--space-5);
+}
+
+.agenda-today__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-lg);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-size: 30px;
+  font-weight: var(--font-weight-bold);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+.agenda-today__text {
+  display: flex;
+  flex-direction: column;
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+}
+
+.agenda-today__text strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-section-title);
+  line-height: 1.15;
+}
+
+.agenda-month {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.agenda-month__title {
+  font-weight: var(--font-weight-bold);
+}
+
+.cal {
+  width: 100%;
+  table-layout: fixed;
+  border-collapse: collapse;
+  text-align: center;
+}
+
+.cal th {
+  padding-bottom: var(--space-2);
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+}
+
+.cal__dia {
+  position: relative;
+  height: 38px;
+  padding: 0;
+  font-size: var(--font-size-small);
+  font-variant-numeric: tabular-nums;
+}
+
+.cal__num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+}
+
+.cal__dia.is-fuera {
+  color: var(--text-disabled);
+}
+
+/* Hoy: círculo carbón (el lima ya señala la fecha de arriba). No depende solo
+   del color: va en negrita y lleva aria-current="date". */
+.cal__dia.is-hoy .cal__num {
+  background: var(--surface-inverse);
+  color: var(--text-on-inverse);
+  font-weight: var(--font-weight-bold);
+}
+
+.cal__marca {
+  position: absolute;
+  bottom: 1px;
+  left: 50%;
+  width: 5px;
+  height: 5px;
+  margin-left: -2.5px;
+  border-radius: 50%;
+  background: var(--color-primary-active);
+}
+
+.agenda-back {
+  margin: var(--space-2) 0 0;
+  text-align: center;
+}
+
+.agenda-overdue {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--status-danger-soft);
+  color: var(--status-danger);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+}
+
+.agenda-quiet {
+  margin: var(--space-4) 0 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+  text-align: center;
+}
+
+.agenda-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  list-style: none;
+}
+
+.agenda-item {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.agenda-item__when {
+  display: flex;
+  flex-direction: column;
+  min-width: 44px;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-bold);
+}
+
+.agenda-item__when small,
+.agenda-item__what small {
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-regular);
+}
+
+.agenda-item__what {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: none;
+}
+
+.agenda-item__what:hover {
+  text-decoration: underline;
+}
+
+/* ----------------------------------------------------------------------- */
+/* F. Tickets recientes: filas sobre el canvas, separadas por líneas finas  */
+/* ----------------------------------------------------------------------- */
+
+.ticket-rows {
+  display: flex;
+  flex-direction: column;
+  list-style: none;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.ticket-rows li {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.ticket-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-2);
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.ticket-row:hover {
+  background: var(--surface-card);
+}
+
+.ticket-row__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+}
+
+.ticket-row__main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ticket-row__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-weight-semibold);
+}
+
+.ticket-row__meta {
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+}
+
+/* ----------------------------------------------------------------------- */
+/* Explorador (dialog)                                                      */
+/* ----------------------------------------------------------------------- */
+
+.modal--explorer {
+  width: min(960px, calc(100vw - 2 * var(--space-4)));
+  max-height: min(86vh, 780px);
+}
+
+.modal--explorer[open] {
+  display: flex;
+  flex-direction: column;
+}
+
+.explorer__controls {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-5) var(--space-3);
+}
+
+.explorer__chips {
+  display: flex;
+  gap: var(--space-2);
+  padding-bottom: var(--space-1);
+  overflow-x: auto;
+}
+
+.explorer__chips .chip {
+  flex-shrink: 0;
+}
+
+.explorer__results {
+  flex: 1;
+  min-height: 200px;
+  overflow-y: auto;
+  padding-top: var(--space-2);
+}
+
+.explorer__count {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-small);
+}
+
+/* ----------------------------------------------------------------------- */
+/* Ajustes por tamaño                                                       */
+/* ----------------------------------------------------------------------- */
+
+@media (max-width: 759px) {
+  .portal-empty {
+    min-height: 0;
+    padding: var(--space-6) var(--space-5);
+  }
+}
+
+@media (max-width: 639px) {
+  .portal-search {
+    min-height: 54px;
+    padding-left: var(--space-4);
+  }
+
+  .portal-search .btn {
+    padding: 0 var(--space-4);
+  }
+
+  .portal-trabajo {
+    align-items: flex-start;
+    padding: var(--space-5);
+    border-radius: var(--radius-xl);
+  }
+
+  .portal-trabajo .btn {
+    width: 100%;
+    justify-content: center;
+  }
+
+  .cat-chip {
+    min-height: 48px;
+    padding-right: var(--space-4);
+  }
+
+  .modal--explorer {
+    max-height: 92vh;
+  }
+}

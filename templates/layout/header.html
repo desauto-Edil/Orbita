@@ -1,0 +1,58 @@
+{% comment %}
+  Header global (nivel 0 de navegación): identidad, búsqueda, notificaciones y
+  menú de usuario. No contiene navegación de módulos (esa vive en el dock).
+
+  Búsqueda y notificaciones todavía no tienen backend (Sprint 8/9 del roadmap):
+  se muestran DESHABILITADAS y rotuladas "próximamente" para fijar su lugar en
+  la composición sin aparentar ser operativas ni inventar funcionalidad.
+{% endcomment %}
+<header class="app-header">
+  <a class="app-header__brand" href="{% url 'core:inicio' %}" aria-label="Órbita, ir al inicio">
+    <span class="app-header__brand-mark" aria-hidden="true">O</span>
+    <span class="app-header__brand-name">Órbita</span>
+  </a>
+
+  <div class="app-header__search search" role="search" data-tooltip="Búsqueda: próximamente" data-tooltip-pos="bottom">
+    <span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" %}</span>
+    <input class="search__input" type="search" placeholder="Buscar en Órbita" aria-label="Buscar en Órbita (próximamente)" disabled>
+  </div>
+
+  <div class="app-header__spacer"></div>
+
+  <div class="app-header__actions">
+    <span data-tooltip="Notificaciones: próximamente" data-tooltip-pos="bottom">
+      <button type="button" class="btn-icon btn-icon--outline" disabled aria-label="Notificaciones (próximamente)">
+        {% include "components/icon.html" with name="bell" %}
+      </button>
+    </span>
+
+    <div class="user-menu popover-host">
+      <button type="button"
+              class="user-menu__trigger"
+              data-popover-toggle="menu-usuario"
+              aria-haspopup="menu"
+              aria-expanded="false"
+              aria-controls="menu-usuario">
+        <span class="avatar" aria-hidden="true">{{ request.user.get_username|slice:":1"|upper }}</span>
+        <span class="user-menu__name">{{ request.user.get_full_name|default:request.user.get_username }}</span>
+        {% include "components/icon.html" with name="chevron-down" size="sm" %}
+        <span class="sr-only">Menú de usuario</span>
+      </button>
+      <div class="popover" id="menu-usuario" role="menu" aria-label="Menú de usuario" hidden>
+        <div class="menu__header">
+          <span class="menu__header-name">{{ request.user.get_full_name|default:request.user.get_username }}</span>
+          <span class="menu__header-meta">{{ request.user.get_username }}</span>
+        </div>
+        <a class="menu__item" role="menuitem" href="{% url 'core:perfil' %}"{% if request.resolver_match.view_name == "core:perfil" %} aria-current="page"{% endif %}>
+          {% include "components/icon.html" with name="user" %}Mi perfil
+        </a>
+        <form method="post" action="{% url 'core:logout' %}" role="none">
+          {% csrf_token %}
+          <button type="submit" class="menu__item menu__item--danger" role="menuitem">
+            {% include "components/icon.html" with name="logout" %}Cerrar sesión
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+</header>

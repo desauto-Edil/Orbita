@@ -1,0 +1,399 @@
+/* Órbita — Diseñador (D1). Solo tokens del sistema central (V0).
+
+   Mismo canvas y gutters que Inicio (`content-area--portal`). Una sola
+   cabecera ("Diseñador") y pestañas locales [Inicio] [Flujos] [Servicios]
+   comunes a las tres pantallas; debajo, el contenido de cada sección:
+
+     Inicio     dos tarjetas (Flujos | Servicios y procesos) con sus cifras y
+                accesos, y "Continúa donde lo dejaste" con lo que está en curso.
+     Flujos     biblioteca: una fila por flujo (estado, usado por, acciones).
+     Servicios  una fila por servicio o proceso (tipo, estado, flujo, acción).
+
+   Ejes: el borde izquierdo de la cabecera, las pestañas, las tarjetas y las
+   listas coincide; las acciones primarias van a la derecha de cada cabecera
+   de sección. */
+
+.dis {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+/* --- Cabecera --- */
+
+.dis-head {
+  max-width: 62ch;
+}
+
+.dis-title {
+  margin: 0;
+  font-size: var(--font-size-page-title);
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.02em;
+}
+
+.dis-lede {
+  margin: var(--space-2) 0 0;
+  color: var(--text-secondary);
+}
+
+/* --- Inicio: tarjetas de sección --- */
+
+.dis-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: stretch;
+}
+
+@media (min-width: 900px) {
+  .dis-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.dis-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: var(--space-6);
+}
+
+.dis-card__head {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-4);
+}
+
+.dis-tile {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+}
+
+.dis-card__title {
+  margin: 0;
+  font-size: var(--font-size-section-title);
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.01em;
+}
+
+.dis-card__text {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+}
+
+.dis-stats {
+  display: flex;
+  gap: var(--space-7);
+  margin: 0;
+}
+
+.dis-stats dt {
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-muted);
+}
+
+.dis-stats dd {
+  margin: 0;
+  font-size: var(--font-size-display);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.dis-empty {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+}
+
+.dis-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: auto;
+}
+
+/* --- Secciones y listas --- */
+
+.dis-resume,
+.dis-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.dis-section__head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+}
+
+.dis-section-title {
+  margin: 0;
+  font-size: var(--font-size-section-title);
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.01em;
+}
+
+.dis-section__text {
+  max-width: 62ch;
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+}
+
+.dis-note {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--status-info-soft);
+  color: var(--status-info);
+  font-size: var(--font-size-small);
+}
+
+.dis-note .icon {
+  margin-top: 2px;
+}
+
+.dis-list-card {
+  padding: var(--space-2) var(--space-6);
+}
+
+.dis-list-title {
+  margin: var(--space-4) 0 0;
+  font-size: var(--font-size-card-title);
+}
+
+.dis-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dis-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) 0;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.dis-row:last-child {
+  border-bottom: none;
+}
+
+.dis-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.dis-row__name {
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.dis-row__link {
+  text-decoration: none;
+}
+
+.dis-row__link:hover {
+  text-decoration: underline;
+}
+
+.dis-row__meta {
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+}
+
+.dis-row__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-small);
+  color: var(--status-warning);
+}
+
+.dis-row__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-shrink: 0;
+}
+
+@media (max-width: 639px) {
+  .dis-card,
+  .dis-list-card {
+    padding-inline: var(--space-4);
+  }
+
+  .dis-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .dis-row__actions {
+    justify-content: flex-start;
+  }
+
+  .dis-stats {
+    gap: var(--space-6);
+  }
+}
+
+/* --- Flujo: lienzo + panel lateral (D2) ---
+   Misma retícula que el workspace de solicitud: contenido principal a la
+   izquierda (~62%) y estado/acciones a la derecha (~38%), con los bordes
+   alineados a la cabecera. El panel lateral acompaña el scroll en pantallas
+   anchas. */
+
+.dis-head--flujo {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-5);
+  max-width: none;
+}
+
+.dis-head__actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.dis-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+@media (min-width: 1000px) {
+  .dis-layout {
+    grid-template-columns: minmax(0, 13fr) minmax(0, 8fr);
+  }
+
+  .dis-side {
+    position: sticky;
+    top: calc(var(--header-h) + var(--space-5));
+    max-height: calc(100vh - var(--header-h) - var(--dock-clearance));
+    overflow-y: auto;
+  }
+}
+
+.dis-main {
+  padding: var(--space-6);
+}
+
+.dis-side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.dis-side-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-5);
+}
+
+.dis-panel__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin-bottom: var(--space-4);
+}
+
+.dis-panel__title {
+  margin: 0;
+  font-size: var(--font-size-card-title);
+  line-height: var(--line-height-tight);
+}
+
+.dis-main .dis-panel__title {
+  font-size: var(--font-size-section-title);
+  letter-spacing: -0.01em;
+}
+
+.dis-panel__meta {
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+}
+
+.dis-side-text {
+  margin: 0;
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+}
+
+.dis-checklist {
+  margin: 0;
+  padding-left: var(--space-5);
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+}
+
+.dis-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.dis-confirm[hidden] {
+  display: none;
+}
+
+.dis-list--compact .dis-row {
+  padding: var(--space-3) 0;
+}
+
+.dis-actions-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.dis-form-card {
+  max-width: 640px;
+  padding: var(--space-6);
+}
+
+@media (max-width: 639px) {
+  .dis-main,
+  .dis-side-card,
+  .dis-form-card {
+    padding: var(--space-5) var(--space-4);
+  }
+}

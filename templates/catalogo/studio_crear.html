@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+
+{% block title %}Crear en Studio — Órbita{% endblock %}
+
+{% block content %}
+  {% include "components/disenador_miga.html" with seccion="servicios" actual="Nuevo" %}
+  <section class="card">
+    <h1>Crear Servicio o Proceso</h1>
+    <p class="text-muted">Empieza con lo básico. Se crea como borrador: después completas la entrada, la ejecución, la salida y la publicación.</p>
+
+    <form method="post" action="{% url 'catalogo:studio_crear' %}" class="form">
+      {% csrf_token %}
+      {% if form.non_field_errors %}
+        <div class="alert alert--danger"><div class="alert__text">{{ form.non_field_errors|join:" " }}</div></div>
+      {% endif %}
+      <div class="field">
+        <label for="{{ form.tipo.id_for_label }}">{{ form.tipo.label }}</label>
+        {{ form.tipo }}
+        <span class="text-muted" style="font-size: var(--text-xs);">
+          Servicio: una necesidad puntual que una persona solicita.
+          Proceso: un ciclo estructurado de trabajo de la organización.
+        </span>
+        {{ form.tipo.errors }}
+      </div>
+      <div class="field">
+        <label for="{{ form.nombre.id_for_label }}">{{ form.nombre.label }}</label>
+        {{ form.nombre }}
+        {{ form.nombre.errors }}
+      </div>
+      <div class="field">
+        <label for="{{ form.categoria.id_for_label }}">{{ form.categoria.label }}</label>
+        {{ form.categoria }}
+        {{ form.categoria.errors }}
+      </div>
+      <div class="field">
+        <label for="{{ form.categoria_nueva.id_for_label }}">{{ form.categoria_nueva.label }}</label>
+        {{ form.categoria_nueva }}
+        {{ form.categoria_nueva.errors }}
+      </div>
+      <div class="field">
+        <label for="{{ form.descripcion.id_for_label }}">{{ form.descripcion.label }}</label>
+        {{ form.descripcion }}
+        {{ form.descripcion.errors }}
+      </div>
+      <div class="field">
+        <label for="{{ form.instrucciones.id_for_label }}">{{ form.instrucciones.label }}</label>
+        {{ form.instrucciones }}
+        {{ form.instrucciones.errors }}
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn--primary">Crear borrador</button>
+        <a class="btn btn--ghost" href="{% url 'catalogo:studio_lista' %}">Cancelar</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

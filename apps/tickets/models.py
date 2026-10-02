@@ -121,16 +121,32 @@ class Ticket(RegistroBase):
     # abre una materialización nueva con False, dentro de su transacción.
     entregables_materializados = models.BooleanField(default=True, editable=False)
 
+    # 4.5 — política de entrega CONGELADA al crear el borrador (misma regla
+    # que los entregables): un cambio posterior en el Servicio no altera cómo
+    # se entrega ni cuándo se cierra un Ticket ya creado. Vacía = sin entrega
+    # formal (tickets anteriores a 4.5 o de servicios sin política): conservan
+    # el flujo resolver/cerrar manual. No es un `ServicioVersion`.
+    entrega_politica = models.CharField(
+        max_length=30, choices=Servicio.PoliticaEntrega.choices, blank=True, default="", editable=False
+    )
+    entrega_dias_observacion = models.PositiveSmallIntegerField(null=True, blank=True, editable=False)
+
     def save(self, *args, **kwargs):
         if self.pk is not None:
             anterior = Ticket.objects.filter(pk=self.pk).values(
-                "instancia_workflow_id", "entregables_materializados"
+                "instancia_workflow_id", "entregables_materializados",
+                "entrega_politica", "entrega_dias_observacion",
             ).first()
             if anterior is not None:
                 if anterior["instancia_workflow_id"] is not None and anterior["instancia_workflow_id"] != self.instancia_workflow_id:
                     raise ValidationError("La instancia de Workflow de un Ticket no puede reemplazarse ni quitarse.")
                 if anterior["entregables_materializados"] and not self.entregables_materializados:
                     raise ValidationError("No se puede reabrir la materialización de entregables de un Ticket.")
+                if (
+                    anterior["entrega_politica"] != self.entrega_politica
+                    or anterior["entrega_dias_observacion"] != self.entrega_dias_observacion
+                ):
+                    raise ValidationError("La política de entrega de un Ticket se congela al crearlo y no puede modificarse.")
         super().save(*args, **kwargs)
 
     def exigir_eliminable(self):
@@ -215,10 +231,18 @@ class HistorialTicket(models.Model):
         CERRADO = "CERRADO", "Cerrado"
         CANCELADO = "CANCELADO", "Cancelado"
         REABIERTO = "REABIERTO", "Reabierto"
+        # 4.5 — una sola entrada por acción, aunque dispare una transición de
+        # estado (mismo criterio que TOMADO): la aceptación y el cierre
+        # automático se registran como CERRADO con `datos.causa`.
+        ENTREGADO = "ENTREGADO", "Resultado entregado"
+        ENTREGA_OBSERVADA = "ENTREGA_OBSERVADA", "Entrega con observaciones"
 
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="historial")
     tipo_evento = models.CharField(max_length=30, choices=TipoEvento.choices)
-    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    # 4.5 — NULL = acción del Sistema (cierre automático por vencimiento).
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
     datos = models.JSONField(null=True, blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
 
@@ -840,3 +864,126 @@ class EntregableTicket(RegistroBase):
 
     def __str__(self):
         return self.nombre
+
+
+class EntregaTicket(RegistroBase):
+    """Entrega FORMAL del resultado al solicitante — 4.5. Una fila por ciclo
+    (entrega → observaciones → ajuste → nueva entrega): ninguna se actualiza
+    más allá de su respuesta ni se elimina, así la historia anterior queda
+    intacta.
+
+    Conceptos que NO se confunden: un `EntregableTicket` satisfecho ≠ entrega
+    formal (esta entidad) ≠ aceptación del solicitante (`estado=ACEPTADA`) ≠
+    Ticket cerrado (`Ticket.estado`). No es una `Aprobacion` de Workflow.
+
+    No agrega estados a `Ticket`: entregar usa la transición RESOLVER
+    (EN_ATENCION→RESUELTO), aceptar usa CERRAR y observar vuelve a
+    EN_ATENCION — todas ya existentes en `apps.tickets.estados`.
+
+    `politica`/`dias_observacion`/`vence_en` son copia de la política
+    congelada del Ticket al entregar (inmutables). Qué se entregó exactamente
+    vive en `ResultadoEntregaTicket` (snapshot), no se reconstruye desde los
+    entregables actuales.
+    """
+
+    class Estado(models.TextChoices):
+        PENDIENTE = "PENDIENTE", "Pendiente de respuesta"
+        ACEPTADA = "ACEPTADA", "Aceptada por el solicitante"
+        OBSERVADA = "OBSERVADA", "Con observaciones"
+        CERRADA_POR_VENCIMIENTO = "CERRADA_POR_VENCIMIENTO", "Cerrada por vencimiento del plazo"
+        CERRADA_SIN_RESPUESTA = "CERRADA_SIN_RESPUESTA", "Cerrada al entregar, sin esperar respuesta"
+
+    ticket = models.ForeignKey(Ticket, on_delete=models.PROTECT, related_name="entregas")
+    numero = models.PositiveIntegerField()
+    entregada_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    entregada_en = models.DateTimeField()
+    politica = models.CharField(max_length=30, choices=Servicio.PoliticaEntrega.choices)
+    dias_observacion = models.PositiveSmallIntegerField(null=True, blank=True)
+    vence_en = models.DateTimeField(null=True, blank=True)
+    estado = models.CharField(max_length=30, choices=Estado.choices, default=Estado.PENDIENTE)
+    # Respuesta/cierre. `resuelta_por` NULL cuando cierra el Sistema (vencimiento)
+    # o la política de cierre directo.
+    resuelta_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    resuelta_en = models.DateTimeField(null=True, blank=True)
+    observaciones = models.TextField(blank=True)
+
+    _CAMPOS_INMUTABLES = (
+        "ticket_id", "numero", "entregada_por_id", "entregada_en", "politica", "dias_observacion", "vence_en",
+    )
+
+    class Meta:
+        ordering = ["ticket_id", "numero"]
+        constraints = [
+            UniqueConstraint(fields=["ticket", "numero"], name="uq_entrega_ticket_numero"),
+            # A lo sumo una entrega pendiente por ticket: protege "doble entrega".
+            UniqueConstraint(
+                fields=["ticket"], condition=Q(estado="PENDIENTE"), name="uq_entrega_pendiente_por_ticket"
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(estado="PENDIENTE", resuelta_en__isnull=True)
+                    | (~Q(estado="PENDIENTE") & Q(resuelta_en__isnull=False))
+                ),
+                name="ck_entrega_resolucion_coherente",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(politica="PERIODO_OBSERVACIONES", vence_en__isnull=False, dias_observacion__isnull=False)
+                    | (~Q(politica="PERIODO_OBSERVACIONES") & Q(vence_en__isnull=True))
+                ),
+                name="ck_entrega_vencimiento_coherente",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            anterior = type(self).objects.filter(pk=self.pk).values(*self._CAMPOS_INMUTABLES).first()
+            if anterior and any(anterior[campo] != getattr(self, campo) for campo in self._CAMPOS_INMUTABLES):
+                raise ValidationError("Los datos de una entrega ya realizada son inmutables.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Una entrega forma parte de la historia del ticket y no puede eliminarse.")
+
+    def __str__(self):
+        return f"Entrega #{self.numero} de {self.ticket}"
+
+
+class ResultadoEntregaTicket(models.Model):
+    """Snapshot de UN entregable al momento de entregar — 4.5. Garantiza qué
+    resultado se entregó aunque después el responsable edite el texto, el
+    enlace o retire archivos para atender observaciones.
+
+    Solo se copian los entregables satisfechos en ese instante. Los archivos
+    no se copian físicamente: `Adjunto` nunca se elimina (solo se retira
+    lógicamente, `retirado_en`), por lo que la referencia sigue siendo fiable;
+    `descargar_adjunto_view` sigue sirviendo un archivo retirado si pertenece
+    a una entrega. No introduce versionamiento de Entregables.
+
+    No hereda `RegistroBase`: append-only, mismo criterio que `ResolucionTicket`.
+    """
+
+    entrega = models.ForeignKey(EntregaTicket, on_delete=models.PROTECT, related_name="resultados")
+    entregable = models.ForeignKey(EntregableTicket, on_delete=models.PROTECT, related_name="+")
+    nombre = models.CharField(max_length=150)
+    tipo = models.CharField(max_length=20, choices=DefinicionEntregable.Tipo.choices)
+    obligatorio = models.BooleanField(default=False)
+    orden = models.PositiveIntegerField(default=0)
+    texto = models.TextField(blank=True)
+    enlace = models.URLField(max_length=2048, blank=True)
+    confirmado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    confirmado_en = models.DateTimeField(null=True, blank=True)
+    adjuntos = models.ManyToManyField(Adjunto, blank=True, related_name="resultados_entrega")
+
+    class Meta:
+        ordering = ["orden", "pk"]
+        constraints = [
+            UniqueConstraint(fields=["entrega", "entregable"], name="uq_resultado_entrega_entregable"),
+        ]
+
+    def __str__(self):
+        return f"{self.nombre} ({self.entrega})"

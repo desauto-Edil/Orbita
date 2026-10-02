@@ -10,5 +10,10 @@ urlpatterns = [
     path("login/", views.login_view, name="login"),
     path("logout/", views.logout_view, name="logout"),
     path("perfil/", views.perfil_view, name="perfil"),
+    path("explorar/", views.explorar_view, name="explorar"),
     path("mi-trabajo/", views.mi_trabajo_view, name="mi_trabajo"),
+    path("sistema-visual/", views.sistema_visual_view, name="sistema_visual"),
+    path("disenador/", views.disenador_view, name="disenador"),
+    path("disenador/flujos/", views.disenador_flujos_view, name="disenador_flujos"),
+    path("disenador/servicios/", views.disenador_servicios_view, name="disenador_servicios"),
 ]

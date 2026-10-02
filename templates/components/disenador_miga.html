@@ -1,0 +1,19 @@
+{% comment %}
+  Ruta dentro del Diseñador para las pantallas heredadas de Studio y de Flujos
+  (D1): "Diseñador / Flujos|Servicios / [intermedio /] actual". Parámetros:
+  `seccion` ("flujos" | "servicios"), `actual` (texto), y opcionalmente
+  `intermedio` + `intermedio_url`. Solo orienta: los destinos de la ruta los
+  autoriza cada vista.
+{% endcomment %}<nav class="breadcrumb" aria-label="Ruta de navegación">
+  <a href="{% url 'core:disenador' %}">Diseñador</a>
+  <span class="breadcrumb__separator" aria-hidden="true">/</span>
+  {% if seccion == "flujos" %}<a href="{% url 'core:disenador_flujos' %}">Flujos</a>{% else %}<a href="{% url 'core:disenador_servicios' %}">Servicios</a>{% endif %}
+  {% if intermedio %}
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <a href="{{ intermedio_url }}">{{ intermedio }}</a>
+  {% endif %}
+  {% if actual %}
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">{{ actual }}</span>
+  {% endif %}
+</nav>
