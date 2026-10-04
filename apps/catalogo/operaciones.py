@@ -33,6 +33,18 @@ def validar_ejecucion(servicio):
     version = workflow.version_activa
     if version is None or version.estado != WorkflowVersion.Estado.ACTIVA or version.workflow_id != workflow.pk:
         raise ValidationError("La ejecución no tiene una versión activa utilizable.")
+    if workflow.modo == "PLANTILLA_FASES":
+        config = servicio.configuracion_ejecucion_activa
+        if config is None or config.estado != "ACTIVA":
+            raise ValidationError("La ejecucion no tiene una configuracion operativa activa.")
+        if config.workflow_version_id != version.pk:
+            raise ValidationError("La configuracion operativa no corresponde a la version activa de la plantilla.")
+        from apps.catalogo.configuracion_ejecucion import validar_configuracion_ejecucion
+
+        errores = validar_configuracion_ejecucion(config)
+        if errores:
+            raise ValidationError(errores)
+        return
     from apps.workflows.validacion import validar_estructura
 
     errores = validar_estructura(version)

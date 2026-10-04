@@ -313,14 +313,24 @@ def radicar_ticket(ticket, actor):
     ticket.tipo = servicio.tipo
     validar_ejecucion(servicio)
     if servicio.workflow_id is not None:
+        datos_workflow = {"ticket_id": ticket.pk}
+        if servicio.workflow.modo == "PLANTILLA_FASES":
+            datos_workflow["configuracion_ejecucion_version_id"] = servicio.configuracion_ejecucion_activa_id
         # Es una ejecución interna derivada de una radicación autorizada,
         # no una acción técnica del solicitante sobre el motor.
         instancia = iniciar_workflow(
             servicio.workflow, origen=RegistroAuditoria.Origen.SISTEMA,
-            datos_iniciales={"ticket_id": ticket.pk},
+            datos_iniciales=datos_workflow,
         )
         if instancia.estado == InstanciaWorkflow.Estado.ERROR:
-            raise ValidationError("No fue posible iniciar la ejecución; el ticket sigue en borrador.")
+            ejecucion_error = instancia.ejecuciones_etapa.order_by("-orden").first()
+            detalle = ""
+            if ejecucion_error and ejecucion_error.error:
+                detalle = ejecucion_error.error.get("mensaje") or ""
+            mensaje = "No fue posible iniciar la ejecución; el ticket sigue en borrador."
+            if detalle:
+                mensaje = f"{mensaje} Detalle: {detalle}"
+            raise ValidationError(mensaje)
         ticket.instancia_workflow = instancia
 
     ticket.radicado = uuid.uuid4()

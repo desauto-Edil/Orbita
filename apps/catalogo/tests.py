@@ -15,8 +15,10 @@ from django.urls import reverse
 from apps.catalogo.admin import CampoAdmin, FormularioAdmin, FormularioVersionAdmin, ServicioAdmin
 from apps.catalogo.campos import ESTRATEGIAS_POR_TIPO
 from apps.catalogo.models import (
+    BloqueOperativo,
     Campo,
     Categoria,
+    ConfiguracionEjecucionVersion,
     DefinicionEntregable,
     Formulario,
     FormularioVersion,
@@ -26,6 +28,7 @@ from apps.catalogo.models import (
     ServicioContextoAtencion,
     ServicioResponsable,
     ServicioVisibilidad,
+    TransicionBloqueOperativo,
 )
 from apps.catalogo.reglas import EspecificacionRegla
 from apps.catalogo.versionamiento import activar_version, crear_nueva_version
@@ -1522,6 +1525,214 @@ class DefinicionEntregableTests(TestCase):
             with self.assertRaises(RuntimeError):
                 configurar_definicion_entregable(self.servicio, self.actor, nombre="Final", tipo="TEXTO")
         self.assertFalse(self.servicio.definiciones_entregables.exists())
+
+
+class ConfiguracionEjecucionFasesR1Tests(TestCase):
+    def setUp(self):
+        from apps.workflows import fases as fases_ops
+        from apps.workflows.versionamiento import activar_version
+
+        self.actor = Usuario.objects.create_user(username="conf_fases", password=CLAVE_PRUEBA)
+        _otorgar_permiso(self.actor, "catalogo.administrar", nombre_rol="Catalogo configura fases")
+        self.categoria = Categoria.objects.create(nombre="Diseno")
+        self.servicio = Servicio.objects.create(nombre="Pieza grafica", categoria=self.categoria)
+        self.workflow = fases_ops.crear_plantilla_fases(self.actor, nombre="Gestion estandar")
+        self.workflow_version = self.workflow.versiones.get(numero=1)
+        self.recepcion = fases_ops.agregar_fase(self.workflow_version, self.actor, nombre="Recepcion")
+        self.ejecucion = fases_ops.agregar_fase(self.workflow_version, self.actor, nombre="Ejecucion")
+        fases_ops.conectar_fases(self.recepcion, self.ejecucion, self.actor)
+        activar_version(self.workflow, self.workflow_version, actor=self.actor)
+        self.workflow.refresh_from_db()
+        self.workflow_version.refresh_from_db()
+        self.servicio.workflow = self.workflow
+        self.servicio.save(update_fields=["workflow", "actualizado_en"])
+
+    def test_crea_configuracion_operativa_versionada_y_bloque_en_fase(self):
+        from apps.catalogo.configuracion_ejecucion import (
+            activar_configuracion_ejecucion,
+            agregar_bloque_operativo,
+            crear_nueva_version_configuracion,
+        )
+
+        version = crear_nueva_version_configuracion(self.servicio, self.actor)
+        bloque = agregar_bloque_operativo(
+            version,
+            self.actor,
+            fase=self.recepcion,
+            tipo=BloqueOperativo.Tipo.ACTIVIDAD,
+            nombre="Revisar brief",
+            configuracion={"tipo_actor": "SOLICITANTE"},
+        )
+        agregar_bloque_operativo(
+            version,
+            self.actor,
+            fase=self.ejecucion,
+            tipo=BloqueOperativo.Tipo.ACTIVIDAD,
+            nombre="Ejecutar solicitud",
+            configuracion={"tipo_actor": "SOLICITANTE"},
+        )
+        activar_configuracion_ejecucion(self.servicio, version, self.actor)
+        self.servicio.refresh_from_db()
+
+        self.assertEqual(version.estado, ConfiguracionEjecucionVersion.Estado.ACTIVA)
+        self.assertEqual(self.servicio.configuracion_ejecucion_activa_id, version.pk)
+        self.assertEqual(bloque.version_id, version.pk)
+        self.assertEqual(bloque.fase_id, self.recepcion.pk)
+
+    def test_rechaza_bloque_con_fase_de_otra_workflow_version(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo, crear_nueva_version_configuracion
+        from apps.workflows import fases as fases_ops
+
+        otro_workflow = fases_ops.crear_plantilla_fases(self.actor, nombre="Otro flujo")
+        otra_version = otro_workflow.versiones.get(numero=1)
+        fase_ajena = fases_ops.agregar_fase(otra_version, self.actor, nombre="Ajena")
+        version = crear_nueva_version_configuracion(self.servicio, self.actor)
+
+        with self.assertRaises(ValidationError):
+            agregar_bloque_operativo(
+                version,
+                self.actor,
+                fase=fase_ajena,
+                tipo=BloqueOperativo.Tipo.ACTIVIDAD,
+                nombre="No corresponde",
+            )
+
+    def test_rechaza_editar_bloque_desde_otra_configuracion(self):
+        from apps.catalogo.configuracion_ejecucion import (
+            agregar_bloque_operativo,
+            crear_nueva_version_configuracion,
+            editar_bloque_operativo,
+        )
+
+        version1 = crear_nueva_version_configuracion(self.servicio, self.actor)
+        version2 = crear_nueva_version_configuracion(self.servicio, self.actor)
+        bloque = agregar_bloque_operativo(
+            version1,
+            self.actor,
+            fase=self.recepcion,
+            tipo=BloqueOperativo.Tipo.ACTIVIDAD,
+            nombre="Revisar solicitud",
+        )
+
+        with self.assertRaises(ValidationError):
+            editar_bloque_operativo(version2, bloque, self.actor, nombre="Mezcla invalida")
+
+    def test_clona_configuracion_operativa_a_nueva_version(self):
+        from apps.catalogo.configuracion_ejecucion import (
+            agregar_bloque_operativo,
+            crear_nueva_version_configuracion,
+        )
+
+        version1 = crear_nueva_version_configuracion(self.servicio, self.actor)
+        agregar_bloque_operativo(
+            version1,
+            self.actor,
+            fase=self.recepcion,
+            tipo=BloqueOperativo.Tipo.ACTIVIDAD,
+            nombre="Revisar brief",
+        )
+
+        version2 = crear_nueva_version_configuracion(self.servicio, self.actor, clonar_desde=version1)
+
+        self.assertEqual(version2.numero, 2)
+        self.assertEqual(version2.bloques.count(), 1)
+        self.assertEqual(version2.bloques.get().fase_id, self.recepcion.pk)
+
+    def test_borrador_valido_no_cuenta_como_configuracion_activa(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo, crear_nueva_version_configuracion
+        from apps.catalogo.operaciones import validar_publicacion
+
+        version = crear_nueva_version_configuracion(self.servicio, self.actor)
+        agregar_bloque_operativo(
+            version,
+            self.actor,
+            fase=self.recepcion,
+            tipo=BloqueOperativo.Tipo.ACTIVIDAD,
+            nombre="Revisar brief",
+            configuracion={"tipo_actor": "SOLICITANTE"},
+        )
+
+        with self.assertRaises(ValidationError):
+            validar_publicacion(self.servicio)
+        self.servicio.refresh_from_db()
+        self.assertIsNone(self.servicio.configuracion_ejecucion_activa_id)
+
+    def test_activacion_historiza_configuracion_anterior(self):
+        from apps.catalogo.configuracion_ejecucion import (
+            activar_configuracion_ejecucion,
+            agregar_bloque_operativo,
+            crear_nueva_version_configuracion,
+            preparar_configuracion_ejecucion,
+        )
+
+        version1 = crear_nueva_version_configuracion(self.servicio, self.actor)
+        agregar_bloque_operativo(
+            version1,
+            self.actor,
+            fase=self.recepcion,
+            tipo=BloqueOperativo.Tipo.ACTIVIDAD,
+            nombre="Revisar brief",
+            configuracion={"tipo_actor": "SOLICITANTE"},
+        )
+        activar_configuracion_ejecucion(self.servicio, version1, self.actor)
+
+        version2 = preparar_configuracion_ejecucion(self.servicio, self.actor)
+        bloque = version2.bloques.get(nombre="Revisar brief")
+        bloque.nombre = "Revisar brief actualizado"
+        bloque.save(update_fields=["nombre", "actualizado_en"])
+        activar_configuracion_ejecucion(self.servicio, version2, self.actor)
+
+        version1.refresh_from_db()
+        version2.refresh_from_db()
+        self.servicio.refresh_from_db()
+        self.assertEqual(version1.estado, ConfiguracionEjecucionVersion.Estado.HISTORICA)
+        self.assertEqual(version2.estado, ConfiguracionEjecucionVersion.Estado.ACTIVA)
+        self.assertEqual(self.servicio.configuracion_ejecucion_activa_id, version2.pk)
+
+    def test_rutas_operativas_de_aprobacion_y_decision_son_editables_en_modelo(self):
+        from apps.catalogo.configuracion_ejecucion import (
+            agregar_bloque_operativo,
+            conectar_bloques_operativos,
+            crear_nueva_version_configuracion,
+        )
+
+        version = crear_nueva_version_configuracion(self.servicio, self.actor)
+        aprobacion = agregar_bloque_operativo(
+            version,
+            self.actor,
+            fase=self.recepcion,
+            tipo=BloqueOperativo.Tipo.APROBACION,
+            nombre="Aprobar documento",
+            configuracion={
+                "modo": "SECUENCIAL",
+                "participantes": [{"tipo": "SOLICITANTE", "usuario_id": None, "equipo_id": None}],
+            },
+        )
+        decision = agregar_bloque_operativo(
+            version,
+            self.actor,
+            fase=self.ejecucion,
+            tipo=BloqueOperativo.Tipo.DECISION,
+            nombre="Clasificar solicitud",
+        )
+        destino = agregar_bloque_operativo(
+            version,
+            self.actor,
+            fase=self.ejecucion,
+            tipo=BloqueOperativo.Tipo.ACTIVIDAD,
+            nombre="Atender",
+            configuracion={"tipo_actor": "SOLICITANTE"},
+        )
+
+        for resultado in ("APROBADA", "RECHAZADA", "DEVUELTA"):
+            conectar_bloques_operativos(aprobacion, destino, self.actor, resultado_aprobacion=resultado)
+        conectar_bloques_operativos(
+            decision, destino, self.actor, variable="prioridad", operador="IGUAL_A", valor="Alta", prioridad=1
+        )
+        conectar_bloques_operativos(decision, destino, self.actor, es_fallback=True)
+
+        self.assertEqual(TransicionBloqueOperativo.objects.filter(bloque_origen=aprobacion).count(), 3)
+        self.assertEqual(TransicionBloqueOperativo.objects.filter(bloque_origen=decision).count(), 2)
 
 
 class EjecucionConfigurableTests(TestCase):
@@ -3623,6 +3834,36 @@ class DisenadorFlujosTests(TestCase):
         respuesta = self.client.get(reverse("flujos:lienzo", args=[workflow.pk]))
         self.assertEqual(respuesta.context["nav_item_activo"], "core:disenador")
 
+    def test_workspace_visual_muestra_fases_conectores_e_inspector(self):
+        from apps.workflows.models import FaseWorkflow
+
+        workflow = self._crear_flujo("Flujo visual")
+        for nombre in ("Planeacion", "Proceso"):
+            self.client.post(
+                reverse("flujos:fase_crear", args=[workflow.pk]),
+                {"fase-nueva-nombre": nombre, "fase-nueva-descripcion": "", "fase-nueva-orden": ""},
+            )
+        planeacion, proceso = FaseWorkflow.objects.filter(version__workflow=workflow).order_by("orden")
+        self.client.post(
+            reverse("flujos:fase_conectar", args=[workflow.pk, planeacion.pk]),
+            {
+                f"fase-{planeacion.pk}-transicion-fase_destino": proceso.pk,
+                f"fase-{planeacion.pk}-transicion-nombre": "",
+                f"fase-{planeacion.pk}-transicion-prioridad": "0",
+            },
+        )
+
+        respuesta = self.client.get(reverse("flujos:lienzo", args=[workflow.pk]))
+        self.assertContains(respuesta, "Canvas de fases")
+        self.assertContains(respuesta, "Recorrido de fases")
+        self.assertContains(respuesta, "Detalles")
+        self.assertContains(respuesta, "Nueva fase")
+        self.assertContains(respuesta, "Planeacion")
+        self.assertContains(respuesta, "Proceso")
+        self.assertContains(respuesta, "Conectar fase")
+        self.assertContains(respuesta, "Versiones")
+        self.assertContains(respuesta, "Usado en")
+
     # --- diseñar bloques (mismos manejadores que Studio) ---
 
     def test_los_bloques_se_agregan_conectados_y_sin_servicio(self):
@@ -3827,6 +4068,168 @@ class DisenadorFlujosTests(TestCase):
         self.client.logout()
         for url in (reverse("flujos:nuevo"), reverse("flujos:lienzo", args=[workflow.pk])):
             self.assertEqual(self.client.get(url).status_code, 302, url)
+
+
+class DisenadorServiciosD3Tests(TestCase):
+    def setUp(self):
+        from apps.workflows.models import Etapa, TransicionEtapa, Workflow, WorkflowVersion
+
+        self.Etapa, self.Transicion, self.Workflow, self.Version = Etapa, TransicionEtapa, Workflow, WorkflowVersion
+        self.configurador = Usuario.objects.create_user("d3_configurador", password=CLAVE_PRUEBA)
+        for codigo in ("catalogo.administrar", "formulario.administrar", "workflows.vincular", "workflows.administrar"):
+            _permiso_get_or_create(self.configurador, codigo, f"Rol D3 {codigo}")
+        self.solo_vincula = Usuario.objects.create_user("d3_vincula", password=CLAVE_PRUEBA)
+        for codigo in ("catalogo.administrar", "formulario.administrar", "workflows.vincular"):
+            _permiso_get_or_create(self.solo_vincula, codigo, f"Rol D3 solo {codigo}")
+        self.categoria = Categoria.objects.create(nombre="D3")
+
+    def _formulario_activo(self, nombre="Entrada D3"):
+        formulario = Formulario.objects.create(nombre=nombre)
+        version = crear_nueva_version(formulario, self.configurador)
+        activar_version(formulario, version, self.configurador)
+        return formulario
+
+    def _servicio(self, nombre="Servicio D3", *, tipo=Servicio.Tipo.SERVICIO, workflow=None):
+        return Servicio.objects.create(
+            nombre=nombre,
+            categoria=self.categoria,
+            tipo=tipo,
+            formulario=self._formulario_activo(f"Entrada {nombre}"),
+            activo=False,
+            workflow=workflow,
+        )
+
+    def _flujo_publicado(self, nombre="Compra de insumos"):
+        from apps.workflows import fases as fases_ops
+        from apps.workflows.versionamiento import activar_version as activar_workflow
+
+        workflow = fases_ops.crear_plantilla_fases(
+            self.configurador, nombre=nombre, descripcion="Flujo publicado reutilizable"
+        )
+        version = workflow.versiones.get(numero=1)
+        recepcion = fases_ops.agregar_fase(version, self.configurador, nombre="Recepcion")
+        revision = fases_ops.agregar_fase(version, self.configurador, nombre="Revision")
+        fases_ops.conectar_fases(recepcion, revision, self.configurador)
+        activar_workflow(workflow, version, self.configurador)
+        workflow.refresh_from_db()
+        return workflow
+
+    def _activar_configuracion_operativa(self, servicio):
+        from apps.catalogo.configuracion_ejecucion import (
+            activar_configuracion_ejecucion,
+            agregar_bloque_operativo,
+            crear_nueva_version_configuracion,
+        )
+
+        version = crear_nueva_version_configuracion(servicio, self.configurador)
+        for fase in servicio.workflow.version_activa.fases.order_by("orden", "pk"):
+            agregar_bloque_operativo(
+                version,
+                self.configurador,
+                fase=fase,
+                tipo=BloqueOperativo.Tipo.ACTIVIDAD,
+                nombre=f"Atender {fase.nombre}",
+                configuracion={"tipo_actor": "SOLICITANTE"},
+            )
+        activar_configuracion_ejecucion(servicio, version, self.configurador)
+        servicio.refresh_from_db()
+
+    def test_servicio_simple_sin_flujo_es_opcional_en_disenador(self):
+        self.client.login(username="d3_configurador", password=CLAVE_PRUEBA)
+        servicio = self._servicio("Simple sin flujo")
+        respuesta = self.client.get(reverse("catalogo:studio", args=[servicio.pk]), {"tab": "ejecucion"})
+        self.assertEqual(respuesta.status_code, 200)
+        flujo = next(s for s in respuesta.context["secciones"] if s["clave"] == "ejecucion")
+        self.assertEqual(flujo["estado"], "optional")
+        self.assertContains(respuesta, "Sin flujo")
+
+    def test_proceso_sin_flujo_requiere_atencion_y_no_publica(self):
+        from apps.catalogo.operaciones import validar_publicacion
+
+        self.client.login(username="d3_configurador", password=CLAVE_PRUEBA)
+        proceso = self._servicio("Proceso sin flujo", tipo=Servicio.Tipo.PROCESO)
+        respuesta = self.client.get(reverse("catalogo:studio", args=[proceso.pk]), {"tab": "ejecucion"})
+        flujo = next(s for s in respuesta.context["secciones"] if s["clave"] == "ejecucion")
+        self.assertEqual(flujo["estado"], "attention")
+        with self.assertRaises(ValidationError):
+            validar_publicacion(proceso)
+
+    def test_usuario_que_solo_vincula_ve_tarjetas_y_puede_seleccionar_flujo_publicado(self):
+        workflow = self._flujo_publicado()
+        servicio = self._servicio("Usa existente")
+        self.client.login(username="d3_vincula", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("catalogo:studio", args=[servicio.pk]), {"tab": "ejecucion"})
+        self.assertContains(respuesta, "Compra de insumos")
+        self.assertContains(respuesta, "Revision")
+        self.assertNotContains(respuesta, "Crear nuevo flujo")
+        self.assertEqual(
+            self.client.post(reverse("catalogo:studio_ejecucion_crear_flujo", args=[servicio.pk]), {"nombre": "No"}).status_code,
+            403,
+        )
+
+        self.client.post(reverse("catalogo:studio_ejecucion_vincular", args=[servicio.pk]), {"plantilla": workflow.pk})
+        servicio.refresh_from_db()
+        self.assertEqual(servicio.workflow_id, workflow.pk)
+
+    def test_usuario_que_solo_vincula_puede_publicar_servicio_con_flujo_ya_publicado(self):
+        workflow = self._flujo_publicado()
+        servicio = self._servicio("Publica con flujo", workflow=workflow)
+        self._activar_configuracion_operativa(servicio)
+        self.client.login(username="d3_vincula", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(reverse("catalogo:studio_publicar", args=[servicio.pk]))
+        self.assertEqual(respuesta.status_code, 302)
+        servicio.refresh_from_db()
+        self.assertTrue(servicio.activo)
+
+    def test_crear_flujo_desde_servicio_crea_workflow_real_y_conserva_retorno(self):
+        self.client.login(username="d3_configurador", password=CLAVE_PRUEBA)
+        servicio = self._servicio("Servicio crea flujo")
+        respuesta = self.client.post(
+            reverse("catalogo:studio_ejecucion_crear_flujo", args=[servicio.pk]),
+            {"nombre": "Flujo desde servicio"},
+        )
+        workflow = self.Workflow.objects.get(nombre="Flujo desde servicio")
+        self.assertRedirects(respuesta, reverse("flujos:lienzo", args=[workflow.pk]))
+        servicio.refresh_from_db()
+        self.assertIsNone(servicio.workflow_id)
+        lienzo = self.client.get(reverse("flujos:lienzo", args=[workflow.pk]))
+        self.assertEqual(lienzo.context["servicio_retorno"], servicio)
+
+    def test_studio_muestra_accion_para_activar_configuracion_operativa(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo, preparar_configuracion_ejecucion
+
+        workflow = self._flujo_publicado("Flujo operativo D3")
+        servicio = self._servicio("Servicio activa config", workflow=workflow)
+        version = preparar_configuracion_ejecucion(servicio, self.configurador)
+        fase = workflow.version_activa.fases.order_by("orden", "pk").first()
+        agregar_bloque_operativo(
+            version,
+            self.configurador,
+            fase=fase,
+            tipo=BloqueOperativo.Tipo.ACTIVIDAD,
+            nombre="Revisar",
+            configuracion={"tipo_actor": "SOLICITANTE"},
+        )
+
+        self.client.login(username="d3_configurador", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("catalogo:studio", args=[servicio.pk]), {"tab": "ejecucion"})
+
+        flujo = next(s for s in respuesta.context["secciones"] if s["clave"] == "ejecucion")
+        self.assertEqual(flujo["texto"], "Lista para activar")
+        self.assertContains(respuesta, "Activar configuracion")
+
+    def test_copia_contextual_solo_cambia_el_vinculo_del_servicio_actual(self):
+        workflow = self._flujo_publicado("Compartido D3")
+        servicio_a = self._servicio("Servicio A", workflow=workflow)
+        servicio_b = self._servicio("Servicio B", workflow=workflow)
+        self.client.login(username="d3_configurador", password=CLAVE_PRUEBA)
+
+        self.client.post(reverse("catalogo:studio_ejecucion_copia", args=[servicio_a.pk]))
+        servicio_a.refresh_from_db()
+        servicio_b.refresh_from_db()
+        self.assertNotEqual(servicio_a.workflow_id, workflow.pk)
+        self.assertEqual(servicio_b.workflow_id, workflow.pk)
+        self.assertEqual(self.Workflow.objects.get(pk=servicio_a.workflow_id).version_activa.estado, self.Version.Estado.ACTIVA)
 
 
 def get_messages_de(respuesta):

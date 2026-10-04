@@ -26,6 +26,7 @@ from apps.workflows import editor, versionamiento
 from apps.workflows.actores import validar_actor
 from apps.workflows.autorizacion import puede_administrar_workflows, puede_vincular_workflows
 from apps.workflows.models import Etapa, TransicionEtapa, Workflow, WorkflowVersion
+from apps.workflows.fases import crear_plantilla_fases
 
 
 TIPOS_BLOQUE = {
@@ -140,7 +141,10 @@ def plantillas_de_ejecucion():
     servicio quedaría ligado a una estructura que nunca fue validada ni
     activada. `n_servicios` informa cuántos servicios lo usan hoy."""
     return (
-        Workflow.objects.filter(version_activa__estado=WorkflowVersion.Estado.ACTIVA)
+        Workflow.objects.filter(
+            modo=Workflow.Modo.PLANTILLA_FASES,
+            version_activa__estado=WorkflowVersion.Estado.ACTIVA,
+        )
         .select_related("version_activa")
         .annotate(n_servicios=Count("servicios"))
         .order_by("nombre", "pk")
@@ -179,6 +183,8 @@ def vincular_ejecucion(servicio, actor, workflow):
     if servicio.workflow_id is not None:
         raise ValidationError("Esta definición ya tiene una ejecución configurada.")
     workflow = Workflow.objects.select_for_update().get(pk=workflow.pk)
+    if workflow.modo != Workflow.Modo.PLANTILLA_FASES:
+        raise ValidationError("Esta operacion solo vincula plantillas de fases publicadas.")
     version = workflow.version_activa
     if version is None or version.estado != WorkflowVersion.Estado.ACTIVA or version.workflow_id != workflow.pk:
         raise ValidationError("El flujo elegido no tiene una versión activa: publícalo antes de usarlo.")
@@ -219,11 +225,15 @@ def crear_copia_de_ejecucion(servicio, actor):
     origen = origen_wf.version_activa or origen_wf.versiones.order_by("-numero").first()
     if origen is None:
         raise ValidationError("El flujo no tiene versiones que copiar.")
-    nuevo = versionamiento.crear_workflow(actor, nombre=servicio.nombre, clonar_desde=origen)
+    nuevo = versionamiento.crear_workflow(actor, nombre=servicio.nombre, clonar_desde=origen, modo=origen_wf.modo)
     if origen.estado == WorkflowVersion.Estado.ACTIVA:
         versionamiento.activar_version(nuevo, nuevo.versiones.get(estado=WorkflowVersion.Estado.BORRADOR), actor)
     servicio.workflow = nuevo
-    servicio.save(update_fields=["workflow", "actualizado_en"])
+    campos = ["workflow", "actualizado_en"]
+    if origen_wf.modo == Workflow.Modo.PLANTILLA_FASES:
+        servicio.configuracion_ejecucion_activa = None
+        campos.append("configuracion_ejecucion_activa")
+    servicio.save(update_fields=campos)
     registrar_evento(
         accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=servicio,
         origen=RegistroAuditoria.Origen.USUARIO, usuario=actor,
@@ -430,8 +440,7 @@ def crear_flujo(actor, *, nombre, descripcion=""):
     nombre = (nombre or "").strip()
     if not nombre:
         raise ValidationError("El flujo necesita un nombre.")
-    workflow = versionamiento.crear_workflow(actor, nombre=nombre, descripcion=descripcion or "")
-    _asegurar_esqueleto(workflow.versiones.get(estado=WorkflowVersion.Estado.BORRADOR), actor)
+    workflow = crear_plantilla_fases(actor, nombre=nombre, descripcion=descripcion or "")
     return workflow
 
 
@@ -453,7 +462,6 @@ def preparar_borrador_de_flujo(workflow, actor, *, confirmar_compartido=False):
                 "modificar el flujo compartido."
             )
         version = versionamiento.crear_nueva_version(workflow, actor)
-    _asegurar_esqueleto(version, actor)
     return version
 
 

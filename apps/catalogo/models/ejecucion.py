@@ -1,0 +1,189 @@
+from django.core.exceptions import ValidationError
+from django.db import models
+from django.db.models import Q, UniqueConstraint
+
+from apps.core.models import RegistroBase
+
+
+class ConfiguracionEjecucionVersion(RegistroBase):
+    """Configuracion operativa versionada de un Servicio sobre una plantilla.
+
+    D3.R1 separa la plantilla general (`WorkflowVersion` con fases) del
+    contenido especifico del Servicio/Proceso. Esta version es lo que un
+    Ticket podra congelar mas adelante junto con la version de Workflow.
+    """
+
+    class Estado(models.TextChoices):
+        BORRADOR = "BORRADOR", "Borrador"
+        ACTIVA = "ACTIVA", "Activa"
+        HISTORICA = "HISTORICA", "Historica"
+
+    servicio = models.ForeignKey(
+        "catalogo.Servicio", on_delete=models.CASCADE, related_name="configuraciones_ejecucion"
+    )
+    workflow_version = models.ForeignKey(
+        "workflows.WorkflowVersion", on_delete=models.PROTECT, related_name="configuraciones_servicio"
+    )
+    numero = models.PositiveIntegerField()
+    estado = models.CharField(max_length=10, choices=Estado.choices, default=Estado.BORRADOR)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=["servicio", "numero"], name="uq_configejec_servicio_numero"),
+            UniqueConstraint(
+                fields=["servicio"],
+                condition=Q(estado="ACTIVA"),
+                name="uq_configejec_servicio_activa",
+            ),
+        ]
+        ordering = ["servicio_id", "numero"]
+
+    def exigir_editable(self):
+        if self.estado != self.Estado.BORRADOR:
+            raise ValidationError(
+                "Esta configuracion de ejecucion ya no esta en borrador. Cree una nueva version para cambiarla."
+            )
+
+    def clean(self):
+        if self.servicio_id is None or self.workflow_version_id is None:
+            return
+        workflow = self.workflow_version.workflow
+        if self.servicio.workflow_id != workflow.pk:
+            raise ValidationError("La configuracion debe usar una version del Workflow vinculado al Servicio.")
+        if workflow.modo != "PLANTILLA_FASES":
+            raise ValidationError("La configuracion operativa solo aplica a plantillas de fases.")
+
+    def save(self, *args, **kwargs):
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.servicio} - configuracion v{self.numero} ({self.get_estado_display()})"
+
+
+class BloqueOperativo(RegistroBase):
+    """Bloque operativo especifico del Servicio dentro de una fase.
+
+    Conserva la semantica empresarial que antes se mezclaba en `Etapa`:
+    actividad, aprobacion, espera o decision. D3.R1 aun no ejecuta estos
+    bloques; solo deja una fuente editable de verdad para el nuevo dominio.
+    """
+
+    class Tipo(models.TextChoices):
+        ACTIVIDAD = "ACTIVIDAD", "Actividad"
+        APROBACION = "APROBACION", "Aprobacion"
+        ESPERA = "ESPERA", "Espera"
+        DECISION = "DECISION", "Decision"
+
+    version = models.ForeignKey(ConfiguracionEjecucionVersion, on_delete=models.CASCADE, related_name="bloques")
+    fase = models.ForeignKey("workflows.FaseWorkflow", on_delete=models.PROTECT, related_name="bloques_operativos")
+    tipo = models.CharField(max_length=20, choices=Tipo.choices)
+    nombre = models.CharField(max_length=150)
+    descripcion = models.TextField(blank=True)
+    orden = models.PositiveIntegerField()
+    configuracion = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=["version", "fase", "orden"], name="uq_bloqueop_version_fase_orden"),
+        ]
+        ordering = ["version_id", "fase_id", "orden", "id"]
+
+    def clean(self):
+        if self.version_id is None or self.fase_id is None:
+            return
+        if self.fase.version_id != self.version.workflow_version_id:
+            raise ValidationError("El bloque debe pertenecer a una fase de la version de Workflow configurada.")
+
+    def save(self, *args, **kwargs):
+        self.version.exigir_editable()
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        self.version.exigir_editable()
+        super().delete(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.nombre} ({self.get_tipo_display()})"
+
+
+class TransicionBloqueOperativo(RegistroBase):
+    """Ruta entre bloques operativos de una misma configuracion.
+
+    Reusa la semantica existente de `TransicionEtapa`: condiciones para
+    DECISION y resultados cerrados para APROBACION. Para recorridos lineales
+    simples el runtime puede continuar por orden/fase, pero cualquier ruta
+    explicita vive aqui como fuente de verdad editable.
+    """
+
+    class Operador(models.TextChoices):
+        IGUAL_A = "IGUAL_A", "Igual a"
+        DISTINTO_DE = "DISTINTO_DE", "Distinto de"
+        CONTIENE = "CONTIENE", "Contiene"
+        NO_CONTIENE = "NO_CONTIENE", "No contiene"
+        MAYOR_QUE = "MAYOR_QUE", "Mayor que"
+        MENOR_QUE = "MENOR_QUE", "Menor que"
+        ESTA_VACIO = "ESTA_VACIO", "Esta vacio"
+        NO_ESTA_VACIO = "NO_ESTA_VACIO", "No esta vacio"
+
+    bloque_origen = models.ForeignKey(BloqueOperativo, on_delete=models.CASCADE, related_name="transiciones_salientes")
+    bloque_destino = models.ForeignKey(BloqueOperativo, on_delete=models.CASCADE, related_name="transiciones_entrantes")
+    nombre = models.CharField(max_length=150, blank=True)
+    prioridad = models.PositiveIntegerField(default=0)
+    variable = models.CharField(max_length=150, blank=True)
+    operador = models.CharField(max_length=20, choices=Operador.choices, blank=True)
+    valor = models.CharField(max_length=255, blank=True)
+    es_fallback = models.BooleanField(default=False)
+    resultado_aprobacion = models.CharField(
+        max_length=10,
+        choices=[("APROBADA", "Aprobada"), ("RECHAZADA", "Rechazada"), ("DEVUELTA", "Devuelta")],
+        blank=True,
+    )
+
+    class Meta:
+        ordering = ["bloque_origen_id", "prioridad", "id"]
+
+    def clean(self):
+        if self.bloque_origen_id is None or self.bloque_destino_id is None:
+            return
+        if self.bloque_origen.version_id != self.bloque_destino.version_id:
+            raise ValidationError("Los bloques conectados deben pertenecer a la misma configuracion.")
+        tipo = self.bloque_origen.tipo
+        if tipo == BloqueOperativo.Tipo.DECISION:
+            if self.es_fallback:
+                if self.variable or self.operador or self.valor:
+                    raise ValidationError("La ruta fallback de una decision no debe tener expresion.")
+            elif not (self.variable and self.operador and self.valor):
+                raise ValidationError("Una ruta condicional requiere variable, operador y valor.")
+            if self.resultado_aprobacion:
+                raise ValidationError("resultado_aprobacion no aplica a una decision.")
+        elif tipo == BloqueOperativo.Tipo.APROBACION:
+            if self.es_fallback or self.variable or self.operador or self.valor:
+                raise ValidationError("Una ruta de aprobacion no admite expresion condicional.")
+            if not self.resultado_aprobacion:
+                raise ValidationError("Una ruta de aprobacion requiere resultado_aprobacion.")
+        else:
+            if self.es_fallback or self.variable or self.operador or self.valor or self.resultado_aprobacion:
+                raise ValidationError("Las reglas de ruta solo aplican a decision o aprobacion.")
+
+    def save(self, *args, **kwargs):
+        self.bloque_origen.version.exigir_editable()
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        self.bloque_origen.version.exigir_editable()
+        super().delete(*args, **kwargs)
+
+    @property
+    def etapa_destino(self):
+        return self.bloque_destino
+
+    @property
+    def etapa_origen_id(self):
+        return self.bloque_origen_id
+
+    def __str__(self):
+        etiqueta = f" [{self.nombre}]" if self.nombre else ""
+        return f"{self.bloque_origen} -> {self.bloque_destino}{etiqueta}"

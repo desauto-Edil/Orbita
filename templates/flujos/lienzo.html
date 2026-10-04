@@ -1,186 +1,427 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}{{ workflow.nombre }} — Flujos — Órbita{% endblock %}
-
-{% block content_modifier %}content-area--portal{% endblock %}
-
+{% block title %}{{ workflow.nombre }} - Flujos - Orbita{% endblock %}
+{% block content_modifier %}content-area--flow-workspace{% endblock %}
 {% block extra_head %}<link rel="stylesheet" href="{% static 'css/disenador.css' %}">{% endblock %}
 
 {% block content %}
-<div class="dis">
-  {% include "components/disenador_miga.html" with seccion="flujos" actual=workflow.nombre %}
+<div class="flow-workspace" data-flow-workspace>
+  <header class="flow-editor-bar" aria-labelledby="flow-title">
+    <nav class="flow-breadcrumb" aria-label="Ruta de navegacion">
+      <a href="{% url 'core:disenador_flujos' %}">{% include "components/icon.html" with name="chevron-left" %}Flujos</a>
+      <span aria-hidden="true">/</span>
+      <span>{{ workflow.nombre }}</span>
+    </nav>
 
-  <header class="dis-head dis-head--flujo">
-    <div>
-      <h1 class="dis-title">{{ workflow.nombre }}</h1>
-      {% if workflow.descripcion %}<p class="dis-lede">{{ workflow.descripcion }}</p>{% endif %}
-    </div>
-    <div class="dis-head__actions">
-      {% if version_activa %}<span class="badge badge--success">Publicado · v{{ version_activa.numero }}</span>{% else %}<span class="badge badge--warning">Sin publicar</span>{% endif %}
-      {% if version_borrador %}<span class="badge badge--info">Borrador v{{ version_borrador.numero }} en diseño</span>{% endif %}
-      <a class="btn btn--ghost btn--sm" href="{% url 'workflows:detalle' workflow.pk %}">Vista técnica</a>
+    <div class="flow-editor-bar__main">
+      <div class="flow-editor-bar__identity">
+        <h1 id="flow-title">{{ workflow.nombre }}</h1>
+        <div class="flow-editor-bar__meta">
+          <span>
+            {{ fases|length }} fase{{ fases|length|pluralize }}
+            {% if editable_ejecucion %}
+              · Borrador v{{ version_mostrada.numero }} · {% if publicable %}Listo para publicar{% else %}Cambios sin publicar{% endif %}
+            {% elif version_activa %}
+              · Publicado · v{{ version_activa.numero }}
+            {% else %}
+              · Sin publicar
+            {% endif %}
+          </span>
+          {% if editable_ejecucion %}
+            <button type="button" class="flow-validation{% if publicable %} is-ready{% elif errores_publicacion %} is-pending{% endif %}" data-flow-open-inspector data-target="inspector-validacion">
+              {% if publicable %}{% include "components/icon.html" with name="check" %}Todo listo{% elif errores_publicacion %}{% include "components/icon.html" with name="alert" %}{{ errores_publicacion|length }} pendiente{{ errores_publicacion|length|pluralize }}{% endif %}
+            </button>
+          {% endif %}
+        </div>
+      </div>
+
+      <div class="flow-editor-actions" aria-label="Acciones del flujo">
+        {% if editable_ejecucion %}
+          <button type="button" class="btn btn--secondary" data-flow-open-inspector data-target="inspector-nueva-fase">{% include "components/icon.html" with name="plus" %}Nueva fase</button>
+          {% if usado_por and version_activa %}
+            <button type="button" class="btn btn--primary" data-flow-open-inspector data-target="inspector-publicar"{% if not publicable %} disabled{% endif %}>Publicar</button>
+          {% else %}
+            <form method="post" action="{% url 'flujos:publicar' workflow.pk %}" class="flow-inline-form">
+              {% csrf_token %}
+              <button type="submit" class="btn btn--primary"{% if not publicable %} disabled{% endif %}>Publicar</button>
+            </form>
+          {% endif %}
+        {% elif caps.administrar_flujos and not viendo_otra %}
+          {% if usado_por %}
+            <button type="button" class="btn btn--primary" data-flow-open-inspector data-target="inspector-compartido">Editar flujo</button>
+          {% else %}
+            <form method="post" action="{% url 'flujos:preparar' workflow.pk %}" class="flow-inline-form">
+              {% csrf_token %}
+              <button type="submit" class="btn btn--primary">Editar flujo</button>
+            </form>
+          {% endif %}
+        {% endif %}
+        <button type="button" class="btn btn--ghost flow-inspector-toggle" data-flow-toggle-inspector aria-expanded="true" aria-controls="flow-inspector">Detalles</button>
+        {% if caps.administrar_flujos %}
+          <details class="flow-menu flow-menu--toolbar">
+            <summary aria-label="Mas acciones">{% include "components/icon.html" with name="more" %}</summary>
+            <div class="flow-menu__content">
+              <button type="button" data-flow-open-inspector data-target="inspector-datos">Editar datos</button>
+              <button type="button" data-flow-open-inspector data-target="inspector-copia">Crear copia</button>
+            </div>
+          </details>
+        {% endif %}
+      </div>
     </div>
   </header>
 
-  <div class="dis-layout">
-    <section class="card dis-main" aria-labelledby="dis-lienzo-titulo">
-      <div class="dis-panel__head">
-        <h2 class="dis-panel__title" id="dis-lienzo-titulo">Pasos del flujo</h2>
-        <span class="dis-panel__meta">
-          {% if editable_ejecucion %}Editando el borrador v{{ version_mostrada.numero }}
-          {% elif version_mostrada.estado == "ACTIVA" %}Versión publicada v{{ version_mostrada.numero }} · solo lectura
-          {% else %}Versión v{{ version_mostrada.numero }} · solo lectura{% endif %}
-        </span>
+  {% if servicio_retorno %}
+    <div class="alert alert--info flow-workspace-alert" role="status">
+      <span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="info" %}</span>
+      <div class="alert__text">
+        Este flujo se creo desde {{ servicio_retorno.nombre }}. {% if version_activa %}<a href="{{ servicio_retorno_url }}">Volver al servicio y vincularlo</a>.{% else %}Publicalo para poder volver y seleccionarlo desde el servicio.{% endif %}
+      </div>
+    </div>
+  {% endif %}
+
+  {% if viendo_otra %}
+    <div class="alert alert--info flow-workspace-alert" role="status">
+      <span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="info" %}</span>
+      <div class="alert__text">Estas viendo la version v{{ version_mostrada.numero }} ({{ version_mostrada.get_estado_display|lower }}). <a href="{% url 'flujos:lienzo' workflow.pk %}">Volver a la version de trabajo</a>.</div>
+    </div>
+  {% endif %}
+
+  <div class="flow-shell">
+    <main class="flow-canvas" aria-label="Canvas de fases">
+      <div class="flow-canvas__scroll">
+        {% if fases %}
+          <ol class="flow-map" aria-label="Recorrido de fases">
+            {% for fila in fases %}
+              <li class="flow-map__item">
+                <article class="flow-node{% if fila.es_inicial %} is-initial{% endif %}{% if fila.es_final %} is-final{% endif %}" tabindex="0" data-flow-select data-target="inspector-fase-info-{{ fila.fase.pk }}" aria-labelledby="fase-{{ fila.fase.pk }}-titulo">
+                  <div class="flow-node__top">
+                    <span class="flow-node__index" aria-hidden="true"></span>
+                    <div class="flow-node__badges">
+                      {% if fila.es_inicial %}<span class="is-initial">Inicial</span>
+                      {% elif fila.es_final %}<span class="is-final">Final</span>
+                      {% else %}<span class="is-neutral">Fase</span>{% endif %}
+                    </div>
+                    {% if editable_ejecucion %}
+                      <details class="flow-menu flow-node__menu">
+                        <summary aria-label="Acciones de fase">{% include "components/icon.html" with name="more" %}</summary>
+                        <div class="flow-menu__content">
+                          <button type="button" data-flow-open-inspector data-target="inspector-fase-edit-{{ fila.fase.pk }}">Editar</button>
+                          <button type="button" data-flow-open-inspector data-target="inspector-conectar-{{ fila.fase.pk }}">Conectar</button>
+                          <form method="post" action="{% url 'flujos:fase_eliminar' workflow.pk fila.fase.pk %}">
+                            {% csrf_token %}
+                            <button type="submit" onclick="return confirm('Eliminar esta fase?')">Eliminar</button>
+                          </form>
+                        </div>
+                      </details>
+                    {% endif %}
+                  </div>
+                  <div class="flow-node__content">
+                    <h2 id="fase-{{ fila.fase.pk }}-titulo">{{ fila.fase.nombre }}</h2>
+                    {% if fila.fase.descripcion %}<p>{{ fila.fase.descripcion }}</p>{% endif %}
+                  </div>
+                </article>
+
+                {% if fila.transiciones %}
+                  <div class="flow-connector" aria-label="Conexiones desde {{ fila.fase.nombre }}">
+                    {% for transicion in fila.transiciones %}
+                      <div class="flow-connector__path" title="{% if transicion.nombre %}{{ transicion.nombre }} - {% endif %}{{ transicion.fase_destino.nombre }}">
+                        <span class="flow-connector__line" aria-hidden="true"></span>
+                        <span class="flow-connector__arrow" aria-hidden="true">{% include "components/icon.html" with name="arrow-right" %}</span>
+                        {% if editable_ejecucion %}
+                          <form method="post" action="{% url 'flujos:fase_desconectar' workflow.pk transicion.pk %}" class="flow-connector__action">
+                            {% csrf_token %}
+                            <button type="submit" aria-label="Quitar conexion con {{ transicion.fase_destino.nombre }}">{% include "components/icon.html" with name="x" %}</button>
+                          </form>
+                        {% endif %}
+                      </div>
+                    {% endfor %}
+                  </div>
+                {% elif not fila.es_final %}
+                  <div class="flow-connector flow-connector--empty" aria-hidden="true">
+                    <span class="flow-connector__line"></span>
+                    <span class="flow-connector__arrow">{% include "components/icon.html" with name="arrow-right" %}</span>
+                  </div>
+                {% endif %}
+              </li>
+            {% endfor %}
+            {% if editable_ejecucion %}
+              <li class="flow-map__item flow-map__item--new">
+                <button type="button" class="flow-new-node" data-flow-open-inspector data-target="inspector-nueva-fase">{% include "components/icon.html" with name="plus" %}Nueva fase</button>
+              </li>
+            {% endif %}
+          </ol>
+        {% else %}
+          <section class="flow-empty-canvas" aria-label="Flujo vacio">
+            <div class="flow-empty-canvas__graphic" aria-hidden="true"><span></span><i></i><span></span><i></i><span></span></div>
+            <h2>Tu flujo esta vacio</h2>
+            <p>Empieza creando la primera fase de este recorrido.</p>
+            {% if editable_ejecucion %}
+              <button type="button" class="btn btn--primary" data-flow-open-inspector data-target="inspector-nueva-fase">{% include "components/icon.html" with name="plus" %}Crear primera fase</button>
+            {% endif %}
+          </section>
+        {% endif %}
+      </div>
+    </main>
+
+    <aside class="flow-inspector" id="flow-inspector" aria-label="Detalles del flujo">
+      <div class="flow-inspector__chrome">
+        <div>
+          <span class="flow-inspector__eyebrow">Detalles</span>
+          <h2>{{ workflow.nombre }}</h2>
+        </div>
+        <button type="button" class="flow-inspector__close" data-flow-close-inspector aria-label="Cerrar detalles">{% include "components/icon.html" with name="x" %}</button>
       </div>
 
-      {% if viendo_otra %}
-        <div class="alert alert--info" role="status">
-          <span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="info" %}</span>
-          <div class="alert__text">Estás viendo la versión v{{ version_mostrada.numero }} ({{ version_mostrada.get_estado_display|lower }}). <a href="{% url 'flujos:lienzo' workflow.pk %}">Volver a la versión de trabajo</a>.</div>
-        </div>
-      {% endif %}
-
-      {% include "catalogo/_ejecucion_bloques.html" %}
-    </section>
-
-    <aside class="dis-side" aria-label="Estado y acciones del flujo">
-      {# ---- Publicación ---- #}
-      <section class="card dis-side-card">
-        <h2 class="dis-panel__title">Publicación</h2>
-        {% if usado_por %}
-          <div class="alert alert--warning" role="status">
-            <span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="alert" %}</span>
-            <div class="alert__text">Este flujo lo usan {{ usado_por|length }} servicio{{ usado_por|length|pluralize }} o proceso{{ usado_por|length|pluralize }}. Una nueva versión afectará a sus tickets <em>nuevos</em>; los ya iniciados conservan la versión con la que empezaron.</div>
-          </div>
-        {% endif %}
-
-        {% if caps.administrar_flujos %}
-          {% if not version_borrador %}
-            <p class="dis-side-text">Para cambiar el flujo se abre un borrador: no afecta a nadie hasta que lo publiques.</p>
-            {% if usado_por %}
-              <button type="button" class="btn btn--primary" data-action="toggle-panel" data-target="panel-compartido">Editar flujo…</button>
-              <div id="panel-compartido" class="dis-confirm" hidden>
-                <p><strong>Este flujo se está usando. ¿Qué quieres hacer?</strong></p>
-                <form method="post" action="{% url 'flujos:copia' workflow.pk %}" class="form">
-                  {% csrf_token %}
-                  <p class="dis-side-text"><strong>Crear copia:</strong> obtienes un flujo nuevo e independiente, igual a este. El original y los servicios que lo usan no cambian.</p>
-                  <button type="submit" class="btn btn--primary">Crear copia</button>
-                </form>
-                <hr>
-                <form method="post" action="{% url 'flujos:preparar' workflow.pk %}" class="form">
-                  {% csrf_token %}
-                  <p class="dis-side-text"><strong>Modificar este flujo:</strong> los cambios se preparan en un borrador y solo afectarán a los servicios vinculados cuando lo publiques; entonces se pedirá otra confirmación.</p>
-                  <label class="choice"><input type="checkbox" name="confirmo_compartido" value="1" required> Entiendo que estoy modificando un flujo que usan {{ usado_por|length }} servicio{{ usado_por|length|pluralize }} o proceso{{ usado_por|length|pluralize }}.</label>
-                  <div class="form-actions">
-                    <button type="submit" class="btn btn--secondary">Sí, modificar</button>
-                    <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="panel-compartido">No, cancelar</button>
-                  </div>
-                </form>
-              </div>
-            {% else %}
-              <form method="post" action="{% url 'flujos:preparar' workflow.pk %}">
-                {% csrf_token %}
-                <button type="submit" class="btn btn--primary">Editar flujo</button>
-              </form>
-            {% endif %}
-          {% else %}
-            {% if errores_publicacion %}
-              <p class="dis-side-text"><strong>Para publicar falta:</strong></p>
-              <ul class="dis-checklist">
+      <div class="flow-inspector__body">
+        <section class="flow-inspector__section" id="inspector-validacion">
+          <h3>Estado</h3>
+          {% if errores_publicacion %}
+            <div class="flow-warning" role="status">
+              <strong>Para publicar falta:</strong>
+              <ul>
                 {% for error in errores_publicacion %}<li>{{ error }}</li>{% endfor %}
               </ul>
-            {% else %}
-              <p class="dis-side-text">El flujo está completo y puede publicarse.</p>
-            {% endif %}
+            </div>
+          {% elif version_borrador %}
+            <p class="flow-inspector__text">Todo listo para publicar.</p>
+          {% else %}
+            <p class="flow-inspector__text">Para hacer cambios, crea una nueva version. Los tickets actuales no se veran afectados.</p>
+          {% endif %}
+        </section>
+
+        <section class="flow-inspector__section">
+          <h3>Descripcion</h3>
+          {% if workflow.descripcion %}<p class="flow-inspector__text">{{ workflow.descripcion }}</p>{% else %}<p class="flow-inspector__text">Agrega una descripcion para explicar este flujo.</p>{% endif %}
+        </section>
+
+        {% if caps.administrar_flujos and not version_borrador and usado_por %}
+          <section class="flow-inspector__section is-action-panel" id="inspector-compartido" hidden>
+            <h3>Editar flujo compartido</h3>
+            <p class="flow-inspector__text">Crea una copia independiente o prepara una nueva version. Nada cambia para los servicios hasta publicar.</p>
+            <form method="post" action="{% url 'flujos:copia' workflow.pk %}" class="form">
+              {% csrf_token %}
+              <button type="submit" class="btn btn--primary">Crear copia</button>
+            </form>
+            <form method="post" action="{% url 'flujos:preparar' workflow.pk %}" class="form">
+              {% csrf_token %}
+              <label class="choice"><input type="checkbox" name="confirmo_compartido" value="1" required> Entiendo que estoy modificando un flujo usado por {{ usado_por|length }} servicio{{ usado_por|length|pluralize }} o proceso{{ usado_por|length|pluralize }}.</label>
+              <button type="submit" class="btn btn--secondary">Modificar este flujo</button>
+            </form>
+          </section>
+        {% endif %}
+
+        {% if editable_ejecucion and usado_por and version_activa %}
+          <section class="flow-inspector__section is-action-panel" id="inspector-publicar" hidden>
+            <h3>Publicar version</h3>
+            <p class="flow-inspector__text">Los tickets nuevos usaran esta version. Los tickets ya iniciados conservan la suya.</p>
+            <ul class="flow-used-list">
+              {% for servicio in usado_por %}
+                <li><span>{{ servicio.nombre }}</span><small>{{ servicio.get_tipo_display }}</small></li>
+              {% endfor %}
+            </ul>
             <form method="post" action="{% url 'flujos:publicar' workflow.pk %}" class="form">
               {% csrf_token %}
-              {% if usado_por and version_activa %}
-                <div class="dis-confirm">
-                  <p class="dis-side-text"><strong>Esta publicación afecta a otros elementos:</strong></p>
-                  <ul class="dis-checklist">
-                    {% for servicio in usado_por %}<li>{{ servicio.nombre }}</li>{% endfor %}
-                  </ul>
-                  <p class="dis-side-text">Sus tickets nuevos usarán esta versión; los ya iniciados conservan la suya. La versión anterior queda guardada.</p>
-                  <label class="choice"><input type="checkbox" name="confirmo_compartido" value="1" required> Entiendo el impacto sobre estos elementos.</label>
-                  <div class="field">
-                    <label for="confirmacion-nombre">Para confirmar, escribe el nombre del flujo: <strong>{{ workflow.nombre }}</strong></label>
-                    <input id="confirmacion-nombre" type="text" name="confirmacion_nombre" autocomplete="off" required>
-                  </div>
-                </div>
-              {% endif %}
-              <button type="submit" class="btn btn--primary"{% if not publicable %} disabled{% endif %}>Publicar versión</button>
+              <label class="choice"><input type="checkbox" name="confirmo_compartido" value="1" required> Entiendo el impacto sobre estos elementos.</label>
+              <div class="field">
+                <label for="confirmacion-nombre">Para confirmar, escribe el nombre del flujo: <strong>{{ workflow.nombre }}</strong></label>
+                <input id="confirmacion-nombre" type="text" name="confirmacion_nombre" autocomplete="off" required>
+              </div>
+              <button type="submit" class="btn btn--primary"{% if not publicable %} disabled{% endif %}>Publicar version</button>
             </form>
-          {% endif %}
-        {% else %}
-          <p class="dis-side-text">Puedes consultar este flujo. Para modificarlo o publicarlo necesitas otro permiso.</p>
+          </section>
         {% endif %}
-      </section>
 
-      {# ---- Usado por ---- #}
-      <section class="card dis-side-card">
-        <h2 class="dis-panel__title">Usado por</h2>
-        {% if usado_por %}
-          <ul class="dis-list dis-list--compact">
-            {% for servicio in usado_por %}
-              <li class="dis-row">
-                <div class="dis-row__main">
-                  {% if caps.gestionar_servicios %}<a class="dis-row__name dis-row__link" href="{% url 'catalogo:studio' servicio.pk %}">{{ servicio.nombre }}</a>{% else %}<span class="dis-row__name">{{ servicio.nombre }}</span>{% endif %}
-                  <span class="dis-row__meta">{{ servicio.get_tipo_display }}</span>
-                </div>
+        {% for fila in fases %}
+          <section class="flow-inspector__section is-action-panel" id="inspector-fase-info-{{ fila.fase.pk }}" hidden>
+            <h3>{{ fila.fase.nombre }}</h3>
+            <p class="flow-inspector__text">
+              {% if fila.es_inicial %}Fase inicial.{% elif fila.es_final %}Fase final.{% else %}Fase del recorrido.{% endif %}
+              {% if fila.fase.descripcion %} {{ fila.fase.descripcion }}{% else %} Agrega una descripcion para explicar esta fase.{% endif %}
+            </p>
+            {% if fila.transiciones %}
+              <div class="flow-mini-list">
+                <strong>Conecta con</strong>
+                <ul>
+                  {% for transicion in fila.transiciones %}
+                    <li><span>{{ transicion.fase_destino.nombre }}</span>{% include "components/icon.html" with name="arrow-right" %}</li>
+                  {% endfor %}
+                </ul>
+              </div>
+            {% endif %}
+            {% if editable_ejecucion %}
+              <button type="button" class="btn btn--secondary" data-flow-open-inspector data-target="inspector-fase-edit-{{ fila.fase.pk }}">Editar fase</button>
+            {% endif %}
+          </section>
+        {% endfor %}
+
+        {% if editable_ejecucion %}
+          <section class="flow-inspector__section is-action-panel" id="inspector-nueva-fase" hidden>
+            <h3>Nueva fase</h3>
+            <p class="flow-inspector__text">Anade un nuevo momento al recorrido.</p>
+            <form method="post" action="{% url 'flujos:fase_crear' workflow.pk %}" class="form">
+              {% csrf_token %}
+              <div class="field">{{ fase_form_nueva.nombre.label_tag }}{{ fase_form_nueva.nombre }}</div>
+              <div class="field">{{ fase_form_nueva.descripcion.label_tag }}{{ fase_form_nueva.descripcion }}</div>
+              <details class="flow-advanced">
+                <summary>Posicion avanzada</summary>
+                <div class="field">{{ fase_form_nueva.orden.label_tag }}{{ fase_form_nueva.orden }}</div>
+              </details>
+              <div class="form-actions">
+                <button type="button" class="btn btn--ghost" data-flow-close-inspector>Cancelar</button>
+                <button type="submit" class="btn btn--primary">Crear fase</button>
+              </div>
+            </form>
+          </section>
+
+          {% for fila in fases %}
+            <section class="flow-inspector__section is-action-panel" id="inspector-fase-edit-{{ fila.fase.pk }}" hidden>
+              <h3>Editar fase</h3>
+              <form method="post" action="{% url 'flujos:fase_editar' workflow.pk fila.fase.pk %}" class="form">
+                {% csrf_token %}
+                <div class="field">{{ fila.form_editar.nombre.label_tag }}{{ fila.form_editar.nombre }}</div>
+                <div class="field">{{ fila.form_editar.descripcion.label_tag }}{{ fila.form_editar.descripcion }}</div>
+                <details class="flow-advanced">
+                  <summary>Posicion avanzada</summary>
+                  <div class="field">{{ fila.form_editar.orden.label_tag }}{{ fila.form_editar.orden }}</div>
+                </details>
+                <button type="submit" class="btn btn--primary">Guardar fase</button>
+              </form>
+            </section>
+
+            <section class="flow-inspector__section is-action-panel" id="inspector-conectar-{{ fila.fase.pk }}" hidden>
+              <h3>Conectar desde {{ fila.fase.nombre }}</h3>
+              <form method="post" action="{% url 'flujos:fase_conectar' workflow.pk fila.fase.pk %}" class="form">
+                {% csrf_token %}
+                <div class="field">{{ fila.form_transicion.fase_destino.label_tag }}{{ fila.form_transicion.fase_destino }}</div>
+                <div class="field">{{ fila.form_transicion.nombre.label_tag }}{{ fila.form_transicion.nombre }}</div>
+                <details class="flow-advanced">
+                  <summary>Prioridad avanzada</summary>
+                  <div class="field">{{ fila.form_transicion.prioridad.label_tag }}{{ fila.form_transicion.prioridad }}</div>
+                </details>
+                <button type="submit" class="btn btn--secondary">Conectar fase</button>
+              </form>
+            </section>
+          {% endfor %}
+        {% endif %}
+
+        <section class="flow-inspector__section">
+          <div class="flow-inspector__section-head"><h3>Versiones</h3><span>{{ versiones|length }}</span></div>
+          <ul class="flow-version-list">
+            {% for v in versiones %}
+              <li>
+                <span>v{{ v.numero }}</span>
+                <span class="badge{% if v.estado == 'ACTIVA' %} badge--success{% elif v.estado == 'BORRADOR' %} badge--info{% endif %}">{% if v.estado == "ACTIVA" %}Publicada{% elif v.estado == "BORRADOR" %}Borrador{% else %}Anterior{% endif %}</span>
+                {% if v.pk != version_mostrada.pk %}<a href="{% url 'flujos:lienzo' workflow.pk %}?version={{ v.pk }}">Ver</a>{% endif %}
               </li>
             {% endfor %}
           </ul>
-        {% else %}
-          <p class="dis-side-text">Sin usar todavía. Cuando lo vincules a un servicio o proceso aparecerá aquí.</p>
-        {% endif %}
-      </section>
+        </section>
 
-      {# ---- Versiones ---- #}
-      <section class="card dis-side-card">
-        <h2 class="dis-panel__title">Versiones</h2>
-        <ul class="dis-list dis-list--compact">
-          {% for v in versiones %}
-            <li class="dis-row">
-              <div class="dis-row__main">
-                <span class="dis-row__name">v{{ v.numero }}</span>
-                <span class="dis-row__meta">{{ v.creado_en|date:"j \d\e F \d\e Y" }}</span>
-              </div>
-              <div class="dis-row__actions">
-                <span class="badge{% if v.estado == 'ACTIVA' %} badge--success{% elif v.estado == 'BORRADOR' %} badge--info{% endif %}">{% if v.estado == "ACTIVA" %}Publicada{% elif v.estado == "BORRADOR" %}Borrador{% else %}Anterior{% endif %}</span>
-                {% if v.pk != version_mostrada.pk %}<a class="btn btn--ghost btn--sm" href="{% url 'flujos:lienzo' workflow.pk %}?version={{ v.pk }}">Ver</a>{% endif %}
-              </div>
-            </li>
-          {% endfor %}
-        </ul>
-      </section>
+        <section class="flow-inspector__section">
+          <div class="flow-inspector__section-head"><h3>Usado en</h3><span>{{ usado_por|length }}</span></div>
+          {% if usado_por %}
+            <ul class="flow-used-list">
+              {% for servicio in usado_por %}
+                <li>
+                  {% if caps.gestionar_servicios %}<a href="{% url 'catalogo:studio' servicio.pk %}">{{ servicio.nombre }}</a>{% else %}<span>{{ servicio.nombre }}</span>{% endif %}
+                  <small>{{ servicio.get_tipo_display }}</small>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="flow-inspector__text">Sin usar todavia.</p>
+          {% endif %}
+        </section>
 
-      {# ---- Datos y copia ---- #}
-      {% if caps.administrar_flujos %}
-        <section class="card dis-side-card">
-          <h2 class="dis-panel__title">Más acciones</h2>
-          <div class="dis-actions-stack">
-            <button type="button" class="btn btn--secondary" data-action="toggle-panel" data-target="panel-datos">Editar nombre y descripción</button>
-            <div id="panel-datos" hidden>
-              <form method="post" action="{% url 'flujos:datos' workflow.pk %}" class="form">
-                {% csrf_token %}
-                <div class="field">{{ form_datos.nombre.label_tag }}{{ form_datos.nombre }}</div>
-                <div class="field">{{ form_datos.descripcion.label_tag }}{{ form_datos.descripcion }}</div>
-                <button type="submit" class="btn btn--primary">Guardar</button>
-              </form>
-            </div>
+        {% if caps.administrar_flujos %}
+          <section class="flow-inspector__section is-action-panel" id="inspector-datos" hidden>
+            <h3>Datos del flujo</h3>
+            <form method="post" action="{% url 'flujos:datos' workflow.pk %}" class="form">
+              {% csrf_token %}
+              <div class="field">{{ form_datos.nombre.label_tag }}{{ form_datos.nombre }}</div>
+              <div class="field">{{ form_datos.descripcion.label_tag }}{{ form_datos.descripcion }}</div>
+              <button type="submit" class="btn btn--primary">Guardar datos</button>
+            </form>
+          </section>
+
+          <section class="flow-inspector__section is-action-panel" id="inspector-copia" hidden>
+            <h3>Crear copia</h3>
             <form method="post" action="{% url 'flujos:copia' workflow.pk %}" class="form">
               {% csrf_token %}
               <div class="field">
-                <label for="nombre-copia">Crear una copia independiente</label>
+                <label for="nombre-copia">Nombre de la copia</label>
                 <input id="nombre-copia" type="text" name="nombre" placeholder="Copia de {{ workflow.nombre }}" maxlength="150">
               </div>
               <button type="submit" class="btn btn--secondary">Crear copia</button>
             </form>
-          </div>
-        </section>
-      {% endif %}
+          </section>
+        {% endif %}
+      </div>
     </aside>
   </div>
 </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function () {
+  var workspace = document.querySelector("[data-flow-workspace]");
+  if (!workspace) return;
+
+  var inspector = workspace.querySelector("#flow-inspector");
+  var toggle = workspace.querySelector("[data-flow-toggle-inspector]");
+  var panels = Array.prototype.slice.call(workspace.querySelectorAll(".flow-inspector__section.is-action-panel"));
+  var nodes = Array.prototype.slice.call(workspace.querySelectorAll("[data-flow-select]"));
+
+  function setInspector(open) {
+    workspace.classList.toggle("is-inspector-collapsed", !open);
+    if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+
+  function openPanel(id) {
+    setInspector(true);
+    panels.forEach(function (panel) {
+      panel.hidden = panel.id !== id;
+    });
+    var target = id ? document.getElementById(id) : null;
+    if (target) target.hidden = false;
+  }
+
+  workspace.addEventListener("click", function (event) {
+    var open = event.target.closest("[data-flow-open-inspector]");
+    if (open) {
+      event.preventDefault();
+      openPanel(open.getAttribute("data-target"));
+      return;
+    }
+
+    if (event.target.closest("[data-flow-close-inspector]")) {
+      event.preventDefault();
+      setInspector(false);
+      return;
+    }
+
+    if (event.target.closest("[data-flow-toggle-inspector]")) {
+      event.preventDefault();
+      setInspector(workspace.classList.contains("is-inspector-collapsed"));
+      return;
+    }
+
+    var selected = event.target.closest("[data-flow-select]");
+    if (selected && !event.target.closest(".flow-menu")) {
+      nodes.forEach(function (node) { node.classList.remove("is-selected"); });
+      selected.classList.add("is-selected");
+      openPanel(selected.getAttribute("data-target"));
+    }
+  });
+
+  workspace.addEventListener("keydown", function (event) {
+    if ((event.key === "Enter" || event.key === " ") && event.target.matches("[data-flow-select]")) {
+      event.preventDefault();
+      event.target.click();
+    }
+  });
+})();
+</script>
 {% endblock %}

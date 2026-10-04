@@ -35,6 +35,14 @@ class Servicio(RegistroBase):
     workflow = models.ForeignKey(
         "workflows.Workflow", on_delete=models.PROTECT, null=True, blank=True, related_name="servicios"
     )
+    configuracion_ejecucion_activa = models.ForeignKey(
+        "catalogo.ConfiguracionEjecucionVersion",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        editable=False,
+        related_name="+",
+    )
 
     class AlcanceVisibilidad(models.TextChoices):
         PUBLICO_INTERNO = "PUBLICO_INTERNO", "Público interno"

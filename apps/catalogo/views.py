@@ -4,10 +4,10 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
 from django.shortcuts import get_object_or_404, render
 
-from apps.catalogo.campos import ESTRATEGIAS_POR_TIPO
 from apps.catalogo.models import Categoria, FormularioVersion
 from apps.catalogo.visibilidad import servicios_visibles_para
 from apps.core.autorizacion import usuario_tiene_permiso
+from apps.tickets.solicitud import construir_items_para_version
 
 
 @login_required
@@ -59,21 +59,9 @@ def previsualizar_version_view(request, version_id):
         raise PermissionDenied
     version = get_object_or_404(FormularioVersion.objects.select_related("formulario"), pk=version_id)
 
-    campos_preview = []
-    for campo in version.campos.prefetch_related("opciones").all():
-        estrategia = ESTRATEGIAS_POR_TIPO[campo.tipo]
-        campos_preview.append(
-            {
-                "campo": campo,
-                "widget": estrategia.widget,
-                "opciones": campo.opciones.all(),
-                "opciones_referencia": estrategia.queryset(campo) if hasattr(estrategia, "queryset") else None,
-            }
-        )
-
     contexto = {
         "version": version,
-        "campos_preview": campos_preview,
+        "items": construir_items_para_version(version),
         "titulo_pagina": f"Previsualización — {version.formulario.nombre}",
     }
     return render(request, "catalogo/formulario_preview.html", contexto)

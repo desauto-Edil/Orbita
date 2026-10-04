@@ -363,14 +363,12 @@ def _atributos_y_pista(campo):
     return atributos, " · ".join(pistas)
 
 
-def construir_items(ticket, *, errores=None, valores_envio=None):
+def _construir_items(version, existentes=None, *, errores=None, valores_envio=None):
     """Una entrada por campo de la versión congelada, en su orden, lista
     para renderizar (control, ancho, estado, valores, errores)."""
     errores = errores or {}
     valores_envio = valores_envio or {}
-    respuesta_formulario = ticket.respuesta_formulario
-    version = respuesta_formulario.formulario_version
-    existentes = _existentes(respuesta_formulario)
+    existentes = existentes or {}
     campos = list(version.campos.prefetch_related("opciones").all())
     ids_archivo = {c.id for c in campos if c.tipo == TipoCampo.ARCHIVO}
 
@@ -450,6 +448,20 @@ def construir_items(ticket, *, errores=None, valores_envio=None):
         )
         items.append(item)
     return items
+
+
+def construir_items(ticket, *, errores=None, valores_envio=None):
+    respuesta_formulario = ticket.respuesta_formulario
+    return _construir_items(
+        respuesta_formulario.formulario_version,
+        _existentes(respuesta_formulario),
+        errores=errores,
+        valores_envio=valores_envio,
+    )
+
+
+def construir_items_para_version(version):
+    return _construir_items(version)
 
 
 def _completado(item):

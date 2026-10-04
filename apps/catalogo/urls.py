@@ -53,6 +53,15 @@ urlpatterns = [
         studio.studio_ejecucion_configurar_view, name="studio_ejecucion_configurar",
     ),
     path(
+        "<int:pk>/studio/ejecucion/activar-configuracion/",
+        studio.studio_ejecucion_activar_configuracion_view,
+        name="studio_ejecucion_activar_configuracion",
+    ),
+    path(
+        "<int:pk>/studio/ejecucion/crear-flujo/",
+        studio.studio_ejecucion_crear_flujo_view, name="studio_ejecucion_crear_flujo",
+    ),
+    path(
         "<int:pk>/studio/ejecucion/vincular/",
         studio.studio_ejecucion_vincular_view, name="studio_ejecucion_vincular",
     ),

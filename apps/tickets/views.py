@@ -179,6 +179,13 @@ def _borrador_propio(request, pk):
     return ticket
 
 
+def _ticket_propio(request, pk):
+    ticket = get_object_or_404(Ticket, pk=pk)
+    if not es_propietario_borrador(request.user, ticket):
+        raise PermissionDenied
+    return ticket
+
+
 def _render_workspace(request, ticket, *, errores=None, valores_envio=None):
     contexto = solicitud.contexto_workspace(ticket, errores=errores, valores_envio=valores_envio)
     contexto["titulo_pagina"] = f"Nuevo ticket — {contexto['servicio'].nombre}"
@@ -208,7 +215,9 @@ def _guardar_envio(request, ticket, version):
 
 @login_required
 def borrador_formulario_view(request, pk):
-    ticket = _borrador_propio(request, pk)
+    ticket = _ticket_propio(request, pk)
+    if ticket.estado != Ticket.Estado.BORRADOR:
+        return redirect("tickets:detalle", pk=ticket.pk)
     version = ticket.respuesta_formulario.formulario_version
 
     if request.method == "POST":
@@ -256,7 +265,9 @@ def revisar_view(request, pk):
     todo está en orden, pasa a la revisión (PRG). GET: muestra lo guardado.
     Si hay campos por corregir o completar, no avanza: vuelve al formulario
     con el error junto a cada campo."""
-    ticket = _borrador_propio(request, pk)
+    ticket = _ticket_propio(request, pk)
+    if ticket.estado != Ticket.Estado.BORRADOR:
+        return redirect("tickets:enviada", pk=ticket.pk) if ticket.radicado else redirect("tickets:detalle", pk=ticket.pk)
     version = ticket.respuesta_formulario.formulario_version
 
     errores_formato, valores_con_error = {}, {}
@@ -286,7 +297,7 @@ def revisar_view(request, pk):
 @login_required
 @require_POST
 def enviar_view(request, pk):
-    """V2 — "Enviar solicitud": la radicación REAL (`operaciones.radicar_ticket`)
+    """V2 — "Solicitar": la radicación REAL (`operaciones.radicar_ticket`)
     sobre lo ya guardado y revisado. Un segundo envío del mismo ticket (doble
     clic) no falla: lleva a la misma confirmación."""
     ticket = get_object_or_404(Ticket, pk=pk)
@@ -300,7 +311,7 @@ def enviar_view(request, pk):
     except ValidationError as exc:
         errores = exc.message_dict if hasattr(exc, "error_dict") else None
         if errores:
-            messages.error(request, "Revisa los campos señalados antes de enviar.")
+            messages.error(request, "Revisa los campos señalados antes de solicitar.")
             return _render_workspace(request, ticket, errores=errores)
         messages.error(request, _mensaje_error(exc))
         return redirect("tickets:revisar", pk=ticket.pk)

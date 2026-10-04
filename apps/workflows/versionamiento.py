@@ -20,7 +20,9 @@ from apps.workflows.models import (
     ConfiguracionEtapaAprobacion,
     ConfiguracionEtapaTarea,
     Etapa,
+    FaseWorkflow,
     ParticipanteEtapaAprobacion,
+    TransicionFaseWorkflow,
     TransicionEtapa,
     Workflow,
     WorkflowVersion,
@@ -88,7 +90,7 @@ _CLONADORES_CONFIGURACION_POR_TIPO = {
 
 
 @transaction.atomic
-def crear_workflow(actor, *, nombre, descripcion="", clonar_desde=None):
+def crear_workflow(actor, *, nombre, descripcion="", clonar_desde=None, modo=Workflow.Modo.LEGACY_EJECUTABLE):
     """3.UI.3 — cierra un GAP real: `workflows.administrar` (ver docstring
     de `apps.workflows.autorizacion.PERMISO_ADMINISTRAR`) ya documentaba
     "crear/editar Workflow" como parte de su alcance, pero hasta ahora esa
@@ -111,7 +113,7 @@ def crear_workflow(actor, *, nombre, descripcion="", clonar_desde=None):
     `crear_nueva_version`, que ya preserva etapas, transiciones y la
     configuración de tareas/aprobaciones; sin él, el comportamiento es el de
     siempre."""
-    workflow = Workflow.objects.create(nombre=nombre, descripcion=descripcion)
+    workflow = Workflow.objects.create(nombre=nombre, descripcion=descripcion, modo=modo)
     registrar_evento(
         accion=RegistroAuditoria.Accion.CREAR,
         instancia=workflow,
@@ -178,6 +180,8 @@ def crear_nueva_version(workflow, actor, clonar_desde=None):
     # evita dos números de versión iguales y clonar una vigente obsoleta.
     workflow = Workflow.objects.select_for_update().get(pk=workflow.pk)
     origen = clonar_desde if clonar_desde is not None else workflow.version_activa
+    if origen is not None and origen.workflow.modo != workflow.modo:
+        raise ValidationError("No se puede clonar una version de un modo de Workflow distinto.")
 
     nueva = WorkflowVersion.objects.create(
         workflow=workflow,
@@ -185,7 +189,26 @@ def crear_nueva_version(workflow, actor, clonar_desde=None):
         estado=WorkflowVersion.Estado.BORRADOR,
     )
 
-    if origen is not None:
+    if origen is not None and workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        mapa_fases = {}
+        for fase in origen.fases.all():
+            clon = FaseWorkflow.objects.create(
+                version=nueva,
+                nombre=fase.nombre,
+                descripcion=fase.descripcion,
+                orden=fase.orden,
+            )
+            mapa_fases[fase.pk] = clon
+        for fase in origen.fases.all():
+            for transicion in fase.transiciones_salientes.all():
+                TransicionFaseWorkflow.objects.create(
+                    fase_origen=mapa_fases[transicion.fase_origen_id],
+                    fase_destino=mapa_fases[transicion.fase_destino_id],
+                    nombre=transicion.nombre,
+                    prioridad=transicion.prioridad,
+                )
+
+    if origen is not None and workflow.modo == Workflow.Modo.LEGACY_EJECUTABLE:
         mapa_etapas = {}
         for etapa in origen.etapas.all():
             clon = Etapa.objects.create(
@@ -248,7 +271,12 @@ def activar_version(workflow, version, actor):
     if version.estado != WorkflowVersion.Estado.BORRADOR:
         raise ValueError("Solo se puede activar una versión en estado BORRADOR.")
 
-    errores = validar_estructura(version)
+    if workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        from apps.workflows.fases import validar_estructura_fases
+
+        errores = validar_estructura_fases(version)
+    else:
+        errores = validar_estructura(version)
     if errores:
         raise ValidationError(errores)
 

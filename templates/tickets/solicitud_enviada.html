@@ -14,7 +14,7 @@
   <p class="sol-done__text">Radicada el {{ ticket.radicado_en|date:"j \d\e F \d\e Y, H:i" }}. Ya puedes seguir su avance desde Mis tickets.</p>
   <div class="sol-done__actions">
     <a class="btn btn--primary" href="{% url 'tickets:detalle' ticket.pk %}">Ver Ticket</a>
-    <a class="btn btn--secondary" href="{% url 'core:inicio' %}">Ir al Inicio</a>
+    <a class="btn btn--secondary" href="{% url 'tickets:mis_tickets' %}">Ir a Mis Tickets</a>
   </div>
 </section>
 {% endblock %}

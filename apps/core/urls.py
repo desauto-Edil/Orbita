@@ -1,6 +1,7 @@
 from django.urls import path
 
 from apps.core import views
+from apps.catalogo import studio as catalogo_studio
 
 app_name = "core"
 
@@ -16,4 +17,6 @@ urlpatterns = [
     path("disenador/", views.disenador_view, name="disenador"),
     path("disenador/flujos/", views.disenador_flujos_view, name="disenador_flujos"),
     path("disenador/servicios/", views.disenador_servicios_view, name="disenador_servicios"),
+    path("disenador/servicios/nuevo/", catalogo_studio.studio_crear_view, name="disenador_servicio_crear"),
+    path("disenador/servicios/<int:pk>/", catalogo_studio.studio_view, name="disenador_servicio"),
 ]

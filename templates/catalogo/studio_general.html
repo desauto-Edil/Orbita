@@ -1,77 +1,107 @@
-<section class="card">
-  <h2>Información general</h2>
-  <p class="text-muted">¿Qué estás creando?</p>
-  <form method="post" action="{% url 'catalogo:studio_general_guardar' servicio.pk %}" class="form">
-    {% csrf_token %}
-    <div class="field">
-      <label for="id_nombre">Nombre</label>
-      {{ form_general.nombre }}
+<section class="svc-section svc-section--basic">
+  <header class="svc-section__head">
+    <div>
+      <p class="svc-kicker">Básico</p>
+      <h2>Información general</h2>
+      <p>Define cómo aparecerá este {{ servicio.get_tipo_display|lower }} en el catálogo.</p>
     </div>
-    <div class="field">
-      <label for="id_descripcion">Descripción</label>
-      {{ form_general.descripcion }}
-    </div>
-    <div class="field">
-      <label for="id_categoria">Categoría</label>
-      {{ form_general.categoria }}
-    </div>
-    <div class="field">
-      <label for="id_tipo">Tipo</label>
-      {{ form_general.tipo }}
-      <span class="text-muted" style="font-size: var(--text-xs);">Servicio: una necesidad puntual. Proceso: un ciclo estructurado de la organización.</span>
-    </div>
-    <div class="field">
-      <label for="id_instrucciones">Instrucciones para quien lo solicita</label>
-      {{ form_general.instrucciones }}
-    </div>
-    <div class="field">
-      <label for="id_alcance_visibilidad">¿Quién puede encontrarlo y solicitarlo?</label>
-      {{ form_general.alcance_visibilidad }}
-      <span class="text-muted" style="font-size: var(--text-xs);">Público interno: cualquier persona de la organización. Restringido: solo quienes elijas abajo.</span>
-    </div>
-    <div class="form-actions">
-      <button type="submit" class="btn btn--primary">Guardar</button>
-    </div>
-  </form>
-</section>
+    <button type="submit" form="form-general-servicio" class="btn btn--primary">Guardar</button>
+  </header>
 
-<section class="card" style="margin-top: var(--space-5);">
-  <h2>Quién puede encontrarlo y solicitarlo</h2>
-  {% if es_restringido %}
-    <p class="text-muted">Este elemento es restringido: solo lo ven y lo solicitan las personas, áreas o unidades que concedas aquí.</p>
+  <div class="svc-basic-grid">
+    <article class="svc-panel svc-panel--editor">
+      <form id="form-general-servicio" method="post" action="{% url 'catalogo:studio_general_guardar' servicio.pk %}" class="form">
+        {% csrf_token %}
+        <div class="svc-form-grid svc-form-grid--two">
+          <div class="field">
+            <label for="id_nombre">Nombre</label>
+            {{ form_general.nombre }}
+          </div>
+          <div class="field">
+            <label for="id_categoria">Categoría</label>
+            {{ form_general.categoria }}
+          </div>
+          <div class="field">
+            <label for="id_tipo">Tipo</label>
+            {{ form_general.tipo }}
+            <span class="svc-help">Servicio: necesidad puntual. Proceso: ciclo estructurado.</span>
+          </div>
+          <div class="field">
+            <label for="id_alcance_visibilidad">Visibilidad</label>
+            {{ form_general.alcance_visibilidad }}
+            <span class="svc-help">El acceso restringido se define abajo.</span>
+          </div>
+        </div>
 
-    {% if concesiones %}
-      <ul class="list-row-group">
-        {% for concesion in concesiones %}
-          <li class="list-row">
-            <span class="list-row__title">
-              {% if concesion.tipo_alcance == "USUARIO" %}{{ concesion.usuario }}
-              {% elif concesion.tipo_alcance == "AREA" %}{{ concesion.area }}
-              {% else %}{{ concesion.unidad_negocio }}{% endif %}
-            </span>
-            <span class="badge">{{ concesion.get_tipo_alcance_display }}</span>
-            <form method="post" action="{% url 'catalogo:studio_visibilidad_retirar' servicio.pk concesion.pk %}" style="display:inline;">
-              {% csrf_token %}
-              <button type="submit" class="btn btn--ghost">Retirar</button>
-            </form>
-          </li>
-        {% endfor %}
-      </ul>
+        <div class="field">
+          <label for="id_descripcion">Descripción</label>
+          {{ form_general.descripcion }}
+        </div>
+        <div class="field">
+          <label for="id_instrucciones">Instrucciones para quien lo solicita</label>
+          {{ form_general.instrucciones }}
+        </div>
+      </form>
+    </article>
+
+    <aside class="svc-preview svc-preview--service" aria-label="Vista previa del servicio">
+      <span class="svc-preview__eyebrow">Vista previa</span>
+      <h3>{{ servicio.nombre }}</h3>
+      {% if servicio.descripcion %}<p>{{ servicio.descripcion }}</p>{% endif %}
+      <div class="svc-preview__chips">
+        <span>{{ servicio.get_tipo_display }}</span>
+        {% if servicio.categoria %}<span>{{ servicio.categoria.nombre }}</span>{% endif %}
+        <span>{% if servicio.activo %}Publicado{% else %}Borrador{% endif %}</span>
+      </div>
+      <div class="svc-preview__line">
+        <strong>Visibilidad</strong>
+        <span>{% if es_restringido %}Restringido{% else %}Público interno{% endif %}</span>
+      </div>
+    </aside>
+  </div>
+
+  <section class="svc-panel svc-panel--visibility">
+    <div class="svc-panel__head">
+      <div>
+        <h3>Visibilidad</h3>
+        <p>Quién puede encontrarlo y solicitarlo.</p>
+      </div>
+    </div>
+
+    {% if es_restringido %}
+      {% if concesiones %}
+        <ul class="svc-compact-list">
+          {% for concesion in concesiones %}
+            <li>
+              <span>
+                {% if concesion.tipo_alcance == "USUARIO" %}{{ concesion.usuario }}
+                {% elif concesion.tipo_alcance == "AREA" %}{{ concesion.area }}
+                {% else %}{{ concesion.unidad_negocio }}{% endif %}
+              </span>
+              <span class="svc-tag">{{ concesion.get_tipo_alcance_display }}</span>
+              <form method="post" action="{% url 'catalogo:studio_visibilidad_retirar' servicio.pk concesion.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn--ghost btn--sm">Retirar</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="svc-empty">Aún no hay personas, áreas o unidades con acceso.</div>
+      {% endif %}
+
+      <form method="post" action="{% url 'catalogo:studio_visibilidad_conceder' servicio.pk %}" class="form svc-inline-form">
+        {% csrf_token %}
+        <div class="svc-form-grid svc-form-grid--four">
+          <div class="field">{{ form_visibilidad.tipo_alcance.label_tag }}{{ form_visibilidad.tipo_alcance }}</div>
+          <div class="field">{{ form_visibilidad.usuario.label_tag }}{{ form_visibilidad.usuario }}</div>
+          <div class="field">{{ form_visibilidad.area.label_tag }}{{ form_visibilidad.area }}</div>
+          <div class="field">{{ form_visibilidad.unidad_negocio.label_tag }}{{ form_visibilidad.unidad_negocio }}</div>
+        </div>
+        <div class="form-actions"><button type="submit" class="btn btn--secondary">Conceder acceso</button></div>
+      </form>
     {% else %}
-      <div class="empty-state"><p>Nadie tiene acceso todavía: sin al menos una concesión, nadie lo encontrará en el catálogo.</p></div>
+      <p class="svc-muted">Público interno: cualquier persona de la organización puede encontrarlo y solicitarlo.</p>
     {% endif %}
-
-    <h3 style="margin-top: var(--space-5);">Conceder acceso</h3>
-    <form method="post" action="{% url 'catalogo:studio_visibilidad_conceder' servicio.pk %}" class="form">
-      {% csrf_token %}
-      <div class="field">{{ form_visibilidad.tipo_alcance.label_tag }}{{ form_visibilidad.tipo_alcance }}</div>
-      <div class="field">{{ form_visibilidad.usuario.label_tag }}{{ form_visibilidad.usuario }}</div>
-      <div class="field">{{ form_visibilidad.area.label_tag }}{{ form_visibilidad.area }}</div>
-      <div class="field">{{ form_visibilidad.unidad_negocio.label_tag }}{{ form_visibilidad.unidad_negocio }}</div>
-      <p class="text-muted" style="font-size: var(--text-xs);">Complete solo el selector que corresponda al tipo elegido.</p>
-      <div class="form-actions"><button type="submit" class="btn btn--primary">Conceder</button></div>
-    </form>
-  {% else %}
-    <p class="text-muted">Es de público interno: cualquier persona de la organización puede encontrarlo y solicitarlo. No hace falta conceder acceso. Si lo cambias a «Restringido» y guardas, podrás elegir quién tiene acceso.</p>
-  {% endif %}
+  </section>
 </section>

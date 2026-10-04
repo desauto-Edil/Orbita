@@ -1,104 +1,151 @@
-<section class="card">
-  <h2>Publicación</h2>
-  <p class="text-muted">¿Está listo y quién puede utilizarlo?</p>
-
-  <ul class="plain-list">
-    {% for item in checklist %}
-      <li>
-        {% if item.ok %}
-          <span class="badge badge--success">✓</span>
-        {% else %}
-          <span class="badge badge--warning">○</span>
-        {% endif %}
-        {{ item.texto }}
-      </li>
-    {% endfor %}
-  </ul>
-
-  {% if errores %}
-    <div class="alert alert--danger" style="margin-top: var(--space-4);">
-      <div class="alert__text">
-        <strong>Pendientes antes de publicar:</strong>
-        <ul>
-          {% for error in errores %}<li>{{ error }}</li>{% endfor %}
-        </ul>
-      </div>
+<section class="svc-section svc-section--publish">
+  <header class="svc-section__head">
+    <div>
+      <p class="svc-kicker">Publicación</p>
+      <h2>Publicar</h2>
+      <p>Revisa si el servicio está listo para usarse.</p>
     </div>
-  {% endif %}
+    {% if impacto_compartido %}
+      <a class="btn btn--primary" href="#confirmar-publicacion">Revisar impacto</a>
+    {% else %}
+      <form method="post" action="{% url 'catalogo:studio_publicar' servicio.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn--primary" {% if not publicable %}disabled{% endif %}>
+          {% if servicio.activo %}Actualizar publicación{% else %}Publicar{% endif %}
+        </button>
+      </form>
+    {% endif %}
+  </header>
 
-  <h3 style="margin-top: var(--space-6);">Visibilidad</h3>
-  {% if es_restringido %}
-    {% if concesiones %}
-      <p class="text-muted">Restringido. Pueden encontrarlo y solicitarlo:</p>
-      <ul class="plain-list">
-        {% for concesion in concesiones %}
-          <li>
-            {% if concesion.tipo_alcance == "USUARIO" %}{{ concesion.usuario }}
-            {% elif concesion.tipo_alcance == "AREA" %}{{ concesion.area }}
-            {% else %}{{ concesion.unidad_negocio }}{% endif %}
-            <span class="badge">{{ concesion.get_tipo_alcance_display }}</span>
+  <div class="svc-publish-grid">
+    <article class="svc-panel svc-readiness">
+      <div class="svc-panel__head">
+        <div>
+          <h3>{% if errores %}Pendientes antes de publicar{% else %}Todo listo{% endif %}</h3>
+          <p>{{ checklist|length }} punto{{ checklist|length|pluralize }} revisado{{ checklist|length|pluralize }}.</p>
+        </div>
+        {% if errores %}<span class="svc-pill svc-pill--warn">{{ errores|length }} pendiente{{ errores|length|pluralize }}</span>{% else %}<span class="svc-pill svc-pill--ok">Listo</span>{% endif %}
+      </div>
+
+      <ul class="svc-checklist">
+        {% for item in checklist %}
+          <li{% if item.ok %} class="is-ok"{% endif %}>
+            <span aria-hidden="true">{% if item.ok %}✓{% else %}•{% endif %}</span>
+            <strong>{{ item.texto }}</strong>
           </li>
         {% endfor %}
       </ul>
-    {% else %}
-      <p class="text-muted">Restringido, sin nadie con acceso todavía.</p>
-    {% endif %}
-  {% else %}
-    <p class="text-muted">Público interno — cualquier persona de la organización.</p>
-  {% endif %}
-  <a class="btn btn--ghost" href="{% url 'catalogo:studio' servicio.pk %}?tab=general">Cambiar visibilidad</a>
 
-  <h3 style="margin-top: var(--space-6);">Quién puede atenderlo</h3>
-  <p class="text-muted" style="font-size: var(--text-sm);">Personas o equipos configurados para atender este elemento. Además necesitan el permiso de atención de tickets; no es lo mismo que quién realiza cada actividad del flujo (eso se define en Ejecución).</p>
-  {% if responsables %}
-    <ul class="list-row-group">
-      {% for responsable in responsables %}
-        <li class="list-row">
-          <span class="list-row__title">{% if responsable.tipo_responsable == "USUARIO" %}{{ responsable.usuario }}{% else %}{{ responsable.equipo }}{% endif %}</span>
-          <span class="badge">{{ responsable.get_tipo_responsable_display }}</span>
-          <form method="post" action="{% url 'catalogo:studio_responsable_retirar' servicio.pk responsable.pk %}" style="display:inline;">
-            {% csrf_token %}
-            <button type="submit" class="btn btn--ghost">Retirar</button>
-          </form>
-        </li>
-      {% endfor %}
-    </ul>
-  {% else %}
-    <div class="empty-state"><p>Todavía no hay responsables configurados.</p></div>
-  {% endif %}
-
-  <form method="post" action="{% url 'catalogo:studio_responsable_agregar' servicio.pk %}" class="form" style="margin-top: var(--space-4);">
-    {% csrf_token %}
-    <div class="field">{{ form_responsable.tipo_responsable.label_tag }}{{ form_responsable.tipo_responsable }}</div>
-    <div class="field">{{ form_responsable.usuario.label_tag }}{{ form_responsable.usuario }}</div>
-    <div class="field">{{ form_responsable.equipo.label_tag }}{{ form_responsable.equipo }}</div>
-    <p class="text-muted" style="font-size: var(--text-xs);">Complete solo el selector que corresponda al tipo elegido.</p>
-    <div class="form-actions"><button type="submit" class="btn btn--secondary">+ Agregar responsable</button></div>
-  </form>
-
-  <div class="form-actions" style="margin-top: var(--space-5);">
-    <form method="post" action="{% url 'catalogo:studio_publicar' servicio.pk %}" class="form">
-      {% csrf_token %}
-      {% if impacto_compartido %}
-        <div class="alert alert--warning" style="margin-bottom: var(--space-3);">
-          <span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="alert" %}</span>
-          <div class="alert__text">
-            <strong>Esta publicación afecta a otros elementos.</strong> El flujo «{{ servicio.workflow.nombre }}» también lo usan:
-            <ul class="plain-list" style="margin: var(--space-2) 0;">
-              {% for otro in impacto_compartido %}<li>{{ otro.nombre }}</li>{% endfor %}
-            </ul>
-            Sus tickets nuevos usarán la versión que publiques; los tickets ya iniciados conservan la suya.
-            <label class="choice" style="margin-top: var(--space-2);"><input type="checkbox" name="confirmo_compartido" value="1" required> Entiendo el impacto sobre estos elementos.</label>
-            <div class="field" style="margin-top: var(--space-2);">
-              <label for="confirmacion-nombre">Para confirmar, escribe el nombre del flujo: <strong>{{ servicio.workflow.nombre }}</strong></label>
-              <input id="confirmacion-nombre" type="text" name="confirmacion_nombre" autocomplete="off" required>
-            </div>
-          </div>
+      {% if errores %}
+        <div class="svc-alert">
+          <strong>Antes de publicar:</strong>
+          <ul>
+            {% for error in errores %}<li>{{ error }}</li>{% endfor %}
+          </ul>
         </div>
       {% endif %}
-      <button type="submit" class="btn btn--primary" {% if not publicable %}disabled{% endif %}>
-        {% if servicio.activo %}Actualizar publicación{% else %}Publicar{% endif %}
-      </button>
-    </form>
+    </article>
+
+    <aside class="svc-panel svc-publish-summary">
+      <h3>Visibilidad</h3>
+      {% if es_restringido %}
+        {% if concesiones %}
+          <p>Restringido. Pueden encontrarlo y solicitarlo:</p>
+          <ul class="svc-compact-list svc-compact-list--plain">
+            {% for concesion in concesiones %}
+              <li>
+                <span>
+                  {% if concesion.tipo_alcance == "USUARIO" %}{{ concesion.usuario }}
+                  {% elif concesion.tipo_alcance == "AREA" %}{{ concesion.area }}
+                  {% else %}{{ concesion.unidad_negocio }}{% endif %}
+                </span>
+                <span class="svc-tag">{{ concesion.get_tipo_alcance_display }}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p>Restringido, sin accesos concedidos todavía.</p>
+        {% endif %}
+      {% else %}
+        <p>Público interno: cualquier persona de la organización.</p>
+      {% endif %}
+      <a class="btn btn--ghost btn--sm" href="{% url 'catalogo:studio' servicio.pk %}?tab=general">Cambiar visibilidad</a>
+    </aside>
   </div>
+
+  <div class="svc-publish-grid svc-publish-grid--secondary">
+    <section class="svc-panel">
+      <div class="svc-panel__head">
+        <div>
+          <h3>Atención</h3>
+          <p>Personas o equipos que pueden atender tickets de este elemento.</p>
+        </div>
+      </div>
+      {% if responsables %}
+        <ul class="svc-compact-list">
+          {% for responsable in responsables %}
+            <li>
+              <span>{% if responsable.tipo_responsable == "USUARIO" %}{{ responsable.usuario }}{% else %}{{ responsable.equipo }}{% endif %}</span>
+              <span class="svc-tag">{{ responsable.get_tipo_responsable_display }}</span>
+              <form method="post" action="{% url 'catalogo:studio_responsable_retirar' servicio.pk responsable.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn--ghost btn--sm">Retirar</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="svc-empty">Todavía no hay responsables configurados.</div>
+      {% endif %}
+
+      <form method="post" action="{% url 'catalogo:studio_responsable_agregar' servicio.pk %}" class="form svc-inline-form">
+        {% csrf_token %}
+        <div class="svc-form-grid svc-form-grid--three">
+          <div class="field">{{ form_responsable.tipo_responsable.label_tag }}{{ form_responsable.tipo_responsable }}</div>
+          <div class="field">{{ form_responsable.usuario.label_tag }}{{ form_responsable.usuario }}</div>
+          <div class="field">{{ form_responsable.equipo.label_tag }}{{ form_responsable.equipo }}</div>
+        </div>
+        <div class="form-actions"><button type="submit" class="btn btn--secondary">Agregar responsable</button></div>
+      </form>
+    </section>
+
+    <section class="svc-panel">
+      <div class="svc-panel__head">
+        <div>
+          <h3>Entrega</h3>
+          <p>Qué verá el solicitante al cierre.</p>
+        </div>
+        {% if politica_actual %}<span class="svc-pill svc-pill--ok">Configurada</span>{% else %}<span class="svc-pill">Manual</span>{% endif %}
+      </div>
+      {% if politica_actual %}
+        <p class="svc-muted">{{ politica_actual }}</p>
+      {% else %}
+        <p class="svc-muted">Sin entrega formal configurada.</p>
+      {% endif %}
+      <a class="btn btn--ghost btn--sm" href="{% url 'catalogo:studio' servicio.pk %}?tab=salida">Ajustar salida</a>
+    </section>
+  </div>
+
+  {% if impacto_compartido %}
+    <form id="confirmar-publicacion" method="post" action="{% url 'catalogo:studio_publicar' servicio.pk %}" class="svc-panel svc-impact-form form">
+      {% csrf_token %}
+      <div class="svc-alert svc-alert--warning">
+        <strong>Esta publicación afecta a otros elementos.</strong>
+        <p>El flujo “{{ servicio.workflow.nombre }}” también lo usan:</p>
+        <ul>
+          {% for otro in impacto_compartido %}<li>{{ otro.nombre }}</li>{% endfor %}
+        </ul>
+        <label class="choice"><input type="checkbox" name="confirmo_compartido" value="1" required> Entiendo el impacto sobre estos elementos.</label>
+        <div class="field">
+          <label for="confirmacion-nombre">Para confirmar, escribe el nombre del flujo: <strong>{{ servicio.workflow.nombre }}</strong></label>
+          <input id="confirmacion-nombre" type="text" name="confirmacion_nombre" autocomplete="off" required>
+        </div>
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn--primary" {% if not publicable %}disabled{% endif %}>
+          {% if servicio.activo %}Actualizar publicación{% else %}Publicar{% endif %}
+        </button>
+      </div>
+    </form>
+  {% endif %}
 </section>

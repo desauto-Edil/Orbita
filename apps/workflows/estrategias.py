@@ -162,6 +162,10 @@ class EstrategiaSinConfiguracion(EstrategiaEtapa):
     propio `ejecutar()` (subclases abajo)."""
 
 
+def _definicion(instancia_etapa):
+    return getattr(instancia_etapa, "definicion_ejecutable", instancia_etapa.etapa)
+
+
 class EstrategiaInicio(EstrategiaSinConfiguracion):
     """RQF-065: arranca la cadena de ejecución. Sin lógica de negocio
     propia — el motor ya creó la `InstanciaEtapa` de INICIO; aquí solo se
@@ -218,7 +222,7 @@ class EstrategiaCondicion(EstrategiaSinConfiguracion):
     ejecutable = True
 
     def ejecutar(self, instancia_etapa, contexto):
-        salientes = list(instancia_etapa.etapa.transiciones_salientes.all())
+        salientes = list(_definicion(instancia_etapa).transiciones_salientes.all())
         fallback = next((t for t in salientes if t.es_fallback), None)
         for transicion in salientes:
             if transicion.es_fallback:
@@ -275,7 +279,7 @@ class EstrategiaEspera(EstrategiaEtapa):
                 raise ValidationError("fecha_objetivo debe tener formato ISO (AAAA-MM-DD).") from exc
 
     def ejecutar(self, instancia_etapa, contexto):
-        configuracion = instancia_etapa.etapa.configuracion or {}
+        configuracion = _definicion(instancia_etapa).configuracion or {}
         if configuracion.get("modo") == "DURACION":
             unidad = configuracion["duracion_unidad"]
             delta = (
@@ -316,16 +320,26 @@ class EstrategiaTarea(EstrategiaSinConfiguracion):
         from apps.tareas.operaciones import crear_tarea
         from apps.workflows.models import TareaWorkflow
 
-        etapa = instancia_etapa.etapa
+        etapa = _definicion(instancia_etapa)
         config = getattr(etapa, "configuracion_tarea", None)
         usuario_responsable = None
         equipo_responsable = None
         if config is not None:
-            usuario_responsable, equipo_responsable = resolver_actor(
-                config.tipo_responsable, instancia=instancia_etapa.instancia_workflow,
-                usuario=config.usuario_responsable, equipo=config.equipo_responsable,
-                permite_vacio=True,
-            )
+            try:
+                usuario_responsable, equipo_responsable = resolver_actor(
+                    config.tipo_responsable, instancia=instancia_etapa.instancia_workflow,
+                    usuario=config.usuario_responsable, equipo=config.equipo_responsable,
+                    permite_vacio=True,
+                )
+            except ValidationError as exc:
+                if (
+                    getattr(etapa, "permite_responsable_pendiente", False)
+                    and config.tipo_responsable == "RESPONSABLE_TICKET"
+                    and any("todavía no tiene un responsable individual" in mensaje for mensaje in exc.messages)
+                ):
+                    usuario_responsable, equipo_responsable = None, None
+                else:
+                    raise
 
         tarea = crear_tarea(
             titulo=etapa.nombre,
@@ -367,7 +381,7 @@ class EstrategiaAprobacion(EstrategiaSinConfiguracion):
         from apps.aprobaciones.operaciones import crear_esquema_aprobacion
         from apps.workflows.models import EsquemaAprobacionWorkflow
 
-        etapa = instancia_etapa.etapa
+        etapa = _definicion(instancia_etapa)
         configuracion = etapa.configuracion_aprobacion
         participantes = []
         for participante in configuracion.participantes.order_by("orden"):

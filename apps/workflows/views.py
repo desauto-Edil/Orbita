@@ -114,6 +114,8 @@ def detalle_view(request, pk):
     workflow = get_object_or_404(Workflow.objects.select_related("version_activa"), pk=pk)
     if not puede_consultar_workflows(request.user):
         raise PermissionDenied
+    if workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        return redirect("flujos:lienzo", pk=workflow.pk)
     administra = puede_administrar_workflows(request.user)
     contexto = {
         "workflow": workflow,

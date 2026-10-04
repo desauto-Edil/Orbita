@@ -1,23 +1,31 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Nuevo flujo — Diseñador — Órbita{% endblock %}
+{% block title %}Nuevo flujo - Disenador - Orbita{% endblock %}
 
 {% block content_modifier %}content-area--portal{% endblock %}
 
 {% block extra_head %}<link rel="stylesheet" href="{% static 'css/disenador.css' %}">{% endblock %}
 
 {% block content %}
-<div class="dis">
+<div class="dis flow-create">
   {% include "components/disenador_miga.html" with seccion="flujos" actual="Nuevo flujo" %}
 
-  <header class="dis-head">
+  <header class="dis-head flow-create__head">
+    <p class="flow-kicker">Nueva plantilla</p>
     <h1 class="dis-title">Nuevo flujo</h1>
-    <p class="dis-lede">Un flujo son los pasos que sigue la organización para atender algo. Lo diseñas una vez y luego lo usas en los servicios y procesos que lo necesiten.</p>
+    <p class="dis-lede">Define una plantilla de fases reutilizable. Despues podras agregar fases, conectarlas y publicarla cuando este lista.</p>
   </header>
 
-  <section class="card dis-form-card">
-    <form method="post" class="form" novalidate>
+  <section class="flow-create__panel" aria-label="Datos del flujo">
+    <div class="flow-create__preview" aria-hidden="true">
+      <span>Inicio</span>
+      <i></i>
+      <span>Fases</span>
+      <i></i>
+      <span>Fin</span>
+    </div>
+    <form method="post" class="form flow-create__form" novalidate>
       {% csrf_token %}
       {% if form.non_field_errors %}
         <div class="alert alert--danger" role="alert"><div class="alert__text">{{ form.non_field_errors|join:" " }}</div></div>
@@ -28,7 +36,7 @@
         {{ form.nombre.errors }}
       </div>
       <div class="field">
-        <label for="{{ form.descripcion.id_for_label }}">Descripción <span class="text-muted">(opcional)</span></label>
+        <label for="{{ form.descripcion.id_for_label }}">Descripcion <span class="text-muted">(opcional)</span></label>
         {{ form.descripcion }}
         {{ form.descripcion.errors }}
       </div>
@@ -37,7 +45,6 @@
         <a class="btn btn--ghost" href="{% url 'core:disenador_flujos' %}">Cancelar</a>
       </div>
     </form>
-    <p class="dis-section__text">Se crea como borrador con un inicio y un fin. En el siguiente paso agregas los bloques.</p>
   </section>
 </div>
 {% endblock %}

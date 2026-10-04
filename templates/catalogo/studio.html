@@ -1,41 +1,74 @@
 {% extends "base.html" %}
+{% load static %}
 
-{% block title %}{{ servicio.nombre }} — Studio — Órbita{% endblock %}
+{% block title %}{{ servicio.nombre }} - Servicios - Disenador - Orbita{% endblock %}
 
-{% block content_modifier %}content-area--wide{% endblock %}
+{% block content_modifier %}content-area--service-workspace{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/disenador.css' %}">{% endblock %}
 
 {% block content %}
-  {% include "components/disenador_miga.html" with seccion="servicios" actual=servicio.nombre %}
-  <section class="card">
-    <div class="list-row" style="border-bottom: none; padding: 0;">
-      <h1 style="margin: 0;">{{ servicio.nombre }}</h1>
-      <span class="badge{% if servicio.tipo == 'PROCESO' %} badge--info{% endif %}">{{ servicio.get_tipo_display }}</span>
-      <span class="badge{% if servicio.activo %} badge--success{% else %} badge--warning{% endif %}">
-        {% if servicio.activo %}Publicado{% else %}Borrador{% endif %}
-      </span>
-    </div>
-    <nav class="breadcrumb" aria-label="Secciones del Studio" style="margin-top: var(--space-4); flex-wrap: wrap;">
-      <a href="{% url 'catalogo:studio' servicio.pk %}?tab=general" class="{% if tab == 'general' %}breadcrumb__current{% endif %}">General</a>
-      <span class="breadcrumb__separator" aria-hidden="true">/</span>
-      <a href="{% url 'catalogo:studio' servicio.pk %}?tab=entrada" class="{% if tab == 'entrada' %}breadcrumb__current{% endif %}">Entrada</a>
-      <span class="breadcrumb__separator" aria-hidden="true">/</span>
-      <a href="{% url 'catalogo:studio' servicio.pk %}?tab=ejecucion" class="{% if tab == 'ejecucion' %}breadcrumb__current{% endif %}">Ejecución</a>
-      <span class="breadcrumb__separator" aria-hidden="true">/</span>
-      <a href="{% url 'catalogo:studio' servicio.pk %}?tab=salida" class="{% if tab == 'salida' %}breadcrumb__current{% endif %}">Salida</a>
-      <span class="breadcrumb__separator" aria-hidden="true">/</span>
-      <a href="{% url 'catalogo:studio' servicio.pk %}?tab=publicacion" class="{% if tab == 'publicacion' %}breadcrumb__current{% endif %}">Publicación</a>
+<div class="service-workspace">
+  <header class="service-editor-bar">
+    <nav class="service-breadcrumb" aria-label="Ruta de navegacion">
+      <a href="{% url 'core:disenador_servicios' %}">
+        {% include "components/icon.html" with name="chevron-left" size="sm" %}
+        Servicios
+      </a>
+      <span aria-hidden="true">/</span>
+      <span class="breadcrumb__current">{{ servicio.nombre }}</span>
     </nav>
-  </section>
 
-  {% if tab == "general" %}
-    {% include "catalogo/studio_general.html" %}
-  {% elif tab == "entrada" %}
-    {% include "catalogo/studio_entrada.html" %}
-  {% elif tab == "ejecucion" %}
-    {% include "catalogo/studio_ejecucion.html" %}
-  {% elif tab == "salida" %}
-    {% include "catalogo/studio_salida.html" %}
-  {% elif tab == "publicacion" %}
-    {% include "catalogo/studio_publicacion.html" %}
-  {% endif %}
+    <div class="service-editor-bar__main">
+      <div class="service-editor-bar__identity">
+        <h1>{{ servicio.nombre }}</h1>
+        <p>
+          {{ servicio.get_tipo_display }}
+          {% if servicio.categoria %} · {{ servicio.categoria.nombre }}{% endif %}
+          · {% if servicio.activo %}Publicado{% else %}Borrador{% endif %}
+        </p>
+      </div>
+      <div class="service-editor-bar__actions" aria-label="Acciones del servicio">
+        <a class="btn btn--secondary" href="{% url 'core:disenador_servicios' %}">Volver</a>
+        <a class="btn btn--secondary" href="{% url 'catalogo:studio' servicio.pk %}?tab=publicacion">Publicar</a>
+      </div>
+    </div>
+  </header>
+
+  <div class="service-shell">
+    <aside class="service-rail" aria-label="Secciones del configurador">
+      <div class="service-rail__head">
+        <span class="service-rail__eyebrow">Configuracion</span>
+        <strong>{{ servicio.get_tipo_display }}</strong>
+        <span>{% if servicio.activo %}Publicado{% else %}En borrador{% endif %}</span>
+      </div>
+
+      <nav class="service-steps">
+        {% for item in secciones %}
+          <a class="service-step service-step--{{ item.estado }}{% if tab == item.clave %} is-active{% endif %}" href="{% url 'core:disenador_servicio' servicio.pk %}?tab={{ item.clave }}"{% if tab == item.clave %} aria-current="page"{% endif %}>
+            <span class="service-step__index">0{{ forloop.counter }}</span>
+            <span class="service-step__body">
+              <span class="service-step__label">{{ item.etiqueta }}</span>
+              <span class="service-step__state">{{ item.texto }}</span>
+            </span>
+          </a>
+        {% endfor %}
+      </nav>
+    </aside>
+
+    <main class="service-main" id="studio-panel">
+      {% if tab == "general" %}
+        {% include "catalogo/studio_general.html" %}
+      {% elif tab == "entrada" %}
+        {% include "catalogo/studio_entrada.html" %}
+      {% elif tab == "ejecucion" %}
+        {% include "catalogo/studio_ejecucion.html" %}
+      {% elif tab == "salida" %}
+        {% include "catalogo/studio_salida.html" %}
+      {% elif tab == "publicacion" %}
+        {% include "catalogo/studio_publicacion.html" %}
+      {% endif %}
+    </main>
+  </div>
+</div>
 {% endblock %}

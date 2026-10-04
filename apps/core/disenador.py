@@ -23,7 +23,7 @@ Quién entra al Diseñador y qué ve:
   Sección Flujos     `workflows.consultar|administrar` (biblioteca completa) o
                      `workflows.vincular` (solo los Flujos publicados, sin
                      acceso a su definición).
-  "Nuevo flujo" y "Vista técnica"  solo con `workflows.administrar` /
+  "Nuevo flujo" y "Abrir flujo"  solo con `workflows.administrar` /
                      `workflows.consultar` respectivamente.
 
 Este módulo importa los dominios de forma perezosa (mismo criterio que
@@ -94,6 +94,7 @@ def _flujos(caps, *, con_servicios=False):
     en_diseno = WorkflowVersion.objects.filter(workflow=OuterRef("pk"), estado=WorkflowVersion.Estado.BORRADOR)
     consulta = (
         Workflow.objects.select_related("version_activa")
+        .filter(modo=Workflow.Modo.PLANTILLA_FASES)
         .annotate(
             n_servicios=Count("servicios", distinct=True),
             n_versiones=Count("versiones", distinct=True),
@@ -103,7 +104,12 @@ def _flujos(caps, *, con_servicios=False):
     )
     if con_servicios:
         consulta = consulta.prefetch_related(
-            Prefetch("servicios", queryset=Servicio.objects.only("id", "nombre", "workflow_id").order_by("nombre"))
+            Prefetch("servicios", queryset=Servicio.objects.only("id", "nombre", "workflow_id").order_by("nombre")),
+            Prefetch(
+                "versiones",
+                queryset=WorkflowVersion.objects.prefetch_related("fases").order_by("-numero"),
+                to_attr="versiones_resumen",
+            ),
         )
     if not caps["consultar_flujos"]:
         # Quien solo puede vincular ve únicamente lo que podría vincular.
@@ -112,11 +118,24 @@ def _flujos(caps, *, con_servicios=False):
 
 
 def biblioteca_de_flujos(caps):
+    from apps.workflows.models import WorkflowVersion
+
     flujos = list(_flujos(caps, con_servicios=True))
     for flujo in flujos:
         usados = list(flujo.servicios.all())
+        versiones = list(getattr(flujo, "versiones_resumen", []))
+        version_tarjeta = (
+            next((v for v in versiones if v.estado == WorkflowVersion.Estado.BORRADOR), None)
+            or flujo.version_activa
+            or (versiones[0] if versiones else None)
+        )
+        fases = list(version_tarjeta.fases.all()) if version_tarjeta else []
         flujo.usado_por = usados[:3]
         flujo.usado_por_extra = max(len(usados) - 3, 0)
+        flujo.version_tarjeta = version_tarjeta
+        flujo.fases_resumen = fases[:4]
+        flujo.fases_extra = max(len(fases) - 4, 0)
+        flujo.n_fases = len(fases)
     return flujos
 
 

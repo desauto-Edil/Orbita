@@ -1,10 +1,11 @@
 {% comment %}
-  Pestañas LOCALES del Diseñador ([Inicio] [Flujos] [Servicios]). No son
-  navegación global. `disenador_tabs` solo incluye las secciones que las
-  capacidades del usuario permiten (ver `apps/core/disenador.py`).
+  Navegacion local del Diseñador. Usa las capacidades ya resueltas en
+  `apps/core/disenador.py`; este parcial solo cambia la presentacion.
 {% endcomment %}
-<nav class="tabs" aria-label="Secciones del Diseñador">
+<nav class="designer-segments" aria-label="Secciones del Diseñador">
   {% for tab in disenador_tabs %}
-    <a class="tabs__tab{% if tab.activa %} is-active{% endif %}" href="{% url tab.url_name %}"{% if tab.activa %} aria-current="page"{% endif %}>{{ tab.etiqueta }}</a>
+    <a class="designer-segments__item{% if tab.activa %} is-active{% endif %}" href="{% url tab.url_name %}"{% if tab.activa %} aria-current="page"{% endif %}>
+      {% if tab.clave == "inicio" %}Resumen{% elif tab.clave == "servicios" %}Servicios y procesos{% else %}{{ tab.etiqueta }}{% endif %}
+    </a>
   {% endfor %}
 </nav>

@@ -60,6 +60,7 @@ from apps.workflows.autorizacion import (
     puede_ejecutar_workflows,
 )
 from apps.workflows import editor
+from apps.workflows import fases as fases_ops
 from apps.workflows.estrategias import (
     ESTRATEGIAS_POR_TIPO,
     EstrategiaCondicion,
@@ -73,10 +74,12 @@ from apps.workflows.models import (
     ConfiguracionEtapaTarea,
     Etapa,
     EsquemaAprobacionWorkflow,
+    FaseWorkflow,
     InstanciaEtapa,
     InstanciaWorkflow,
     ParticipanteEtapaAprobacion,
     TareaWorkflow,
+    TransicionFaseWorkflow,
     TransicionEtapa,
     Workflow,
     WorkflowVersion,
@@ -142,6 +145,86 @@ def _crear_workflow_lineal(nombre="Workflow válido"):
     TransicionEtapa.objects.create(etapa_origen=inicio, etapa_destino=tarea)
     TransicionEtapa.objects.create(etapa_origen=tarea, etapa_destino=fin)
     return workflow, version, {"inicio": inicio, "tarea": tarea, "fin": fin}
+
+
+class PlantillaFasesR1Tests(TestCase):
+    def setUp(self):
+        self.actor = Usuario.objects.create_user(username="gestor_fases", password=CLAVE_PRUEBA)
+
+    def _plantilla_lineal(self):
+        workflow = fases_ops.crear_plantilla_fases(self.actor, nombre="Gestion estandar")
+        version = workflow.versiones.get(numero=1)
+        recepcion = fases_ops.agregar_fase(version, self.actor, nombre="Recepcion")
+        ejecucion = fases_ops.agregar_fase(version, self.actor, nombre="Ejecucion")
+        revision = fases_ops.agregar_fase(version, self.actor, nombre="Revision")
+        cierre = fases_ops.agregar_fase(version, self.actor, nombre="Cierre")
+        fases_ops.conectar_fases(recepcion, ejecucion, self.actor)
+        fases_ops.conectar_fases(ejecucion, revision, self.actor)
+        fases_ops.conectar_fases(revision, cierre, self.actor)
+        return workflow, version, {
+            "recepcion": recepcion,
+            "ejecucion": ejecucion,
+            "revision": revision,
+            "cierre": cierre,
+        }
+
+    def test_crear_plantilla_nueva_y_fases(self):
+        workflow = fases_ops.crear_plantilla_fases(self.actor, nombre="Gestion estandar")
+        version = workflow.versiones.get(numero=1)
+
+        fase = fases_ops.agregar_fase(version, self.actor, nombre="Recepcion", descripcion="Entrada")
+
+        self.assertEqual(workflow.modo, Workflow.Modo.PLANTILLA_FASES)
+        self.assertEqual(version.estado, WorkflowVersion.Estado.BORRADOR)
+        self.assertEqual(fase.version_id, version.pk)
+        self.assertEqual(fase.orden, 1)
+
+    def test_transiciones_y_activacion_de_plantilla(self):
+        workflow, version, fases = self._plantilla_lineal()
+
+        activar_version(workflow, version, actor=self.actor)
+        workflow.refresh_from_db()
+
+        self.assertEqual(workflow.version_activa_id, version.pk)
+        self.assertEqual(version.fases.count(), 4)
+        self.assertEqual(
+            fases["recepcion"].transiciones_salientes.get().fase_destino_id,
+            fases["ejecucion"].pk,
+        )
+
+    def test_clona_fases_y_transiciones_al_crear_nueva_version(self):
+        workflow, version, _fases = self._plantilla_lineal()
+        activar_version(workflow, version, actor=self.actor)
+
+        nueva = crear_nueva_version(workflow, actor=self.actor)
+
+        self.assertEqual(nueva.fases.count(), 4)
+        self.assertEqual(TransicionFaseWorkflow.objects.filter(fase_origen__version=nueva).count(), 3)
+        self.assertFalse(nueva.etapas.exists())
+
+    def test_version_activa_de_fases_es_inmutable(self):
+        workflow, version, _fases = self._plantilla_lineal()
+        activar_version(workflow, version, actor=self.actor)
+
+        with self.assertRaises(ValidationError):
+            fases_ops.agregar_fase(version, self.actor, nombre="Post cierre")
+
+    def test_rechaza_transicion_con_fase_de_otra_version(self):
+        _workflow1, _version1, fases1 = self._plantilla_lineal()
+        _workflow2, _version2, fases2 = self._plantilla_lineal()
+
+        with self.assertRaises(ValidationError):
+            fases_ops.conectar_fases(fases1["cierre"], fases2["recepcion"], self.actor)
+
+    def test_legacy_sigue_ejecutable_sin_usar_fases(self):
+        workflow, version, _etapas = _crear_workflow_lineal("Legacy operativo")
+        activar_version(workflow, version, actor=self.actor)
+
+        instancia = iniciar_workflow(workflow, actor=self.actor)
+
+        self.assertEqual(workflow.modo, Workflow.Modo.LEGACY_EJECUTABLE)
+        self.assertEqual(instancia.workflow_version_id, version.pk)
+        self.assertFalse(FaseWorkflow.objects.filter(version=version).exists())
 
 
 class VersionamientoTests(TestCase):

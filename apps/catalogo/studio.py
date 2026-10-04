@@ -32,6 +32,17 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 
 from apps.catalogo.entregables import configurar_definicion_entregable, retirar_definicion_entregable
+from apps.catalogo.configuracion_ejecucion import (
+    activar_configuracion_ejecucion,
+    agregar_bloque_operativo,
+    conectar_bloques_operativos,
+    editar_bloque_operativo,
+    editar_transicion_bloque_operativo,
+    eliminar_bloque_operativo,
+    eliminar_transicion_bloque_operativo,
+    preparar_configuracion_ejecucion,
+    validar_configuracion_ejecucion,
+)
 from apps.catalogo.ejecucion import (
     TIPOS_BLOQUE,
     agregar_bloque,
@@ -40,6 +51,7 @@ from apps.catalogo.ejecucion import (
     configurar_bloque_en_flujo,
     conectar_bloques,
     conectar_bloques_en_flujo,
+    crear_flujo,
     crear_copia_de_ejecucion,
     desconectar_bloques,
     desconectar_bloques_en_flujo,
@@ -77,7 +89,9 @@ from apps.catalogo.forms import (
     VisibilidadForm,
 )
 from apps.catalogo.models import (
+    BloqueOperativo,
     Campo,
+    ConfiguracionEjecucionVersion,
     DefinicionEntregable,
     FormularioVersion,
     OpcionCampo,
@@ -85,6 +99,7 @@ from apps.catalogo.models import (
     Servicio,
     ServicioResponsable,
     ServicioVisibilidad,
+    TransicionBloqueOperativo,
 )
 from apps.catalogo.operaciones import (
     activar_servicio,
@@ -102,9 +117,16 @@ from apps.catalogo.operaciones import (
 from apps.catalogo.versionamiento import activar_version, crear_nueva_version
 from apps.core.autorizacion import usuario_tiene_permiso
 from apps.workflows.autorizacion import puede_administrar_workflows, puede_vincular_workflows
-from apps.workflows.models import Etapa, TransicionEtapa, Workflow, WorkflowVersion
+from apps.workflows.models import Etapa, FaseWorkflow, TransicionEtapa, Workflow, WorkflowVersion
 
 TABS = ("general", "entrada", "ejecucion", "salida", "publicacion")
+TAB_LABELS = {
+    "general": "Basico",
+    "entrada": "Formulario",
+    "ejecucion": "Flujo",
+    "salida": "Salida",
+    "publicacion": "Publicar",
+}
 
 ETIQUETAS_BLOQUE = {v: k for k, v in TIPOS_BLOQUE.items()}
 ETIQUETAS_BLOQUE_DISPLAY = {"ACTIVIDAD": "Actividad", "APROBACION": "Aprobación", "ESPERA": "Espera", "DECISION": "Decisión"}
@@ -224,7 +246,17 @@ def _version_entrada_editable(servicio):
 def _version_ejecucion_editable(servicio):
     if servicio.workflow_id is None:
         return None
+    if servicio.workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        return None
     return servicio.workflow.versiones.filter(estado=WorkflowVersion.Estado.BORRADOR).order_by("-numero").first()
+
+
+def _configuracion_ejecucion_editable(servicio):
+    if servicio.workflow_id is None or servicio.workflow.modo != Workflow.Modo.PLANTILLA_FASES:
+        return None
+    return servicio.configuraciones_ejecucion.filter(
+        estado=ConfiguracionEjecucionVersion.Estado.BORRADOR
+    ).order_by("-numero").first()
 
 
 def _resumen_actor(tipo, usuario, equipo):
@@ -711,6 +743,206 @@ def _contexto_bloques(version_borrador, version_mostrada, despues=None):
     }
 
 
+def _fases_para_resumen(version):
+    if version is None:
+        return []
+    return list(version.fases.order_by("orden", "pk"))
+
+
+def _serializar_configuracion_bloque_operativo(tipo, config_kwargs):
+    if tipo == "ACTIVIDAD":
+        usuario = config_kwargs.get("usuario")
+        equipo = config_kwargs.get("equipo")
+        return {
+            "tipo_actor": config_kwargs.get("tipo_actor") or "",
+            "usuario_id": usuario.pk if usuario is not None else None,
+            "equipo_id": equipo.pk if equipo is not None else None,
+            "permite_subtareas": config_kwargs.get("permite_subtareas", False),
+        }
+    if tipo == "ESPERA":
+        return dict(config_kwargs)
+    if tipo == "APROBACION":
+        participantes = []
+        for tipo_p, referencia in config_kwargs.get("participantes", []):
+            participantes.append(
+                {
+                    "tipo": tipo_p,
+                    "usuario_id": referencia.pk if tipo_p == "USUARIO" and referencia is not None else None,
+                    "equipo_id": referencia.pk if tipo_p == "EQUIPO" and referencia is not None else None,
+                }
+            )
+        return {
+            "modo": config_kwargs.get("modo"),
+            "politica": config_kwargs.get("politica") or "",
+            "participantes": participantes,
+        }
+    return {}
+
+
+def _config_inicial_para_formulario(bloque):
+    cfg = bloque.configuracion or {}
+    if bloque.tipo == BloqueOperativo.Tipo.ACTIVIDAD:
+        return {
+            "tipo_actor": cfg.get("tipo_actor") or "",
+            "usuario": cfg.get("usuario_id"),
+            "equipo": cfg.get("equipo_id"),
+            "permite_subtareas": cfg.get("permite_subtareas", False),
+        }
+    if bloque.tipo == BloqueOperativo.Tipo.APROBACION:
+        return {"modo": cfg.get("modo"), "politica": cfg.get("politica") or ""}
+    return cfg
+
+
+def _participantes_iniciales_operativos(bloque):
+    participantes = []
+    for item in (bloque.configuracion or {}).get("participantes", []):
+        participantes.append(
+            {
+                "tipo": item.get("tipo"),
+                "usuario": item.get("usuario_id"),
+                "equipo": item.get("equipo_id"),
+            }
+        )
+    return participantes or None
+
+
+def _destinos_bloque_choices(version_config, *, excluir_pk=None):
+    bloques = version_config.bloques.select_related("fase").order_by("fase__orden", "orden", "pk")
+    if excluir_pk is not None:
+        bloques = bloques.exclude(pk=excluir_pk)
+    return [(bloque.pk, f"{bloque.fase.nombre} - {bloque.nombre}") for bloque in bloques]
+
+
+def _resumen_bloque_operativo(bloque):
+    cfg = bloque.configuracion or {}
+    if bloque.tipo == BloqueOperativo.Tipo.ACTIVIDAD:
+        return _resumen_actor(cfg.get("tipo_actor"), None, None)
+    if bloque.tipo == BloqueOperativo.Tipo.APROBACION:
+        return f"{len(cfg.get('participantes') or [])} aprobador(es)"
+    if bloque.tipo == BloqueOperativo.Tipo.ESPERA:
+        if cfg.get("modo") == "DURACION":
+            return f"{cfg.get('duracion_valor')} {(cfg.get('duracion_unidad') or '').lower()}"
+        if cfg.get("modo") == "FECHA":
+            return f"Hasta {cfg.get('fecha_objetivo')}"
+    if bloque.tipo == BloqueOperativo.Tipo.DECISION:
+        return "Rutas condicionales"
+    return "Sin configurar"
+
+
+def _bloque_operativo_para_presentacion(bloque, editable):
+    fila = {
+        "bloque": bloque,
+        "tipo_empresarial": bloque.tipo,
+        "tipo_empresarial_display": ETIQUETAS_BLOQUE_DISPLAY.get(bloque.tipo, bloque.tipo),
+        "resumen": _resumen_bloque_operativo(bloque),
+    }
+    if not editable:
+        return fila
+    fila["form_editar"] = BloqueEditarForm(
+        initial={"nombre": bloque.nombre, "descripcion": bloque.descripcion},
+        prefix=f"bloque-{bloque.pk}-editar",
+    )
+    if bloque.tipo == BloqueOperativo.Tipo.ACTIVIDAD:
+        fila["form_configurar"] = ActividadConfigForm(
+            initial=_config_inicial_para_formulario(bloque), prefix=f"bloque-{bloque.pk}-config"
+        )
+    elif bloque.tipo == BloqueOperativo.Tipo.ESPERA:
+        fila["form_configurar"] = EsperaConfigForm(
+            initial=_config_inicial_para_formulario(bloque), prefix=f"bloque-{bloque.pk}-config"
+        )
+    elif bloque.tipo == BloqueOperativo.Tipo.APROBACION:
+        fila["form_configurar"] = AprobacionConfigForm(
+            initial=_config_inicial_para_formulario(bloque), prefix=f"bloque-{bloque.pk}-config"
+        )
+        fila["formset_participantes"] = ParticipanteAprobacionFormSet(
+            initial=_participantes_iniciales_operativos(bloque), prefix=f"bloque-{bloque.pk}-participantes"
+        )
+        destinos = _destinos_bloque_choices(bloque.version, excluir_pk=bloque.pk)
+        rutas = {t.resultado_aprobacion: t for t in bloque.transiciones_salientes.all()}
+        fila["rutas"] = rutas
+        fila["form_ruta"] = RutaAprobacionForm(
+            initial={
+                "destino_aprobada": rutas["APROBADA"].bloque_destino_id if "APROBADA" in rutas else None,
+                "destino_devuelta": rutas["DEVUELTA"].bloque_destino_id if "DEVUELTA" in rutas else "",
+                "destino_rechazada": rutas["RECHAZADA"].bloque_destino_id if "RECHAZADA" in rutas else None,
+            },
+            destinos=destinos,
+            prefix=f"bloque-{bloque.pk}-ruta",
+        )
+    elif bloque.tipo == BloqueOperativo.Tipo.DECISION:
+        salientes = list(bloque.transiciones_salientes.all())
+        condicionales = [t for t in salientes if not t.es_fallback]
+        fallback = next((t for t in salientes if t.es_fallback), None)
+        destinos = _destinos_bloque_choices(bloque.version, excluir_pk=bloque.pk)
+        fila["condicionales"] = [
+            {
+                "transicion": transicion,
+                "form": CondicionalForm(
+                    initial={
+                        "variable": transicion.variable,
+                        "operador": transicion.operador,
+                        "valor": transicion.valor,
+                        "prioridad": transicion.prioridad,
+                        "destino": transicion.bloque_destino_id,
+                    },
+                    destinos=destinos,
+                    prefix=f"bloque-{bloque.pk}-cond-{transicion.pk}",
+                ),
+            }
+            for transicion in condicionales
+        ]
+        fila["form_condicional_nuevo"] = CondicionalForm(
+            destinos=destinos, prefix=f"bloque-{bloque.pk}-cond-nuevo"
+        )
+        fila["fallback"] = fallback
+        fila["form_fallback"] = FallbackForm(
+            initial={"destino": fallback.bloque_destino_id} if fallback is not None else {},
+            destinos=destinos,
+            prefix=f"bloque-{bloque.pk}-fallback",
+        )
+    return fila
+
+
+def _contexto_configuracion_operativa(servicio):
+    workflow = servicio.workflow
+    version_activa = workflow.version_activa if workflow else None
+    config_borrador = _configuracion_ejecucion_editable(servicio)
+    config_activa = servicio.configuracion_ejecucion_activa
+    config_mostrada = config_borrador or config_activa
+    editable = config_borrador is not None
+    errores_configuracion = validar_configuracion_ejecucion(config_borrador) if config_borrador is not None else []
+    fases = []
+    for fase in _fases_para_resumen(version_activa):
+        bloques = []
+        if config_mostrada is not None:
+            bloques = [
+                _bloque_operativo_para_presentacion(bloque, editable)
+                for bloque in config_mostrada.bloques.filter(fase=fase).order_by("orden", "pk")
+            ]
+        fases.append({"fase": fase, "bloques": bloques})
+    return {
+        "usa_plantilla_fases": True,
+        "version_ejecucion_activa": version_activa,
+        "version_ejecucion_borrador": None,
+        "version_ejecucion": version_activa,
+        "configuracion_ejecucion_activa": config_activa,
+        "configuracion_ejecucion_borrador": config_borrador,
+        "configuracion_ejecucion": config_mostrada,
+        "errores_configuracion_ejecucion": errores_configuracion,
+        "configuracion_ejecucion_publicable": config_borrador is not None and not errores_configuracion,
+        "editable_ejecucion": editable,
+        "fases_configuracion": fases,
+        "bloques_disponibles": [
+            (codigo, etiqueta, TIPOS_BLOQUE_DESCRIPCION[codigo]) for codigo, etiqueta in TIPOS_BLOQUE_CHOICES
+        ],
+        "bloque_general_form": BloqueGeneralForm(prefix="nuevo") if editable else None,
+        "form_actividad_nuevo": ActividadConfigForm(prefix="nuevo-config"),
+        "form_espera_nuevo": EsperaConfigForm(prefix="nuevo-config"),
+        "form_aprobacion_nuevo": AprobacionConfigForm(prefix="nuevo-config"),
+        "formset_participantes_nuevo": ParticipanteAprobacionFormSet(prefix="nuevo-participantes"),
+    }
+
+
 def _ancla_urls_servicio(servicio):
     """URLs que usa la lista de bloques (`catalogo/_ejecucion_bloques.html`)
     cuando el ancla es un Servicio."""
@@ -739,9 +971,30 @@ def _contexto_ejecucion(servicio, despues=None, plantilla=None):
     plantillas, plantilla_elegida, plantilla_bloques = [], None, []
     if workflow is None:
         plantillas = list(plantillas_de_ejecucion())
+        for flujo in plantillas:
+            flujo.fases_resumen = _fases_para_resumen(flujo.version_activa)
+            flujo.n_bloques = len(flujo.fases_resumen)
+            flujo.recorrido = [fase.nombre for fase in flujo.fases_resumen[:5]]
+            flujo.recorrido_extra = max(flujo.n_bloques - len(flujo.recorrido), 0)
         plantilla_elegida = next((p for p in plantillas if str(p.pk) == str(plantilla)), None)
         if plantilla_elegida is not None:
-            plantilla_bloques = _bloques_para_presentacion(plantilla_elegida.version_activa)
+            plantilla_bloques = [
+                {"etapa": fase, "tipo_empresarial_display": "Fase", "resumen": fase.descripcion}
+                for fase in plantilla_elegida.fases_resumen
+            ]
+    elif workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        compartido_con = list(servicios_que_comparten(workflow, excluir=servicio))
+        contexto = {
+            "compartido_con": compartido_con,
+            "plantillas": plantillas,
+            "plantilla_elegida": plantilla_elegida,
+            "plantilla_bloques": plantilla_bloques,
+            "plantilla_tiene_decisiones": False,
+            "workflow": workflow,
+            "ancla": _ancla_urls_servicio(servicio),
+        }
+        contexto.update(_contexto_configuracion_operativa(servicio))
+        return contexto
     # Workflow compartido: se advierte con qué servicios (regla de reutilización).
     compartido_con = list(servicios_que_comparten(workflow, excluir=servicio)) if workflow is not None else []
     contexto = {
@@ -854,6 +1107,73 @@ def _contexto_publicacion(servicio):
 # --- Vista principal (GET, dispatch por pestaña) --------------------------
 
 
+def _estado_secciones(servicio):
+    formulario = servicio.formulario
+    version_form = formulario.version_activa if formulario else None
+    formulario_ok = version_form is not None and version_form.estado == FormularioVersion.Estado.ACTIVA
+
+    workflow = servicio.workflow
+    version_wf = workflow.version_activa if workflow else None
+    if workflow is None and servicio.tipo == Servicio.Tipo.SERVICIO:
+        flujo_estado, flujo_texto = "optional", "Opcional"
+    elif workflow is None:
+        flujo_estado, flujo_texto = "attention", "Requiere atencion"
+    elif workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        config_activa = servicio.configuracion_ejecucion_activa
+        config_borrador = _configuracion_ejecucion_editable(servicio)
+        if config_activa is not None and config_activa.workflow_version_id == workflow.version_activa_id:
+            flujo_estado, flujo_texto = "complete", "Configurada"
+        elif config_borrador is not None and not validar_configuracion_ejecucion(config_borrador):
+            flujo_estado, flujo_texto = "incomplete", "Lista para activar"
+        elif config_activa is not None:
+            flujo_estado, flujo_texto = "attention", "Requiere actualizacion"
+        else:
+            flujo_estado, flujo_texto = "attention", "Requiere configuracion"
+    elif version_wf is not None and version_wf.estado == WorkflowVersion.Estado.ACTIVA:
+        flujo_estado, flujo_texto = "complete", f"v{version_wf.numero} publicada"
+    else:
+        flujo_estado, flujo_texto = "attention", "Requiere publicar flujo"
+
+    tiene_salida = (
+        servicio.definiciones_entregables.filter(activo=True).exists()
+        or bool(servicio.politica_entrega)
+    )
+    try:
+        validar_publicacion(servicio)
+        publicable = True
+    except ValidationError:
+        publicable = False
+
+    basico_ok = servicio.nombre and servicio.categoria_id and servicio.tipo in Servicio.Tipo.values
+    return [
+        {
+            "clave": "general",
+            "etiqueta": TAB_LABELS["general"],
+            "estado": "complete" if basico_ok else "attention",
+            "texto": "Completa" if basico_ok else "Requiere atencion",
+        },
+        {
+            "clave": "entrada",
+            "etiqueta": TAB_LABELS["entrada"],
+            "estado": "complete" if formulario_ok else "attention",
+            "texto": f"v{version_form.numero} activa" if formulario_ok else "Requiere version activa",
+        },
+        {"clave": "ejecucion", "etiqueta": TAB_LABELS["ejecucion"], "estado": flujo_estado, "texto": flujo_texto},
+        {
+            "clave": "salida",
+            "etiqueta": TAB_LABELS["salida"],
+            "estado": "complete" if tiene_salida else "optional",
+            "texto": "Configurada" if tiene_salida else "Opcional segun dominio",
+        },
+        {
+            "clave": "publicacion",
+            "etiqueta": TAB_LABELS["publicacion"],
+            "estado": "complete" if servicio.activo else ("incomplete" if publicable else "attention"),
+            "texto": "Publicado" if servicio.activo else ("Listo para publicar" if publicable else "Con pendientes"),
+        },
+    ]
+
+
 @login_required
 def studio_view(request, pk):
     if not _puede_catalogo(request.user):
@@ -867,6 +1187,7 @@ def studio_view(request, pk):
         "servicio": servicio,
         "tab": tab,
         "titulo_pagina": servicio.nombre,
+        "secciones": _estado_secciones(servicio),
         "puede_formulario": _puede_formulario(request.user),
         "puede_ejecucion": puede_administrar_workflows(request.user),
         "puede_vincular_workflow": puede_vincular_workflows(request.user),
@@ -1115,14 +1436,55 @@ def studio_ejecucion_configurar_view(request, pk):
         raise PermissionDenied
     servicio = get_object_or_404(Servicio, pk=pk)
     try:
-        preparar_ejecucion(
-            servicio, request.user, confirmar_compartido=request.POST.get("confirmo_compartido") == "1"
-        )
+        if servicio.workflow_id is not None and servicio.workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+            preparar_configuracion_ejecucion(servicio, request.user)
+        else:
+            preparar_ejecucion(
+                servicio, request.user, confirmar_compartido=request.POST.get("confirmo_compartido") == "1"
+            )
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Ejecución lista para configurar.")
     return redirect(_volver(pk, "ejecucion"))
+
+
+@login_required
+def studio_ejecucion_activar_configuracion_view(request, pk):
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    if not (_puede_catalogo(request.user) and puede_administrar_workflows(request.user)):
+        raise PermissionDenied
+    servicio = get_object_or_404(Servicio, pk=pk)
+    version = _configuracion_ejecucion_editable(servicio)
+    if version is None:
+        messages.error(request, "No hay una configuracion operativa en borrador para activar.")
+        return redirect(_volver(pk, "ejecucion"))
+    try:
+        activar_configuracion_ejecucion(servicio, version, request.user)
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Configuracion operativa activada.")
+    return redirect(_volver(pk, "ejecucion"))
+
+
+@login_required
+def studio_ejecucion_crear_flujo_view(request, pk):
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    if not (_puede_catalogo(request.user) and puede_administrar_workflows(request.user)):
+        raise PermissionDenied
+    servicio = get_object_or_404(Servicio, pk=pk)
+    nombre = (request.POST.get("nombre") or "").strip() or servicio.nombre
+    try:
+        workflow = crear_flujo(request.user, nombre=nombre, descripcion=servicio.descripcion)
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+        return redirect(_volver(pk, "ejecucion"))
+    request.session[f"retorno_servicio_flujo_{workflow.pk}"] = servicio.pk
+    messages.success(request, "Flujo creado en la biblioteca. Disenalo, publicalo y vuelve para vincularlo.")
+    return redirect("flujos:lienzo", pk=workflow.pk)
 
 
 @login_required
@@ -1409,33 +1771,278 @@ def _con_ancla_de_servicio(manejador):
     return vista
 
 
+def _configuracion_operativa_o_error(servicio):
+    version = _configuracion_ejecucion_editable(servicio)
+    if version is None:
+        raise ValidationError("No hay una configuracion operativa en borrador.")
+    return version
+
+
+def _h_bloque_operativo_guardar(request, servicio, bloque_id=None):
+    version = _configuracion_operativa_o_error(servicio)
+    if bloque_id is None:
+        general_form = BloqueGeneralForm(request.POST, prefix="nuevo")
+        if not general_form.is_valid():
+            messages.error(request, "Revise el nombre y tipo del bloque.")
+            return redirect(_volver(servicio.pk, "ejecucion"))
+        try:
+            fase = get_object_or_404(FaseWorkflow, pk=int(request.POST.get("fase_id", "")), version=version.workflow_version)
+        except ValueError:
+            messages.error(request, "Seleccione una fase valida.")
+            return redirect(_volver(servicio.pk, "ejecucion"))
+        tipo = general_form.cleaned_data["tipo"]
+        config_kwargs, config_valido = _parsear_configuracion_bloque(request, tipo)
+        if not config_valido:
+            messages.error(request, "Revise la configuracion del bloque.")
+            return redirect(_volver(servicio.pk, "ejecucion"))
+        try:
+            agregar_bloque_operativo(
+                version,
+                request.user,
+                fase=fase,
+                tipo=tipo,
+                nombre=general_form.cleaned_data["nombre"],
+                descripcion=general_form.cleaned_data.get("descripcion", ""),
+                configuracion=_serializar_configuracion_bloque_operativo(tipo, config_kwargs),
+            )
+        except ValidationError as exc:
+            messages.error(request, _mensaje_error(exc))
+        else:
+            messages.success(request, "Bloque agregado.")
+        return redirect(_volver(servicio.pk, "ejecucion"))
+
+    bloque = get_object_or_404(BloqueOperativo, pk=bloque_id, version=version)
+    editar_form = BloqueEditarForm(request.POST, prefix=f"bloque-{bloque_id}-editar")
+    if not editar_form.is_valid():
+        messages.error(request, "Revise el nombre del bloque.")
+        return redirect(_volver(servicio.pk, "ejecucion"))
+    config_kwargs, config_valido = _parsear_configuracion_bloque(request, bloque.tipo, bloque_id=bloque_id)
+    if not config_valido:
+        messages.error(request, "Revise la configuracion del bloque.")
+        return redirect(_volver(servicio.pk, "ejecucion"))
+    try:
+        editar_bloque_operativo(
+            version,
+            bloque,
+            request.user,
+            nombre=editar_form.cleaned_data["nombre"],
+            descripcion=editar_form.cleaned_data.get("descripcion", ""),
+            configuracion=_serializar_configuracion_bloque_operativo(bloque.tipo, config_kwargs),
+        )
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Bloque actualizado.")
+    return redirect(_volver(servicio.pk, "ejecucion"))
+
+
+def _h_bloque_operativo_eliminar(request, servicio, bloque_id):
+    version = _configuracion_operativa_o_error(servicio)
+    bloque = get_object_or_404(BloqueOperativo, pk=bloque_id, version=version)
+    try:
+        eliminar_bloque_operativo(version, bloque, request.user)
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Bloque eliminado.")
+    return redirect(_volver(servicio.pk, "ejecucion"))
+
+
+def _h_ruta_aprobacion_operativa(request, servicio, bloque_id):
+    version = _configuracion_operativa_o_error(servicio)
+    bloque = get_object_or_404(BloqueOperativo, pk=bloque_id, version=version, tipo=BloqueOperativo.Tipo.APROBACION)
+    destinos = _destinos_bloque_choices(version, excluir_pk=bloque.pk)
+    form = RutaAprobacionForm(request.POST, destinos=destinos, prefix=f"bloque-{bloque_id}-ruta")
+    if not form.is_valid():
+        messages.error(request, "Revise las rutas de la aprobacion.")
+        return redirect(_volver(servicio.pk, "ejecucion"))
+    datos = form.cleaned_data
+    mapa = {
+        "APROBADA": datos["destino_aprobada"],
+        "RECHAZADA": datos["destino_rechazada"],
+        "DEVUELTA": datos.get("destino_devuelta") or None,
+    }
+    try:
+        existentes = {t.resultado_aprobacion: t for t in bloque.transiciones_salientes.all()}
+        for resultado, destino_pk in mapa.items():
+            existente = existentes.get(resultado)
+            if destino_pk is None:
+                if existente is not None:
+                    eliminar_transicion_bloque_operativo(existente, request.user)
+                continue
+            destino = get_object_or_404(BloqueOperativo, pk=destino_pk, version=version)
+            if existente is None:
+                conectar_bloques_operativos(bloque, destino, request.user, resultado_aprobacion=resultado)
+            else:
+                editar_transicion_bloque_operativo(
+                    existente, request.user, destino=destino, resultado_aprobacion=resultado
+                )
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Rutas de aprobacion actualizadas.")
+    return redirect(_volver(servicio.pk, "ejecucion"))
+
+
+def _h_condicional_operativa(request, servicio, bloque_id, condicional_id=None):
+    version = _configuracion_operativa_o_error(servicio)
+    bloque = get_object_or_404(BloqueOperativo, pk=bloque_id, version=version, tipo=BloqueOperativo.Tipo.DECISION)
+    destinos = _destinos_bloque_choices(version, excluir_pk=bloque.pk)
+    prefix = f"bloque-{bloque_id}-cond-{condicional_id}" if condicional_id else f"bloque-{bloque_id}-cond-nuevo"
+    form = CondicionalForm(request.POST, destinos=destinos, prefix=prefix)
+    if not form.is_valid():
+        messages.error(request, "Revise la condicion.")
+        return redirect(_volver(servicio.pk, "ejecucion"))
+    datos = form.cleaned_data
+    destino = get_object_or_404(BloqueOperativo, pk=datos["destino"], version=version)
+    try:
+        if condicional_id is None:
+            conectar_bloques_operativos(
+                bloque,
+                destino,
+                request.user,
+                variable=datos["variable"],
+                operador=datos["operador"],
+                valor=datos["valor"],
+                prioridad=datos["prioridad"],
+            )
+        else:
+            transicion = get_object_or_404(
+                TransicionBloqueOperativo, pk=condicional_id, bloque_origen=bloque, es_fallback=False
+            )
+            editar_transicion_bloque_operativo(
+                transicion,
+                request.user,
+                destino=destino,
+                variable=datos["variable"],
+                operador=datos["operador"],
+                valor=datos["valor"],
+                prioridad=datos["prioridad"],
+                es_fallback=False,
+                resultado_aprobacion="",
+            )
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Condicion guardada.")
+    return redirect(_volver(servicio.pk, "ejecucion"))
+
+
+def _h_condicional_operativa_eliminar(request, servicio, bloque_id, condicional_id):
+    version = _configuracion_operativa_o_error(servicio)
+    bloque = get_object_or_404(BloqueOperativo, pk=bloque_id, version=version, tipo=BloqueOperativo.Tipo.DECISION)
+    transicion = get_object_or_404(
+        TransicionBloqueOperativo, pk=condicional_id, bloque_origen=bloque, es_fallback=False
+    )
+    try:
+        eliminar_transicion_bloque_operativo(transicion, request.user)
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Condicion eliminada.")
+    return redirect(_volver(servicio.pk, "ejecucion"))
+
+
+def _h_fallback_operativo(request, servicio, bloque_id):
+    version = _configuracion_operativa_o_error(servicio)
+    bloque = get_object_or_404(BloqueOperativo, pk=bloque_id, version=version, tipo=BloqueOperativo.Tipo.DECISION)
+    destinos = _destinos_bloque_choices(version, excluir_pk=bloque.pk)
+    form = FallbackForm(request.POST, destinos=destinos, prefix=f"bloque-{bloque_id}-fallback")
+    if not form.is_valid():
+        messages.error(request, "Revise la ruta alternativa.")
+        return redirect(_volver(servicio.pk, "ejecucion"))
+    destino = get_object_or_404(BloqueOperativo, pk=form.cleaned_data["destino"], version=version)
+    existente = bloque.transiciones_salientes.filter(es_fallback=True).first()
+    try:
+        if existente is None:
+            conectar_bloques_operativos(bloque, destino, request.user, es_fallback=True)
+        else:
+            editar_transicion_bloque_operativo(
+                existente,
+                request.user,
+                destino=destino,
+                variable="",
+                operador="",
+                valor="",
+                es_fallback=True,
+                resultado_aprobacion="",
+            )
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Ruta alternativa guardada.")
+    return redirect(_volver(servicio.pk, "ejecucion"))
+
+
 @login_required
 def studio_bloque_guardar_view(request, pk, bloque_id=None):
+    servicio = get_object_or_404(Servicio, pk=pk)
+    if servicio.workflow_id is not None and servicio.workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+        if not (_puede_catalogo(request.user) and puede_administrar_workflows(request.user)):
+            raise PermissionDenied
+        return _h_bloque_operativo_guardar(request, servicio, bloque_id)
     return _con_ancla_de_servicio(_h_bloque_guardar)(request, pk, bloque_id)
 
 
 @login_required
 def studio_bloque_eliminar_view(request, pk, bloque_id):
+    servicio = get_object_or_404(Servicio, pk=pk)
+    if servicio.workflow_id is not None and servicio.workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+        if not (_puede_catalogo(request.user) and puede_administrar_workflows(request.user)):
+            raise PermissionDenied
+        return _h_bloque_operativo_eliminar(request, servicio, bloque_id)
     return _con_ancla_de_servicio(_h_bloque_eliminar)(request, pk, bloque_id)
 
 
 @login_required
 def studio_ruta_aprobacion_guardar_view(request, pk, bloque_id):
+    servicio = get_object_or_404(Servicio, pk=pk)
+    if servicio.workflow_id is not None and servicio.workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+        if not (_puede_catalogo(request.user) and puede_administrar_workflows(request.user)):
+            raise PermissionDenied
+        return _h_ruta_aprobacion_operativa(request, servicio, bloque_id)
     return _con_ancla_de_servicio(_h_ruta_aprobacion_guardar)(request, pk, bloque_id)
 
 
 @login_required
 def studio_condicional_guardar_view(request, pk, bloque_id, condicional_id=None):
+    servicio = get_object_or_404(Servicio, pk=pk)
+    if servicio.workflow_id is not None and servicio.workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+        if not (_puede_catalogo(request.user) and puede_administrar_workflows(request.user)):
+            raise PermissionDenied
+        return _h_condicional_operativa(request, servicio, bloque_id, condicional_id)
     return _con_ancla_de_servicio(_h_condicional_guardar)(request, pk, bloque_id, condicional_id)
 
 
 @login_required
 def studio_condicional_eliminar_view(request, pk, bloque_id, condicional_id):
+    servicio = get_object_or_404(Servicio, pk=pk)
+    if servicio.workflow_id is not None and servicio.workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+        if not (_puede_catalogo(request.user) and puede_administrar_workflows(request.user)):
+            raise PermissionDenied
+        return _h_condicional_operativa_eliminar(request, servicio, bloque_id, condicional_id)
     return _con_ancla_de_servicio(_h_condicional_eliminar)(request, pk, bloque_id, condicional_id)
 
 
 @login_required
 def studio_fallback_guardar_view(request, pk, bloque_id):
+    servicio = get_object_or_404(Servicio, pk=pk)
+    if servicio.workflow_id is not None and servicio.workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        if request.method != "POST":
+            return HttpResponseNotAllowed(["POST"])
+        if not (_puede_catalogo(request.user) and puede_administrar_workflows(request.user)):
+            raise PermissionDenied
+        return _h_fallback_operativo(request, servicio, bloque_id)
     return _con_ancla_de_servicio(_h_fallback_guardar)(request, pk, bloque_id)
 
 
@@ -1492,11 +2099,13 @@ def studio_publicar_view(request, pk):
         raise PermissionDenied
     servicio = get_object_or_404(Servicio, pk=pk)
     try:
-        if servicio.workflow_id is not None:
-            if not puede_administrar_workflows(request.user):
-                raise PermissionDenied
+        if servicio.workflow_id is not None and servicio.workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+            activar_servicio(servicio, request.user)
+        elif servicio.workflow_id is not None:
             version = _version_ejecucion_editable(servicio)
             if version is not None:
+                if not puede_administrar_workflows(request.user):
+                    raise PermissionDenied
                 confirmado = (
                     request.POST.get("confirmo_compartido") == "1"
                     and request.POST.get("confirmacion_nombre", "").strip() == servicio.workflow.nombre

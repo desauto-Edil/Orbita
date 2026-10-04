@@ -1,72 +1,101 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Flujos — Diseñador — Órbita{% endblock %}
+{% block title %}Flujos - Diseñador - Órbita{% endblock %}
 
-{% block content_modifier %}content-area--portal{% endblock %}
+{% block content_modifier %}content-area--designer-home{% endblock %}
 
 {% block extra_head %}<link rel="stylesheet" href="{% static 'css/disenador.css' %}">{% endblock %}
 
 {% block content %}
-<div class="dis">
-  <header class="dis-head">
-    <h1 class="dis-title">Diseñador</h1>
-    <p class="dis-lede">Diseña los flujos de trabajo y los servicios que la organización ofrece.</p>
+<div class="designer-shell">
+  <header class="designer-header designer-header--with-action">
+    <div>
+      <p class="designer-eyebrow">DISEÑADOR</p>
+      <h1>Flujos</h1>
+      <p>Estructuras reutilizables para organizar cómo se realiza el trabajo.</p>
+    </div>
+    {% if caps.administrar_flujos %}
+      <a class="btn btn--primary" href="{% url 'flujos:nuevo' %}">{% include "components/icon.html" with name="plus" %}Nuevo flujo</a>
+    {% endif %}
   </header>
 
   {% include "layout/disenador_tabs.html" %}
 
-  <section class="dis-section" aria-labelledby="dis-biblioteca">
-    <div class="dis-section__head">
+  <section class="designer-library" aria-labelledby="dis-biblioteca-flujos">
+    <div class="designer-section-head">
       <div>
-        <h2 class="dis-section-title" id="dis-biblioteca">Biblioteca de flujos</h2>
-        <p class="dis-section__text">
-          {% if caps.consultar_flujos %}Cada flujo se diseña una vez y puede usarse en varios servicios o procesos. Solo un flujo publicado puede vincularse.{% else %}Estos son los flujos publicados. Puedes elegir cualquiera de ellos al configurar un servicio.{% endif %}
-        </p>
+        <h2 id="dis-biblioteca-flujos">Flujos</h2>
+        <p>Diseña una vez el recorrido y reutilízalo donde lo necesites.</p>
       </div>
-      {% if caps.administrar_flujos %}
-        <a class="btn btn--primary" href="{% url 'flujos:nuevo' %}">{% include "components/icon.html" with name="plus" %}Nuevo flujo</a>
-      {% endif %}
     </div>
 
     {% if flujos %}
-      <div class="card dis-list-card">
-        <ul class="dis-list">
-          {% for flujo in flujos %}
-            <li class="dis-row dis-row--flujo">
-              <div class="dis-row__main">
-                <span class="dis-row__name">{{ flujo.nombre }}</span>
-                {% if flujo.descripcion %}<span class="dis-row__meta">{{ flujo.descripcion|truncatechars:140 }}</span>{% endif %}
-                <span class="dis-row__meta">
-                  {% if flujo.n_servicios %}
-                    Usado por {{ flujo.n_servicios }} servicio{{ flujo.n_servicios|pluralize }} o proceso{{ flujo.n_servicios|pluralize }}:
-                    {% for servicio in flujo.usado_por %}{{ servicio.nombre }}{% if not forloop.last %}, {% endif %}{% endfor %}{% if flujo.usado_por_extra %} y {{ flujo.usado_por_extra }} más{% endif %}
-                  {% else %}
-                    Sin usar todavía
-                  {% endif %}
-                </span>
+      <div class="designer-object-grid designer-object-grid--flows" role="list">
+        {% for flujo in flujos %}
+          <article class="designer-object designer-object--workflow" role="listitem">
+            <div class="designer-object__top">
+              <div>
+                <h3>{{ flujo.nombre }}</h3>
+                {% if flujo.descripcion %}<p>{{ flujo.descripcion|truncatechars:96 }}</p>{% endif %}
               </div>
-              <div class="dis-row__actions">
-                {% if flujo.version_activa %}
-                  <span class="badge badge--success">Publicado · v{{ flujo.version_activa.numero }}</span>
+              <details class="designer-object-menu">
+                <summary aria-label="Más acciones">{% include "components/icon.html" with name="more" %}</summary>
+                <div class="designer-object-menu__content">
+                  {% if caps.consultar_flujos %}<a href="{% url 'flujos:lienzo' flujo.pk %}">Abrir</a>{% endif %}
+                  <span>{% if flujo.version_activa %}Publicado · v{{ flujo.version_activa.numero }}{% else %}Sin publicar{% endif %}</span>
+                </div>
+              </details>
+            </div>
+
+            <div class="designer-workflow-route" aria-label="Recorrido de fases">
+              {% if flujo.fases_resumen %}
+                {% for fase in flujo.fases_resumen %}
+                  <span class="designer-workflow-route__node"><i aria-hidden="true"></i>{{ fase.nombre }}</span>
+                {% endfor %}
+                {% if flujo.fases_extra %}<span class="designer-workflow-route__more" title="{{ flujo.fases_extra }} fases más">+{{ flujo.fases_extra }}</span>{% endif %}
+              {% else %}
+                <span class="designer-workflow-route__empty">Sin fases todavía</span>
+              {% endif %}
+            </div>
+
+            <div class="designer-object__meta">
+              <span>{{ flujo.n_fases }} fase{{ flujo.n_fases|pluralize }}</span>
+              <span>
+                {% if flujo.n_servicios %}
+                  Usado por {{ flujo.n_servicios }} servicio{{ flujo.n_servicios|pluralize }} o proceso{{ flujo.n_servicios|pluralize }}
                 {% else %}
-                  <span class="badge badge--warning">Sin publicar</span>
+                  Sin usar todavía
                 {% endif %}
-                {% if flujo.tiene_borrador and flujo.version_activa and caps.consultar_flujos %}<span class="badge badge--info">Nueva versión en diseño</span>{% endif %}
-                {% if caps.consultar_flujos %}
-                  <a class="btn btn--secondary btn--sm" href="{% url 'flujos:lienzo' flujo.pk %}">Abrir</a>
-                  <a class="btn btn--ghost btn--sm" href="{% url 'workflows:detalle' flujo.pk %}">Vista técnica</a>
+              </span>
+            </div>
+
+            <div class="designer-object__footer">
+              <div class="designer-object__states">
+                {% if flujo.version_activa %}
+                  <span class="designer-status designer-status--published">Publicado · v{{ flujo.version_activa.numero }}</span>
+                {% else %}
+                  <span class="designer-status designer-status--draft">Sin publicar</span>
                 {% endif %}
+                {% if flujo.tiene_borrador and flujo.version_activa and caps.consultar_flujos %}<span class="designer-status designer-status--draft">Borrador en diseño</span>{% endif %}
               </div>
-            </li>
-          {% endfor %}
-        </ul>
+              {% if caps.consultar_flujos %}
+                <a class="btn btn--secondary btn--sm" href="{% url 'flujos:lienzo' flujo.pk %}">Abrir</a>
+              {% endif %}
+            </div>
+          </article>
+        {% endfor %}
       </div>
     {% else %}
-      <div class="empty-state">
+      <div class="designer-empty-state">
+        <span aria-hidden="true">{% include "components/icon.html" with name="workflow" %}</span>
+        <h3>Aún no hay flujos</h3>
         <p>
-          {% if caps.administrar_flujos %}Todavía no hay flujos. Crea el primero con «Nuevo flujo».{% elif caps.consultar_flujos %}Todavía no hay flujos creados.{% else %}Todavía no hay flujos publicados para elegir.{% endif %}
+          {% if caps.administrar_flujos %}Crea el primer flujo para empezar a organizar las fases del trabajo.{% elif caps.consultar_flujos %}Todavía no hay flujos creados.{% else %}Todavía no hay flujos publicados para elegir.{% endif %}
         </p>
+        {% if caps.administrar_flujos %}
+          <a class="btn btn--primary" href="{% url 'flujos:nuevo' %}">{% include "components/icon.html" with name="plus" %}Crear primer flujo</a>
+        {% endif %}
       </div>
     {% endif %}
   </section>

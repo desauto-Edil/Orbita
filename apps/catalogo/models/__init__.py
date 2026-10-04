@@ -6,11 +6,15 @@ from .catalogo import (
     ServicioResponsable,
     ServicioVisibilidad,
 )
+from .ejecucion import BloqueOperativo, ConfiguracionEjecucionVersion, TransicionBloqueOperativo
 from .formularios import Campo, Formulario, FormularioVersion, OpcionCampo, ReglaCondicional
 
 __all__ = [
+    "BloqueOperativo",
     "Categoria",
+    "ConfiguracionEjecucionVersion",
     "DefinicionEntregable",
+    "TransicionBloqueOperativo",
     "Servicio",
     "ServicioVisibilidad",
     "ServicioResponsable",

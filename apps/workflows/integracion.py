@@ -81,10 +81,11 @@ def resolver_aprobacion_workflow(aprobacion, actor, *, decision, observacion="")
             "apps.aprobaciones.operaciones.resolver_aprobacion directamente."
         )
 
-    etapa = vinculo.instancia_etapa.etapa
-    transicion = etapa.transiciones_salientes.get(resultado_aprobacion=esquema.resultado)
+    ejecucion = vinculo.instancia_etapa
+    definicion = ejecucion.etapa or ejecucion.bloque_operativo
+    transicion = definicion.transiciones_salientes.get(resultado_aprobacion=esquema.resultado)
     continuar_espera_externa(
-        vinculo.instancia_etapa,
+        ejecucion,
         motivo_espera=InstanciaEtapa.MotivoEspera.APROBACION,
         transicion_seleccionada=transicion,
     )

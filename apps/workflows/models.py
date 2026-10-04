@@ -41,8 +41,13 @@ from apps.workflows.validacion import validar_integridad_transicion
 
 
 class Workflow(RegistroBase):
+    class Modo(models.TextChoices):
+        LEGACY_EJECUTABLE = "LEGACY_EJECUTABLE", "Legacy ejecutable"
+        PLANTILLA_FASES = "PLANTILLA_FASES", "Plantilla de fases"
+
     nombre = models.CharField(max_length=150)
     descripcion = models.TextField(blank=True)
+    modo = models.CharField(max_length=20, choices=Modo.choices, default=Modo.LEGACY_EJECUTABLE)
     version_activa = models.ForeignKey(
         "WorkflowVersion", on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
@@ -79,6 +84,79 @@ class WorkflowVersion(RegistroBase):
 
     def __str__(self):
         return f"{self.workflow} — v{self.numero} ({self.get_estado_display()})"
+
+
+class FaseWorkflow(RegistroBase):
+    """Fase general reutilizable de una plantilla de Workflow.
+
+    D3.R1 conserva `Etapa` como definicion legacy ejecutable. Las fases viven
+    aparte para que una plantilla responda "por que fases pasa el trabajo"
+    sin contener tareas, aprobadores, esperas ni reglas especificas de un
+    Servicio/Proceso.
+    """
+
+    version = models.ForeignKey(WorkflowVersion, on_delete=models.CASCADE, related_name="fases")
+    nombre = models.CharField(max_length=150)
+    descripcion = models.TextField(blank=True)
+    orden = models.PositiveIntegerField()
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=["version", "orden"], name="uq_faseworkflow_version_orden"),
+        ]
+        ordering = ["version_id", "orden", "id"]
+
+    def clean(self):
+        if self.version_id and self.version.workflow.modo != Workflow.Modo.PLANTILLA_FASES:
+            raise ValidationError("Solo un Workflow de tipo plantilla de fases puede contener fases.")
+
+    def save(self, *args, **kwargs):
+        self.version.exigir_editable()
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        self.version.exigir_editable()
+        super().delete(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.nombre} (fase {self.orden})"
+
+
+class TransicionFaseWorkflow(RegistroBase):
+    """Conexion simple entre fases de una misma `WorkflowVersion`.
+
+    No reutiliza `TransicionEtapa`: esa transicion gobierna bloques
+    ejecutables legacy y sus reglas de condicion/aprobacion. Aqui solo se
+    modela la estructura general de fases.
+    """
+
+    fase_origen = models.ForeignKey(FaseWorkflow, on_delete=models.CASCADE, related_name="transiciones_salientes")
+    fase_destino = models.ForeignKey(FaseWorkflow, on_delete=models.CASCADE, related_name="transiciones_entrantes")
+    nombre = models.CharField(max_length=150, blank=True)
+    prioridad = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        ordering = ["fase_origen_id", "prioridad", "id"]
+
+    def clean(self):
+        if self.fase_origen_id is None or self.fase_destino_id is None:
+            return
+        if self.fase_origen.version_id != self.fase_destino.version_id:
+            raise ValidationError("Las fases conectadas deben pertenecer a la misma version de Workflow.")
+
+    def save(self, *args, **kwargs):
+        self.fase_origen.version.exigir_editable()
+        self.clean()
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        self.fase_origen.version.exigir_editable()
+        super().delete(*args, **kwargs)
+
+    def __str__(self):
+        etiqueta = f" [{self.nombre}]" if self.nombre else ""
+        return f"{self.fase_origen} -> {self.fase_destino}{etiqueta}"
 
 
 class Etapa(RegistroBase):
@@ -304,6 +382,13 @@ class InstanciaWorkflow(RegistroBase):
     workflow_version = models.ForeignKey(
         WorkflowVersion, on_delete=models.PROTECT, related_name="instancias"
     )
+    configuracion_ejecucion_version = models.ForeignKey(
+        "catalogo.ConfiguracionEjecucionVersion",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="instancias_workflow",
+    )
     estado = models.CharField(max_length=15, choices=Estado.choices, default=Estado.EN_EJECUCION)
     # JSON puro (namespaces `datos_iniciales`/`resultados_etapas`/`variables`
     # — ver `apps/workflows/contexto.py`); `encoder=DjangoJSONEncoder` es
@@ -384,7 +469,13 @@ class InstanciaEtapa(RegistroBase):
     instancia_workflow = models.ForeignKey(
         InstanciaWorkflow, on_delete=models.CASCADE, related_name="ejecuciones_etapa"
     )
-    etapa = models.ForeignKey(Etapa, on_delete=models.PROTECT, related_name="ejecuciones")
+    etapa = models.ForeignKey(Etapa, on_delete=models.PROTECT, null=True, blank=True, related_name="ejecuciones")
+    bloque_operativo = models.ForeignKey(
+        "catalogo.BloqueOperativo", on_delete=models.PROTECT, null=True, blank=True, related_name="ejecuciones"
+    )
+    fase_workflow = models.ForeignKey(
+        FaseWorkflow, on_delete=models.PROTECT, null=True, blank=True, related_name="ejecuciones_bloque"
+    )
     orden = models.PositiveIntegerField()
     estado = models.CharField(max_length=15, choices=Estado.choices, default=Estado.PENDIENTE)
     iniciada_en = models.DateTimeField(null=True, blank=True)
@@ -394,6 +485,9 @@ class InstanciaEtapa(RegistroBase):
     motivo_espera = models.CharField(max_length=10, choices=MotivoEspera.choices, null=True, blank=True)
     transicion_tomada = models.ForeignKey(
         TransicionEtapa, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    transicion_bloque_tomada = models.ForeignKey(
+        "catalogo.TransicionBloqueOperativo", on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
 
     class Meta:
@@ -406,7 +500,8 @@ class InstanciaEtapa(RegistroBase):
         ordering = ["instancia_workflow_id", "orden"]
 
     def __str__(self):
-        return f"{self.etapa} — ejecución #{self.orden} de {self.instancia_workflow}"
+        definicion = self.etapa or self.bloque_operativo
+        return f"{definicion} - ejecucion #{self.orden} de {self.instancia_workflow}"
 
 
 class TareaWorkflow(models.Model):

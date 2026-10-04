@@ -50,8 +50,10 @@ from django.urls import reverse
 from django.utils import timezone
 
 from apps.catalogo.models import (
+    BloqueOperativo,
     Campo,
     Categoria,
+    ConfiguracionEjecucionVersion,
     Formulario,
     OpcionCampo,
     ReglaCondicional,
@@ -147,6 +149,15 @@ def _otorgar_tickets_atender(usuario, *, tipo_alcance=AsignacionRol.TipoAlcance.
     RolPermiso.objects.create(rol=rol, permiso=permiso)
     return AsignacionRol.objects.create(
         usuario=usuario, rol=rol, tipo_alcance=tipo_alcance, area=area, unidad_negocio=unidad_negocio
+    )
+
+
+def _otorgar_permiso(usuario, codigo, *, nombre_rol=None):
+    permiso, _ = Permiso.objects.get_or_create(codigo=codigo, defaults={"nombre": codigo})
+    rol = RolFuncional.objects.create(nombre=nombre_rol or f"Rol {codigo} {usuario.username}")
+    RolPermiso.objects.create(rol=rol, permiso=permiso)
+    return AsignacionRol.objects.create(
+        usuario=usuario, rol=rol, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL
     )
 
 
@@ -4548,7 +4559,7 @@ class SolicitudEspacioDeTrabajoTests(_EscenarioSolicitudMixin, TestCase):
     def test_un_ticket_ya_radicado_no_vuelve_al_workspace(self):
         guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Asunto"].id: "x"})
         radicar_ticket(self.ticket, self.usuario)
-        self.assertEqual(self._abrir().status_code, 403)
+        self.assertRedirects(self._abrir(), self._url("detalle"))
 
     def test_servicio_desactivado_se_avisa_en_el_borrador(self):
         self.servicio.activo = False
@@ -4715,7 +4726,7 @@ class SolicitudGuardadoYErroresTests(_MediaAisladaMixin, _EscenarioSolicitudMixi
         self.assertNotIn("Detalle", filas)
         self.assertContains(respuesta, "Revisa tu solicitud")
         self.assertContains(respuesta, "Volver y editar")
-        self.assertContains(respuesta, "Enviar solicitud")
+        self.assertContains(respuesta, "Solicitar")
         self.assertContains(respuesta, reverse("tickets:enviar", args=[self.ticket.pk]))
         self.assertNotContains(respuesta, "campo_")  # ni ids ni nombres internos
 
@@ -4793,11 +4804,11 @@ class SolicitudPrecedenciaDeErroresTests(_EscenarioSolicitudMixin, TestCase):
 
 
 class SolicitudEnvioTests(_EscenarioSolicitudMixin, TestCase):
-    """Enviar = la radicación REAL (`operaciones.radicar_ticket`) + confirmación."""
+    """Solicitar = la radicación REAL (`operaciones.radicar_ticket`) + confirmación."""
 
     def setUp(self):
         self._preparar()
-        guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Asunto"].id: "Listo para enviar"})
+        guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Asunto"].id: "Listo para solicitar"})
 
     def test_enviar_radica_de_verdad_y_lleva_a_la_confirmacion(self):
         respuesta = self.client.post(self._url("enviar"))
@@ -4820,7 +4831,7 @@ class SolicitudEnvioTests(_EscenarioSolicitudMixin, TestCase):
         self.assertContains(respuesta, str(self.ticket.radicado))
         self.assertContains(respuesta, self.servicio.nombre)
         self.assertContains(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
-        self.assertContains(respuesta, reverse("core:inicio"))
+        self.assertContains(respuesta, reverse("tickets:mis_tickets"))
 
     def test_un_doble_envio_no_falla_ni_radica_dos_veces(self):
         self.client.post(self._url("enviar"))
@@ -4869,6 +4880,110 @@ class SolicitudEnvioTests(_EscenarioSolicitudMixin, TestCase):
     def test_el_detalle_de_un_borrador_sigue_llevando_al_formulario(self):
         self.assertRedirects(self.client.get(self._url("detalle")), self._url("borrador"))
 
+    def test_un_ticket_ya_solicitado_no_vuelve_a_editarse_como_borrador(self):
+        self.client.post(self._url("enviar"))
+        self.assertRedirects(self.client.get(self._url("borrador")), self._url("detalle"))
+        self.assertRedirects(self.client.get(self._url("revisar")), self._url("enviada"))
+
+
+class SolicitudEnvioPlantillaFasesTests(TestCase):
+    """La acción final de solicitud usa el runtime nuevo de fases."""
+
+    def setUp(self):
+        from apps.catalogo.configuracion_ejecucion import (
+            activar_configuracion_ejecucion,
+            agregar_bloque_operativo,
+            crear_nueva_version_configuracion,
+        )
+        from apps.workflows import fases as fases_ops
+        from apps.workflows.versionamiento import activar_version as activar_workflow
+
+        self.usuario = Usuario.objects.create_user(username="sol_fases", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user(username="admin_fases", password=CLAVE_PRUEBA)
+        _otorgar_permiso(self.admin, "catalogo.administrar")
+        self.servicio, self.formulario_version, self.campos = _crear_servicio_con_formulario(
+            self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Asunto", "obligatorio": True}]
+        )
+        self.workflow = fases_ops.crear_plantilla_fases(self.admin, nombre="Plantilla de diseño")
+        self.workflow_version = self.workflow.versiones.get(numero=1)
+        self.planeacion = fases_ops.agregar_fase(self.workflow_version, self.admin, nombre="Planeación")
+        self.proceso = fases_ops.agregar_fase(self.workflow_version, self.admin, nombre="Proceso")
+        self.revision = fases_ops.agregar_fase(self.workflow_version, self.admin, nombre="Revisión")
+        self.gaceta = fases_ops.agregar_fase(self.workflow_version, self.admin, nombre="Gaceta")
+        self.terminada = fases_ops.agregar_fase(self.workflow_version, self.admin, nombre="Terminada")
+        fases_ops.conectar_fases(self.planeacion, self.proceso, self.admin)
+        fases_ops.conectar_fases(self.proceso, self.revision, self.admin)
+        fases_ops.conectar_fases(self.revision, self.gaceta, self.admin)
+        fases_ops.conectar_fases(self.gaceta, self.terminada, self.admin)
+        activar_workflow(self.workflow, self.workflow_version, self.admin)
+        self.servicio.workflow = self.workflow
+        self.servicio.save(update_fields=["workflow", "actualizado_en"])
+        self.configuracion = crear_nueva_version_configuracion(self.servicio, self.admin)
+        self.bloque_inicial = agregar_bloque_operativo(
+            self.configuracion,
+            self.admin,
+            fase=self.planeacion,
+            tipo=BloqueOperativo.Tipo.ACTIVIDAD,
+            nombre="Revisión de documentación",
+            configuracion={"tipo_actor": "RESPONSABLE_TICKET"},
+        )
+        self.bloque_proceso = agregar_bloque_operativo(
+            self.configuracion,
+            self.admin,
+            fase=self.proceso,
+            tipo=BloqueOperativo.Tipo.ACTIVIDAD,
+            nombre="Preparar el diseño",
+            configuracion={"tipo_actor": "SOLICITANTE"},
+        )
+        activar_configuracion_ejecucion(self.servicio, self.configuracion, self.admin)
+        self.ticket = crear_borrador(self.usuario, self.servicio)
+        guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Asunto"].id: "Diseño de piezas"})
+        self.client.login(username="sol_fases", password=CLAVE_PRUEBA)
+
+    def _url(self, nombre):
+        return reverse(f"tickets:{nombre}", args=[self.ticket.pk])
+
+    def test_solicitar_congela_versiones_e_inicia_primera_fase_y_bloque(self):
+        from apps.workflows.models import InstanciaWorkflow, TareaWorkflow
+
+        respuesta = self.client.post(self._url("enviar"))
+        self.assertRedirects(respuesta, self._url("enviada"))
+        self.ticket.refresh_from_db()
+        instancia = self.ticket.instancia_workflow
+        ejecucion = instancia.ejecuciones_etapa.get(orden=1)
+        vinculo_tarea = TareaWorkflow.objects.get(instancia_etapa=ejecucion)
+
+        self.assertEqual(self.ticket.estado, Ticket.Estado.RADICADO)
+        self.assertEqual(instancia.workflow_version_id, self.workflow_version.pk)
+        self.assertEqual(instancia.configuracion_ejecucion_version_id, self.configuracion.pk)
+        self.assertEqual(ejecucion.fase_workflow_id, self.planeacion.pk)
+        self.assertEqual(ejecucion.bloque_operativo_id, self.bloque_inicial.pk)
+        self.assertEqual(ejecucion.estado, "EN_ESPERA")
+        self.assertEqual(vinculo_tarea.tarea.titulo, "Revisión de documentación")
+        self.assertIsNone(vinculo_tarea.tarea.usuario_responsable_id)
+        self.assertIsNone(vinculo_tarea.tarea.equipo_responsable_id)
+
+        segundo = self.client.post(self._url("enviar"))
+        self.assertRedirects(segundo, self._url("enviada"))
+        self.assertEqual(InstanciaWorkflow.objects.count(), 1)
+        self.assertEqual(TareaWorkflow.objects.count(), 1)
+        self.assertEqual(
+            HistorialTicket.objects.filter(ticket=self.ticket, tipo_evento=HistorialTicket.TipoEvento.RADICADO).count(),
+            1,
+        )
+
+    def test_solicitar_exige_configuracion_activa_compatible(self):
+        self.configuracion.estado = ConfiguracionEjecucionVersion.Estado.HISTORICA
+        self.configuracion.save(update_fields=["estado", "actualizado_en"])
+        self.servicio.configuracion_ejecucion_activa = None
+        self.servicio.save(update_fields=["configuracion_ejecucion_activa", "actualizado_en"])
+
+        respuesta = self.client.post(self._url("enviar"))
+        self.assertRedirects(respuesta, self._url("revisar"))
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.estado, Ticket.Estado.BORRADOR)
+        self.assertIsNone(self.ticket.instancia_workflow_id)
+
 
 class SolicitudControlesTests(_EscenarioSolicitudMixin, TestCase):
     """V2.2 — el renderer entrega a cada control lo que el dominio realmente
@@ -4877,9 +4992,9 @@ class SolicitudControlesTests(_EscenarioSolicitudMixin, TestCase):
 
     def setUp(self):
         T = Campo.TipoCampo
-        self.area_zeta = Area.objects.create(nombre="Zeta")
-        self.area_alfa = Area.objects.create(nombre="Alfa")
-        self.area_inactiva = Area.objects.create(nombre="Inactiva", activo=False)
+        self.area_zeta = Area.objects.create(nombre="Zeta", codigo="SOL-ZETA")
+        self.area_alfa = Area.objects.create(nombre="Alfa", codigo="SOL-ALFA")
+        self.area_inactiva = Area.objects.create(nombre="Inactiva", codigo="SOL-INACTIVA", activo=False)
         self.inactivo = Usuario.objects.create_user(username="zz_inactivo", password=CLAVE_PRUEBA, is_active=False)
         self._preparar(
             [

@@ -1,142 +1,421 @@
-<section class="card">
-  <h2>Ejecución</h2>
-  <p class="text-muted">¿Qué debe hacer la organización?</p>
+<section class="svc-section svc-section--flow">
+  <header class="svc-section__head">
+    <div>
+      <p class="svc-kicker">Ejecución</p>
+      <h2>Flujo</h2>
+      <p>Define cómo se atenderá este {{ servicio.get_tipo_display|lower }}.</p>
+    </div>
+  </header>
 
   {% if workflow is None %}
-    <div class="empty-state">
-      <p>Este servicio todavía no tiene una ejecución configurada.</p>
-    </div>
-
-    <div class="catalogo-grid" style="margin-top: var(--space-4);">
-      <div class="card">
-        <h4>Empezar desde cero</h4>
-        <p class="text-muted" style="font-size: var(--text-sm);">Defines las etapas bloque por bloque.</p>
-        <form method="post" action="{% url 'catalogo:studio_ejecucion_configurar' servicio.pk %}">
-          {% csrf_token %}
-          <button type="submit" class="btn btn--primary">Configurar ejecución</button>
-        </form>
-      </div>
-
-      {% if puede_vincular_workflow %}
-        <div class="card">
-          <h4>Usar un flujo existente</h4>
-          <p class="text-muted" style="font-size: var(--text-sm);">Reutiliza las etapas de un flujo ya publicado. El flujo se comparte con los demás servicios que lo usan; si luego necesitas cambios propios, podrás crear una copia.</p>
-          {% if plantillas %}
-            <form method="get" action="{% url 'catalogo:studio' servicio.pk %}" class="form">
-              <input type="hidden" name="tab" value="ejecucion">
-              <div class="field">
-                <label for="plantilla-select">Flujo</label>
-                <select id="plantilla-select" name="plantilla">
-                  {% for p in plantillas %}
-                    <option value="{{ p.pk }}"{% if plantilla_elegida and plantilla_elegida.pk == p.pk %} selected{% endif %}>{{ p.nombre }} · {{ p.n_servicios }} servicio{{ p.n_servicios|pluralize }}</option>
-                  {% endfor %}
-                </select>
-              </div>
-              <button type="submit" class="btn btn--secondary">Ver etapas</button>
-            </form>
-          {% else %}
-            <p class="text-muted">Todavía no hay flujos publicados para reutilizar.</p>
-          {% endif %}
+    <div class="svc-flow-start">
+      {% if servicio.tipo == "SERVICIO" %}
+        <article class="svc-panel svc-panel--soft">
+          <div class="svc-panel__head">
+            <div>
+              <h3>Sin flujo</h3>
+              <p>Este servicio puede publicarse como solicitud simple si el formulario y las demás reglas reales están listas.</p>
+            </div>
+            <span class="svc-pill">Permitido</span>
+          </div>
+        </article>
+      {% else %}
+        <div class="svc-alert svc-alert--warning" role="status">
+          <strong>Este proceso necesita un flujo publicado para poder publicarse.</strong>
         </div>
       {% endif %}
-    </div>
 
-    {% if puede_vincular_workflow and plantilla_elegida %}
-      <h3 style="margin-top: var(--space-6);">Etapas de «{{ plantilla_elegida.nombre }}»</h3>
-      {% if plantilla_bloques %}
-        <ul class="list-row-group">
-          {% for fila in plantilla_bloques %}
-            <li class="list-row">
-              <span class="list-row__title">{{ forloop.counter }}. {{ fila.etapa.nombre }}</span>
-              <span class="badge badge--accent">{{ fila.tipo_empresarial_display }}</span>
-              <span class="text-muted">{{ fila.resumen }}</span>
-            </li>
+      <div class="svc-choice-grid">
+        {% if puede_ejecucion %}
+          <article class="svc-panel">
+            <h3>Crear nuevo flujo</h3>
+            <p>Crea un flujo real en el diseñador. Después de publicarlo, vuelve aquí para vincularlo.</p>
+            <form method="post" action="{% url 'catalogo:studio_ejecucion_crear_flujo' servicio.pk %}" class="form">
+              {% csrf_token %}
+              <div class="field">
+                <label for="nuevo-flujo-nombre">Nombre del flujo</label>
+                <input id="nuevo-flujo-nombre" type="text" name="nombre" value="{{ servicio.nombre }}" maxlength="150">
+              </div>
+              <button type="submit" class="btn btn--primary">Crear flujo</button>
+            </form>
+          </article>
+        {% endif %}
+
+        {% if puede_vincular_workflow %}
+          <article class="svc-panel">
+            <h3>Usar flujo existente</h3>
+            <p>Solo se muestran flujos publicados. Si lo eliges, este servicio compartirá esa plantilla.</p>
+            {% if not plantillas %}<div class="svc-empty">Todavía no hay flujos publicados para reutilizar.</div>{% endif %}
+          </article>
+        {% endif %}
+      </div>
+
+      {% if puede_vincular_workflow and plantillas %}
+        <div class="svc-template-grid">
+          {% for flujo in plantillas %}
+            <article class="svc-template{% if plantilla_elegida and plantilla_elegida.pk == flujo.pk %} is-selected{% endif %}">
+              <div class="svc-template__head">
+                <div>
+                  <h3>{{ flujo.nombre }}</h3>
+                  {% if flujo.descripcion %}<p>{{ flujo.descripcion }}</p>{% endif %}
+                </div>
+                <span class="svc-pill svc-pill--ok">Publicado · v{{ flujo.version_activa.numero }}</span>
+              </div>
+              <p class="svc-route">
+                {% for nombre in flujo.recorrido %}
+                  <span>{{ nombre }}</span>{% if not forloop.last %}<span aria-hidden="true">→</span>{% endif %}
+                {% empty %}
+                  <span>Sin bloques empresariales</span>
+                {% endfor %}
+                {% if flujo.recorrido_extra %}<span>+{{ flujo.recorrido_extra }}</span>{% endif %}
+              </p>
+              <div class="svc-template__meta">
+                <span>{{ flujo.n_bloques }} etapa{{ flujo.n_bloques|pluralize }}</span>
+                <span>Usado por {{ flujo.n_servicios }} servicio{{ flujo.n_servicios|pluralize }}</span>
+              </div>
+              <div class="svc-row-actions">
+                <a class="btn btn--ghost btn--sm" href="{% url 'catalogo:studio' servicio.pk %}?tab=ejecucion&plantilla={{ flujo.pk }}">Previsualizar</a>
+                <form method="post" action="{% url 'catalogo:studio_ejecucion_vincular' servicio.pk %}">
+                  {% csrf_token %}
+                  <input type="hidden" name="plantilla" value="{{ flujo.pk }}">
+                  <button type="submit" class="btn btn--primary">Seleccionar</button>
+                </form>
+              </div>
+            </article>
           {% endfor %}
-        </ul>
-      {% else %}
-        <p class="text-muted">Este flujo no tiene bloques configurados.</p>
+        </div>
       {% endif %}
-      <p class="text-muted" style="font-size: var(--text-sm);">
-        Este elemento <strong>usará el mismo flujo</strong> que {{ plantilla_elegida.n_servicios }} servicio{{ plantilla_elegida.n_servicios|pluralize }} más.
-        Cada ticket tiene su propia ejecución: compartir el flujo no mezcla los tickets entre servicios.
-        {% if plantilla_tiene_decisiones %}Las decisiones usan campos del formulario: comprueba que existan en este servicio.{% endif %}
-      </p>
-      <form method="post" action="{% url 'catalogo:studio_ejecucion_vincular' servicio.pk %}">
-        {% csrf_token %}
-        <input type="hidden" name="plantilla" value="{{ plantilla_elegida.pk }}">
-        <button type="submit" class="btn btn--primary">Usar este flujo</button>
-      </form>
-    {% endif %}
+
+      {% if puede_vincular_workflow and plantilla_elegida %}
+        <section class="svc-panel">
+          <div class="svc-panel__head">
+            <div>
+              <h3>Recorrido de {{ plantilla_elegida.nombre }}</h3>
+              <p>Comprueba que las variables y pasos apliquen a este servicio.</p>
+            </div>
+          </div>
+          {% if plantilla_bloques %}
+            <ul class="svc-compact-list">
+              {% for fila in plantilla_bloques %}
+                <li>
+                  <span>{{ forloop.counter }}. {{ fila.etapa.nombre }}</span>
+                  <span class="svc-tag svc-tag--accent">{{ fila.tipo_empresarial_display }}</span>
+                  <span>{{ fila.resumen }}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <div class="svc-empty">Este flujo no tiene bloques empresariales.</div>
+          {% endif %}
+          {% if plantilla_tiene_decisiones %}
+            <p class="svc-note">Las decisiones usan variables del formulario: comprueba que existan en este servicio.</p>
+          {% endif %}
+        </section>
+      {% endif %}
+    </div>
   {% else %}
     {% if compartido_con %}
-      <div class="alert alert--warning" role="status" style="margin-top: var(--space-3);">
-        <span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="alert" %}</span>
-        <div class="alert__text">
-          <strong>Este flujo se comparte con otros elementos.</strong> También lo usan:
-          <ul class="plain-list" style="margin: var(--space-2) 0;">
-            {% for otro in compartido_con %}
-              <li>{{ otro.nombre }} <span class="badge">{{ otro.get_tipo_display }}</span></li>
-            {% endfor %}
-          </ul>
-          Lo que se publique en este flujo afectará a los tickets <em>nuevos</em> de todos ellos; los tickets ya iniciados conservan la versión con la que empezaron.
-        </div>
+      <div class="svc-alert svc-alert--warning" role="status">
+        <strong>Este flujo se comparte.</strong>
+        <p>También lo usan:</p>
+        <ul>
+          {% for otro in compartido_con %}
+            <li>{{ otro.nombre }} <span class="svc-tag">{{ otro.get_tipo_display }}</span></li>
+          {% endfor %}
+        </ul>
       </div>
     {% endif %}
 
-    <div class="list-row" style="border-bottom: none; padding: 0; margin-top: var(--space-3);">
-      {% if version_ejecucion_activa %}
-        <span class="badge badge--success">Versión activa: v{{ version_ejecucion_activa.numero }}</span>
-      {% else %}
-        <span class="badge badge--warning">Sin versión activa todavía</span>
-      {% endif %}
-      {% if version_ejecucion_borrador %}
-        <span class="badge badge--info">Editando borrador v{{ version_ejecucion_borrador.numero }}{% if compartido_con %} (compartido){% endif %}</span>
-        {% if compartido_con and puede_ejecucion %}
-          <form method="post" action="{% url 'catalogo:studio_ejecucion_copia' servicio.pk %}" style="display:inline;">
-            {% csrf_token %}
-            <button type="submit" class="btn btn--secondary">Crear copia propia</button>
-          </form>
-        {% endif %}
-      {% elif puede_ejecucion %}
-        {% if compartido_con %}
-          <button type="button" class="btn btn--primary" data-action="toggle-panel" data-target="panel-compartido">Editar ejecución…</button>
+    {% if not usa_plantilla_fases %}
+      <div class="svc-status-row">
+        {% if version_ejecucion_activa %}
+          <span class="svc-pill svc-pill--ok">v{{ version_ejecucion_activa.numero }} activa</span>
         {% else %}
-          <form method="post" action="{% url 'catalogo:studio_ejecucion_configurar' servicio.pk %}" style="display:inline;">
-            {% csrf_token %}
-            <button type="submit" class="btn btn--primary">Editar ejecución</button>
-          </form>
+          <span class="svc-pill svc-pill--warn">Sin versión activa todavía</span>
         {% endif %}
-      {% endif %}
-    </div>
+        {% if version_ejecucion_borrador %}
+          <span class="svc-pill">Borrador v{{ version_ejecucion_borrador.numero }}{% if compartido_con %} · compartido{% endif %}</span>
+          {% if compartido_con and puede_ejecucion %}
+            <form method="post" action="{% url 'catalogo:studio_ejecucion_copia' servicio.pk %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn--secondary">Crear copia del flujo</button>
+            </form>
+          {% endif %}
+        {% elif puede_ejecucion %}
+          {% if compartido_con %}
+            <button type="button" class="btn btn--primary" data-action="toggle-panel" data-target="panel-compartido">Modificar flujo</button>
+          {% else %}
+            <form method="post" action="{% url 'catalogo:studio_ejecucion_configurar' servicio.pk %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn--primary">Editar flujo</button>
+            </form>
+          {% endif %}
+        {% endif %}
+      </div>
 
-    {% if compartido_con and puede_ejecucion and not version_ejecucion_borrador %}
-      <div id="panel-compartido" class="surface-sunken" hidden style="margin-top: var(--space-3);">
-        <p><strong>Este flujo lo usan otros elementos. ¿Qué quieres hacer?</strong></p>
-        <form method="post" action="{% url 'catalogo:studio_ejecucion_copia' servicio.pk %}">
-          {% csrf_token %}
-          <p class="text-muted" style="font-size: var(--text-sm);"><strong>Crear copia:</strong> este elemento pasa a tener su propio flujo, igual al actual. Los demás siguen con el original, que no cambia.</p>
-          <button type="submit" class="btn btn--primary">Crear copia propia</button>
-        </form>
-        <hr>
-        <form method="post" action="{% url 'catalogo:studio_ejecucion_configurar' servicio.pk %}">
-          {% csrf_token %}
-          <p class="text-muted" style="font-size: var(--text-sm);"><strong>Modificar compartido:</strong> los cambios se preparan en un borrador y solo afectan a los demás cuando se publiquen (se pedirá una confirmación adicional).</p>
-          <label class="choice"><input type="checkbox" name="confirmo_compartido" value="1" required> Entiendo que modificaré un flujo usado por {{ compartido_con|length|add:1 }} elementos.</label>
-          <div class="form-actions" style="margin-top: var(--space-3);">
-            <button type="submit" class="btn btn--secondary">Modificar compartido</button>
-            <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="panel-compartido">Cancelar</button>
+      {% if compartido_con and puede_ejecucion and not version_ejecucion_borrador %}
+        <div id="panel-compartido" class="svc-panel" hidden>
+          <h3>Modificar un flujo compartido</h3>
+          <form method="post" action="{% url 'catalogo:studio_ejecucion_copia' servicio.pk %}" class="form">
+            {% csrf_token %}
+            <p class="svc-muted">Crea una copia independiente para este {{ servicio.get_tipo_display|lower }}. Los demás conservan el original.</p>
+            <button type="submit" class="btn btn--primary">Crear copia del flujo</button>
+          </form>
+          <form method="post" action="{% url 'catalogo:studio_ejecucion_configurar' servicio.pk %}" class="form">
+            {% csrf_token %}
+            <p class="svc-muted">O abre un borrador del flujo común. El impacto se confirma al publicar.</p>
+            <label class="choice"><input type="checkbox" name="confirmo_compartido" value="1" required> Entiendo que modificaré un flujo usado por {{ compartido_con|length|add:1 }} elementos.</label>
+            <button type="submit" class="btn btn--secondary">Sí, modificar compartido</button>
+          </form>
+        </div>
+      {% endif %}
+
+      {% if not editable_ejecucion %}
+        <p class="svc-note">
+          {% if puede_ejecucion %}Estás viendo la versión activa. Pulsa “Editar flujo” para crear un borrador nuevo.
+          {% else %}Estás viendo la versión activa. Puedes vincular, pero no modificar flujos.{% endif %}
+        </p>
+      {% endif %}
+    {% endif %}
+
+    {% if usa_plantilla_fases %}
+      <div class="svc-flow-summary">
+        <article class="svc-panel svc-flow-summary__map">
+          <div class="svc-panel__head">
+            <div>
+              <h3>{{ workflow.nombre }}</h3>
+              <p>
+                {% if version_ejecucion_activa %}Workflow v{{ version_ejecucion_activa.numero }} publicado{% else %}Sin versión publicada{% endif %}
+              </p>
+            </div>
+            <a class="btn btn--secondary" href="{% url 'flujos:lienzo' workflow.pk %}">Ver flujo</a>
           </div>
-        </form>
+
+          <ol class="svc-mini-map" aria-label="Mini mapa del flujo">
+            {% for item in fases_configuracion %}
+              <li>
+                <span>{{ item.fase.orden }}</span>
+                <strong>{{ item.fase.nombre }}</strong>
+              </li>
+            {% empty %}
+              <li><strong>Sin fases</strong></li>
+            {% endfor %}
+          </ol>
+        </article>
+
+        <article class="svc-panel svc-flow-summary__config">
+          <div class="svc-panel__head">
+            <div>
+              <h3>Configuración del servicio</h3>
+              <p>Ajusta qué ocurre dentro de cada fase para este {{ servicio.get_tipo_display|lower }}.</p>
+            </div>
+          </div>
+          {% if configuracion_ejecucion_borrador %}
+            <span class="svc-pill">Borrador v{{ configuracion_ejecucion_borrador.numero }}</span>
+            {% if configuracion_ejecucion_activa %}<span class="svc-pill svc-pill--ok">Activa v{{ configuracion_ejecucion_activa.numero }}</span>{% endif %}
+            {% if errores_configuracion_ejecucion %}
+              <div class="svc-alert">
+                <strong>Faltan {{ errores_configuracion_ejecucion|length }} elemento{{ errores_configuracion_ejecucion|length|pluralize }} por configurar.</strong>
+                <ul>
+                  {% for error in errores_configuracion_ejecucion %}<li>{{ error }}</li>{% endfor %}
+                </ul>
+              </div>
+            {% else %}
+              <p class="svc-muted">Lista para activar.</p>
+            {% endif %}
+            <form method="post" action="{% url 'catalogo:studio_ejecucion_activar_configuracion' servicio.pk %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn--primary"{% if not configuracion_ejecucion_publicable %} disabled{% endif %}>Activar configuracion</button>
+            </form>
+          {% elif configuracion_ejecucion_activa %}
+            <span class="svc-pill svc-pill--ok">Activa v{{ configuracion_ejecucion_activa.numero }}</span>
+            {% if puede_ejecucion %}
+              <form method="post" action="{% url 'catalogo:studio_ejecucion_configurar' servicio.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn--primary">Editar configuración</button>
+              </form>
+            {% endif %}
+          {% else %}
+            <span class="svc-pill svc-pill--warn">Sin configuración activa</span>
+            {% if puede_ejecucion %}
+              <form method="post" action="{% url 'catalogo:studio_ejecucion_configurar' servicio.pk %}">
+                {% csrf_token %}
+                <button type="submit" class="btn btn--primary">Editar configuración</button>
+              </form>
+            {% endif %}
+          {% endif %}
+        </article>
+      </div>
+
+      <section class="svc-panel svc-panel--soft">
+        <div class="svc-panel__head">
+          <div>
+            <h3>Configuración por fase</h3>
+            <p>Las fases pertenecen al flujo reutilizable. Aquí configuras los bloques operativos de este {{ servicio.get_tipo_display|lower }}.</p>
+          </div>
+        </div>
+      </section>
+
+      <div class="svc-phase-list">
+        {% for item in fases_configuracion %}
+          <section class="svc-phase">
+            <header class="svc-phase__head">
+              <span>{{ item.fase.orden }}</span>
+              <div>
+                <h3>{{ item.fase.nombre }}</h3>
+                {% if item.fase.descripcion %}<p>{{ item.fase.descripcion }}</p>{% endif %}
+              </div>
+              {% if editable_ejecucion %}
+                <button type="button" class="btn btn--secondary btn--sm" data-action="toggle-panel" data-target="panel-nuevo-fase-{{ item.fase.pk }}">Agregar bloque</button>
+              {% endif %}
+            </header>
+
+            {% if item.bloques %}
+              <ul class="svc-block-list">
+                {% for fila in item.bloques %}
+                  <li class="svc-block-row">
+                    <div class="svc-block-row__main">
+                      <span class="svc-block-row__order">{{ fila.bloque.orden }}</span>
+                      <strong>{{ fila.bloque.nombre }}</strong>
+                      <span class="svc-tag svc-tag--accent">{{ fila.tipo_empresarial_display }}</span>
+                      <span>{{ fila.resumen }}</span>
+                    </div>
+                    {% if editable_ejecucion %}
+                      <div class="svc-row-actions">
+                        <button type="button" class="btn btn--ghost btn--sm" data-action="toggle-panel" data-target="panel-bloque-{{ fila.bloque.pk }}">Editar</button>
+                        <form method="post" action="{% url 'catalogo:studio_bloque_eliminar' servicio.pk fila.bloque.pk %}">
+                          {% csrf_token %}
+                          <button type="submit" class="btn btn--ghost btn--sm">Eliminar</button>
+                        </form>
+                      </div>
+
+                      <div id="panel-bloque-{{ fila.bloque.pk }}" class="svc-inline-editor" hidden>
+                        <form method="post" action="{% url 'catalogo:studio_bloque_editar' servicio.pk fila.bloque.pk %}" class="form">
+                          {% csrf_token %}
+                          <div class="svc-form-grid svc-form-grid--two">
+                            <div class="field">{{ fila.form_editar.nombre.label_tag }}{{ fila.form_editar.nombre }}</div>
+                            <div class="field">{{ fila.form_editar.descripcion.label_tag }}{{ fila.form_editar.descripcion }}</div>
+                          </div>
+                          {% if fila.tipo_empresarial == "ACTIVIDAD" %}
+                            <div class="svc-form-grid svc-form-grid--two">
+                              <div class="field">{{ fila.form_configurar.tipo_actor.label_tag }}{{ fila.form_configurar.tipo_actor }}</div>
+                              <div class="field">{{ fila.form_configurar.usuario.label_tag }}{{ fila.form_configurar.usuario }}</div>
+                              <div class="field">{{ fila.form_configurar.equipo.label_tag }}{{ fila.form_configurar.equipo }}</div>
+                            </div>
+                            <label class="choice">{{ fila.form_configurar.permite_subtareas }} {{ fila.form_configurar.permite_subtareas.label_tag }}</label>
+                          {% elif fila.tipo_empresarial == "ESPERA" %}
+                            <div class="svc-form-grid svc-form-grid--three">
+                              <div class="field">{{ fila.form_configurar.modo.label_tag }}{{ fila.form_configurar.modo }}</div>
+                              <div class="field">{{ fila.form_configurar.duracion_valor.label_tag }}{{ fila.form_configurar.duracion_valor }} {{ fila.form_configurar.duracion_unidad }}</div>
+                              <div class="field">{{ fila.form_configurar.fecha_objetivo.label_tag }}{{ fila.form_configurar.fecha_objetivo }}</div>
+                            </div>
+                          {% elif fila.tipo_empresarial == "APROBACION" %}
+                            <div class="svc-form-grid svc-form-grid--two">
+                              <div class="field">{{ fila.form_configurar.modo.label_tag }}{{ fila.form_configurar.modo }}</div>
+                              <div class="field">{{ fila.form_configurar.politica.label_tag }}{{ fila.form_configurar.politica }}</div>
+                            </div>
+                            {{ fila.formset_participantes.management_form }}
+                            {% for pform in fila.formset_participantes %}
+                              <div class="field">{{ pform.tipo }} {{ pform.usuario }} {{ pform.equipo }}{% if pform.DELETE %} {{ pform.DELETE }} eliminar{% endif %}</div>
+                            {% endfor %}
+                          {% endif %}
+                          <button type="submit" class="btn btn--primary">Guardar bloque</button>
+                        </form>
+
+                        {% if fila.tipo_empresarial == "APROBACION" %}
+                          <form method="post" action="{% url 'catalogo:studio_ruta_aprobacion_guardar' servicio.pk fila.bloque.pk %}" class="form">
+                            {% csrf_token %}
+                            <h4>Rutas</h4>
+                            <div class="svc-form-grid svc-form-grid--three">
+                              <div class="field">{{ fila.form_ruta.destino_aprobada.label_tag }}{{ fila.form_ruta.destino_aprobada }}</div>
+                              <div class="field">{{ fila.form_ruta.destino_devuelta.label_tag }}{{ fila.form_ruta.destino_devuelta }}</div>
+                              <div class="field">{{ fila.form_ruta.destino_rechazada.label_tag }}{{ fila.form_ruta.destino_rechazada }}</div>
+                            </div>
+                            <button type="submit" class="btn btn--secondary">Guardar rutas</button>
+                          </form>
+                        {% endif %}
+
+                        {% if fila.tipo_empresarial == "DECISION" %}
+                          <h4>Condiciones</h4>
+                          {% for item_cond in fila.condicionales %}
+                            <form method="post" action="{% url 'catalogo:studio_condicional_editar' servicio.pk fila.bloque.pk item_cond.transicion.pk %}" class="form">
+                              {% csrf_token %}
+                              <div class="field">Si {{ item_cond.form.variable }} {{ item_cond.form.operador }} {{ item_cond.form.valor }}</div>
+                              <div class="field">Prioridad {{ item_cond.form.prioridad }}</div>
+                              <div class="field">Entonces {{ item_cond.form.destino }}</div>
+                              <button type="submit" class="btn btn--secondary">Guardar condición</button>
+                              <button type="submit" class="btn btn--ghost" formaction="{% url 'catalogo:studio_condicional_eliminar' servicio.pk fila.bloque.pk item_cond.transicion.pk %}">Eliminar</button>
+                            </form>
+                          {% endfor %}
+                          <form method="post" action="{% url 'catalogo:studio_condicional_crear' servicio.pk fila.bloque.pk %}" class="form">
+                            {% csrf_token %}
+                            <div class="field">Si {{ fila.form_condicional_nuevo.variable }} {{ fila.form_condicional_nuevo.operador }} {{ fila.form_condicional_nuevo.valor }}</div>
+                            <div class="field">Prioridad {{ fila.form_condicional_nuevo.prioridad }}</div>
+                            <div class="field">Entonces {{ fila.form_condicional_nuevo.destino }}</div>
+                            <button type="submit" class="btn btn--secondary">Agregar condición</button>
+                          </form>
+                          <form method="post" action="{% url 'catalogo:studio_fallback_guardar' servicio.pk fila.bloque.pk %}" class="form">
+                            {% csrf_token %}
+                            <div class="field">{{ fila.form_fallback.destino.label_tag }}{{ fila.form_fallback.destino }}</div>
+                            <button type="submit" class="btn btn--secondary">Guardar ruta alternativa</button>
+                          </form>
+                        {% endif %}
+                      </div>
+                    {% endif %}
+                  </li>
+                {% endfor %}
+              </ul>
+            {% else %}
+              <div class="svc-empty">Esta fase todavía no tiene bloques para este {{ servicio.get_tipo_display|lower }}.</div>
+            {% endif %}
+
+            {% if editable_ejecucion %}
+              <div id="panel-nuevo-fase-{{ item.fase.pk }}" class="svc-inline-editor" hidden>
+                <div class="svc-block-type-grid">
+                  {% for codigo, etiqueta, descripcion in bloques_disponibles %}
+                    <article class="svc-block-type">
+                      <h4>{{ etiqueta }}</h4>
+                      <p>{{ descripcion }}</p>
+                      <button type="button" class="btn btn--ghost btn--sm" data-action="toggle-panel" data-target="panel-nuevo-{{ item.fase.pk }}-{{ codigo }}">Configurar</button>
+                      <div id="panel-nuevo-{{ item.fase.pk }}-{{ codigo }}" hidden>
+                        <form method="post" action="{% url 'catalogo:studio_bloque_crear' servicio.pk %}" class="form">
+                          {% csrf_token %}
+                          <input type="hidden" name="fase_id" value="{{ item.fase.pk }}">
+                          <input type="hidden" name="nuevo-tipo" value="{{ codigo }}">
+                          <div class="field">{{ bloque_general_form.nombre.label_tag }}{{ bloque_general_form.nombre }}</div>
+                          <div class="field">{{ bloque_general_form.descripcion.label_tag }}{{ bloque_general_form.descripcion }}</div>
+                          {% if codigo == "ACTIVIDAD" %}
+                            <div class="field">{{ form_actividad_nuevo.tipo_actor.label_tag }}{{ form_actividad_nuevo.tipo_actor }}</div>
+                            <div class="field">{{ form_actividad_nuevo.usuario.label_tag }}{{ form_actividad_nuevo.usuario }}</div>
+                            <div class="field">{{ form_actividad_nuevo.equipo.label_tag }}{{ form_actividad_nuevo.equipo }}</div>
+                            <label class="choice">{{ form_actividad_nuevo.permite_subtareas }} {{ form_actividad_nuevo.permite_subtareas.label_tag }}</label>
+                          {% elif codigo == "ESPERA" %}
+                            <div class="field">{{ form_espera_nuevo.modo.label_tag }}{{ form_espera_nuevo.modo }}</div>
+                            <div class="field">{{ form_espera_nuevo.duracion_valor.label_tag }}{{ form_espera_nuevo.duracion_valor }} {{ form_espera_nuevo.duracion_unidad }}</div>
+                            <div class="field">{{ form_espera_nuevo.fecha_objetivo.label_tag }}{{ form_espera_nuevo.fecha_objetivo }}</div>
+                          {% elif codigo == "APROBACION" %}
+                            <div class="field">{{ form_aprobacion_nuevo.modo.label_tag }}{{ form_aprobacion_nuevo.modo }}</div>
+                            <div class="field">{{ form_aprobacion_nuevo.politica.label_tag }}{{ form_aprobacion_nuevo.politica }}</div>
+                            {{ formset_participantes_nuevo.management_form }}
+                            {% for pform in formset_participantes_nuevo %}
+                              <div class="field">{{ pform.tipo }} {{ pform.usuario }} {{ pform.equipo }}</div>
+                            {% endfor %}
+                          {% endif %}
+                          <button type="submit" class="btn btn--primary">Agregar</button>
+                        </form>
+                      </div>
+                    </article>
+                  {% endfor %}
+                </div>
+              </div>
+            {% endif %}
+          </section>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="svc-panel">
+        {% include "catalogo/_ejecucion_bloques.html" %}
       </div>
     {% endif %}
-
-    {% if not editable_ejecucion %}
-      <p class="text-muted" style="margin-top: var(--space-3);">
-        {% if puede_ejecucion %}Estás viendo la versión activa, de solo lectura. Pulsa «Editar ejecución» para crear un borrador nuevo.
-        {% else %}Estás viendo la versión activa, de solo lectura. No tienes autorización para modificar flujos.{% endif %}
-      </p>
-    {% endif %}
-
-    {% include "catalogo/_ejecucion_bloques.html" %}
   {% endif %}
 </section>

@@ -1995,7 +1995,7 @@ class DisenadorTests(TestCase):
         respuesta = self._get("disenador")
         self.assertEqual(respuesta.status_code, 200)
         self.assertEqual(self._claves(respuesta), ["inicio", "servicios"])
-        self.assertContains(respuesta, reverse("catalogo:studio_crear"))
+        self.assertContains(respuesta, reverse("core:disenador_servicio_crear"))
         self.assertNotContains(respuesta, reverse("flujos:nuevo"))
         self.assertEqual(self._get("disenador_servicios").status_code, 200)
         self.assertEqual(self._get("disenador_flujos").status_code, 403)
@@ -2008,12 +2008,12 @@ class DisenadorTests(TestCase):
         self.assertEqual(self._claves(respuesta), ["inicio", "flujos"])
         self.assertContains(respuesta, "Atención estándar")
         self.assertContains(respuesta, reverse("flujos:lienzo", args=[flujo.pk]))  # abrir el flujo
-        self.assertContains(respuesta, reverse("workflows:detalle", args=[flujo.pk]))  # vista técnica
+        self.assertNotContains(respuesta, reverse("workflows:detalle", args=[flujo.pk]))  # sin vista tecnica
         self.assertNotContains(respuesta, reverse("flujos:nuevo"))  # sin "Nuevo flujo"
         self.assertEqual(self._get("disenador_servicios").status_code, 403)
-        self.assertNotContains(self._get("disenador"), reverse("catalogo:studio_crear"))
+        self.assertNotContains(self._get("disenador"), reverse("core:disenador_servicio_crear"))
 
-    def test_administrar_flujos_ve_nuevo_flujo_y_vista_tecnica(self):
+    def test_administrar_flujos_ve_nuevo_flujo_y_workspace_visual(self):
         self._con("workflows.administrar")
         self._flujo("Atención estándar")
         for nombre in ("disenador", "disenador_flujos"):
@@ -2054,7 +2054,9 @@ class DisenadorTests(TestCase):
         self.assertContains(respuesta, "Sin usar todavía")
         self.assertContains(respuesta, "Publicado · v1")
         self.assertContains(respuesta, "Sin publicar")
-        self.assertContains(respuesta, "Nueva versión en diseño")
+        self.assertContains(respuesta, "Borrador en diseño")
+        self.assertContains(respuesta, "Estructuras reutilizables para organizar cómo se realiza el trabajo.")
+        self.assertContains(respuesta, "Abrir")
 
     def test_la_lista_de_servicios_muestra_tipo_estado_y_flujo(self):
         self._con("catalogo.administrar")
@@ -2066,7 +2068,7 @@ class DisenadorTests(TestCase):
         self.assertContains(respuesta, "Flujo: Flujo de compras")
         self.assertContains(respuesta, "Sin flujo")
         self.assertContains(respuesta, "Un proceso necesita un flujo para poder publicarse.")
-        self.assertContains(respuesta, reverse("catalogo:studio", args=[con_flujo.pk]))
+        self.assertContains(respuesta, reverse("core:disenador_servicio", args=[con_flujo.pk]))
         self.assertContains(respuesta, "Borrador")
         self.assertContains(respuesta, "Publicado")
 
@@ -2097,8 +2099,8 @@ class DisenadorTests(TestCase):
         self.assertContains(respuesta, "Todavía no hay flujos. Crea el primero")
         self.assertContains(respuesta, "Todavía no hay servicios ni procesos")
         self.assertNotContains(respuesta, "Continúa donde lo dejaste")
-        self.assertContains(self._get("disenador_flujos"), "Todavía no hay flujos. Crea el primero")
-        self.assertContains(self._get("disenador_servicios"), "Todavía no hay servicios ni procesos")
+        self.assertContains(self._get("disenador_flujos"), "Crea el primer flujo para empezar")
+        self.assertContains(self._get("disenador_servicios"), "Aún no hay servicios ni procesos")
 
     def test_sin_flujos_publicados_quien_solo_consulta_no_recibe_invitacion_a_crear(self):
         self._con("workflows.consultar")

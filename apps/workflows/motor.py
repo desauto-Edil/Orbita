@@ -43,10 +43,13 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import datetime
+from types import SimpleNamespace
 
+from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.utils import timezone
 
+from apps.core.models import Equipo
 from apps.core.auditoria import registrar_evento, serializar
 from apps.core.models import RegistroAuditoria
 from apps.workflows.contexto import (
@@ -55,7 +58,7 @@ from apps.workflows.contexto import (
     registrar_resultado_etapa,
 )
 from apps.workflows.estrategias import ESTRATEGIAS_POR_TIPO, ResultadoEjecucion
-from apps.workflows.models import InstanciaEtapa, InstanciaWorkflow, WorkflowVersion
+from apps.workflows.models import InstanciaEtapa, InstanciaWorkflow, Workflow, WorkflowVersion
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +81,97 @@ class _PuntoContinuacion:
     instancia_etapa: InstanciaEtapa | None = None
     etapa_destino: object = None  # Etapa — sin importar la clase, evita un ciclo de import innecesario
     orden: int | None = None
+
+
+TIPO_ETAPA_POR_BLOQUE = {
+    "ACTIVIDAD": "TAREA",
+    "APROBACION": "APROBACION",
+    "ESPERA": "ESPERA",
+    "DECISION": "CONDICION",
+}
+
+
+class _TransicionesBloque:
+    def __init__(self, bloque):
+        self.bloque = bloque
+
+    def all(self):
+        return list(self.bloque.transiciones_salientes.all())
+
+    def first(self):
+        return self.bloque.transiciones_salientes.first()
+
+    def get(self, **kwargs):
+        return self.bloque.transiciones_salientes.get(**kwargs)
+
+
+class _EtapaDesdeBloque:
+    """Adaptador minimo para reutilizar las Strategies existentes."""
+
+    def __init__(self, bloque):
+        self.bloque = bloque
+        self.pk = bloque.pk
+        self.tipo = TIPO_ETAPA_POR_BLOQUE[bloque.tipo]
+        self.nombre = bloque.nombre
+        self.descripcion = bloque.descripcion
+        self.configuracion = bloque.configuracion or {}
+        self.transiciones_salientes = _TransicionesBloque(bloque)
+        self.permite_responsable_pendiente = True
+        if self.tipo == "TAREA":
+            self.configuracion_tarea = self._config_tarea()
+        if self.tipo == "APROBACION":
+            self.configuracion_aprobacion = self._config_aprobacion()
+
+    def _config_tarea(self):
+        cfg = self.configuracion or {}
+        usuario = None
+        equipo = None
+        if cfg.get("tipo_actor") == "USUARIO" and cfg.get("usuario_id"):
+            usuario = get_user_model().objects.get(pk=cfg["usuario_id"])
+        if cfg.get("tipo_actor") == "EQUIPO" and cfg.get("equipo_id"):
+            equipo = Equipo.objects.get(pk=cfg["equipo_id"])
+        return SimpleNamespace(
+            tipo_responsable=cfg.get("tipo_actor") or "",
+            usuario_responsable=usuario,
+            equipo_responsable=equipo,
+            permite_subtareas=bool(cfg.get("permite_subtareas")),
+        )
+
+    def _config_aprobacion(self):
+        cfg = self.configuracion or {}
+
+        class _Participantes:
+            def __init__(self, participantes):
+                self.participantes = participantes
+
+            def order_by(self, _campo):
+                return self.participantes
+
+        participantes = []
+        for idx, dato in enumerate(cfg.get("participantes") or [], start=1):
+            usuario = None
+            equipo = None
+            if dato.get("tipo") == "USUARIO" and dato.get("usuario_id"):
+                usuario = get_user_model().objects.get(pk=dato["usuario_id"])
+            if dato.get("tipo") == "EQUIPO" and dato.get("equipo_id"):
+                equipo = Equipo.objects.get(pk=dato["equipo_id"])
+            participantes.append(
+                SimpleNamespace(
+                    orden=idx,
+                    tipo_aprobador=dato.get("tipo"),
+                    usuario=usuario,
+                    equipo=equipo,
+                )
+            )
+        return SimpleNamespace(
+            modo=cfg.get("modo"),
+            politica=cfg.get("politica") or "",
+            participantes=_Participantes(participantes),
+        )
+
+
+def _definicion_ejecutable(instancia_etapa):
+    return instancia_etapa.etapa or _EtapaDesdeBloque(instancia_etapa.bloque_operativo)
 
 
 def _localizar_punto_continuacion(instancia):
@@ -108,6 +202,18 @@ def _localizar_punto_continuacion(instancia):
     ):
         return _PuntoContinuacion(tipo="RETOMAR", instancia_etapa=ultima)
 
+    if ultima.estado == InstanciaEtapa.Estado.COMPLETADA and ultima.transicion_bloque_tomada_id:
+        return _PuntoContinuacion(
+            tipo="CREAR",
+            etapa_destino=ultima.transicion_bloque_tomada.bloque_destino,
+            orden=ultima.orden + 1,
+        )
+
+    if ultima.estado == InstanciaEtapa.Estado.COMPLETADA and ultima.bloque_operativo_id:
+        siguiente = _siguiente_bloque_lineal(ultima.bloque_operativo)
+        if siguiente is not None:
+            return _PuntoContinuacion(tipo="CREAR", etapa_destino=siguiente, orden=ultima.orden + 1)
+
     if ultima.estado == InstanciaEtapa.Estado.COMPLETADA and ultima.transicion_tomada_id:
         return _PuntoContinuacion(
             tipo="CREAR",
@@ -126,6 +232,35 @@ def _resolver_transicion_saliente(etapa, resultado):
     if resultado.transicion_seleccionada is not None:
         return resultado.transicion_seleccionada
     return etapa.transiciones_salientes.first()
+
+
+def _siguiente_bloque_lineal(bloque):
+    siguiente = (
+        bloque.version.bloques.filter(fase=bloque.fase, orden__gt=bloque.orden)
+        .order_by("orden", "pk")
+        .first()
+    )
+    if siguiente is not None:
+        return siguiente
+    transicion_fase = bloque.fase.transiciones_salientes.order_by("prioridad", "pk").first()
+    if transicion_fase is None:
+        return None
+    return _primer_bloque_desde_fase(bloque.version, transicion_fase.fase_destino)
+
+
+def _primer_bloque_desde_fase(configuracion, fase, visitadas=None):
+    visitadas = set() if visitadas is None else set(visitadas)
+    if fase.pk in visitadas:
+        return None
+    visitadas.add(fase.pk)
+    bloque = configuracion.bloques.filter(fase=fase).order_by("orden", "pk").first()
+    if bloque is not None:
+        return bloque
+    for transicion in fase.transiciones_salientes.order_by("prioridad", "pk"):
+        bloque = _primer_bloque_desde_fase(configuracion, transicion.fase_destino, visitadas)
+        if bloque is not None:
+            return bloque
+    return None
 
 
 def _registrar_error(instancia, instancia_etapa, *, tipo, mensaje):
@@ -152,7 +287,7 @@ def _ejecutar_etapa(instancia, instancia_etapa):
     encadenando (la etapa se completó con `CONTINUAR`), `False` si debe
     detenerse (ESPERAR, COMPLETAR o ERROR: en los tres casos ya se dejó a
     la instancia en el estado correspondiente)."""
-    etapa = instancia_etapa.etapa
+    etapa = _definicion_ejecutable(instancia_etapa)
     estrategia = ESTRATEGIAS_POR_TIPO.get(etapa.tipo)
 
     instancia_etapa.estado = InstanciaEtapa.Estado.EN_EJECUCION
@@ -173,6 +308,7 @@ def _ejecutar_etapa(instancia, instancia_etapa):
         return False
 
     try:
+        instancia_etapa.definicion_ejecutable = etapa
         resultado = estrategia.ejecutar(instancia_etapa, instancia.contexto)
     except Exception as exc:  # noqa: BLE001 — error técnico inesperado; no debe tumbar el proceso.
         logger.exception("Error técnico ejecutando InstanciaEtapa %s", instancia_etapa.pk)
@@ -212,9 +348,14 @@ def _ejecutar_etapa(instancia, instancia_etapa):
     instancia_etapa.estado = InstanciaEtapa.Estado.COMPLETADA
     instancia_etapa.resultado = resultado.datos
     instancia_etapa.finalizada_en = timezone.now()
-    instancia_etapa.transicion_tomada = transicion
+    if instancia_etapa.bloque_operativo_id:
+        instancia_etapa.transicion_bloque_tomada = transicion
+        campos_transicion = "transicion_bloque_tomada"
+    else:
+        instancia_etapa.transicion_tomada = transicion
+        campos_transicion = "transicion_tomada"
     instancia_etapa.save(
-        update_fields=["estado", "resultado", "finalizada_en", "transicion_tomada", "actualizado_en"]
+        update_fields=["estado", "resultado", "finalizada_en", campos_transicion, "actualizado_en"]
     )
 
     if resultado.estado == ResultadoEjecucion.COMPLETAR:
@@ -252,12 +393,21 @@ def _avanzar_automaticamente(instancia):
             return instancia
 
         if punto.tipo == "CREAR":
-            instancia_etapa = InstanciaEtapa.objects.create(
-                instancia_workflow=instancia,
-                etapa=punto.etapa_destino,
-                orden=punto.orden,
-                estado=InstanciaEtapa.Estado.PENDIENTE,
-            )
+            if getattr(punto.etapa_destino, "_meta", None) is not None and punto.etapa_destino._meta.model_name == "bloqueoperativo":
+                instancia_etapa = InstanciaEtapa.objects.create(
+                    instancia_workflow=instancia,
+                    bloque_operativo=punto.etapa_destino,
+                    fase_workflow=punto.etapa_destino.fase,
+                    orden=punto.orden,
+                    estado=InstanciaEtapa.Estado.PENDIENTE,
+                )
+            else:
+                instancia_etapa = InstanciaEtapa.objects.create(
+                    instancia_workflow=instancia,
+                    etapa=punto.etapa_destino,
+                    orden=punto.orden,
+                    estado=InstanciaEtapa.Estado.PENDIENTE,
+                )
         else:  # "RETOMAR"
             instancia_etapa = punto.instancia_etapa
 
@@ -279,6 +429,15 @@ def iniciar_workflow(workflow, *, actor=None, origen=RegistroAuditoria.Origen.US
     version = workflow.version_activa
     if version is None or version.estado != WorkflowVersion.Estado.ACTIVA:
         raise ValueError("El workflow no tiene una versión activa para ejecutar.")
+
+    if workflow.modo == Workflow.Modo.PLANTILLA_FASES:
+        return _iniciar_workflow_por_configuracion(
+            workflow,
+            version,
+            actor=actor,
+            origen=origen,
+            datos_iniciales=datos_iniciales,
+        )
 
     inicio = version.etapas.filter(tipo="INICIO").first()
     if inicio is None:
@@ -309,6 +468,51 @@ def iniciar_workflow(workflow, *, actor=None, origen=RegistroAuditoria.Origen.US
         datos_nuevos=serializar(instancia),
     )
 
+    return _avanzar_automaticamente(instancia)
+
+
+def _iniciar_workflow_por_configuracion(workflow, version, *, actor=None, origen=RegistroAuditoria.Origen.USUARIO, datos_iniciales=None):
+    from apps.catalogo.models import ConfiguracionEjecucionVersion
+
+    datos_iniciales = datos_iniciales or {}
+    config_id = datos_iniciales.get("configuracion_ejecucion_version_id")
+    if not config_id:
+        raise ValueError("La plantilla de fases necesita una configuracion de ejecucion activa.")
+    configuracion = ConfiguracionEjecucionVersion.objects.get(pk=config_id)
+    if configuracion.workflow_version_id != version.pk:
+        raise ValueError("La configuracion de ejecucion no corresponde a la version activa del workflow.")
+    if configuracion.estado != ConfiguracionEjecucionVersion.Estado.ACTIVA:
+        raise ValueError("La configuracion de ejecucion no esta activa.")
+
+    fase_inicial = version.fases.filter(transiciones_entrantes__isnull=True).order_by("orden", "pk").first()
+    if fase_inicial is None:
+        raise ValueError("La version activa no tiene una fase inicial.")
+    bloque_inicial = _primer_bloque_desde_fase(configuracion, fase_inicial)
+    if bloque_inicial is None:
+        raise ValueError("La configuracion activa no tiene bloques operativos ejecutables.")
+
+    instancia = InstanciaWorkflow.objects.create(
+        workflow_version=version,
+        configuracion_ejecucion_version=configuracion,
+        estado=InstanciaWorkflow.Estado.EN_EJECUCION,
+        contexto=construir_contexto_inicial(datos_iniciales),
+        iniciado_por=actor,
+    )
+    InstanciaEtapa.objects.create(
+        instancia_workflow=instancia,
+        bloque_operativo=bloque_inicial,
+        fase_workflow=bloque_inicial.fase,
+        orden=1,
+        estado=InstanciaEtapa.Estado.PENDIENTE,
+    )
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.CREAR,
+        instancia=instancia,
+        origen=origen,
+        usuario=actor,
+        datos_anteriores=None,
+        datos_nuevos=serializar(instancia),
+    )
     return _avanzar_automaticamente(instancia)
 
 
@@ -353,8 +557,13 @@ def _completar_ejecucion_en_espera(instancia, ejecucion, *, transicion_seleccion
     un Ticket o una Gaceta."""
     ejecucion.estado = InstanciaEtapa.Estado.COMPLETADA
     ejecucion.finalizada_en = timezone.now()
-    ejecucion.transicion_tomada = transicion_seleccionada or ejecucion.etapa.transiciones_salientes.first()
-    ejecucion.save(update_fields=["estado", "finalizada_en", "transicion_tomada", "actualizado_en"])
+    if ejecucion.bloque_operativo_id:
+        ejecucion.transicion_bloque_tomada = transicion_seleccionada or ejecucion.bloque_operativo.transiciones_salientes.first()
+        campos = ["estado", "finalizada_en", "transicion_bloque_tomada", "actualizado_en"]
+    else:
+        ejecucion.transicion_tomada = transicion_seleccionada or ejecucion.etapa.transiciones_salientes.first()
+        campos = ["estado", "finalizada_en", "transicion_tomada", "actualizado_en"]
+    ejecucion.save(update_fields=campos)
 
     instancia.estado = InstanciaWorkflow.Estado.EN_EJECUCION
     instancia.save(update_fields=["estado", "actualizado_en"])
@@ -438,7 +647,7 @@ def continuar_espera_externa(instancia_etapa, *, motivo_espera, transicion_selec
             f"Motivo de espera inesperado: se esperaba {motivo_espera}, "
             f"la ejecución está en espera por {instancia_etapa.motivo_espera}."
         )
-    if transicion_seleccionada is not None and transicion_seleccionada.etapa_origen_id != instancia_etapa.etapa_id:
+    if transicion_seleccionada is not None and getattr(transicion_seleccionada, "bloque_origen_id", getattr(transicion_seleccionada, "etapa_origen_id", None)) not in (instancia_etapa.etapa_id, instancia_etapa.bloque_operativo_id):
         raise ValueError("transicion_seleccionada no pertenece a la etapa de esta ejecución.")
 
     return _completar_ejecucion_en_espera(instancia, instancia_etapa, transicion_seleccionada=transicion_seleccionada)
