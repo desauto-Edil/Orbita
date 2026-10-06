@@ -7,14 +7,14 @@
   la composición sin aparentar ser operativas ni inventar funcionalidad.
 {% endcomment %}
 <header class="app-header">
-  <a class="app-header__brand" href="{% url 'core:inicio' %}" aria-label="Órbita, ir al inicio">
-    <span class="app-header__brand-mark" aria-hidden="true">O</span>
-    <span class="app-header__brand-name">Órbita</span>
+  <a class="app-header__brand" href="{% url 'core:inicio' %}" aria-label="{{ sistema.nombre }}, ir al inicio">
+    {% include "layout/marca.html" %}
+    <span class="app-header__brand-name">{{ sistema.nombre }}</span>
   </a>
 
   <div class="app-header__search search" role="search" data-tooltip="Búsqueda: próximamente" data-tooltip-pos="bottom">
     <span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" %}</span>
-    <input class="search__input" type="search" placeholder="Buscar en Órbita" aria-label="Buscar en Órbita (próximamente)" disabled>
+    <input class="search__input" type="search" placeholder="Buscar en {{ sistema.nombre }}" aria-label="Buscar en {{ sistema.nombre }} (próximamente)" disabled>
   </div>
 
   <div class="app-header__spacer"></div>

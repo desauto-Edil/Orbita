@@ -1,0 +1,20 @@
+{% extends "configuracion/base.html" %}
+
+{% block config_subtitulo %}Administra quién usa {{ sistema.nombre }}, cómo se organiza y cómo se presenta.{% endblock %}
+
+{% block config_contenido %}
+  <section class="config-grid" aria-label="Secciones de Configuración">
+    {% for tarjeta in tarjetas %}
+      <a class="card card--interactive config-tile" href="{% url tarjeta.url_name %}">
+        <span class="config-tile__icon" aria-hidden="true">{% include "components/icon.html" with name=tarjeta.icono %}</span>
+        <span class="config-tile__body">
+          <span class="config-tile__title">{{ tarjeta.etiqueta }}</span>
+          <span class="config-tile__text">{{ tarjeta.descripcion }}</span>
+        </span>
+        {% if tarjeta.total is not None %}
+          <span class="config-tile__count"><strong>{{ tarjeta.total }}</strong> {{ tarjeta.unidad }}</span>
+        {% endif %}
+      </a>
+    {% endfor %}
+  </section>
+{% endblock %}

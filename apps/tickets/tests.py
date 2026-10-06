@@ -81,6 +81,7 @@ from apps.tickets.autorizacion import (
     puede_cerrar_ticket,
     puede_comentar_ticket,
     puede_consultar_ticket,
+    puede_iniciar_atencion,
     puede_reabrir_ticket,
     puede_reasignar,
     puede_resolver_ticket,
@@ -98,6 +99,7 @@ from apps.tickets.models import (
     ArchivoRespuestaCampo,
     ComentarioTicket,
     EntregaTicket,
+    ProrrogaTicket,
     ResultadoEntregaTicket,
     HistorialTicket,
     ResolucionTicket,
@@ -118,6 +120,7 @@ from apps.tickets.operaciones import (
     crear_borrador,
     eliminar_borrador,
     guardar_respuestas_borrador,
+    iniciar_atencion_ticket,
     radicar_ticket,
     reabrir_ticket,
     reasignar_ticket,
@@ -5155,3 +5158,3158 @@ class SolicitudControlesTests(_EscenarioSolicitudMixin, TestCase):
         self.assertEqual([o["valor"] for o in items["Tipo"]["opciones"] if o["seleccionada"]], ["b"])
         self.assertEqual(items["Canal"]["seleccion"], ["x", "z"])
         self.assertEqual([o["etiqueta"] for o in items["Área"]["opciones"] if o["seleccionada"]], ["Alfa"])
+
+
+# --- 4.A1 — compromiso temporal ------------------------------------------------
+
+
+def _bogota():
+    import zoneinfo
+
+    return timezone.override(zoneinfo.ZoneInfo("America/Bogota"))
+
+
+def _local(anio, mes, dia, hora=0, minuto=0):
+    import datetime
+    import zoneinfo
+
+    return datetime.datetime(anio, mes, dia, hora, minuto, tzinfo=zoneinfo.ZoneInfo("America/Bogota"))
+
+
+class TiemposCalculoTests(TestCase):
+    """`apps.tickets.tiempos` — hábil = lunes a viernes, sin festivos. Octubre
+    2026: 5 lun · 9 vie · 10 sáb · 11 dom · 12 lun · 13 mar."""
+
+    def setUp(self):
+        from apps.tickets import tiempos
+
+        self.t = tiempos
+        contexto = _bogota()
+        contexto.__enter__()
+        self.addCleanup(contexto.__exit__, None, None, None)
+
+    def _calc(self, desde, cantidad, unidad, habiles):
+        return self.t.calcular_fecha_objetivo(desde, cantidad, unidad, habiles)
+
+    def test_dias_habiles_dentro_de_la_semana(self):
+        self.assertEqual(self._calc(_local(2026, 10, 5, 9, 30), 3, "DIAS", True), _local(2026, 10, 8, 9, 30))
+
+    def test_dias_habiles_cruzan_el_fin_de_semana(self):
+        self.assertEqual(self._calc(_local(2026, 10, 9, 10), 1, "DIAS", True), _local(2026, 10, 12, 10))
+        self.assertEqual(self._calc(_local(2026, 10, 7, 16, 45), 3, "DIAS", True), _local(2026, 10, 12, 16, 45))
+        self.assertEqual(self._calc(_local(2026, 10, 5, 9), 5, "DIAS", True), _local(2026, 10, 12, 9))
+        self.assertEqual(self._calc(_local(2026, 10, 5, 9), 10, "DIAS", True), _local(2026, 10, 19, 9))
+
+    def test_inicio_en_fin_de_semana_cuenta_desde_el_lunes(self):
+        self.assertEqual(self._calc(_local(2026, 10, 10, 10), 1, "DIAS", True), _local(2026, 10, 12, 10))
+        self.assertEqual(self._calc(_local(2026, 10, 11, 15), 2, "DIAS", True), _local(2026, 10, 13, 15))
+
+    def test_dias_corridos_no_saltan_el_fin_de_semana(self):
+        self.assertEqual(self._calc(_local(2026, 10, 9, 10), 2, "DIAS", False), _local(2026, 10, 11, 10))
+
+    def test_horas_corridas_son_horas_reloj(self):
+        self.assertEqual(self._calc(_local(2026, 10, 9, 22), 5, "HORAS", False), _local(2026, 10, 10, 3))
+
+    def test_horas_habiles_no_corren_sabado_ni_domingo(self):
+        self.assertEqual(self._calc(_local(2026, 10, 5, 8), 4, "HORAS", True), _local(2026, 10, 5, 12))
+        self.assertEqual(self._calc(_local(2026, 10, 9, 22), 5, "HORAS", True), _local(2026, 10, 12, 3))
+        self.assertEqual(self._calc(_local(2026, 10, 9, 12), 48, "HORAS", True), _local(2026, 10, 13, 12))
+
+    def test_horas_habiles_con_inicio_en_fin_de_semana_arrancan_el_lunes(self):
+        self.assertEqual(self._calc(_local(2026, 10, 10, 10), 2, "HORAS", True), _local(2026, 10, 12, 2))
+        self.assertEqual(self._calc(_local(2026, 10, 11, 23), 1, "HORAS", True), _local(2026, 10, 12, 1))
+
+    def test_el_resultado_es_aware_y_en_la_zona_activa(self):
+        resultado = self._calc(_local(2026, 10, 9, 10), 1, "DIAS", True)
+        self.assertTrue(timezone.is_aware(resultado))
+        self.assertEqual(timezone.localtime(resultado).hour, 10)
+
+    def test_datos_invalidos_se_rechazan(self):
+        desde = _local(2026, 10, 5, 9)
+        for cantidad, unidad in ((0, "DIAS"), (-1, "DIAS"), (1000, "DIAS"), (True, "DIAS"), (1.5, "DIAS"), (3, "SEMANAS"), (3, "")):
+            with self.subTest(cantidad=cantidad, unidad=unidad), self.assertRaises(ValueError):
+                self.t.calcular_fecha_objetivo(desde, cantidad, unidad, True)
+        import datetime
+
+        with self.assertRaises(ValueError):
+            self.t.calcular_fecha_objetivo(datetime.datetime(2026, 10, 5, 9), 1, "DIAS", False)
+
+    def test_fecha_objetivo_de_sin_compromiso_es_none(self):
+        class _SinCompromiso:
+            tiempo_objetivo_cantidad = None
+
+        self.assertIsNone(self.t.fecha_objetivo_de(_SinCompromiso(), _local(2026, 10, 5, 9)))
+
+
+class CompromisoTemporalTicketTests(TestCase):
+    """4.A1 — snapshot del tiempo objetivo, fechas original/vigente y su
+    protección, para Servicio y Proceso."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user("tiempo41", password=CLAVE_PRUEBA)
+        self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
+            self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto", "obligatorio": True}]
+        )
+
+    def _configurar(self, servicio=None, **tiempo):
+        servicio = servicio or self.servicio
+        for campo, valor in tiempo.items():
+            setattr(servicio, f"tiempo_objetivo_{campo}", valor)
+        servicio.save()
+
+    def _radicado(self, servicio=None):
+        ticket = crear_borrador(self.usuario, servicio or self.servicio)
+        _completar_texto(ticket, self.usuario, self.campos)
+        radicar_ticket(ticket, self.usuario)
+        ticket.refresh_from_db()
+        return ticket
+
+    def test_servicio_sin_tiempo_radica_sin_fechas_objetivo(self):
+        ticket = self._radicado()
+        self.assertEqual(
+            (ticket.tiempo_objetivo_cantidad, ticket.tiempo_objetivo_unidad, ticket.tiempo_objetivo_habiles),
+            (None, "", False),
+        )
+        self.assertIsNone(ticket.fecha_objetivo_original)
+        self.assertIsNone(ticket.fecha_objetivo_vigente)
+
+    def test_el_borrador_congela_el_tiempo_del_servicio_y_aun_no_tiene_fechas(self):
+        self._configurar(cantidad=3, unidad="DIAS", habiles=True)
+        ticket = crear_borrador(self.usuario, self.servicio)
+        ticket.refresh_from_db()
+        self.assertEqual(
+            (ticket.tiempo_objetivo_cantidad, ticket.tiempo_objetivo_unidad, ticket.tiempo_objetivo_habiles),
+            (3, "DIAS", True),
+        )
+        self.assertIsNone(ticket.fecha_objetivo_original)
+        self.assertIsNone(ticket.fecha_objetivo_vigente)
+
+    def test_radicar_fija_original_y_vigente_con_el_calculo_de_dominio(self):
+        from apps.tickets import tiempos
+
+        self._configurar(cantidad=3, unidad="DIAS", habiles=True)
+        with _bogota():
+            ticket = self._radicado()
+            esperado = tiempos.calcular_fecha_objetivo(ticket.radicado_en, 3, "DIAS", True)
+        self.assertEqual(ticket.fecha_objetivo_original, esperado)
+        self.assertEqual(ticket.fecha_objetivo_vigente, esperado)
+        self.assertGreater(ticket.fecha_objetivo_original, ticket.radicado_en)
+
+    def test_horas_corridas_se_suman_al_instante_de_radicacion(self):
+        self._configurar(cantidad=4, unidad="HORAS", habiles=False)
+        ticket = self._radicado()
+        self.assertEqual(ticket.fecha_objetivo_original, ticket.radicado_en + timedelta(hours=4))
+
+    def test_cambiar_el_servicio_despues_no_altera_tickets_existentes(self):
+        self._configurar(cantidad=2, unidad="DIAS", habiles=True)
+        borrador = crear_borrador(self.usuario, self.servicio)
+        radicado = self._radicado()
+        original = radicado.fecha_objetivo_original
+        self._configurar(cantidad=30, unidad="HORAS", habiles=False)
+        borrador.refresh_from_db()
+        radicado.refresh_from_db()
+        self.assertEqual((borrador.tiempo_objetivo_cantidad, borrador.tiempo_objetivo_unidad), (2, "DIAS"))
+        self.assertEqual((radicado.tiempo_objetivo_cantidad, radicado.tiempo_objetivo_unidad), (2, "DIAS"))
+        self.assertEqual(radicado.fecha_objetivo_original, original)
+        # El borrador existente se radica con SU snapshot, no con el nuevo.
+        _completar_texto(borrador, self.usuario, self.campos)
+        radicar_ticket(borrador, self.usuario)
+        borrador.refresh_from_db()
+        self.assertEqual((borrador.tiempo_objetivo_cantidad, borrador.tiempo_objetivo_unidad), (2, "DIAS"))
+        self.assertIsNotNone(borrador.fecha_objetivo_original)
+
+    def test_quitar_el_tiempo_del_servicio_no_borra_el_de_un_ticket_existente(self):
+        self._configurar(cantidad=2, unidad="DIAS", habiles=False)
+        ticket = self._radicado()
+        self._configurar(cantidad=None, unidad="", habiles=False)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.tiempo_objetivo_cantidad, 2)
+        self.assertIsNotNone(ticket.fecha_objetivo_original)
+
+    def test_ticket_historico_sin_snapshot_no_se_recalcula_ni_inventa_fechas(self):
+        self._configurar(cantidad=3, unidad="DIAS", habiles=True)
+        ticket = crear_borrador(self.usuario, self.servicio)
+        # Simula un Ticket anterior a 4.A1: sin snapshot aunque el Servicio hoy tenga tiempo.
+        Ticket.objects.filter(pk=ticket.pk).update(
+            tiempo_objetivo_cantidad=None, tiempo_objetivo_unidad="", tiempo_objetivo_habiles=False
+        )
+        ticket.refresh_from_db()
+        _completar_texto(ticket, self.usuario, self.campos)
+        radicar_ticket(ticket, self.usuario)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+        self.assertIsNone(ticket.tiempo_objetivo_cantidad)
+        self.assertIsNone(ticket.fecha_objetivo_original)
+        self.assertIsNone(ticket.fecha_objetivo_vigente)
+        ticket.save()  # guardar un histórico sigue siendo posible
+        ticket.refresh_from_db()
+        self.assertIsNone(ticket.fecha_objetivo_original)
+
+    def test_la_fecha_original_no_se_puede_modificar_ni_borrar(self):
+        self._configurar(cantidad=3, unidad="DIAS", habiles=True)
+        ticket = self._radicado()
+        original = ticket.fecha_objetivo_original
+        ticket.fecha_objetivo_original = original + timedelta(days=1)
+        with self.assertRaises(ValidationError):
+            ticket.save()
+        ticket.fecha_objetivo_original = None
+        ticket.fecha_objetivo_vigente = None
+        with self.assertRaises(ValidationError):
+            ticket.save()
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.fecha_objetivo_original, original)
+
+    def test_solo_la_vigente_puede_moverse_y_la_original_se_conserva(self):
+        self._configurar(cantidad=3, unidad="DIAS", habiles=True)
+        ticket = self._radicado()
+        original = ticket.fecha_objetivo_original
+        ticket.fecha_objetivo_vigente = original + timedelta(days=2)
+        ticket.save()
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.fecha_objetivo_original, original)
+        self.assertEqual(ticket.fecha_objetivo_vigente, original + timedelta(days=2))
+
+    def test_el_snapshot_temporal_no_se_puede_modificar(self):
+        self._configurar(cantidad=3, unidad="DIAS", habiles=True)
+        ticket = crear_borrador(self.usuario, self.servicio)
+        for campo, valor in (
+            ("tiempo_objetivo_cantidad", 9), ("tiempo_objetivo_unidad", "HORAS"), ("tiempo_objetivo_habiles", False),
+        ):
+            with self.subTest(campo=campo):
+                ticket.refresh_from_db()
+                setattr(ticket, campo, valor)
+                with self.assertRaises(ValidationError):
+                    ticket.save()
+
+    def test_la_base_rechaza_fechas_incoherentes(self):
+        self._configurar(cantidad=3, unidad="DIAS", habiles=True)
+        ticket = self._radicado()
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Ticket.objects.filter(pk=ticket.pk).update(fecha_objetivo_vigente=None)
+        sin_compromiso = Ticket.objects.create(solicitante=self.usuario)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Ticket.objects.filter(pk=sin_compromiso.pk).update(
+                fecha_objetivo_original=timezone.now(), fecha_objetivo_vigente=timezone.now()
+            )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Ticket.objects.filter(pk=sin_compromiso.pk).update(tiempo_objetivo_cantidad=0, tiempo_objetivo_unidad="DIAS")
+
+    def test_un_proceso_congela_y_calcula_igual_que_un_servicio(self):
+        from apps.workflows.models import ConfiguracionEtapaTarea, Etapa, TransicionEtapa, Workflow, WorkflowVersion
+        from apps.workflows.versionamiento import activar_version as activar_workflow
+
+        workflow = Workflow.objects.create(nombre="Ejecución 4.A1")
+        version = WorkflowVersion.objects.create(workflow=workflow, numero=1)
+        inicio = Etapa.objects.create(version=version, tipo="INICIO", nombre="Inicio")
+        tarea = Etapa.objects.create(version=version, tipo="TAREA", nombre="Trabajar")
+        fin = Etapa.objects.create(version=version, tipo="FIN", nombre="Fin")
+        ConfiguracionEtapaTarea.objects.create(etapa=tarea)
+        TransicionEtapa.objects.create(etapa_origen=inicio, etapa_destino=tarea)
+        TransicionEtapa.objects.create(etapa_origen=tarea, etapa_destino=fin)
+        activar_workflow(workflow, version, self.usuario)
+        self.servicio.tipo = Servicio.Tipo.PROCESO
+        self.servicio.workflow = workflow
+        self._configurar(cantidad=2, unidad="DIAS", habiles=True)
+        ticket = self._radicado()
+        self.assertEqual(ticket.tipo, "PROCESO")
+        self.assertEqual((ticket.tiempo_objetivo_cantidad, ticket.tiempo_objetivo_unidad), (2, "DIAS"))
+        self.assertTrue(ticket.tiempo_objetivo_habiles)
+        self.assertIsNotNone(ticket.fecha_objetivo_original)
+        self.assertEqual(ticket.fecha_objetivo_original, ticket.fecha_objetivo_vigente)
+
+
+# --- 4.A2 — prórrogas de la fecha objetivo -------------------------------------
+
+
+class _EscenarioProrrogaMixin:
+    """Servicio con tiempo objetivo (5 días corridos) y política de prórroga, y un
+    Ticket EN_ATENCION: responsable individual + un compañero de su equipo; un
+    gestor con `tickets.atender` GLOBAL que NO es responsable del ticket; un
+    solicitante y un ajeno."""
+
+    def _preparar_prorroga(self, politica="SIN_APROBACION", aprobador="usuario", tiempo=True):
+        self.solicitante_p = Usuario.objects.create_user("solicitante_p", password=CLAVE_PRUEBA)
+        self.responsable_p = Usuario.objects.create_user("responsable_p", password=CLAVE_PRUEBA)
+        self.companero_p = Usuario.objects.create_user("companero_p", password=CLAVE_PRUEBA)
+        self.gestor_p = Usuario.objects.create_user("gestor_p", password=CLAVE_PRUEBA)
+        self.ajeno_p = Usuario.objects.create_user("ajeno_p", password=CLAVE_PRUEBA)
+        self.aprobador_p = Usuario.objects.create_user("aprobador_p", password=CLAVE_PRUEBA)
+        self.miembro_aprobador_p = Usuario.objects.create_user("miembro_aprobador_p", password=CLAVE_PRUEBA)
+        self.equipo_p = Equipo.objects.create(nombre="Equipo prórroga")
+        self.equipo_aprobador_p = Equipo.objects.create(nombre="Equipo aprobador prórroga")
+        MiembroEquipo.objects.create(equipo=self.equipo_aprobador_p, usuario=self.miembro_aprobador_p)
+        for usuario in (self.responsable_p, self.companero_p):
+            MiembroEquipo.objects.create(equipo=self.equipo_p, usuario=usuario)
+            _otorgar_tickets_atender(usuario)
+        _otorgar_tickets_atender(self.gestor_p)
+
+        self.servicio_p, _, _ = _crear_servicio_con_formulario(self.solicitante_p, [])
+        self._configurar_servicio_p(politica=politica, aprobador=aprobador, tiempo=tiempo)
+        self.ticket_p = crear_borrador(self.solicitante_p, self.servicio_p)
+        radicar_ticket(self.ticket_p, self.solicitante_p)
+        self.ticket_p = asignar_ticket(self.ticket_p, self.responsable_p, equipo=self.equipo_p)
+        self.ticket_p = tomar_ticket(self.ticket_p, self.responsable_p)
+
+    def _configurar_servicio_p(self, *, politica, aprobador="usuario", tiempo=True):
+        Servicio.objects.filter(pk=self.servicio_p.pk).update(
+            tiempo_objetivo_cantidad=5 if tiempo else None,
+            tiempo_objetivo_unidad="DIAS" if tiempo else "",
+            tiempo_objetivo_habiles=False,
+            politica_prorroga=politica,
+            prorroga_aprobador_usuario=self.aprobador_p if politica == "CON_APROBACION" and aprobador == "usuario" else None,
+            prorroga_aprobador_equipo=(
+                self.equipo_aprobador_p if politica == "CON_APROBACION" and aprobador == "equipo" else None
+            ),
+        )
+        self.servicio_p.refresh_from_db()
+
+    def _ticket(self):
+        return Ticket.objects.get(pk=self.ticket_p.pk)
+
+    def _nueva_fecha(self, dias=3, base=None):
+        return (base or self._ticket().fecha_objetivo_vigente) + timedelta(days=dias)
+
+    def _solicitar(self, actor=None, dias=3, motivo="Necesito más tiempo para terminar"):
+        from apps.tickets import prorrogas
+
+        return prorrogas.solicitar_prorroga(
+            self._ticket(), actor or self.responsable_p, nueva_fecha=self._nueva_fecha(dias), motivo=motivo
+        )
+
+    def _aprobacion(self, prorroga):
+        return prorroga.esquema_aprobacion.participaciones.get()
+
+    def _resolver(self, prorroga, actor=None, decision="APROBADA", observacion=""):
+        from apps.tickets import prorrogas
+
+        return prorrogas.resolver_prorroga_por_aprobacion(
+            self._aprobacion(prorroga), actor or self.aprobador_p, decision=decision, observacion=observacion
+        )
+
+
+class ProrrogaSnapshotTests(_EscenarioProrrogaMixin, TestCase):
+    def test_el_ticket_congela_politica_y_aprobador_al_crear_el_borrador(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+        ticket = self._ticket()
+        self.assertEqual(ticket.prorroga_politica, "CON_APROBACION")
+        self.assertEqual(ticket.prorroga_aprobador_usuario_id, self.aprobador_p.pk)
+        self.assertIsNone(ticket.prorroga_aprobador_equipo_id)
+
+    def test_cambiar_el_servicio_despues_no_altera_tickets_existentes(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+        self._configurar_servicio_p(politica="NO_PERMITE")
+        ticket = self._ticket()
+        self.assertEqual(ticket.prorroga_politica, "CON_APROBACION")
+        self.assertEqual(ticket.prorroga_aprobador_usuario_id, self.aprobador_p.pk)
+        # ...y sigue pudiendo pedir prórroga con la política con que nació.
+        self.assertEqual(self._solicitar().estado, "PENDIENTE")
+
+    def test_un_servicio_sin_politica_deja_el_ticket_sin_politica_y_no_permite_prorrogas(self):
+        from apps.tickets.autorizacion import motivo_no_elegible_para_prorroga
+
+        self._preparar_prorroga(politica="")
+        self.assertEqual(self._ticket().prorroga_politica, "")
+        self.assertIn("no permite prórrogas", motivo_no_elegible_para_prorroga(self._ticket()))
+
+    def test_la_politica_congelada_no_se_puede_modificar(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        ticket = self._ticket()
+        ticket.prorroga_politica = "NO_PERMITE"
+        with self.assertRaises(ValidationError):
+            ticket.save()
+        ticket.refresh_from_db()
+        ticket.prorroga_aprobador_usuario = self.aprobador_p
+        with self.assertRaises(ValidationError):
+            ticket.save()
+
+    def test_la_base_rechaza_politicas_incoherentes_en_el_ticket(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        for cambios in (
+            {"prorroga_politica": "CON_APROBACION"},
+            {"prorroga_politica": "SIN_APROBACION", "prorroga_aprobador_usuario": self.aprobador_p},
+            {
+                "prorroga_politica": "CON_APROBACION",
+                "prorroga_aprobador_usuario": self.aprobador_p, "prorroga_aprobador_equipo": self.equipo_aprobador_p,
+            },
+        ):
+            with self.subTest(cambios=cambios), self.assertRaises(IntegrityError), transaction.atomic():
+                Ticket.objects.filter(pk=self.ticket_p.pk).update(**cambios)
+
+    def test_ticket_historico_sin_politica_sigue_funcionando(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        Ticket.objects.filter(pk=self.ticket_p.pk).update(prorroga_politica="")
+        ticket = self._ticket()
+        ticket.save()  # guardar un histórico sigue siendo posible
+        self.assertEqual(ticket.prorrogas.count(), 0)
+        with self.assertRaises(ValidationError):
+            self._solicitar()
+
+
+class SolicitarProrrogaTests(_EscenarioProrrogaMixin, TestCase):
+    """Reglas de solicitud con política SIN_APROBACION (la más simple)."""
+
+    def setUp(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+
+    def test_el_responsable_solicita_y_se_aplica_sin_tocar_la_original(self):
+        antes = self._ticket()
+        prorroga = self._solicitar(dias=3)
+        despues = self._ticket()
+        self.assertEqual(prorroga.estado, ProrrogaTicket.Estado.APROBADA)
+        self.assertEqual(prorroga.politica, "SIN_APROBACION")
+        self.assertEqual(prorroga.numero, 1)
+        self.assertIsNone(prorroga.resuelta_por)
+        self.assertIsNotNone(prorroga.resuelta_en)
+        self.assertIsNone(prorroga.esquema_aprobacion)
+        self.assertEqual(prorroga.fecha_objetivo_vigente_al_solicitar, antes.fecha_objetivo_vigente)
+        self.assertEqual(despues.fecha_objetivo_original, antes.fecha_objetivo_original)
+        self.assertEqual(despues.fecha_objetivo_vigente, antes.fecha_objetivo_vigente + timedelta(days=3))
+
+    def test_un_miembro_del_equipo_responsable_tambien_puede(self):
+        prorroga = self._solicitar(actor=self.companero_p)
+        self.assertEqual(prorroga.solicitada_por, self.companero_p)
+
+    def test_quien_no_atiende_el_ticket_no_puede(self):
+        from apps.tickets import prorrogas
+
+        for usuario in (self.solicitante_p, self.ajeno_p, self.gestor_p):
+            with self.subTest(usuario=usuario.username), self.assertRaises(PermissionDenied):
+                prorrogas.solicitar_prorroga(
+                    self._ticket(), usuario, nueva_fecha=self._nueva_fecha(), motivo="Quiero más tiempo"
+                )
+        self.assertEqual(ProrrogaTicket.objects.count(), 0)
+
+    def test_solo_se_solicita_con_el_ticket_en_atencion(self):
+        for estado in (
+            Ticket.Estado.RADICADO, Ticket.Estado.RESUELTO, Ticket.Estado.CERRADO, Ticket.Estado.CANCELADO
+        ):
+            with self.subTest(estado=estado):
+                Ticket.objects.filter(pk=self.ticket_p.pk).update(estado=estado)
+                with self.assertRaises(ValidationError) as contexto:
+                    self._solicitar()
+                self.assertIn("en atención", contexto.exception.messages[0])
+        self.assertEqual(ProrrogaTicket.objects.count(), 0)
+
+    def test_un_ticket_sin_compromiso_temporal_no_admite_prorroga(self):
+        Ticket.objects.filter(pk=self.ticket_p.pk).update(
+            fecha_objetivo_original=None, fecha_objetivo_vigente=None,
+            tiempo_objetivo_cantidad=None, tiempo_objetivo_unidad="",
+        )
+        with self.assertRaises(ValidationError) as contexto:
+            from apps.tickets import prorrogas
+
+            prorrogas.solicitar_prorroga(
+                self._ticket(), self.responsable_p, nueva_fecha=timezone.now() + timedelta(days=9), motivo="Más tiempo"
+            )
+        self.assertIn("fecha objetivo", contexto.exception.messages[0])
+
+    def test_la_politica_no_permite_bloquea(self):
+        for politica in ("NO_PERMITE", ""):
+            with self.subTest(politica=politica):
+                Ticket.objects.filter(pk=self.ticket_p.pk).update(prorroga_politica=politica)
+                with self.assertRaises(ValidationError):
+                    self._solicitar()
+
+    def test_la_nueva_fecha_debe_ser_posterior_a_la_vigente(self):
+        from apps.tickets import prorrogas
+
+        vigente = self._ticket().fecha_objetivo_vigente
+        for nueva in (vigente, vigente - timedelta(hours=1), timezone.now() - timedelta(days=30)):
+            with self.subTest(nueva=nueva), self.assertRaises(ValidationError):
+                prorrogas.solicitar_prorroga(self._ticket(), self.responsable_p, nueva_fecha=nueva, motivo="Más tiempo")
+        with self.assertRaises(ValidationError):
+            prorrogas.solicitar_prorroga(
+                self._ticket(), self.responsable_p, nueva_fecha=datetime_ingenua(), motivo="Más tiempo"
+            )
+        with self.assertRaises(ValidationError):
+            prorrogas.solicitar_prorroga(self._ticket(), self.responsable_p, nueva_fecha=None, motivo="Más tiempo")
+        self.assertEqual(self._ticket().fecha_objetivo_vigente, vigente)
+
+    def test_el_motivo_es_obligatorio(self):
+        for motivo in ("", "   ", None):
+            with self.subTest(motivo=motivo), self.assertRaises(ValidationError):
+                self._solicitar(motivo=motivo)
+
+    def test_servicio_sin_workflow_tambien_admite_prorroga(self):
+        self.assertIsNone(self.servicio_p.workflow_id)
+        self.assertIsNone(self._ticket().instancia_workflow_id)
+        self.assertEqual(self._solicitar().estado, "APROBADA")
+
+    def test_proceso_funciona_igual_que_servicio(self):
+        from apps.workflows.models import ConfiguracionEtapaTarea, Etapa, TransicionEtapa, Workflow, WorkflowVersion
+        from apps.workflows.versionamiento import activar_version as activar_workflow
+
+        workflow = Workflow.objects.create(nombre="Ejecución prórroga")
+        version = WorkflowVersion.objects.create(workflow=workflow, numero=1)
+        inicio = Etapa.objects.create(version=version, tipo="INICIO", nombre="Inicio")
+        tarea = Etapa.objects.create(version=version, tipo="TAREA", nombre="Trabajar")
+        fin = Etapa.objects.create(version=version, tipo="FIN", nombre="Fin")
+        ConfiguracionEtapaTarea.objects.create(etapa=tarea)
+        TransicionEtapa.objects.create(etapa_origen=inicio, etapa_destino=tarea)
+        TransicionEtapa.objects.create(etapa_origen=tarea, etapa_destino=fin)
+        activar_workflow(workflow, version, self.solicitante_p)
+        Servicio.objects.filter(pk=self.servicio_p.pk).update(tipo="PROCESO", workflow=workflow)
+        ticket = crear_borrador(self.solicitante_p, Servicio.objects.get(pk=self.servicio_p.pk))
+        radicar_ticket(ticket, self.solicitante_p)
+        ticket = asignar_ticket(ticket, self.responsable_p, equipo=self.equipo_p)
+        ticket = tomar_ticket(ticket, self.responsable_p)
+        self.assertEqual(ticket.tipo, "PROCESO")
+        from apps.tickets import prorrogas
+
+        prorroga = prorrogas.solicitar_prorroga(
+            Ticket.objects.get(pk=ticket.pk), self.responsable_p,
+            nueva_fecha=ticket.fecha_objetivo_vigente + timedelta(days=2), motivo="Proceso largo",
+        )
+        self.assertEqual(prorroga.estado, "APROBADA")
+        self.assertEqual(
+            Ticket.objects.get(pk=ticket.pk).fecha_objetivo_vigente, ticket.fecha_objetivo_vigente + timedelta(days=2)
+        )
+
+
+def datetime_ingenua():
+    import datetime
+
+    return datetime.datetime(2099, 1, 1, 9, 0)
+
+
+class ProrrogaConAprobacionTests(_EscenarioProrrogaMixin, TestCase):
+    def setUp(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+
+    def test_queda_pendiente_sin_mover_la_fecha_y_crea_la_aprobacion_del_aprobador(self):
+        antes = self._ticket()
+        prorroga = self._solicitar()
+        despues = self._ticket()
+        self.assertEqual(prorroga.estado, "PENDIENTE")
+        self.assertIsNone(prorroga.resuelta_en)
+        self.assertEqual(despues.fecha_objetivo_vigente, antes.fecha_objetivo_vigente)
+        aprobacion = self._aprobacion(prorroga)
+        self.assertEqual(aprobacion.estado, "PENDIENTE")
+        self.assertEqual(aprobacion.aprobador_usuario, self.aprobador_p)
+        self.assertEqual(prorroga.esquema_aprobacion.modo, "SECUENCIAL")
+
+    def test_no_hay_una_segunda_pendiente(self):
+        self._solicitar()
+        with self.assertRaises(ValidationError) as contexto:
+            self._solicitar(dias=6)
+        self.assertIn("pendiente", contexto.exception.messages[0])
+        self.assertEqual(ProrrogaTicket.objects.filter(ticket=self.ticket_p).count(), 1)
+
+    def test_aprobar_actualiza_solo_la_vigente(self):
+        antes = self._ticket()
+        prorroga = self._solicitar(dias=3)
+        resuelta = self._resolver(prorroga, observacion="De acuerdo")
+        despues = self._ticket()
+        self.assertEqual(resuelta.estado, "APROBADA")
+        self.assertEqual(resuelta.resuelta_por, self.aprobador_p)
+        self.assertEqual(resuelta.observaciones_resolucion, "De acuerdo")
+        self.assertEqual(despues.fecha_objetivo_vigente, antes.fecha_objetivo_vigente + timedelta(days=3))
+        self.assertEqual(despues.fecha_objetivo_original, antes.fecha_objetivo_original)
+        self.assertEqual(self._aprobacion(prorroga).estado, "APROBADA")
+        from apps.aprobaciones.models import EsquemaAprobacion
+
+        self.assertEqual(EsquemaAprobacion.objects.get(pk=prorroga.esquema_aprobacion_id).resultado, "APROBADA")
+
+    def test_rechazar_no_mueve_la_fecha_y_exige_observacion(self):
+        antes = self._ticket()
+        prorroga = self._solicitar()
+        with self.assertRaises(ValidationError):
+            self._resolver(prorroga, decision="RECHAZADA", observacion="")
+        self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "PENDIENTE")
+        resuelta = self._resolver(prorroga, decision="RECHAZADA", observacion="No hay margen")
+        self.assertEqual(resuelta.estado, "RECHAZADA")
+        self.assertEqual(resuelta.resuelta_por, self.aprobador_p)
+        self.assertEqual(self._ticket().fecha_objetivo_vigente, antes.fecha_objetivo_vigente)
+        self.assertEqual(self._ticket().fecha_objetivo_original, antes.fecha_objetivo_original)
+
+    def test_devolver_no_existe_para_una_prorroga(self):
+        prorroga = self._solicitar()
+        with self.assertRaises(ValidationError):
+            self._resolver(prorroga, decision="DEVUELTA", observacion="Ajusta")
+        self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "PENDIENTE")
+        self.assertEqual(self._aprobacion(prorroga).estado, "PENDIENTE")
+
+    def test_una_segunda_resolucion_se_rechaza_claramente(self):
+        prorroga = self._solicitar()
+        self._resolver(prorroga)
+        vigente = self._ticket().fecha_objetivo_vigente
+        for decision in ("APROBADA", "RECHAZADA"):
+            with self.subTest(decision=decision), self.assertRaises(ValidationError) as contexto:
+                self._resolver(prorroga, decision=decision, observacion="otra vez")
+            self.assertIn("ya fue resuelta", contexto.exception.messages[0])
+        self.assertEqual(self._ticket().fecha_objetivo_vigente, vigente)
+
+    def test_solo_el_aprobador_designado_decide(self):
+        from apps.tickets import prorrogas
+
+        prorroga = self._solicitar()
+        for usuario in (self.responsable_p, self.solicitante_p, self.ajeno_p, self.gestor_p):
+            with self.subTest(usuario=usuario.username), self.assertRaises(PermissionDenied):
+                prorrogas.resolver_prorroga_por_aprobacion(
+                    self._aprobacion(prorroga), usuario, decision="APROBADA", observacion=""
+                )
+        self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "PENDIENTE")
+
+    def test_un_equipo_aprobador_lo_resuelve_cualquier_miembro_activo(self):
+        self._configurar_servicio_p(politica="CON_APROBACION", aprobador="equipo")
+        ticket = crear_borrador(self.solicitante_p, self.servicio_p)
+        radicar_ticket(ticket, self.solicitante_p)
+        ticket = asignar_ticket(ticket, self.responsable_p, equipo=self.equipo_p)
+        ticket = tomar_ticket(ticket, self.responsable_p)
+        from apps.tickets import prorrogas
+
+        prorroga = prorrogas.solicitar_prorroga(
+            Ticket.objects.get(pk=ticket.pk), self.responsable_p,
+            nueva_fecha=ticket.fecha_objetivo_vigente + timedelta(days=2), motivo="Más tiempo",
+        )
+        aprobacion = prorroga.esquema_aprobacion.participaciones.get()
+        self.assertEqual(aprobacion.aprobador_equipo, self.equipo_aprobador_p)
+        resuelta = prorrogas.resolver_prorroga_por_aprobacion(
+            aprobacion, self.miembro_aprobador_p, decision="APROBADA", observacion=""
+        )
+        self.assertEqual(resuelta.resuelta_por, self.miembro_aprobador_p)
+
+    def test_aprobar_exige_que_el_ticket_siga_en_atencion_pero_rechazar_siempre_se_puede(self):
+        prorroga = self._solicitar()
+        Ticket.objects.filter(pk=self.ticket_p.pk).update(estado=Ticket.Estado.RESUELTO)
+        vigente = self._ticket().fecha_objetivo_vigente
+        with self.assertRaises(ValidationError) as contexto:
+            self._resolver(prorroga, decision="APROBADA")
+        self.assertIn("ya no está en atención", contexto.exception.messages[0])
+        self.assertEqual(self._ticket().fecha_objetivo_vigente, vigente)
+        self.assertEqual(self._resolver(prorroga, decision="RECHAZADA", observacion="Ya se resolvió").estado, "RECHAZADA")
+
+    def test_la_prorroga_no_se_aprueba_si_la_fecha_ya_no_es_posterior(self):
+        prorroga = self._solicitar(dias=1)
+        Ticket.objects.filter(pk=self.ticket_p.pk).update(
+            fecha_objetivo_vigente=prorroga.nueva_fecha_solicitada + timedelta(days=1)
+        )
+        with self.assertRaises(ValidationError):
+            self._resolver(prorroga)
+
+    def test_aprobar_por_la_pantalla_de_aprobaciones_aplica_la_nueva_fecha(self):
+        prorroga = self._solicitar(dias=3)
+        antes = self._ticket()
+        aprobacion = self._aprobacion(prorroga)
+        self.client.login(username="aprobador_p", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("aprobaciones:detalle", args=[aprobacion.pk]))
+        self.assertContains(respuesta, "Prórroga #1")
+        self.assertContains(respuesta, "Necesito más tiempo para terminar")
+        self.assertNotContains(respuesta, "Devolver")
+        respuesta = self.client.post(
+            reverse("aprobaciones:decidir", args=[aprobacion.pk]), {"decision": "APROBADA", "observacion": ""}
+        )
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "APROBADA")
+        self.assertEqual(self._ticket().fecha_objetivo_vigente, antes.fecha_objetivo_vigente + timedelta(days=3))
+
+    def test_devolver_por_la_pantalla_se_rechaza_sin_cambios(self):
+        prorroga = self._solicitar()
+        aprobacion = self._aprobacion(prorroga)
+        self.client.login(username="aprobador_p", password=CLAVE_PRUEBA)
+        self.client.post(reverse("aprobaciones:decidir", args=[aprobacion.pk]), {"decision": "DEVUELTA", "observacion": "x"})
+        self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "PENDIENTE")
+
+    def test_rechazar_por_la_pantalla_deja_la_fecha_intacta(self):
+        prorroga = self._solicitar()
+        antes = self._ticket()
+        self.client.login(username="aprobador_p", password=CLAVE_PRUEBA)
+        self.client.post(
+            reverse("aprobaciones:decidir", args=[self._aprobacion(prorroga).pk]),
+            {"decision": "RECHAZADA", "observacion": "Sin margen"},
+        )
+        resuelta = ProrrogaTicket.objects.get(pk=prorroga.pk)
+        self.assertEqual((resuelta.estado, resuelta.observaciones_resolucion), ("RECHAZADA", "Sin margen"))
+        self.assertEqual(self._ticket().fecha_objetivo_vigente, antes.fecha_objetivo_vigente)
+
+    def test_quien_no_es_el_aprobador_no_puede_decidir_por_la_pantalla(self):
+        prorroga = self._solicitar()
+        self.client.login(username="ajeno_p", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("aprobaciones:decidir", args=[self._aprobacion(prorroga).pk]),
+            {"decision": "APROBADA", "observacion": ""},
+        )
+        self.assertEqual(respuesta.status_code, 403)
+        self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "PENDIENTE")
+
+    def test_aprobaciones_ajenas_a_prorroga_siguen_funcionando_igual(self):
+        # Una aprobación independiente (sin prórroga ni workflow) conserva su contrato.
+        from apps.aprobaciones.operaciones import crear_esquema_aprobacion, resolver_aprobacion
+
+        esquema = crear_esquema_aprobacion(modo="SECUENCIAL", participantes=[("USUARIO", self.aprobador_p)])
+        aprobacion = esquema.participaciones.get()
+        self.client.login(username="aprobador_p", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("aprobaciones:detalle", args=[aprobacion.pk]))
+        self.assertContains(respuesta, "Devolver")
+        self.assertNotContains(respuesta, "Prórroga #")
+        _, esquema = resolver_aprobacion(aprobacion, self.aprobador_p, decision="DEVUELTA", observacion="x")
+        self.assertEqual(esquema.resultado, "DEVUELTA")
+
+
+class CancelarProrrogaTests(_EscenarioProrrogaMixin, TestCase):
+    def setUp(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+
+    def _cancelar(self, prorroga, actor=None, motivo=""):
+        from apps.tickets import prorrogas
+
+        return prorrogas.cancelar_prorroga(prorroga, actor or self.responsable_p, motivo=motivo)
+
+    def test_el_solicitante_cancela_una_pendiente_sin_mover_la_fecha(self):
+        from apps.aprobaciones.consultas import aprobaciones_pendientes_para
+
+        antes = self._ticket()
+        prorroga = self._solicitar()
+        self.assertEqual(aprobaciones_pendientes_para(self.aprobador_p).count(), 1)
+        cancelada = self._cancelar(prorroga, motivo="Ya no la necesito")
+        self.assertEqual(cancelada.estado, "CANCELADA")
+        self.assertEqual(cancelada.resuelta_por, self.responsable_p)
+        self.assertIsNotNone(cancelada.resuelta_en)
+        self.assertEqual(cancelada.observaciones_resolucion, "Ya no la necesito")
+        self.assertEqual(self._ticket().fecha_objetivo_vigente, antes.fecha_objetivo_vigente)
+        # La aprobación se retira: el aprobador ya no la ve ni puede decidirla.
+        self.assertEqual(aprobaciones_pendientes_para(self.aprobador_p).count(), 0)
+        self.assertEqual(self._aprobacion(prorroga).estado, "NO_REQUERIDA")
+        with self.assertRaises(ValidationError):
+            self._resolver(prorroga)
+
+    def test_no_se_cancela_una_prorroga_ya_resuelta(self):
+        aprobada = self._solicitar()
+        self._resolver(aprobada)
+        with self.assertRaises(ValidationError):
+            self._cancelar(aprobada)
+        rechazada = self._solicitar(dias=2)
+        self._resolver(rechazada, decision="RECHAZADA", observacion="No")
+        with self.assertRaises(ValidationError):
+            self._cancelar(rechazada)
+        cancelada = self._solicitar(dias=2)
+        self._cancelar(cancelada)
+        with self.assertRaises(ValidationError):
+            self._cancelar(cancelada)
+
+    def test_solo_quien_la_solicito_puede_cancelar(self):
+        prorroga = self._solicitar()
+        for usuario in (self.companero_p, self.aprobador_p, self.solicitante_p, self.gestor_p, self.ajeno_p):
+            with self.subTest(usuario=usuario.username), self.assertRaises(PermissionDenied):
+                self._cancelar(prorroga, actor=usuario)
+        self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "PENDIENTE")
+
+    def test_despues_de_cancelar_se_puede_solicitar_otra(self):
+        self._cancelar(self._solicitar())
+        segunda = self._solicitar(dias=4)
+        self.assertEqual((segunda.numero, segunda.estado), (2, "PENDIENTE"))
+
+
+class MultiplesProrrogasTests(_EscenarioProrrogaMixin, TestCase):
+    def test_dos_prorrogas_aprobadas_conservan_original_y_historial(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        original = self._ticket().fecha_objetivo_original
+        primera = self._solicitar(dias=3)
+        segunda = self._solicitar(dias=3)
+        ticket = self._ticket()
+        self.assertEqual(ticket.fecha_objetivo_original, original)
+        self.assertEqual(ticket.fecha_objetivo_vigente, original + timedelta(days=6))
+        self.assertEqual([p.numero for p in ticket.prorrogas.all()], [1, 2])
+        # La segunda toma como base la vigente de entonces, no la original.
+        self.assertEqual(primera.fecha_objetivo_vigente_al_solicitar, original)
+        self.assertEqual(segunda.fecha_objetivo_vigente_al_solicitar, original + timedelta(days=3))
+        self.assertEqual(segunda.nueva_fecha_solicitada, original + timedelta(days=6))
+
+    def test_la_segunda_debe_superar_la_vigente_actual_no_la_original(self):
+        from apps.tickets import prorrogas
+
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        original = self._ticket().fecha_objetivo_original
+        self._solicitar(dias=5)
+        with self.assertRaises(ValidationError):
+            prorrogas.solicitar_prorroga(
+                self._ticket(), self.responsable_p, nueva_fecha=original + timedelta(days=2), motivo="Atrasada"
+            )
+
+    def test_con_aprobacion_encadena_pendiente_aprobada_rechazada(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+        original = self._ticket().fecha_objetivo_original
+        self._resolver(self._solicitar(dias=3))
+        self._resolver(self._solicitar(dias=2), decision="RECHAZADA", observacion="Demasiado")
+        tercera = self._solicitar(dias=1)
+        ticket = self._ticket()
+        self.assertEqual(ticket.fecha_objetivo_vigente, original + timedelta(days=3))
+        self.assertEqual(tercera.fecha_objetivo_vigente_al_solicitar, original + timedelta(days=3))
+        self.assertEqual(
+            [(p.numero, p.estado) for p in ticket.prorrogas.all()],
+            [(1, "APROBADA"), (2, "RECHAZADA"), (3, "PENDIENTE")],
+        )
+
+
+class ProrrogaHistorialAuditoriaTests(_EscenarioProrrogaMixin, TestCase):
+    def _eventos(self, tipo):
+        return HistorialTicket.objects.filter(ticket=self.ticket_p, tipo_evento=tipo)
+
+    def _auditorias(self, modelo, objeto_id):
+        return RegistroAuditoria.objects.filter(modelo=modelo, object_id=objeto_id)
+
+    def test_sin_aprobacion_registra_solicitud_y_aprobacion_automatica(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        antes = self._ticket()
+        prorroga = self._solicitar(dias=3, motivo="Cambió el alcance")
+        solicitada = self._eventos("PRORROGA_SOLICITADA").get()
+        self.assertEqual(solicitada.actor, self.responsable_p)
+        self.assertEqual(solicitada.datos["prorroga_id"], prorroga.pk)
+        self.assertEqual(solicitada.datos["motivo"], "Cambió el alcance")
+        self.assertEqual(solicitada.datos["numero"], 1)
+        self.assertEqual(solicitada.datos["fecha_objetivo_anterior"], antes.fecha_objetivo_vigente.isoformat())
+        self.assertEqual(solicitada.datos["nueva_fecha"], prorroga.nueva_fecha_solicitada.isoformat())
+        aprobada = self._eventos("PRORROGA_APROBADA").get()
+        self.assertIsNone(aprobada.actor)  # la resolvió el Sistema por política
+        self.assertEqual(aprobada.datos["causa"], "POLITICA_SIN_APROBACION")
+        # Auditoría: la prórroga (CREAR) y el cambio de la fecha vigente del ticket.
+        creada = self._auditorias("tickets.prorrogaticket", prorroga.pk).get(accion=RegistroAuditoria.Accion.CREAR)
+        self.assertEqual(creada.usuario, self.responsable_p)
+        self.assertEqual(creada.datos_nuevos["estado"], "APROBADA")
+        cambio = self._auditorias("tickets.ticket", self.ticket_p.pk).get(
+            accion=RegistroAuditoria.Accion.ACTUALIZAR, datos_nuevos__prorroga_id=prorroga.pk
+        )
+        self.assertEqual(cambio.usuario, self.responsable_p)
+        self.assertEqual(cambio.datos_anteriores, {"fecha_objetivo_vigente": antes.fecha_objetivo_vigente.isoformat()})
+        self.assertEqual(
+            cambio.datos_nuevos["fecha_objetivo_vigente"], prorroga.nueva_fecha_solicitada.isoformat()
+        )
+
+    def test_con_aprobacion_aprobar_registra_al_aprobador(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+        prorroga = self._solicitar()
+        self.assertEqual(self._eventos("PRORROGA_SOLICITADA").get().actor, self.responsable_p)
+        self.assertFalse(self._eventos("PRORROGA_APROBADA").exists())
+        self.assertFalse(
+            self._auditorias("tickets.ticket", self.ticket_p.pk).filter(datos_nuevos__prorroga_id=prorroga.pk).exists()
+        )
+        self._resolver(prorroga, observacion="Adelante")
+        evento = self._eventos("PRORROGA_APROBADA").get()
+        self.assertEqual(evento.actor, self.aprobador_p)
+        self.assertEqual(evento.datos["observaciones"], "Adelante")
+        actualizacion = self._auditorias("tickets.prorrogaticket", prorroga.pk).get(
+            accion=RegistroAuditoria.Accion.ACTUALIZAR
+        )
+        self.assertEqual(actualizacion.usuario, self.aprobador_p)
+        self.assertEqual(actualizacion.datos_anteriores, {"estado": "PENDIENTE"})
+        self.assertEqual(actualizacion.datos_nuevos["estado"], "APROBADA")
+        self.assertTrue(
+            self._auditorias("tickets.ticket", self.ticket_p.pk).filter(datos_nuevos__prorroga_id=prorroga.pk).exists()
+        )
+
+    def test_rechazar_y_cancelar_registran_su_evento_y_no_tocan_la_fecha_en_auditoria(self):
+        from apps.tickets import prorrogas
+
+        self._preparar_prorroga(politica="CON_APROBACION")
+        rechazada = self._solicitar()
+        self._resolver(rechazada, decision="RECHAZADA", observacion="Sin margen")
+        evento = self._eventos("PRORROGA_RECHAZADA").get()
+        self.assertEqual((evento.actor, evento.datos["observaciones"]), (self.aprobador_p, "Sin margen"))
+        cancelada = self._solicitar(dias=2)
+        prorrogas.cancelar_prorroga(cancelada, self.responsable_p, motivo="Desistí")
+        evento = self._eventos("PRORROGA_CANCELADA").get()
+        self.assertEqual((evento.actor, evento.datos["prorroga_id"]), (self.responsable_p, cancelada.pk))
+        cierre = self._auditorias("tickets.prorrogaticket", cancelada.pk).get(accion=RegistroAuditoria.Accion.ACTUALIZAR)
+        self.assertEqual(cierre.datos_nuevos["estado"], "CANCELADA")
+        # Ninguna de las dos movió la fecha vigente del ticket.
+        self.assertFalse(
+            self._auditorias("tickets.ticket", self.ticket_p.pk)
+            .filter(datos_nuevos__has_key="fecha_objetivo_vigente")
+            .exists()
+        )
+
+    def test_los_eventos_aparecen_en_la_linea_de_tiempo_del_detalle(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        self._solicitar()
+        self.client.login(username="responsable_p", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket_p.pk]))
+        self.assertContains(respuesta, "Prórroga solicitada")
+        self.assertContains(respuesta, "Prórroga aprobada")
+        self.assertContains(respuesta, "automática, sin aprobación")
+
+
+class ProrrogaInmutabilidadTests(_EscenarioProrrogaMixin, TestCase):
+    def setUp(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+
+    def test_una_prorroga_resuelta_no_se_modifica_ni_se_elimina(self):
+        prorroga = self._solicitar()
+        self._resolver(prorroga)
+        resuelta = ProrrogaTicket.objects.get(pk=prorroga.pk)
+        resuelta.motivo = "Otro motivo"
+        with self.assertRaises(ValidationError):
+            resuelta.save()
+        resuelta = ProrrogaTicket.objects.get(pk=prorroga.pk)
+        resuelta.estado = ProrrogaTicket.Estado.RECHAZADA
+        with self.assertRaises(ValidationError):
+            resuelta.save()
+        with self.assertRaises(ValidationError):
+            resuelta.delete()
+        self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "APROBADA")
+
+    def test_los_datos_de_la_solicitud_no_cambian_ni_estando_pendiente(self):
+        prorroga = self._solicitar()
+        for campo, valor in (
+            ("motivo", "Otro"), ("nueva_fecha_solicitada", prorroga.nueva_fecha_solicitada + timedelta(days=1)),
+            ("solicitada_por", self.ajeno_p), ("numero", 9),
+        ):
+            with self.subTest(campo=campo):
+                pendiente = ProrrogaTicket.objects.get(pk=prorroga.pk)
+                setattr(pendiente, campo, valor)
+                with self.assertRaises(ValidationError):
+                    pendiente.save()
+
+    def test_la_base_protege_la_unicidad_de_la_pendiente_y_la_coherencia(self):
+        from apps.aprobaciones.operaciones import crear_esquema_aprobacion
+
+        prorroga = self._solicitar()
+        otro_esquema = crear_esquema_aprobacion(modo="SECUENCIAL", participantes=[("USUARIO", self.aprobador_p)])
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ProrrogaTicket.objects.create(
+                ticket=self._ticket(), numero=2, politica="CON_APROBACION", solicitada_por=self.responsable_p,
+                solicitada_en=timezone.now(), fecha_objetivo_vigente_al_solicitar=prorroga.nueva_fecha_solicitada,
+                nueva_fecha_solicitada=prorroga.nueva_fecha_solicitada + timedelta(days=1), motivo="Otra",
+                esquema_aprobacion=otro_esquema,
+            )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ProrrogaTicket.objects.filter(pk=prorroga.pk).update(nueva_fecha_solicitada=prorroga.fecha_objetivo_vigente_al_solicitar)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ProrrogaTicket.objects.filter(pk=prorroga.pk).update(estado="RECHAZADA")  # sin resuelta_en
+
+
+class ProrrogaConcurrenciaTests(_EscenarioProrrogaMixin, TransactionTestCase):
+    def setUp(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+
+    def _correr(self, tareas):
+        resultados = {}
+        barrera = threading.Barrier(len(tareas))
+
+        def _hilo(clave, funcion):
+            barrera.wait()
+            try:
+                funcion()
+                resultados[clave] = "ok"
+            except (ValidationError, PermissionDenied):
+                resultados[clave] = "rechazada"
+            finally:
+                connection.close()
+
+        hilos = [threading.Thread(target=_hilo, args=(clave, funcion)) for clave, funcion in tareas.items()]
+        for hilo in hilos:
+            hilo.start()
+        for hilo in hilos:
+            hilo.join()
+        return resultados
+
+    def test_dos_solicitudes_simultaneas_dejan_una_sola_pendiente(self):
+        from apps.tickets import prorrogas
+
+        def _pedir(actor):
+            return lambda: prorrogas.solicitar_prorroga(
+                Ticket.objects.get(pk=self.ticket_p.pk), actor,
+                nueva_fecha=Ticket.objects.get(pk=self.ticket_p.pk).fecha_objetivo_vigente + timedelta(days=3),
+                motivo="Más tiempo",
+            )
+
+        resultados = self._correr({"a": _pedir(self.responsable_p), "b": _pedir(self.companero_p)})
+        self.assertEqual(sorted(resultados.values()), ["ok", "rechazada"])
+        self.assertEqual(ProrrogaTicket.objects.filter(ticket=self.ticket_p).count(), 1)
+        self.assertEqual(ProrrogaTicket.objects.filter(ticket=self.ticket_p, estado="PENDIENTE").count(), 1)
+
+    def test_aprobar_y_cancelar_a_la_vez_dejan_un_resultado_coherente(self):
+        from apps.tickets import prorrogas
+
+        prorroga = self._solicitar()
+        original = self._ticket().fecha_objetivo_vigente
+        aprobacion = self._aprobacion(prorroga)
+        resultados = self._correr({
+            "aprobar": lambda: prorrogas.resolver_prorroga_por_aprobacion(
+                aprobacion, self.aprobador_p, decision="APROBADA", observacion=""
+            ),
+            "cancelar": lambda: prorrogas.cancelar_prorroga(
+                ProrrogaTicket.objects.get(pk=prorroga.pk), self.responsable_p
+            ),
+        })
+        self.assertEqual(sorted(resultados.values()), ["ok", "rechazada"])
+        final = ProrrogaTicket.objects.get(pk=prorroga.pk)
+        ticket = self._ticket()
+        if resultados["aprobar"] == "ok":
+            self.assertEqual(final.estado, "APROBADA")
+            self.assertEqual(ticket.fecha_objetivo_vigente, prorroga.nueva_fecha_solicitada)
+        else:
+            self.assertEqual(final.estado, "CANCELADA")
+            self.assertEqual(ticket.fecha_objetivo_vigente, original)
+        self.assertEqual(ticket.fecha_objetivo_original, original)
+
+    def test_dos_aprobaciones_simultaneas_aplican_la_fecha_una_sola_vez(self):
+        from apps.tickets import prorrogas
+
+        prorroga = self._solicitar(dias=3)
+        original = self._ticket().fecha_objetivo_vigente
+        aprobacion = self._aprobacion(prorroga)
+        decidir = lambda: prorrogas.resolver_prorroga_por_aprobacion(  # noqa: E731
+            aprobacion, self.aprobador_p, decision="APROBADA", observacion=""
+        )
+        resultados = self._correr({"a": decidir, "b": decidir})
+        self.assertEqual(sorted(resultados.values()), ["ok", "rechazada"])
+        self.assertEqual(self._ticket().fecha_objetivo_vigente, original + timedelta(days=3))
+        self.assertEqual(self._eventos_aprobada(), 1)
+
+    def _eventos_aprobada(self):
+        return HistorialTicket.objects.filter(ticket=self.ticket_p, tipo_evento="PRORROGA_APROBADA").count()
+
+
+class ProrrogaVistasTests(_EscenarioProrrogaMixin, TestCase):
+    def _detalle(self, username):
+        self.client.login(username=username, password=CLAVE_PRUEBA)
+        return self.client.get(reverse("tickets:detalle", args=[self.ticket_p.pk]))
+
+    def _post(self, nombre, *args, **datos):
+        return self.client.post(reverse(f"tickets:{nombre}", args=args), datos)
+
+    def _datos_solicitud(self, dias=3):
+        nueva = timezone.localtime(self._nueva_fecha(dias))
+        return {"nueva_fecha": nueva.strftime("%Y-%m-%dT%H:%M"), "motivo": "Necesito más tiempo"}
+
+    def test_el_responsable_ve_el_compromiso_y_el_boton_sin_aprobacion(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        respuesta = self._detalle("responsable_p")
+        self.assertContains(respuesta, "Compromiso de atención")
+        self.assertContains(respuesta, "Fecha objetivo original")
+        self.assertContains(respuesta, "Fecha objetivo vigente")
+        self.assertContains(respuesta, "Solicitar prórroga")
+        self.assertContains(respuesta, "se aplicará directamente")
+        self.assertNotContains(respuesta, "Ampliada")
+
+    def test_con_aprobacion_el_formulario_avisa_que_se_envia_a_aprobacion(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+        respuesta = self._detalle("responsable_p")
+        self.assertContains(respuesta, "se enviará para aprobación")
+        self.assertContains(respuesta, "Enviar para aprobación")
+
+    def test_el_boton_solo_aparece_cuando_corresponde(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        self.assertNotContains(self._detalle("solicitante_p"), "Solicitar prórroga")
+        self.client.logout()
+        self.assertEqual(self._detalle("ajeno_p").status_code, 403)
+        self.client.logout()
+        self.assertNotContains(self._detalle("gestor_p"), "Solicitar prórroga")
+        self.client.logout()
+        for politica in ("NO_PERMITE", ""):
+            self._configurar_servicio_p(politica="SIN_APROBACION")
+            Ticket.objects.filter(pk=self.ticket_p.pk).update(prorroga_politica=politica)
+            self.client.logout()
+            respuesta = self._detalle("responsable_p")
+            self.assertNotContains(respuesta, "Solicitar prórroga")
+            self.assertContains(respuesta, "no permite prórrogas")
+        Ticket.objects.filter(pk=self.ticket_p.pk).update(prorroga_politica="SIN_APROBACION", estado="RESUELTO")
+        self.client.logout()
+        self.assertNotContains(self._detalle("responsable_p"), "Solicitar prórroga")
+
+    def test_con_una_pendiente_no_se_ofrece_otra_y_se_ofrece_cancelar_al_solicitante(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+        self._solicitar()
+        respuesta = self._detalle("responsable_p")
+        self.assertNotContains(respuesta, "Solicitar prórroga")
+        self.assertContains(respuesta, "Ya hay una prórroga pendiente")
+        self.assertContains(respuesta, "Cancelar solicitud")
+        self.client.logout()
+        # Otro responsable del ticket ve la pendiente, pero no puede cancelarla.
+        self.assertNotContains(self._detalle("companero_p"), "Cancelar solicitud")
+
+    def test_el_historial_muestra_fecha_solicitante_motivo_estado_y_resolucion(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+        self._resolver(self._solicitar(motivo="Dependo de un proveedor"), decision="RECHAZADA", observacion="Sin margen")
+        self._configurar_servicio_p(politica="CON_APROBACION")
+        respuesta = self._detalle("responsable_p")
+        self.assertContains(respuesta, "Historial de prórrogas (1)")
+        self.assertContains(respuesta, "Prórroga 1")
+        self.assertContains(respuesta, "Rechazada")
+        self.assertContains(respuesta, "Dependo de un proveedor")
+        self.assertContains(respuesta, "Solicitada por responsable_p")
+        self.assertContains(respuesta, "por aprobador_p")
+        self.assertContains(respuesta, "Sin margen")
+
+    def test_si_la_vigente_difiere_de_la_original_se_marca_ampliada(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        self._solicitar(dias=2)
+        respuesta = self._detalle("responsable_p")
+        self.assertContains(respuesta, "Ampliada")
+        self.assertContains(respuesta, "Aprobada automáticamente")
+
+    def test_el_solicitante_del_ticket_tambien_consulta_el_historial(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        self._solicitar(motivo="Motivo visible")
+        respuesta = self._detalle("solicitante_p")
+        self.assertContains(respuesta, "Motivo visible")
+        self.assertNotContains(respuesta, "Solicitar prórroga")
+
+    def test_el_aprobador_con_acceso_al_ticket_ve_el_enlace_para_resolver(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+        _otorgar_tickets_atender(self.aprobador_p)
+        prorroga = self._solicitar()
+        respuesta = self._detalle("aprobador_p")
+        self.assertContains(respuesta, "Resolver prórroga")
+        self.assertContains(respuesta, reverse("aprobaciones:detalle", args=[self._aprobacion(prorroga).pk]))
+
+    def test_post_solicitar_sin_aprobacion_aplica_la_fecha(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        antes = self._ticket()
+        self.client.login(username="responsable_p", password=CLAVE_PRUEBA)
+        respuesta = self._post("solicitar_prorroga", self.ticket_p.pk, **self._datos_solicitud(3))
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket_p.pk]))
+        self.assertEqual(ProrrogaTicket.objects.get().estado, "APROBADA")
+        self.assertEqual(self._ticket().fecha_objetivo_original, antes.fecha_objetivo_original)
+        self.assertGreater(self._ticket().fecha_objetivo_vigente, antes.fecha_objetivo_vigente)
+
+    def test_post_solicitar_con_aprobacion_queda_pendiente(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+        antes = self._ticket()
+        self.client.login(username="responsable_p", password=CLAVE_PRUEBA)
+        self._post("solicitar_prorroga", self.ticket_p.pk, **self._datos_solicitud(3))
+        self.assertEqual(ProrrogaTicket.objects.get().estado, "PENDIENTE")
+        self.assertEqual(self._ticket().fecha_objetivo_vigente, antes.fecha_objetivo_vigente)
+
+    def test_post_sin_permiso_o_con_datos_invalidos_no_crea_nada(self):
+        self._preparar_prorroga(politica="SIN_APROBACION")
+        self.client.login(username="ajeno_p", password=CLAVE_PRUEBA)
+        self._post("solicitar_prorroga", self.ticket_p.pk, **self._datos_solicitud())
+        self.client.logout()
+        self.client.login(username="solicitante_p", password=CLAVE_PRUEBA)
+        self._post("solicitar_prorroga", self.ticket_p.pk, **self._datos_solicitud())
+        self.client.logout()
+        self.client.login(username="responsable_p", password=CLAVE_PRUEBA)
+        self._post("solicitar_prorroga", self.ticket_p.pk, nueva_fecha="no es una fecha", motivo="x")
+        self._post("solicitar_prorroga", self.ticket_p.pk, nueva_fecha=self._datos_solicitud()["nueva_fecha"], motivo="")
+        pasada = timezone.localtime(self._ticket().fecha_objetivo_vigente - timedelta(days=1))
+        self._post("solicitar_prorroga", self.ticket_p.pk, nueva_fecha=pasada.strftime("%Y-%m-%dT%H:%M"), motivo="Atrasada")
+        self.assertEqual(ProrrogaTicket.objects.count(), 0)
+
+    def test_los_endpoints_son_solo_post_y_exigen_sesion(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+        prorroga = self._solicitar()
+        self.client.login(username="responsable_p", password=CLAVE_PRUEBA)
+        self.assertEqual(self.client.get(reverse("tickets:solicitar_prorroga", args=[self.ticket_p.pk])).status_code, 405)
+        self.assertEqual(
+            self.client.get(reverse("tickets:cancelar_prorroga", args=[self.ticket_p.pk, prorroga.pk])).status_code, 405
+        )
+        self.client.logout()
+        self.assertEqual(self._post("solicitar_prorroga", self.ticket_p.pk, **self._datos_solicitud()).status_code, 302)
+        self.assertEqual(ProrrogaTicket.objects.count(), 1)
+
+    def test_post_cancelar_solo_por_quien_la_solicito(self):
+        self._preparar_prorroga(politica="CON_APROBACION")
+        prorroga = self._solicitar()
+        self.client.login(username="companero_p", password=CLAVE_PRUEBA)
+        self._post("cancelar_prorroga", self.ticket_p.pk, prorroga.pk)
+        self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "PENDIENTE")
+        self.client.logout()
+        self.client.login(username="responsable_p", password=CLAVE_PRUEBA)
+        self._post("cancelar_prorroga", self.ticket_p.pk, prorroga.pk, motivo="Desistí")
+        self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "CANCELADA")
+        # Una prórroga de otro ticket no se alcanza por una URL cruzada.
+        self.assertEqual(self._post("cancelar_prorroga", self.ticket_p.pk + 999, prorroga.pk).status_code, 404)
+
+
+class ProrrogaRegresionTests(_EscenarioProrrogaMixin, TestCase):
+    def test_solicitar_y_resolver_no_tocan_el_workflow_del_ticket(self):
+        from apps.workflows.models import (
+            ConfiguracionEtapaTarea, Etapa, InstanciaEtapa, InstanciaWorkflow, TransicionEtapa, Workflow, WorkflowVersion,
+        )
+        from apps.workflows.versionamiento import activar_version as activar_workflow
+
+        self._preparar_prorroga(politica="CON_APROBACION")
+        workflow = Workflow.objects.create(nombre="Ejecución regresión prórroga")
+        version = WorkflowVersion.objects.create(workflow=workflow, numero=1)
+        inicio = Etapa.objects.create(version=version, tipo="INICIO", nombre="Inicio")
+        tarea = Etapa.objects.create(version=version, tipo="TAREA", nombre="Trabajar")
+        fin = Etapa.objects.create(version=version, tipo="FIN", nombre="Fin")
+        ConfiguracionEtapaTarea.objects.create(etapa=tarea)
+        TransicionEtapa.objects.create(etapa_origen=inicio, etapa_destino=tarea)
+        TransicionEtapa.objects.create(etapa_origen=tarea, etapa_destino=fin)
+        activar_workflow(workflow, version, self.solicitante_p)
+        Servicio.objects.filter(pk=self.servicio_p.pk).update(workflow=workflow)
+        ticket = crear_borrador(self.solicitante_p, Servicio.objects.get(pk=self.servicio_p.pk))
+        radicar_ticket(ticket, self.solicitante_p)
+        ticket = asignar_ticket(ticket, self.responsable_p, equipo=self.equipo_p)
+        ticket = tomar_ticket(ticket, self.responsable_p)
+        self.ticket_p = ticket
+        instancia = ticket.instancia_workflow
+
+        def _foto():
+            actual = InstanciaWorkflow.objects.get(pk=instancia.pk)
+            ejecuciones = list(
+                InstanciaEtapa.objects.filter(instancia_workflow=actual).order_by("orden").values_list(
+                    "orden", "estado", "etapa_id", "transicion_tomada_id"
+                )
+            )
+            return actual.estado, actual.workflow_version_id, ejecuciones, dict(actual.contexto)
+
+        antes = _foto()
+        self._resolver(self._solicitar(dias=3))
+        self._resolver(self._solicitar(dias=2), decision="RECHAZADA", observacion="No")
+        self.assertEqual(_foto(), antes)
+
+    def test_la_entrega_formal_no_cambia_por_una_prorroga(self):
+        from apps.tickets import prorrogas
+
+        class _Escenario(_EscenarioEntregaFormalMixin):
+            pass
+
+        escenario = _Escenario()
+        escenario._preparar_entrega_formal()
+        ticket = Ticket.objects.get(pk=escenario.ticket45.pk)
+        vigente = timezone.now() + timedelta(days=5)
+        Ticket.objects.filter(pk=ticket.pk).update(
+            tiempo_objetivo_cantidad=5, tiempo_objetivo_unidad="DIAS", prorroga_politica="SIN_APROBACION",
+            fecha_objetivo_original=vigente, fecha_objetivo_vigente=vigente,
+        )
+        politica_antes = (ticket.entrega_politica, ticket.entrega_dias_observacion)
+        prorrogas.solicitar_prorroga(
+            Ticket.objects.get(pk=ticket.pk), escenario.responsable45,
+            nueva_fecha=vigente + timedelta(days=4), motivo="Más tiempo",
+        )
+        ticket = Ticket.objects.get(pk=ticket.pk)
+        self.assertEqual((ticket.entrega_politica, ticket.entrega_dias_observacion), politica_antes)
+        self.assertEqual(EntregaTicket.objects.filter(ticket=ticket).count(), 0)
+        escenario.ticket45 = ticket
+        escenario._listo()
+        entrega = escenario._entregar()
+        # El plazo de observaciones sigue su propia semántica: entrega + N días.
+        self.assertEqual(entrega.vence_en, entrega.entregada_en + timedelta(days=entrega.dias_observacion))
+        self.assertEqual(Ticket.objects.get(pk=ticket.pk).fecha_objetivo_vigente, vigente + timedelta(days=4))
+
+    def test_un_ticket_creado_antes_de_4a2_sigue_su_ciclo_completo(self):
+        self._preparar_prorroga(politica="")
+        Ticket.objects.filter(pk=self.ticket_p.pk).update(
+            tiempo_objetivo_cantidad=None, tiempo_objetivo_unidad="", fecha_objetivo_original=None, fecha_objetivo_vigente=None,
+        )
+        resolver_ticket(self._ticket(), self.responsable_p, "Listo")
+        cerrar_ticket(self._ticket(), self.solicitante_p)
+        ticket = self._ticket()
+        self.assertEqual(ticket.estado, Ticket.Estado.CERRADO)
+        self.assertEqual(ticket.prorrogas.count(), 0)
+
+
+class TareaATicketNavegacionTests(TestCase):
+    """4.A2 — Mi trabajo: navegar de una Tarea al Ticket que la originó. La
+    prórroga sigue perteneciendo al Ticket."""
+
+    def setUp(self):
+        from apps.workflows.models import ConfiguracionEtapaTarea, Etapa, TareaWorkflow, TransicionEtapa, Workflow, WorkflowVersion
+        from apps.workflows.versionamiento import activar_version as activar_workflow
+
+        self.solicitante = Usuario.objects.create_user("nav_solicitante", password=CLAVE_PRUEBA)
+        self.sin_ticket = Usuario.objects.create_user("nav_sin_ticket", password=CLAVE_PRUEBA)
+        for usuario in (self.solicitante, self.sin_ticket):
+            _otorgar_permiso(usuario, "tareas.consultar", nombre_rol=f"Rol tareas {usuario.username}")
+        self.servicio, _, _ = _crear_servicio_con_formulario(self.solicitante, [])
+        workflow = Workflow.objects.create(nombre="Flujo navegación")
+        version = WorkflowVersion.objects.create(workflow=workflow, numero=1)
+        inicio = Etapa.objects.create(version=version, tipo="INICIO", nombre="Inicio")
+        tarea = Etapa.objects.create(version=version, tipo="TAREA", nombre="Preparar entrega")
+        fin = Etapa.objects.create(version=version, tipo="FIN", nombre="Fin")
+        ConfiguracionEtapaTarea.objects.create(etapa=tarea)
+        TransicionEtapa.objects.create(etapa_origen=inicio, etapa_destino=tarea)
+        TransicionEtapa.objects.create(etapa_origen=tarea, etapa_destino=fin)
+        activar_workflow(workflow, version, self.solicitante)
+        Servicio.objects.filter(pk=self.servicio.pk).update(workflow=workflow)
+        self.ticket = crear_borrador(self.solicitante, Servicio.objects.get(pk=self.servicio.pk))
+        radicar_ticket(self.ticket, self.solicitante)
+        self.tarea = TareaWorkflow.objects.get(instancia_etapa__instancia_workflow=self.ticket.instancia_workflow).tarea
+
+    def _enlace(self):
+        return reverse("tickets:detalle", args=[self.ticket.pk])
+
+    def test_el_detalle_de_la_tarea_enlaza_al_ticket_si_el_usuario_puede_verlo(self):
+        self.client.login(username="nav_solicitante", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tareas:detalle", args=[self.tarea.pk]))
+        self.assertContains(respuesta, "Parte del ticket")
+        self.assertContains(respuesta, self._enlace())
+
+    def test_la_vista_previa_de_mi_trabajo_tambien_enlaza_al_ticket(self):
+        self.client.login(username="nav_solicitante", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tareas:vista_previa", args=[self.tarea.pk]))
+        self.assertContains(respuesta, self._enlace())
+
+    def test_sin_acceso_al_ticket_no_se_ofrece_el_enlace(self):
+        self.client.login(username="nav_sin_ticket", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tareas:detalle", args=[self.tarea.pk]))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertNotContains(respuesta, self._enlace())
+
+    def test_una_subtarea_enlaza_al_ticket_de_su_tarea_principal(self):
+        from apps.tareas.models import Tarea
+
+        subtarea = Tarea.objects.create(titulo="Detalle", tarea_padre=self.tarea)
+        self.client.login(username="nav_solicitante", password=CLAVE_PRUEBA)
+        self.assertContains(self.client.get(reverse("tareas:detalle", args=[subtarea.pk])), self._enlace())
+
+    def test_una_tarea_independiente_no_tiene_ticket(self):
+        from apps.tareas.models import Tarea
+
+        suelta = Tarea.objects.create(titulo="Sin ticket")
+        self.client.login(username="nav_solicitante", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tareas:detalle", args=[suelta.pk]))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertNotContains(respuesta, "Parte del ticket")
+
+
+# --- 4.C1 — Ticket General y configuración base --------------------------------
+
+
+class _EscenarioTicketGeneralMixin:
+    """Un Servicio interno con formulario genérico de tres campos configurables
+    (asunto, descripción, adjunto), designado y —según se pida— habilitado; más un
+    Servicio y un Proceso ordinarios con su propio formulario."""
+
+    NOMBRE_INTERNO = "Servicio interno reservado"
+
+    def _preparar_general(self, *, habilitar=True, designar=True):
+        from apps.catalogo import ticket_general as general
+
+        self.general = general
+        self.admin_g = Usuario.objects.create_user("admin_g", password=CLAVE_PRUEBA)
+        _otorgar_permiso(self.admin_g, "catalogo.administrar")
+        self.usuario_g = Usuario.objects.create_user("usuario_g", password=CLAVE_PRUEBA)
+        self.atiende_g = Usuario.objects.create_user("atiende_g", password=CLAVE_PRUEBA)
+        _otorgar_tickets_atender(self.atiende_g)
+        self.servicio_g, self.version_g, self.campos_g = _crear_servicio_con_formulario(
+            self.admin_g,
+            [
+                {"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Asunto", "obligatorio": True},
+                {"tipo": Campo.TipoCampo.TEXTO_LARGO, "etiqueta": "Descripción"},
+                {"tipo": Campo.TipoCampo.ARCHIVO, "etiqueta": "Adjuntos"},
+            ],
+        )
+        Servicio.objects.filter(pk=self.servicio_g.pk).update(nombre=self.NOMBRE_INTERNO)
+        self.servicio_g.refresh_from_db()
+        self._preparar_destino_general()
+        if designar:
+            general.designar_servicio_ticket_general(self.servicio_g, self.admin_g)
+            self.servicio_g.refresh_from_db()
+            if habilitar:
+                general.configurar_habilitacion(self.admin_g, habilitado=True)
+
+    def _preparar_destino_general(self):
+        """4.C2 — radicar un Ticket General exige un destino. Base de todos los
+        escenarios: un destino EQUIPO (con un miembro que atiende) como destino de
+        reserva, para que los tickets creados sin elegir destino sigan radicándose
+        igual que en 4.C1. Se fija directo en la configuración (sin auditoría) para no
+        alterar los eventos que los tests de 4.C1 cuentan."""
+        from apps.catalogo import destinos_ticket_general as destinos
+        from apps.catalogo.models import ConfiguracionTicketGeneral
+
+        self.destinos = destinos
+        self.equipo_g = Equipo.objects.create(nombre="Equipo general")
+        MiembroEquipo.objects.create(equipo=self.equipo_g, usuario=self.atiende_g)
+        self.destino_g = destinos.crear_destino(self.admin_g, tipo="EQUIPO", objeto=self.equipo_g)
+        ConfiguracionTicketGeneral.objects.update_or_create(
+            pk=ConfiguracionTicketGeneral.PK_UNICA, defaults={"destino_predeterminado": self.destino_g}
+        )
+
+    def _preparar_catalogo_normal(self):
+        self.servicio_n, _, self.campos_n = _crear_servicio_con_formulario(
+            self.admin_g, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Motivo"}]
+        )
+        Servicio.objects.filter(pk=self.servicio_n.pk).update(nombre="Servicio ordinario visible")
+        self.proceso_n, _, _ = _crear_servicio_con_formulario(self.admin_g, [])
+        Servicio.objects.filter(pk=self.proceso_n.pk).update(nombre="Proceso ordinario visible", tipo="PROCESO")
+        self.servicio_n.refresh_from_db()
+        self.proceso_n.refresh_from_db()
+
+    def _configurar_interno(self, **campos):
+        Servicio.objects.filter(pk=self.servicio_g.pk).update(**campos)
+        self.servicio_g.refresh_from_db()
+
+    def _ticket_general(self, usuario=None):
+        from apps.tickets.operaciones import crear_borrador_ticket_general
+
+        return crear_borrador_ticket_general(usuario or self.usuario_g)
+
+    def _radicar_general(self, usuario=None, asunto="Necesito apoyo con un tema nuevo"):
+        usuario = usuario or self.usuario_g
+        ticket = self._ticket_general(usuario)
+        guardar_respuestas_borrador(ticket, usuario, {self.campos_g["Asunto"].id: asunto})
+        radicar_ticket(ticket, usuario)
+        ticket.refresh_from_db()
+        return ticket
+
+
+class TicketGeneralConfiguracionTests(_EscenarioTicketGeneralMixin, TestCase):
+    def setUp(self):
+        self._preparar_general(habilitar=False)
+
+    def _config(self):
+        from apps.catalogo.models import ConfiguracionTicketGeneral
+
+        return ConfiguracionTicketGeneral
+
+    def test_sin_configuracion_guardada_esta_deshabilitado_y_consultar_no_escribe(self):
+        from apps.catalogo.models import ConfiguracionTicketGeneral
+
+        ConfiguracionTicketGeneral.objects.all().delete()  # el setUp ya designó el servicio (crea la fila)
+        self.assertFalse(ConfiguracionTicketGeneral.actual().habilitado)
+        self.assertEqual(ConfiguracionTicketGeneral.objects.count(), 0)
+
+    def test_hay_una_sola_configuracion_efectiva(self):
+        from apps.catalogo.models import ConfiguracionTicketGeneral
+
+        self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+        ConfiguracionTicketGeneral(habilitado=True).save()
+        ConfiguracionTicketGeneral(habilitado=False).save()
+        self.assertEqual(ConfiguracionTicketGeneral.objects.count(), 1)
+        self.assertEqual(ConfiguracionTicketGeneral.objects.get().pk, ConfiguracionTicketGeneral.PK_UNICA)
+        self.assertFalse(ConfiguracionTicketGeneral.actual().habilitado)
+
+    def test_habilitar_y_deshabilitar(self):
+        self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+        self.assertTrue(self._config().actual().habilitado)
+        self.general.configurar_habilitacion(self.admin_g, habilitado=False)
+        self.assertFalse(self._config().actual().habilitado)
+
+    def test_para_habilitar_hace_falta_un_servicio_interno_publicado_y_valido(self):
+        Servicio.objects.filter(pk=self.servicio_g.pk).update(es_ticket_general=False)
+        with self.assertRaises(ValidationError) as contexto:
+            self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+        self.assertIn("servicio interno", contexto.exception.messages[0])
+        Servicio.objects.filter(pk=self.servicio_g.pk).update(es_ticket_general=True, activo=False)
+        with self.assertRaises(ValidationError) as contexto:
+            self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+        self.assertIn("publica", contexto.exception.messages[0])
+        Servicio.objects.filter(pk=self.servicio_g.pk).update(activo=True)
+        Formulario.objects.filter(pk=self.servicio_g.formulario_id).update(version_activa=None)
+        with self.assertRaises(ValidationError):
+            self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+        self.assertFalse(self._config().actual().habilitado)
+
+    def test_audita_los_cambios_y_no_duplica_si_no_cambia(self):
+        self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+        self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+        eventos = RegistroAuditoria.objects.filter(modelo="catalogo.configuracionticketgeneral")
+        self.assertEqual(eventos.count(), 1)
+        evento = eventos.get()
+        self.assertEqual(evento.accion, RegistroAuditoria.Accion.ACTUALIZAR)
+        self.assertEqual((evento.datos_anteriores, evento.datos_nuevos), ({"habilitado": False}, {"habilitado": True}))
+        self.assertEqual(evento.usuario, self.admin_g)
+
+    def test_todas_las_operaciones_exigen_catalogo_administrar(self):
+        categoria = Categoria.objects.create(nombre="Otra")
+        for llamada in (
+            lambda: self.general.configurar_habilitacion(self.usuario_g, habilitado=True),
+            lambda: self.general.designar_servicio_ticket_general(self.servicio_g, self.usuario_g),
+            lambda: self.general.crear_servicio_ticket_general(self.usuario_g, categoria=categoria),
+        ):
+            with self.assertRaises(PermissionDenied):
+                llamada()
+
+    def test_las_vistas_de_administracion_exigen_permiso_y_solo_post(self):
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        for nombre in ("ticket_general_habilitar", "ticket_general_crear", "ticket_general_designar"):
+            self.assertEqual(self.client.post(reverse(f"catalogo:{nombre}"), {}).status_code, 403)
+        self.client.logout()
+        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        for nombre in ("ticket_general_habilitar", "ticket_general_crear", "ticket_general_designar"):
+            self.assertEqual(self.client.get(reverse(f"catalogo:{nombre}")).status_code, 405)
+
+    def test_habilitar_por_la_pantalla(self):
+        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(reverse("catalogo:ticket_general_habilitar"), {"habilitado": "1"})
+        self.assertRedirects(respuesta, reverse("core:disenador_servicios"))
+        self.assertTrue(self._config().actual().habilitado)
+        self.client.post(reverse("catalogo:ticket_general_habilitar"), {"habilitado": "0"})
+        self.assertFalse(self._config().actual().habilitado)
+
+    def test_la_tarjeta_de_administracion_muestra_el_estado_y_enlaza_al_studio_del_servicio(self):
+        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:disenador_servicios"))
+        self.assertContains(respuesta, "Ticket general")
+        self.assertContains(respuesta, self.NOMBRE_INTERNO)
+        self.assertContains(respuesta, reverse("core:disenador_servicio", args=[self.servicio_g.pk]))
+        self.assertContains(respuesta, "Habilitar ticket general")
+
+
+class TicketGeneralServicioInternoTests(_EscenarioTicketGeneralMixin, TestCase):
+    def setUp(self):
+        self._preparar_general(habilitar=False, designar=False)
+
+    def test_designar_marca_un_unico_servicio(self):
+        self.general.designar_servicio_ticket_general(self.servicio_g, self.admin_g)
+        self.assertEqual(self.general.servicio_ticket_general(), Servicio.objects.get(pk=self.servicio_g.pk))
+        self.assertEqual(Servicio.objects.filter(es_ticket_general=True).count(), 1)
+        evento = RegistroAuditoria.objects.get(modelo="catalogo.servicio", object_id=self.servicio_g.pk)
+        self.assertEqual(evento.datos_nuevos, {"es_ticket_general": True})
+
+    def test_la_base_impide_dos_servicios_marcados(self):
+        otro, _, _ = _crear_servicio_con_formulario(self.admin_g, [])
+        self.general.designar_servicio_ticket_general(self.servicio_g, self.admin_g)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Servicio.objects.filter(pk=otro.pk).update(es_ticket_general=True)
+
+    def test_el_servicio_interno_no_puede_ser_un_proceso(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Servicio.objects.filter(pk=self.servicio_g.pk).update(es_ticket_general=True, tipo="PROCESO")
+        Servicio.objects.filter(pk=self.servicio_g.pk).update(tipo="PROCESO")
+        self.servicio_g.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            self.general.designar_servicio_ticket_general(self.servicio_g, self.admin_g)
+
+    def test_cambiar_el_tipo_del_servicio_interno_a_proceso_se_rechaza_en_la_edicion(self):
+        from apps.catalogo.operaciones import editar_servicio_general
+
+        self.general.designar_servicio_ticket_general(self.servicio_g, self.admin_g)
+        with self.assertRaises(ValidationError):
+            editar_servicio_general(
+                self.servicio_g, self.admin_g, nombre="X", descripcion="", categoria=self.servicio_g.categoria,
+                tipo="PROCESO", instrucciones="", alcance_visibilidad=self.servicio_g.alcance_visibilidad,
+            )
+
+    def test_la_marca_no_es_editable_por_admin(self):
+        from apps.catalogo.admin import ServicioAdmin
+
+        self.assertIn("es_ticket_general", ServicioAdmin.readonly_fields)
+
+    def test_designar_otro_servicio_mueve_la_marca_y_deshabilita(self):
+        otro, _, _ = _crear_servicio_con_formulario(self.admin_g, [])
+        self.general.designar_servicio_ticket_general(self.servicio_g, self.admin_g)
+        self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+        self.general.designar_servicio_ticket_general(otro, self.admin_g)
+        self.assertEqual(list(Servicio.objects.filter(es_ticket_general=True)), [Servicio.objects.get(pk=otro.pk)])
+        self.assertFalse(self.general.ConfiguracionTicketGeneral.actual().habilitado)
+
+    def test_un_servicio_con_tickets_no_se_convierte_en_general_ni_deja_de_serlo(self):
+        servicio_con_tickets, _, _ = _crear_servicio_con_formulario(self.admin_g, [])
+        crear_borrador(self.usuario_g, servicio_con_tickets)
+        with self.assertRaises(ValidationError) as contexto:
+            self.general.designar_servicio_ticket_general(servicio_con_tickets, self.admin_g)
+        self.assertIn("ya tiene tickets", contexto.exception.messages[0])
+        self.assertFalse(Servicio.objects.get(pk=servicio_con_tickets.pk).es_ticket_general)
+        # El interno con tickets conserva su marca.
+        self.general.designar_servicio_ticket_general(self.servicio_g, self.admin_g)
+        self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+        self._ticket_general()
+        otro, _, _ = _crear_servicio_con_formulario(self.admin_g, [])
+        with self.assertRaises(ValidationError):
+            self.general.designar_servicio_ticket_general(otro, self.admin_g)
+        self.assertTrue(Servicio.objects.get(pk=self.servicio_g.pk).es_ticket_general)
+        self.assertNotIn(servicio_con_tickets, self.general.servicios_candidatos())
+
+    def test_crear_el_servicio_interno_desde_cero(self):
+        Servicio.objects.filter(pk=self.servicio_g.pk).delete()
+        categoria = Categoria.objects.create(nombre="Interna")
+        servicio = self.general.crear_servicio_ticket_general(self.admin_g, categoria=categoria)
+        self.assertTrue(servicio.es_ticket_general)
+        self.assertEqual((servicio.tipo, servicio.activo), ("SERVICIO", False))
+        self.assertEqual(servicio.alcance_visibilidad, "PUBLICO_INTERNO")
+        self.assertEqual(servicio.nombre, "Ticket general")
+        self.assertIsNone(servicio.formulario_id)  # el formulario se construye en Studio, no se siembra
+        with self.assertRaises(ValidationError):
+            self.general.crear_servicio_ticket_general(self.admin_g, categoria=categoria)
+        self.assertEqual(Servicio.objects.filter(es_ticket_general=True).count(), 1)
+
+    def test_crear_exige_una_categoria_activa(self):
+        Servicio.objects.filter(pk=self.servicio_g.pk).delete()
+        inactiva = Categoria.objects.create(nombre="Apagada", activo=False)
+        for categoria in (None, inactiva):
+            with self.assertRaises(ValidationError):
+                self.general.crear_servicio_ticket_general(self.admin_g, categoria=categoria)
+        self.assertFalse(Servicio.objects.filter(es_ticket_general=True).exists())
+
+    def test_crear_y_elegir_por_la_pantalla(self):
+        Servicio.objects.filter(pk=self.servicio_g.pk).delete()
+        categoria = Categoria.objects.create(nombre="Interna")
+        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("catalogo:ticket_general_crear"), {"categoria": categoria.pk, "nombre": "Pedidos libres"}
+        )
+        interno = Servicio.objects.get(es_ticket_general=True)
+        self.assertRedirects(
+            respuesta, reverse("core:disenador_servicio", args=[interno.pk]), fetch_redirect_response=False
+        )
+        self.assertEqual(interno.nombre, "Pedidos libres")
+
+    def test_nada_se_crea_sin_una_accion_explicita(self):
+        # Importar, migrar o abrir pantallas no crea el servicio interno ni la configuración.
+        configuraciones = self.general.ConfiguracionTicketGeneral.objects.count()
+        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        self.client.get(reverse("core:disenador_servicios"))
+        self.client.get(reverse("core:inicio"))
+        self.assertFalse(Servicio.objects.filter(es_ticket_general=True).exists())
+        self.assertEqual(self.general.ConfiguracionTicketGeneral.objects.count(), configuraciones)
+
+
+class TicketGeneralVisibilidadTests(_EscenarioTicketGeneralMixin, TestCase):
+    """El Servicio interno está ACTIVO y aun así no es un Servicio catalogado."""
+
+    def setUp(self):
+        self._preparar_general(habilitar=True)
+        self._preparar_catalogo_normal()
+
+    def test_esta_activo_pero_fuera_del_catalogo(self):
+        from apps.catalogo.visibilidad import servicios_accesibles_para, servicios_visibles_para
+
+        self.assertTrue(self.servicio_g.activo)
+        self.assertNotIn(self.servicio_g, servicios_visibles_para(self.usuario_g))
+        self.assertIn(self.servicio_g, servicios_accesibles_para(self.usuario_g))
+
+    def test_servicios_y_procesos_ordinarios_siguen_visibles(self):
+        from apps.catalogo.visibilidad import servicios_visibles_para
+
+        visibles = servicios_visibles_para(self.usuario_g)
+        self.assertIn(self.servicio_n, visibles)
+        self.assertIn(self.proceso_n, visibles)
+
+    def test_no_aparece_en_el_catalogo_ni_se_abre_por_su_url(self):
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("catalogo:lista"))
+        self.assertContains(respuesta, "Servicio ordinario visible")
+        self.assertContains(respuesta, "Proceso ordinario visible")
+        self.assertNotContains(respuesta, self.NOMBRE_INTERNO)
+        self.assertEqual(self.client.get(reverse("catalogo:detalle", args=[self.servicio_g.pk])).status_code, 404)
+        self.assertEqual(self.client.get(reverse("tickets:solicitar", args=[self.servicio_g.pk])).status_code, 404)
+
+    def test_no_aparece_en_el_explorador_ni_en_la_busqueda_ordinaria(self):
+        from apps.core import inicio
+
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:explorar"), {"q": "interno"})
+        self.assertNotContains(respuesta, self.NOMBRE_INTERNO)
+        respuesta = self.client.get(reverse("core:explorar"))
+        self.assertContains(respuesta, "Servicio ordinario visible")
+        self.assertNotContains(respuesta, self.NOMBRE_INTERNO)
+        resultados, _ = inicio.buscar_servicios(self.usuario_g, "interno")
+        self.assertEqual(resultados, [])
+        resultados, _ = inicio.buscar_servicios(self.usuario_g, "")
+        self.assertNotIn(self.servicio_g, resultados)
+        self.assertEqual(
+            self.client.get(reverse("catalogo:lista"), {"q": "interno"}).context["servicios"].count(), 0
+        )
+
+    def test_no_cuenta_en_las_categorias_de_inicio(self):
+        from apps.core import inicio
+
+        categorias = inicio.categorias_con_servicios(self.usuario_g)
+        total = sum(c["n"] for c in categorias)
+        self.assertEqual(total, 2)  # solo el servicio y el proceso ordinarios
+
+    def test_no_aparece_en_frecuentes_ni_recientes_aunque_se_use_mucho(self):
+        from apps.core import inicio
+
+        for _ in range(3):
+            self._ticket_general()
+        usados = inicio.servicios_usados(self.usuario_g)
+        self.assertNotIn(self.servicio_g.pk, [s.pk for s in usados["frecuentes"] + usados["recientes"]])
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:inicio"))
+        # Las tarjetas de servicios usados no lo ofrecen; sus tickets sí aparecen, como
+        # cualquier ticket propio, en "Tus tickets recientes".
+        self.assertNotIn(self.servicio_g.pk, [s.pk for s in respuesta.context["frecuentes"]])
+        self.assertNotIn(self.servicio_g.pk, [s.pk for s in respuesta.context["recientes"]])
+        self.assertFalse(respuesta.context["tiene_usados"])
+        self.assertEqual(len(respuesta.context["tickets_recientes"]), 3)
+
+    def test_la_via_normal_de_crear_tickets_lo_rechaza(self):
+        with self.assertRaises(PermissionDenied):
+            crear_borrador(self.usuario_g, self.servicio_g)
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.get(reverse("tickets:iniciar", args=[self.servicio_g.pk]))
+        self.assertEqual(Ticket.objects.count(), 0)
+
+    def test_para_el_administrador_si_aparece_en_el_diseñador(self):
+        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:disenador_servicios"))
+        self.assertContains(respuesta, self.NOMBRE_INTERNO)
+        self.assertContains(respuesta, "designer-status designer-status--neutral\">Ticket general")
+
+
+class TicketGeneralFormularioTests(_EscenarioTicketGeneralMixin, TestCase):
+    def setUp(self):
+        self._preparar_general()
+
+    def test_reutiliza_el_formulario_versionado_de_siempre(self):
+        ticket = self._ticket_general()
+        self.assertEqual(ticket.detalle_servicio.servicio, self.servicio_g)
+        self.assertEqual(ticket.detalle_servicio.formulario_version, self.version_g)
+        self.assertEqual(ticket.respuesta_formulario.formulario_version, self.version_g)
+        self.assertEqual(
+            sorted(c.etiqueta for c in self.version_g.campos.all()), ["Adjuntos", "Asunto", "Descripción"]
+        )
+        self.assertEqual(
+            {c.tipo for c in self.version_g.campos.all()},
+            {Campo.TipoCampo.TEXTO, Campo.TipoCampo.TEXTO_LARGO, Campo.TipoCampo.ARCHIVO},
+        )
+
+    def test_una_version_nueva_sigue_las_reglas_de_siempre(self):
+        antiguo = self._ticket_general()
+        nueva = crear_nueva_version(self.servicio_g.formulario, actor=self.admin_g)
+        Campo.objects.create(version=nueva, tipo=Campo.TipoCampo.TEXTO, etiqueta="Urgencia")
+        activar_version(self.servicio_g.formulario, nueva, actor=self.admin_g)
+        otro_usuario = Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA)
+        reciente = self._ticket_general(otro_usuario)
+        self.assertEqual(reciente.detalle_servicio.formulario_version_id, nueva.pk)
+        antiguo.refresh_from_db()
+        self.assertEqual(antiguo.detalle_servicio.formulario_version_id, self.version_g.pk)
+
+    def test_no_hay_campos_en_el_ticket_ni_otro_motor(self):
+        # Solo columnas propias del Ticket: `adjuntos` existe como relación inversa del
+        # modelo Adjunto (2.4), no como campo.
+        nombres = {campo.name for campo in Ticket._meta.concrete_fields}
+        for prohibido in ("asunto", "descripcion", "adjuntos", "adjunto"):
+            self.assertNotIn(prohibido, nombres)
+        ticket = self._radicar_general(asunto="Asunto guardado como respuesta de formulario")
+        respuesta = ticket.respuesta_formulario.respuestas_campo.get(campo=self.campos_g["Asunto"])
+        self.assertEqual(respuesta.valor, "Asunto guardado como respuesta de formulario")
+
+
+class TicketGeneralCreacionTests(_EscenarioTicketGeneralMixin, TestCase):
+    def setUp(self):
+        self._preparar_general()
+
+    def test_crea_un_ticket_normal_sobre_el_servicio_interno(self):
+        ticket = self._ticket_general()
+        self.assertEqual(ticket.estado, Ticket.Estado.BORRADOR)
+        self.assertEqual(ticket.tipo, "SERVICIO")
+        self.assertEqual(ticket.solicitante, self.usuario_g)
+        self.assertEqual(TicketServicio.objects.filter(ticket=ticket).count(), 1)
+        self.assertTrue(ticket.detalle_servicio.servicio.es_ticket_general)
+        self.assertIsNone(ticket.instancia_workflow_id)
+
+    def test_congela_tiempo_prorroga_y_entrega_del_servicio_interno(self):
+        self._configurar_interno(
+            tiempo_objetivo_cantidad=2, tiempo_objetivo_unidad="DIAS", tiempo_objetivo_habiles=True,
+            politica_prorroga="CON_APROBACION", prorroga_aprobador_usuario=self.admin_g,
+            politica_entrega="PERIODO_OBSERVACIONES", dias_observacion=4,
+        )
+        ticket = self._ticket_general()
+        self.assertEqual(
+            (ticket.tiempo_objetivo_cantidad, ticket.tiempo_objetivo_unidad, ticket.tiempo_objetivo_habiles),
+            (2, "DIAS", True),
+        )
+        self.assertEqual(
+            (ticket.prorroga_politica, ticket.prorroga_aprobador_usuario_id), ("CON_APROBACION", self.admin_g.pk)
+        )
+        self.assertEqual((ticket.entrega_politica, ticket.entrega_dias_observacion), ("PERIODO_OBSERVACIONES", 4))
+        # Cambiar el servicio después no altera el ticket ya creado.
+        self._configurar_interno(
+            tiempo_objetivo_cantidad=30, politica_prorroga="NO_PERMITE", prorroga_aprobador_usuario=None
+        )
+        ticket.refresh_from_db()
+        self.assertEqual((ticket.tiempo_objetivo_cantidad, ticket.prorroga_politica), (2, "CON_APROBACION"))
+
+    def test_materializa_los_entregables_del_servicio_interno(self):
+        from apps.catalogo.models import DefinicionEntregable
+
+        DefinicionEntregable.objects.create(servicio=self.servicio_g, nombre="Respuesta", tipo="TEXTO", obligatorio=True)
+        ticket = self._ticket_general()
+        self.assertEqual([e.nombre for e in ticket.entregables.all()], ["Respuesta"])
+
+    def test_deshabilitado_la_operacion_se_rechaza_y_no_crea_nada(self):
+        self.general.configurar_habilitacion(self.admin_g, habilitado=False)
+        with self.assertRaises(ValidationError) as contexto:
+            self._ticket_general()
+        self.assertIn("no está habilitado", contexto.exception.messages[0])
+        self.assertEqual(Ticket.objects.count(), 0)
+
+    def test_exige_visibilidad_normal_del_servicio_interno(self):
+        self._configurar_interno(alcance_visibilidad="RESTRINGIDO")
+        with self.assertRaises(PermissionDenied):
+            self._ticket_general()
+        from apps.catalogo.models import ServicioVisibilidad
+
+        ServicioVisibilidad.objects.create(
+            servicio=self.servicio_g, tipo_alcance="USUARIO", usuario=self.usuario_g
+        )
+        self.assertEqual(self._ticket_general().detalle_servicio.servicio, self.servicio_g)
+        otro = Usuario.objects.create_user("sin_acceso_g", password=CLAVE_PRUEBA)
+        with self.assertRaises(PermissionDenied):
+            self._ticket_general(otro)
+
+    def test_exige_un_servicio_interno_activo_y_con_formulario_activo(self):
+        self._configurar_interno(activo=False)
+        with self.assertRaises(PermissionDenied):
+            self._ticket_general()
+        self._configurar_interno(activo=True)
+        Formulario.objects.filter(pk=self.servicio_g.formulario_id).update(version_activa=None)
+        with self.assertRaises(ValidationError) as contexto:
+            self._ticket_general()
+        self.assertIn("formulario activo", contexto.exception.messages[0])
+
+    def test_sin_servicio_interno_configurado_se_rechaza(self):
+        Servicio.objects.filter(pk=self.servicio_g.pk).update(es_ticket_general=False)
+        with self.assertRaises(ValidationError):
+            self._ticket_general()
+
+    def test_el_origen_se_deduce_del_servicio_sin_campos_extra(self):
+        self._preparar_catalogo_normal()
+        general = self._ticket_general()
+        normal = crear_borrador(self.usuario_g, self.servicio_n)
+        generales = Ticket.objects.filter(detalle_servicio__servicio__es_ticket_general=True)
+        self.assertEqual(list(generales), [general])
+        self.assertNotIn(normal, generales)
+
+
+class TicketGeneralRadicacionTests(_EscenarioTicketGeneralMixin, TestCase):
+    def setUp(self):
+        self._preparar_general()
+        self._configurar_interno(
+            tiempo_objetivo_cantidad=3, tiempo_objetivo_unidad="DIAS", tiempo_objetivo_habiles=False,
+            politica_prorroga="SIN_APROBACION",
+        )
+
+    def test_radica_con_el_dominio_existente_y_calcula_la_fecha_objetivo(self):
+        ticket = self._radicar_general()
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+        self.assertIsNotNone(ticket.radicado)
+        self.assertEqual(ticket.fecha_objetivo_original, ticket.fecha_objetivo_vigente)
+        self.assertIsNotNone(ticket.fecha_objetivo_original)
+        self.assertEqual(ticket.historial.filter(tipo_evento="RADICADO").count(), 1)
+
+    def test_no_crea_ningun_workflow_artificial(self):
+        from apps.workflows.models import InstanciaWorkflow, Workflow
+
+        antes = (Workflow.objects.count(), InstanciaWorkflow.objects.count())
+        ticket = self._radicar_general()
+        self.assertEqual((Workflow.objects.count(), InstanciaWorkflow.objects.count()), antes)
+        self.assertIsNone(ticket.instancia_workflow_id)
+        self.assertIsNone(self.servicio_g.workflow_id)
+
+    def test_valida_su_formulario_al_radicar(self):
+        ticket = self._ticket_general()
+        with self.assertRaises(ValidationError):
+            radicar_ticket(ticket, self.usuario_g)
+        self.assertEqual(Ticket.objects.get(pk=ticket.pk).estado, Ticket.Estado.BORRADOR)
+
+    def test_sigue_el_ciclo_normal_hasta_cerrarse_y_admite_prorroga(self):
+        from apps.tickets import prorrogas
+
+        ticket = self._radicar_general()
+        ticket = tomar_ticket(ticket, self.atiende_g)
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+        prorroga = prorrogas.solicitar_prorroga(
+            Ticket.objects.get(pk=ticket.pk), self.atiende_g,
+            nueva_fecha=ticket.fecha_objetivo_vigente + timedelta(days=2), motivo="Más tiempo",
+        )
+        self.assertEqual(prorroga.estado, "APROBADA")
+        resolver_ticket(Ticket.objects.get(pk=ticket.pk), self.atiende_g, "Resuelto")
+        cerrar_ticket(Ticket.objects.get(pk=ticket.pk), self.usuario_g)
+        final = Ticket.objects.get(pk=ticket.pk)
+        self.assertEqual(final.estado, Ticket.Estado.CERRADO)
+        self.assertEqual(final.fecha_objetivo_original, ticket.fecha_objetivo_original)
+
+    def test_entra_a_la_cola_normal_de_atencion(self):
+        ticket = self._radicar_general()
+        self.assertTrue(puede_ver_en_cola(self.atiende_g, ticket))
+        self.client.login(username="atiende_g", password=CLAVE_PRUEBA)
+        self.assertContains(self.client.get(reverse("tickets:cola")), self.NOMBRE_INTERNO)
+
+    def test_radicar_no_exige_que_siga_habilitado(self):
+        # Habilitar/deshabilitar gobierna la ENTRADA (crear el borrador); un borrador
+        # ya creado conserva su derecho a radicarse, como con cualquier Servicio.
+        ticket = self._ticket_general()
+        guardar_respuestas_borrador(ticket, self.usuario_g, {self.campos_g["Asunto"].id: "Pendiente"})
+        self.general.configurar_habilitacion(self.admin_g, habilitado=False)
+        radicar_ticket(ticket, self.usuario_g)
+        self.assertEqual(Ticket.objects.get(pk=ticket.pk).estado, Ticket.Estado.RADICADO)
+
+
+class TicketGeneralVistasTests(_EscenarioTicketGeneralMixin, TestCase):
+    def setUp(self):
+        self._preparar_general(habilitar=True)
+
+    def _inicio(self, username="usuario_g"):
+        self.client.login(username=username, password=CLAVE_PRUEBA)
+        return self.client.get(reverse("core:inicio"))
+
+    def test_habilitado_se_ofrece_la_entrada_en_inicio(self):
+        respuesta = self._inicio()
+        self.assertContains(respuesta, "Crear ticket general")
+        self.assertContains(respuesta, reverse("tickets:ticket_general"))
+
+    def test_deshabilitado_no_hay_cta_y_la_url_directa_se_rechaza(self):
+        self.general.configurar_habilitacion(self.admin_g, habilitado=False)
+        self.assertNotContains(self._inicio(), "Crear ticket general")
+        self.assertEqual(self.client.get(reverse("tickets:ticket_general")).status_code, 404)
+        self.assertEqual(Ticket.objects.count(), 0)
+
+    def test_no_se_ofrece_si_el_servicio_no_tiene_formulario_activo_o_no_es_accesible(self):
+        self._configurar_interno(alcance_visibilidad="RESTRINGIDO")
+        self.assertNotContains(self._inicio(), "Crear ticket general")
+        self.assertEqual(self.client.get(reverse("tickets:ticket_general")).status_code, 404)
+        self._configurar_interno(alcance_visibilidad="PUBLICO_INTERNO")
+        Formulario.objects.filter(pk=self.servicio_g.formulario_id).update(version_activa=None)
+        self.assertNotContains(self._inicio(), "Crear ticket general")
+        respuesta = self.client.get(reverse("tickets:ticket_general"))
+        self.assertContains(respuesta, "aún no está disponible")
+
+    def test_exige_sesion(self):
+        self.client.logout()
+        respuesta = self.client.get(reverse("tickets:ticket_general"))
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertIn("login", respuesta.url)
+
+    def test_entrar_crea_el_borrador_y_muestra_el_formulario_generico(self):
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:ticket_general"))
+        ticket = Ticket.objects.get()
+        self.assertRedirects(respuesta, reverse("tickets:borrador", args=[ticket.pk]))
+        pagina = self.client.get(reverse("tickets:borrador", args=[ticket.pk]))
+        self.assertContains(pagina, "Asunto")
+        self.assertContains(pagina, "Descripción")
+        self.assertContains(pagina, "Adjuntos")
+
+    def test_entrar_dos_veces_reutiliza_el_borrador_vacio(self):
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.get(reverse("tickets:ticket_general"))
+        self.client.get(reverse("tickets:ticket_general"))
+        self.assertEqual(Ticket.objects.count(), 1)
+
+    def test_el_recorrido_completo_radica_por_la_via_normal(self):
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.get(reverse("tickets:ticket_general"))
+        ticket = Ticket.objects.get()
+        self.client.post(
+            reverse("tickets:borrador", args=[ticket.pk]),
+            {f"campo_{self.campos_g['Asunto'].id}": "Pedido sin servicio", f"campo_{self.campos_g['Descripción'].id}": "Detalle"},
+        )
+        respuesta = self.client.post(reverse("tickets:enviar", args=[ticket.pk]))
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertEqual(Ticket.objects.get(pk=ticket.pk).estado, Ticket.Estado.RADICADO)
+
+    def test_el_enlace_de_inicio_no_aparece_para_quien_no_tiene_acceso(self):
+        self._configurar_interno(alcance_visibilidad="RESTRINGIDO")
+        from apps.catalogo.models import ServicioVisibilidad
+
+        ServicioVisibilidad.objects.create(servicio=self.servicio_g, tipo_alcance="USUARIO", usuario=self.usuario_g)
+        self.assertContains(self._inicio("usuario_g"), "Crear ticket general")
+        self.client.logout()
+        self.assertNotContains(self._inicio("atiende_g"), "Crear ticket general")
+
+
+class TicketGeneralRegresionTests(_EscenarioTicketGeneralMixin, TestCase):
+    def setUp(self):
+        self._preparar_general(habilitar=True)
+        self._preparar_catalogo_normal()
+
+    def test_crear_borrador_normal_conserva_su_contrato(self):
+        ticket = crear_borrador(self.usuario_g, self.servicio_n)
+        self.assertEqual(ticket.detalle_servicio.servicio, self.servicio_n)
+        self.assertEqual(ticket.estado, Ticket.Estado.BORRADOR)
+        self.assertFalse(ticket.detalle_servicio.servicio.es_ticket_general)
+        # Un servicio normal no visible sigue rechazándose igual que antes.
+        Servicio.objects.filter(pk=self.servicio_n.pk).update(alcance_visibilidad="RESTRINGIDO")
+        with self.assertRaises(PermissionDenied):
+            crear_borrador(self.usuario_g, Servicio.objects.get(pk=self.servicio_n.pk))
+
+    def test_el_flujo_v2_de_un_servicio_normal_sigue_funcionando(self):
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:solicitar", args=[self.servicio_n.pk]))
+        ticket = Ticket.objects.get()
+        self.assertRedirects(respuesta, reverse("tickets:borrador", args=[ticket.pk]))
+        self.assertEqual(ticket.detalle_servicio.servicio, self.servicio_n)
+
+    def test_los_tickets_existentes_no_se_convierten_en_generales(self):
+        ticket = crear_borrador(self.usuario_g, self.servicio_n)
+        antes = (ticket.estado, ticket.detalle_servicio.servicio_id)
+        self._ticket_general()
+        ticket.refresh_from_db()
+        self.assertEqual((ticket.estado, ticket.detalle_servicio.servicio_id), antes)
+        self.assertEqual(Ticket.objects.filter(detalle_servicio__servicio__es_ticket_general=True).count(), 1)
+
+    def test_el_tiempo_objetivo_de_un_servicio_normal_sigue_funcionando(self):
+        Servicio.objects.filter(pk=self.servicio_n.pk).update(tiempo_objetivo_cantidad=2, tiempo_objetivo_unidad="DIAS")
+        ticket = crear_borrador(self.usuario_g, Servicio.objects.get(pk=self.servicio_n.pk))
+        guardar_respuestas_borrador(ticket, self.usuario_g, {})
+        radicar_ticket(ticket, self.usuario_g)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.tiempo_objetivo_cantidad, 2)
+        self.assertIsNotNone(ticket.fecha_objetivo_original)
+
+    def test_la_prorroga_de_un_servicio_normal_sigue_funcionando(self):
+        from apps.tickets import prorrogas
+
+        Servicio.objects.filter(pk=self.servicio_n.pk).update(
+            tiempo_objetivo_cantidad=2, tiempo_objetivo_unidad="DIAS", politica_prorroga="SIN_APROBACION"
+        )
+        ticket = crear_borrador(self.usuario_g, Servicio.objects.get(pk=self.servicio_n.pk))
+        radicar_ticket(ticket, self.usuario_g)
+        ticket = tomar_ticket(ticket, self.atiende_g)
+        prorroga = prorrogas.solicitar_prorroga(
+            Ticket.objects.get(pk=ticket.pk), self.atiende_g,
+            nueva_fecha=ticket.fecha_objetivo_vigente + timedelta(days=1), motivo="Más tiempo",
+        )
+        self.assertEqual(prorroga.estado, "APROBADA")
+
+    def test_el_catalogo_y_sus_pruebas_de_visibilidad_no_cambian_para_servicios_normales(self):
+        from apps.catalogo.visibilidad import servicios_visibles_para
+
+        Servicio.objects.filter(pk=self.servicio_n.pk).update(alcance_visibilidad="RESTRINGIDO")
+        self.assertNotIn(self.servicio_n, servicios_visibles_para(self.usuario_g))
+        from apps.catalogo.models import ServicioVisibilidad
+
+        ServicioVisibilidad.objects.create(servicio=self.servicio_n, tipo_alcance="USUARIO", usuario=self.usuario_g)
+        self.assertIn(Servicio.objects.get(pk=self.servicio_n.pk), servicios_visibles_para(self.usuario_g))
+
+
+class TicketGeneralConcurrenciaTests(_EscenarioTicketGeneralMixin, TransactionTestCase):
+    def setUp(self):
+        self._preparar_general(habilitar=False, designar=False)
+
+    def _correr(self, tareas):
+        resultados = {}
+        barrera = threading.Barrier(len(tareas))
+
+        def _hilo(clave, funcion):
+            barrera.wait()
+            try:
+                funcion()
+                resultados[clave] = "ok"
+            except ValidationError:
+                resultados[clave] = "rechazada"
+            finally:
+                connection.close()
+
+        hilos = [threading.Thread(target=_hilo, args=(c, f)) for c, f in tareas.items()]
+        for hilo in hilos:
+            hilo.start()
+        for hilo in hilos:
+            hilo.join()
+        return resultados
+
+    def test_dos_designaciones_simultaneas_dejan_un_unico_servicio_interno(self):
+        otro, _, _ = _crear_servicio_con_formulario(self.admin_g, [])
+        resultados = self._correr({
+            "a": lambda: self.general.designar_servicio_ticket_general(
+                Servicio.objects.get(pk=self.servicio_g.pk), self.admin_g
+            ),
+            "b": lambda: self.general.designar_servicio_ticket_general(Servicio.objects.get(pk=otro.pk), self.admin_g),
+        })
+        self.assertEqual(sorted(resultados.values()), ["ok", "ok"])  # en serie: la segunda reemplaza a la primera
+        self.assertEqual(Servicio.objects.filter(es_ticket_general=True).count(), 1)
+        self.assertEqual(self.general.ConfiguracionTicketGeneral.objects.count(), 1)
+
+    def test_dos_creaciones_simultaneas_del_servicio_interno_solo_una_prospera(self):
+        Servicio.objects.filter(pk=self.servicio_g.pk).delete()
+        categoria = Categoria.objects.create(nombre="Concurrente")
+        resultados = self._correr({
+            clave: (lambda: self.general.crear_servicio_ticket_general(self.admin_g, categoria=categoria))
+            for clave in ("a", "b")
+        })
+        self.assertEqual(sorted(resultados.values()), ["ok", "rechazada"])
+        self.assertEqual(Servicio.objects.filter(es_ticket_general=True).count(), 1)
+
+    def test_habilitar_y_designar_a_la_vez_dejan_la_configuracion_consistente(self):
+        self.general.designar_servicio_ticket_general(self.servicio_g, self.admin_g)
+        otro, _, _ = _crear_servicio_con_formulario(self.admin_g, [])
+        self._correr({
+            "habilitar": lambda: self.general.configurar_habilitacion(self.admin_g, habilitado=True),
+            "designar": lambda: self.general.designar_servicio_ticket_general(Servicio.objects.get(pk=otro.pk), self.admin_g),
+        })
+        marcados = Servicio.objects.filter(es_ticket_general=True)
+        self.assertEqual(marcados.count(), 1)
+        # Si quedó habilitado, es porque el servicio interno vigente es válido y activo.
+        configuracion = self.general.ConfiguracionTicketGeneral.actual()
+        if configuracion.habilitado:
+            self.assertTrue(marcados.get().activo)
+
+
+# --- 4.C2 — Direccionamiento y enrutamiento del Ticket General -------------------
+
+
+class _EscenarioDestinosMixin(_EscenarioTicketGeneralMixin):
+    """Sobre el escenario de 4.C1 (Servicio interno habilitado, destino de reserva
+    `destino_g` = `equipo_g`): un destino de cada tipo y personas con alcance
+    `tickets.atender` de ÁREA (no global) para que nada se autorice por accidente."""
+
+    def _preparar_destinos(self, *, habilitar=True):
+        self._preparar_general(habilitar=habilitar)
+        self.area_otra = Area.objects.create(nombre="Otra área", codigo="OTRA-G")
+        self.area_tic = Area.objects.create(nombre="Tecnología", codigo="TIC-G")
+        self.equipo_tic = Equipo.objects.create(nombre="Soporte TIC")
+        self.equipo_dis = Equipo.objects.create(nombre="Diseño")
+        self.miembro_tic = Usuario.objects.create_user("miembro_tic", password=CLAVE_PRUEBA)
+        self.miembro_dis = Usuario.objects.create_user("miembro_dis", password=CLAVE_PRUEBA)
+        self.persona_g = Usuario.objects.create_user(
+            "persona_g", first_name="María", last_name="Pérez", password=CLAVE_PRUEBA
+        )
+        self.ajeno_g = Usuario.objects.create_user("ajeno_g", password=CLAVE_PRUEBA)
+        MiembroEquipo.objects.create(equipo=self.equipo_tic, usuario=self.miembro_tic)
+        MiembroEquipo.objects.create(equipo=self.equipo_dis, usuario=self.miembro_dis)
+        for usuario in (self.miembro_tic, self.miembro_dis, self.persona_g, self.ajeno_g):
+            _otorgar_tickets_atender(usuario, tipo_alcance=AsignacionRol.TipoAlcance.AREA, area=self.area_otra)
+        destinos = self.destinos
+        self.d_area = destinos.crear_destino(self.admin_g, tipo="AREA", objeto=self.area_tic, responsable=self.equipo_tic)
+        self.d_equipo = destinos.crear_destino(self.admin_g, tipo="EQUIPO", objeto=self.equipo_dis)
+        self.d_persona = destinos.crear_destino(self.admin_g, tipo="USUARIO", objeto=self.persona_g)
+
+    def _sin_reserva(self):
+        self.destinos.definir_predeterminado(self.admin_g, None)
+
+    def _radicar_a(self, destino=None, usuario=None, asunto="Necesito apoyo con un tema nuevo"):
+        from apps.tickets import direccionamiento
+
+        usuario = usuario or self.usuario_g
+        ticket = self._ticket_general(usuario)
+        if destino is not None:
+            direccionamiento.seleccionar_destino_borrador(ticket, usuario, destino.pk)
+        guardar_respuestas_borrador(ticket, usuario, {self.campos_g["Asunto"].id: asunto})
+        radicar_ticket(ticket, usuario)
+        ticket.refresh_from_db()
+        return ticket
+
+    def _cola(self, usuario, **parametros):
+        self.client.login(username=usuario.username, password=CLAVE_PRUEBA)
+        return self.client.get(reverse("tickets:cola"), parametros)
+
+
+class TicketGeneralDestinoModeloTests(_EscenarioDestinosMixin, TestCase):
+    def setUp(self):
+        self._preparar_destinos(habilitar=False)
+
+    def test_destino_de_area_con_su_responsable(self):
+        self.assertEqual((self.d_area.tipo, self.d_area.area, self.d_area.etiqueta), ("AREA", self.area_tic, "Tecnología"))
+        self.assertEqual((self.d_area.responsable_equipo, self.d_area.responsable_usuario), (self.equipo_tic, None))
+        self.assertTrue(self.d_area.activo)
+
+    def test_destino_de_equipo_es_su_propio_responsable_por_defecto(self):
+        self.assertEqual((self.d_equipo.equipo, self.d_equipo.responsable_equipo), (self.equipo_dis, self.equipo_dis))
+        self.assertIsNone(self.d_equipo.responsable_usuario)
+
+    def test_destino_de_persona_es_su_propio_responsable_por_defecto(self):
+        self.assertEqual(self.d_persona.etiqueta, "María Pérez")
+        self.assertEqual((self.d_persona.responsable_usuario, self.d_persona.responsable_equipo), (self.persona_g, None))
+
+    def test_un_destino_de_area_exige_responsable(self):
+        otra = Area.objects.create(nombre="Mercadeo", codigo="MER-G")
+        with self.assertRaises(ValidationError):
+            self.destinos.crear_destino(self.admin_g, tipo="AREA", objeto=otra)
+
+    def test_un_equipo_puede_atender_un_destino_de_persona_y_viceversa(self):
+        destino = self.destinos.crear_destino(
+            self.admin_g, tipo="USUARIO", objeto=self.ajeno_g, responsable=self.equipo_tic
+        )
+        self.assertEqual((destino.responsable_equipo, destino.responsable_usuario), (self.equipo_tic, None))
+        otra = Area.objects.create(nombre="Mercadeo", codigo="MER-G")
+        destino = self.destinos.crear_destino(self.admin_g, tipo="AREA", objeto=otra, responsable=self.miembro_tic)
+        self.assertEqual((destino.responsable_usuario, destino.responsable_equipo), (self.miembro_tic, None))
+
+    def test_la_base_rechaza_combinaciones_incoherentes_de_destino(self):
+        from apps.catalogo.models import DestinoTicketGeneral
+
+        otra = Area.objects.create(nombre="Mercadeo", codigo="MER-G")
+        casos = {
+            "area sin area": dict(tipo="AREA", equipo=self.equipo_dis),
+            "area con equipo": dict(tipo="AREA", area=otra, equipo=self.equipo_dis),
+            "equipo con area": dict(tipo="EQUIPO", equipo=self.equipo_dis, area=otra),
+            "equipo con usuario": dict(tipo="EQUIPO", equipo=self.equipo_dis, usuario=self.ajeno_g),
+            "usuario sin usuario": dict(tipo="USUARIO", area=otra),
+            "usuario con equipo": dict(tipo="USUARIO", usuario=self.ajeno_g, equipo=self.equipo_dis),
+            "tipo desconocido": dict(tipo="OTRO", area=otra),
+            "tipo sin objeto": dict(tipo="AREA"),
+        }
+        for nombre, datos in casos.items():
+            with self.subTest(nombre), self.assertRaises(IntegrityError), transaction.atomic():
+                DestinoTicketGeneral.objects.create(responsable_equipo=self.equipo_tic, **datos)
+
+    def test_la_base_exige_exactamente_un_responsable(self):
+        from apps.catalogo.models import DestinoTicketGeneral
+
+        otra = Area.objects.create(nombre="Mercadeo", codigo="MER-G")
+        for nombre, responsables in {
+            "ninguno": {},
+            "ambos": {"responsable_equipo": self.equipo_tic, "responsable_usuario": self.miembro_tic},
+        }.items():
+            with self.subTest(nombre), self.assertRaises(IntegrityError), transaction.atomic():
+                DestinoTicketGeneral.objects.create(tipo="AREA", area=otra, **responsables)
+
+    def test_un_objeto_tiene_un_solo_destino(self):
+        from apps.catalogo.models import DestinoTicketGeneral
+
+        with self.assertRaises(ValidationError):
+            self.destinos.crear_destino(self.admin_g, tipo="AREA", objeto=self.area_tic, responsable=self.equipo_dis)
+        for datos in (
+            dict(tipo="AREA", area=self.area_tic), dict(tipo="EQUIPO", equipo=self.equipo_dis),
+            dict(tipo="USUARIO", usuario=self.persona_g),
+        ):
+            with self.subTest(datos["tipo"]), self.assertRaises(IntegrityError), transaction.atomic():
+                DestinoTicketGeneral.objects.create(responsable_equipo=self.equipo_tic, **datos)
+
+    def test_no_se_crea_un_destino_con_objetos_inactivos_segun_el_dominio_real(self):
+        area = Area.objects.create(nombre="Inactiva", codigo="INA-G", activo=False)
+        equipo = Equipo.objects.create(nombre="Equipo inactivo", activo=False)
+        usuario = Usuario.objects.create_user("inactivo_g", password=CLAVE_PRUEBA, is_active=False)
+        for tipo, objeto, responsable in (
+            ("AREA", area, self.equipo_tic), ("EQUIPO", equipo, None), ("USUARIO", usuario, None),
+        ):
+            with self.subTest(tipo), self.assertRaises(ValidationError):
+                self.destinos.crear_destino(self.admin_g, tipo=tipo, objeto=objeto, responsable=responsable)
+
+    def test_el_responsable_debe_poder_atender(self):
+        otra = Area.objects.create(nombre="Mercadeo", codigo="MER-G")
+        vacio = Equipo.objects.create(nombre="Equipo vacío")
+        inactivo = Equipo.objects.create(nombre="Equipo apagado", activo=False)
+        MiembroEquipo.objects.create(equipo=inactivo, usuario=self.ajeno_g)
+        persona_inactiva = Usuario.objects.create_user("baja_g", password=CLAVE_PRUEBA, is_active=False)
+        for responsable in (vacio, inactivo, persona_inactiva):
+            with self.subTest(str(responsable)), self.assertRaises(ValidationError):
+                self.destinos.crear_destino(self.admin_g, tipo="AREA", objeto=otra, responsable=responsable)
+        MiembroEquipo.objects.filter(equipo=self.equipo_tic).update(activo=False)
+        with self.assertRaises(ValidationError):
+            self.destinos.crear_destino(self.admin_g, tipo="AREA", objeto=otra, responsable=self.equipo_tic)
+
+    def test_un_tipo_u_objeto_incorrecto_se_rechaza(self):
+        with self.assertRaises(ValidationError):
+            self.destinos.crear_destino(self.admin_g, tipo="AREA", objeto=self.equipo_dis, responsable=self.equipo_tic)
+        with self.assertRaises(ValidationError):
+            self.destinos.crear_destino(self.admin_g, tipo="OTRO", objeto=self.area_tic, responsable=self.equipo_tic)
+
+    def test_activo_e_inactivo_y_utilizable(self):
+        self.assertIn(self.d_area, self.destinos.destinos_utilizables())
+        self.destinos.desactivar_destino(self.admin_g, self.d_area)
+        self.assertNotIn(self.d_area.pk, [d.pk for d in self.destinos.destinos_utilizables()])
+        self.destinos.activar_destino(self.admin_g, self.d_area)
+        self.assertIn(self.d_area.pk, [d.pk for d in self.destinos.destinos_utilizables()])
+
+    def test_un_destino_activo_deja_de_ser_utilizable_si_su_objeto_se_inactiva(self):
+        Area.objects.filter(pk=self.area_tic.pk).update(activo=False)
+        destino = self.destinos._consulta().get(pk=self.d_area.pk)
+        self.assertTrue(destino.activo)
+        self.assertIn("inactiva", self.destinos.motivo_no_utilizable(destino))
+        self.assertNotIn(destino.pk, [d.pk for d in self.destinos.destinos_utilizables()])
+        with self.assertRaises(ValidationError):  # activo, pero su área no lo es: no puede ser reserva
+            self.destinos.definir_predeterminado(self.admin_g, destino)
+        self.destinos.desactivar_destino(self.admin_g, destino)
+        with self.assertRaises(ValidationError):  # y no se reactiva mientras su área siga inactiva
+            self.destinos.activar_destino(self.admin_g, destino)
+
+    def test_el_destino_de_reserva_es_unico_y_siempre_utilizable(self):
+        from apps.catalogo.models import ConfiguracionTicketGeneral
+
+        self.assertEqual(ConfiguracionTicketGeneral.actual().destino_predeterminado, self.destino_g)
+        self.destinos.definir_predeterminado(self.admin_g, self.d_area)
+        self.assertEqual(ConfiguracionTicketGeneral.actual().destino_predeterminado, self.d_area)
+        self.assertEqual(ConfiguracionTicketGeneral.objects.count(), 1)
+        self.assertEqual(self.destinos.destino_predeterminado_utilizable().pk, self.d_area.pk)
+
+    def test_el_destino_de_reserva_debe_estar_activo_y_se_puede_quitar(self):
+        from apps.catalogo.models import ConfiguracionTicketGeneral
+
+        self.destinos.desactivar_destino(self.admin_g, self.d_equipo)
+        with self.assertRaises(ValidationError):
+            self.destinos.definir_predeterminado(self.admin_g, self.d_equipo)
+        self.destinos.definir_predeterminado(self.admin_g, None)
+        self.assertIsNone(ConfiguracionTicketGeneral.actual().destino_predeterminado_id)
+        self.assertIsNone(self.destinos.destino_predeterminado_utilizable())
+
+    def test_desactivar_el_destino_de_reserva_lo_retira_como_reserva(self):
+        from apps.catalogo.models import ConfiguracionTicketGeneral
+
+        self.destinos.desactivar_destino(self.admin_g, self.destino_g)
+        self.assertIsNone(ConfiguracionTicketGeneral.actual().destino_predeterminado_id)
+        self.assertFalse(self.destinos.opciones_de_seleccion()["permite_omitir"])
+
+
+class TicketGeneralDestinoAdministracionTests(_EscenarioDestinosMixin, TestCase):
+    def setUp(self):
+        self._preparar_destinos(habilitar=False)
+
+    def _eventos(self, modelo="catalogo.destinoticketgeneral"):
+        return RegistroAuditoria.objects.filter(modelo=modelo).order_by("pk")
+
+    def test_todas_las_operaciones_exigen_catalogo_administrar(self):
+        for llamada in (
+            lambda: self.destinos.crear_destino(
+                self.usuario_g, tipo="AREA", objeto=self.area_otra, responsable=self.equipo_tic
+            ),
+            lambda: self.destinos.cambiar_responsable(self.usuario_g, self.d_area, responsable=self.equipo_dis),
+            lambda: self.destinos.activar_destino(self.usuario_g, self.d_area),
+            lambda: self.destinos.desactivar_destino(self.usuario_g, self.d_area),
+            lambda: self.destinos.definir_predeterminado(self.usuario_g, self.d_area),
+        ):
+            with self.assertRaises(PermissionDenied):
+                llamada()
+
+    def test_editar_el_responsable_solo_afecta_a_los_tickets_nuevos(self):
+        self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+        antes = self._radicar_a(self.d_area)
+        self.destinos.cambiar_responsable(self.admin_g, self.d_area, responsable=self.equipo_dis)
+        self.d_area.refresh_from_db()
+        self.assertEqual(self.d_area.responsable_equipo, self.equipo_dis)
+        antes.refresh_from_db()
+        self.assertEqual(antes.equipo_responsable, self.equipo_tic)
+        nuevo = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        self.assertEqual(nuevo.equipo_responsable, self.equipo_dis)
+
+    def test_cambiar_a_una_persona_responsable_y_validar(self):
+        self.destinos.cambiar_responsable(self.admin_g, self.d_area, responsable=self.miembro_tic)
+        self.d_area.refresh_from_db()
+        self.assertEqual((self.d_area.responsable_usuario, self.d_area.responsable_equipo), (self.miembro_tic, None))
+        with self.assertRaises(ValidationError):
+            self.destinos.cambiar_responsable(
+                self.admin_g, self.d_area, responsable=Equipo.objects.create(nombre="Sin miembros")
+            )
+        with self.assertRaises(ValidationError):
+            self.destinos.cambiar_responsable(self.admin_g, self.d_area, responsable=None)
+
+    def test_activar_y_desactivar_son_idempotentes(self):
+        self.destinos.activar_destino(self.admin_g, self.d_area)
+        self.assertEqual(self._eventos().filter(accion="ACTUALIZAR").count(), 0)
+        self.destinos.desactivar_destino(self.admin_g, self.d_area)
+        self.destinos.desactivar_destino(self.admin_g, self.d_area)
+        self.assertEqual(self._eventos().filter(accion="ACTUALIZAR").count(), 1)
+
+    def test_audita_alta_edicion_activacion_y_cambio_de_responsable(self):
+        alta = self._eventos().filter(accion="CREAR", object_id=self.d_area.pk).get()
+        self.assertEqual(alta.usuario, self.admin_g)
+        self.destinos.cambiar_responsable(self.admin_g, self.d_area, responsable=self.equipo_dis)
+        self.destinos.desactivar_destino(self.admin_g, self.d_area)
+        self.destinos.activar_destino(self.admin_g, self.d_area)
+        eventos = list(self._eventos().filter(accion="ACTUALIZAR", object_id=self.d_area.pk))
+        self.assertEqual(len(eventos), 3)
+        cambio, baja, alta_de_nuevo = eventos
+        self.assertEqual(cambio.datos_anteriores["responsable_equipo_id"], self.equipo_tic.pk)
+        self.assertEqual(cambio.datos_nuevos["responsable_equipo_id"], self.equipo_dis.pk)
+        self.assertEqual((baja.datos_anteriores["activo"], baja.datos_nuevos["activo"]), (True, False))
+        self.assertEqual((alta_de_nuevo.datos_anteriores["activo"], alta_de_nuevo.datos_nuevos["activo"]), (False, True))
+
+    def test_audita_el_cambio_del_destino_de_reserva(self):
+        self.destinos.definir_predeterminado(self.admin_g, self.d_area)
+        self.destinos.definir_predeterminado(self.admin_g, self.d_area)  # sin cambio: no duplica
+        self.destinos.definir_predeterminado(self.admin_g, None)
+        eventos = list(self._eventos("catalogo.configuracionticketgeneral").filter(datos_nuevos__has_key="destino_predeterminado_id"))
+        self.assertEqual(
+            [(e.datos_anteriores["destino_predeterminado_id"], e.datos_nuevos["destino_predeterminado_id"]) for e in eventos],
+            [(self.destino_g.pk, self.d_area.pk), (self.d_area.pk, None)],
+        )
+
+    def test_habilitar_exige_al_menos_un_destino_utilizable(self):
+        for destino in (self.destino_g, self.d_area, self.d_equipo, self.d_persona):
+            self.destinos.desactivar_destino(self.admin_g, destino)
+        with self.assertRaises(ValidationError) as contexto:
+            self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+        self.assertIn("destino", contexto.exception.messages[0])
+        self.assertFalse(self.general.estado_para_administracion()["puede_habilitar"])
+        self.destinos.activar_destino(self.admin_g, self.d_area)
+        self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+
+    def test_sin_destinos_utilizables_no_se_ofrece_la_entrada(self):
+        self.general.configurar_habilitacion(self.admin_g, habilitado=True)
+        self.assertIsNotNone(self.general.servicio_disponible_para(self.usuario_g))
+        for destino in (self.destino_g, self.d_area, self.d_equipo, self.d_persona):
+            self.destinos.desactivar_destino(self.admin_g, destino)
+        self.assertIsNone(self.general.servicio_disponible_para(self.usuario_g))
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.assertContains(self.client.get(reverse("tickets:ticket_general")), "aún no está disponible")
+        self.assertEqual(Ticket.objects.count(), 0)
+
+    def test_pantalla_lista_destinos_y_estado(self):
+        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("core:disenador_servicios"))
+        self.assertContains(respuesta, "Soporte TIC")
+        self.assertContains(respuesta, "Área: Tecnología")
+        self.assertContains(respuesta, "Destino de reserva")
+        self.assertContains(respuesta, "María Pérez")
+
+    def test_acciones_de_la_pantalla(self):
+        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        otra = Area.objects.create(nombre="Mercadeo", codigo="MER-G")
+        self.client.post(reverse("catalogo:ticket_general_destino_crear"), {
+            "tipo": "AREA", "objeto_area": otra.pk, "objeto_equipo": "", "objeto_usuario": "",
+            "responsable": f"EQUIPO:{self.equipo_dis.pk}",
+        })
+        creado = self.destinos._consulta().get(area=otra)
+        self.assertEqual(creado.responsable_equipo, self.equipo_dis)
+        self.client.post(
+            reverse("catalogo:ticket_general_destino_responsable", args=[creado.pk]),
+            {"responsable": f"USUARIO:{self.miembro_tic.pk}"},
+        )
+        creado.refresh_from_db()
+        self.assertEqual(creado.responsable_usuario, self.miembro_tic)
+        self.client.post(reverse("catalogo:ticket_general_destino_estado", args=[creado.pk]), {"activo": "0"})
+        creado.refresh_from_db()
+        self.assertFalse(creado.activo)
+        self.client.post(reverse("catalogo:ticket_general_destino_estado", args=[creado.pk]), {"activo": "1"})
+        self.client.post(reverse("catalogo:ticket_general_destino_predeterminado"), {"destino": creado.pk})
+        self.assertEqual(self.general.ConfiguracionTicketGeneral.actual().destino_predeterminado_id, creado.pk)
+        self.client.post(reverse("catalogo:ticket_general_destino_predeterminado"), {"destino": ""})
+        self.assertIsNone(self.general.ConfiguracionTicketGeneral.actual().destino_predeterminado_id)
+
+    def test_la_pantalla_muestra_el_motivo_si_algo_no_se_acepta(self):
+        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(
+            reverse("catalogo:ticket_general_destino_crear"),
+            {"tipo": "AREA", "objeto_area": self.area_otra.pk, "responsable": ""}, follow=True,
+        )
+        self.assertContains(respuesta, "necesita un responsable")
+        self.assertFalse(self.destinos._consulta().filter(area=self.area_otra).exists())
+
+    def test_las_vistas_exigen_permiso_y_solo_aceptan_post(self):
+        urls = [
+            reverse("catalogo:ticket_general_destino_crear"),
+            reverse("catalogo:ticket_general_destino_predeterminado"),
+            reverse("catalogo:ticket_general_destino_responsable", args=[self.d_area.pk]),
+            reverse("catalogo:ticket_general_destino_estado", args=[self.d_area.pk]),
+        ]
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        for url in urls:
+            self.assertEqual(self.client.post(url, {}).status_code, 403)
+        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        for url in urls:
+            self.assertEqual(self.client.get(url).status_code, 405)
+
+
+class TicketGeneralSeleccionTests(_EscenarioDestinosMixin, TestCase):
+    def setUp(self):
+        self._preparar_destinos()
+
+    def test_una_lista_agrupada_solo_con_destinos_activos(self):
+        opciones = self.destinos.opciones_de_seleccion()
+        self.assertEqual([g["titulo"] for g in opciones["grupos"]], ["Áreas", "Equipos", "Personas"])
+        por_grupo = {g["titulo"]: [o["etiqueta"] for o in g["opciones"]] for g in opciones["grupos"]}
+        self.assertEqual(por_grupo["Áreas"], ["Tecnología"])
+        self.assertEqual(por_grupo["Equipos"], ["Diseño", "Equipo general"])
+        self.assertEqual(por_grupo["Personas"], ["María Pérez"])
+        self.destinos.desactivar_destino(self.admin_g, self.d_equipo)
+        por_grupo = {g["titulo"]: [o["etiqueta"] for o in g["opciones"]] for g in self.destinos.opciones_de_seleccion()["grupos"]}
+        self.assertEqual(por_grupo["Equipos"], ["Equipo general"])
+
+    def test_la_entrada_muestra_el_selector_agrupado(self):
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        ticket_url = self.client.get(reverse("tickets:ticket_general"))["Location"]
+        respuesta = self.client.get(ticket_url)
+        self.assertContains(respuesta, 'name="destino_general"')
+        for titulo in ("Áreas", "Equipos", "Personas"):
+            self.assertContains(respuesta, f'<optgroup label="{titulo}">')
+        self.assertContains(respuesta, "No estoy seguro")
+        self.assertContains(respuesta, "¿A quién diriges tu solicitud?")
+
+    def test_el_destino_es_obligatorio_si_no_hay_destino_de_reserva(self):
+        self._sin_reserva()
+        self.assertFalse(self.destinos.opciones_de_seleccion()["permite_omitir"])
+        ticket = self._ticket_general()
+        guardar_respuestas_borrador(ticket, self.usuario_g, {self.campos_g["Asunto"].id: "Sin destino"})
+        with self.assertRaises(ValidationError) as contexto:
+            radicar_ticket(ticket, self.usuario_g)
+        self.assertIn("Selecciona a quién", contexto.exception.messages[0])
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.BORRADOR)
+        self.assertEqual((ticket.usuario_responsable_id, ticket.equipo_responsable_id, ticket.radicado), (None, None, None))
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:borrador", args=[ticket.pk]))
+        self.assertContains(respuesta, "Obligatorio")
+        self.assertNotContains(respuesta, "No estoy seguro")
+
+    def test_sin_seleccion_se_resuelve_al_destino_de_reserva(self):
+        from apps.tickets.models import DireccionamientoTicket
+
+        ticket = self._radicar_a(None)
+        fila = DireccionamientoTicket.objects.get(ticket=ticket)
+        self.assertEqual((fila.destino, fila.es_predeterminado), (self.destino_g, True))
+        self.assertEqual(ticket.equipo_responsable, self.equipo_g)
+
+    def test_elegir_un_destino_no_usa_la_reserva(self):
+        from apps.tickets.models import DireccionamientoTicket
+
+        ticket = self._radicar_a(self.d_equipo)
+        fila = DireccionamientoTicket.objects.get(ticket=ticket)
+        self.assertEqual((fila.destino, fila.es_predeterminado), (self.d_equipo, False))
+
+    def test_no_se_puede_elegir_un_destino_inactivo_o_inexistente(self):
+        from apps.tickets import direccionamiento
+
+        ticket = self._ticket_general()
+        self.destinos.desactivar_destino(self.admin_g, self.d_area)
+        for valor in (self.d_area.pk, 999999, "no-es-un-id"):
+            with self.subTest(valor), self.assertRaises(ValidationError):
+                direccionamiento.seleccionar_destino_borrador(ticket, self.usuario_g, valor)
+
+    def test_solo_el_solicitante_en_borrador_y_en_un_ticket_general(self):
+        from apps.tickets import direccionamiento
+
+        ticket = self._ticket_general()
+        with self.assertRaises(PermissionDenied):
+            direccionamiento.seleccionar_destino_borrador(ticket, self.ajeno_g, self.d_area.pk)
+        self._preparar_catalogo_normal()
+        normal = crear_borrador(self.usuario_g, self.servicio_n)
+        with self.assertRaises(ValidationError):
+            direccionamiento.seleccionar_destino_borrador(normal, self.usuario_g, self.d_area.pk)
+        radicado = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        with self.assertRaises(ValidationError):
+            direccionamiento.seleccionar_destino_borrador(radicado, radicado.solicitante, self.d_equipo.pk)
+
+    def test_se_puede_cambiar_y_quitar_la_seleccion_en_borrador(self):
+        from apps.tickets import direccionamiento
+        from apps.tickets.models import DireccionamientoTicket
+
+        ticket = self._ticket_general()
+        direccionamiento.seleccionar_destino_borrador(ticket, self.usuario_g, self.d_area.pk)
+        direccionamiento.seleccionar_destino_borrador(ticket, self.usuario_g, self.d_equipo.pk)
+        self.assertEqual(DireccionamientoTicket.objects.get(ticket=ticket).destino, self.d_equipo)
+        direccionamiento.seleccionar_destino_borrador(ticket, self.usuario_g, "")
+        self.assertIsNone(DireccionamientoTicket.objects.get(ticket=ticket).destino)
+        self.assertEqual(DireccionamientoTicket.objects.filter(ticket=ticket).count(), 1)
+
+    def test_el_destino_no_es_un_campo_del_formulario_ni_cambia_con_el_formulario(self):
+        etiquetas = {c.etiqueta for c in self.version_g.campos.all()}
+        self.assertEqual(etiquetas, {"Asunto", "Descripción", "Adjuntos"})
+        from apps.tickets import direccionamiento
+
+        nueva = crear_nueva_version(self.servicio_g.formulario, actor=self.admin_g)
+        Campo.objects.create(version=nueva, tipo=Campo.TipoCampo.TEXTO, etiqueta="Urgencia")
+        activar_version(self.servicio_g.formulario, nueva, actor=self.admin_g)
+        ticket = self._ticket_general(Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        self.assertEqual(ticket.detalle_servicio.formulario_version_id, nueva.pk)
+        direccionamiento.seleccionar_destino_borrador(ticket, ticket.solicitante, self.d_area.pk)
+        self.assertIsNone(direccionamiento.error_de_destino(ticket))  # el enrutamiento no depende de la versión
+
+    def test_recorrido_completo_por_la_interfaz(self):
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.get(reverse("tickets:ticket_general"))
+        ticket = Ticket.objects.get(solicitante=self.usuario_g)
+        campo = f"campo_{self.campos_g['Asunto'].id}"
+        respuesta = self.client.post(
+            reverse("tickets:revisar", args=[ticket.pk]), {"destino_general": self.d_area.pk, campo: "Mi pedido"}
+        )
+        self.assertRedirects(respuesta, reverse("tickets:revisar", args=[ticket.pk]))
+        self.assertContains(self.client.get(reverse("tickets:revisar", args=[ticket.pk])), "Tecnología")
+        self.client.post(reverse("tickets:enviar", args=[ticket.pk]))
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+        self.assertEqual(ticket.equipo_responsable, self.equipo_tic)
+
+    def test_la_revision_avisa_si_falta_el_destino_y_no_deja_avanzar(self):
+        self._sin_reserva()
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.get(reverse("tickets:ticket_general"))
+        ticket = Ticket.objects.get(solicitante=self.usuario_g)
+        campo = f"campo_{self.campos_g['Asunto'].id}"
+        respuesta = self.client.post(reverse("tickets:revisar", args=[ticket.pk]), {"destino_general": "", campo: "Mi pedido"})
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "Selecciona a quién diriges tu solicitud.")
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.BORRADOR)
+
+    def test_el_formulario_de_un_servicio_normal_no_muestra_selector(self):
+        self._preparar_catalogo_normal()
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        redireccion = self.client.get(reverse("tickets:solicitar", args=[self.servicio_n.pk]))
+        self.assertNotContains(self.client.get(redireccion["Location"]), "destino_general")
+
+
+class TicketGeneralRadicacionDestinoTests(_EscenarioDestinosMixin, TestCase):
+    def setUp(self):
+        self._preparar_destinos()
+        self._configurar_interno(
+            tiempo_objetivo_cantidad=3, tiempo_objetivo_unidad="DIAS", tiempo_objetivo_habiles=False,
+            politica_prorroga="SIN_APROBACION",
+        )
+
+    def test_area_resuelve_al_responsable_configurado(self):
+        ticket = self._radicar_a(self.d_area)
+        self.assertEqual((ticket.equipo_responsable, ticket.usuario_responsable), (self.equipo_tic, None))
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+
+    def test_equipo_resuelve_a_su_responsable(self):
+        ticket = self._radicar_a(self.d_equipo)
+        self.assertEqual((ticket.equipo_responsable, ticket.usuario_responsable), (self.equipo_dis, None))
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+
+    def test_persona_resuelve_a_su_responsable(self):
+        ticket = self._radicar_a(self.d_persona)
+        self.assertEqual((ticket.usuario_responsable, ticket.equipo_responsable), (self.persona_g, None))
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+
+    def test_se_fija_la_foto_del_destino(self):
+        from apps.tickets.models import DireccionamientoTicket
+
+        ticket = self._radicar_a(self.d_area)
+        fila = DireccionamientoTicket.objects.get(ticket=ticket)
+        self.assertEqual(
+            (fila.tipo, fila.referencia_id, fila.etiqueta, fila.destino, fila.es_predeterminado),
+            ("AREA", self.area_tic.pk, "Tecnología", self.d_area, False),
+        )
+        self.assertIsNotNone(fila.fijado_en)
+
+    def test_la_foto_fijada_es_inmutable(self):
+        from apps.tickets.models import DireccionamientoTicket
+
+        fila = DireccionamientoTicket.objects.get(ticket=self._radicar_a(self.d_area))
+        fila.etiqueta = "Otra"
+        with self.assertRaises(ValidationError):
+            fila.save()
+        self.assertEqual(DireccionamientoTicket.objects.get(pk=fila.pk).etiqueta, "Tecnología")
+
+    def test_la_base_impide_fotos_incoherentes(self):
+        from apps.tickets.models import DireccionamientoTicket
+        from apps.tickets import direccionamiento
+
+        ticket = self._ticket_general()
+        direccionamiento.seleccionar_destino_borrador(ticket, self.usuario_g, self.d_area.pk)
+        filas = DireccionamientoTicket.objects.filter(ticket=ticket)
+        for cambios in (
+            {"fijado_en": timezone.now()},  # fijada sin foto
+            {"tipo": "AREA", "etiqueta": "X", "referencia_id": 1},  # foto sin fijar
+        ):
+            with self.subTest(cambios), self.assertRaises(IntegrityError), transaction.atomic():
+                filas.update(**cambios)
+
+    def test_historial_del_direccionamiento_sin_iniciar_atencion(self):
+        ticket = self._radicar_a(self.d_area)
+        eventos = list(ticket.historial.order_by("pk").values_list("tipo_evento", flat=True))
+        self.assertEqual(eventos, ["RADICADO", "DIRECCIONADO"])
+        datos = ticket.historial.get(tipo_evento="DIRECCIONADO").datos
+        self.assertEqual(
+            (datos["destino_tipo"], datos["destino_etiqueta"], datos["responsable_etiqueta"], datos["es_predeterminado"]),
+            ("AREA", "Tecnología", "Soporte TIC", False),
+        )
+        self.assertEqual(ticket.historial.get(tipo_evento="DIRECCIONADO").actor, self.usuario_g)
+
+    def test_el_detalle_explica_destino_y_responsable(self):
+        ticket = self._radicar_a(self.d_area)
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        self.assertContains(respuesta, "Dirigido a:")
+        self.assertContains(respuesta, "Destino: Tecnología · Responsable: Soporte TIC")
+
+    def test_audita_el_direccionamiento(self):
+        ticket = self._radicar_a(self.d_persona)
+        cambio = _auditorias_de_ticket(ticket).filter(datos_nuevos__has_key="usuario_responsable_id").get()
+        self.assertEqual(cambio.datos_anteriores, {"usuario_responsable_id": None, "equipo_responsable_id": None})
+        self.assertEqual(cambio.datos_nuevos, {"usuario_responsable_id": self.persona_g.pk, "equipo_responsable_id": None})
+        foto = RegistroAuditoria.objects.get(modelo="tickets.direccionamientoticket")
+        self.assertEqual((foto.accion, foto.usuario), ("CREAR", self.usuario_g))
+        self.assertEqual(foto.datos_nuevos["etiqueta"], "María Pérez")
+
+    def test_si_el_destino_se_desactiva_antes_de_radicar_no_se_radica(self):
+        from apps.tickets import direccionamiento
+
+        ticket = self._ticket_general()
+        direccionamiento.seleccionar_destino_borrador(ticket, self.usuario_g, self.d_area.pk)
+        guardar_respuestas_borrador(ticket, self.usuario_g, {self.campos_g["Asunto"].id: "Pedido"})
+        self.destinos.desactivar_destino(self.admin_g, self.d_area)
+        with self.assertRaises(ValidationError) as contexto:
+            radicar_ticket(ticket, self.usuario_g)
+        self.assertIn("ya no está disponible", contexto.exception.messages[0])
+        ticket.refresh_from_db()
+        self.assertEqual((ticket.estado, ticket.equipo_responsable_id, ticket.radicado), (Ticket.Estado.BORRADOR, None, None))
+        self.assertFalse(ticket.historial.exists())
+
+    def test_si_el_responsable_deja_de_ser_valido_no_se_radica(self):
+        from apps.tickets import direccionamiento
+
+        ticket = self._ticket_general()
+        direccionamiento.seleccionar_destino_borrador(ticket, self.usuario_g, self.d_area.pk)
+        guardar_respuestas_borrador(ticket, self.usuario_g, {self.campos_g["Asunto"].id: "Pedido"})
+        MiembroEquipo.objects.filter(equipo=self.equipo_tic).update(activo=False)
+        with self.assertRaises(ValidationError):
+            radicar_ticket(ticket, self.usuario_g)
+        self.assertEqual(Ticket.objects.get(pk=ticket.pk).estado, Ticket.Estado.BORRADOR)
+
+    def test_un_ticket_general_nunca_se_radica_sin_poder_determinar_responsable(self):
+        for destino in (self.destino_g, self.d_area, self.d_equipo, self.d_persona):
+            self.destinos.desactivar_destino(self.admin_g, destino)
+        ticket = self._ticket_general()
+        guardar_respuestas_borrador(ticket, self.usuario_g, {self.campos_g["Asunto"].id: "Pedido"})
+        with self.assertRaises(ValidationError):
+            radicar_ticket(ticket, self.usuario_g)
+        self.assertEqual(Ticket.objects.get(pk=ticket.pk).estado, Ticket.Estado.BORRADOR)
+
+    def test_un_ticket_normal_no_se_dirige_ni_cambia(self):
+        from apps.tickets.models import DireccionamientoTicket
+
+        self._preparar_catalogo_normal()
+        normal = crear_borrador(self.usuario_g, self.servicio_n)
+        radicar_ticket(normal, self.usuario_g)
+        normal.refresh_from_db()
+        self.assertEqual((normal.estado, normal.usuario_responsable_id, normal.equipo_responsable_id), ("RADICADO", None, None))
+        self.assertFalse(DireccionamientoTicket.objects.filter(ticket=normal).exists())
+        self.assertEqual(list(normal.historial.values_list("tipo_evento", flat=True)), ["RADICADO"])
+
+
+class TicketGeneralEstadoTests(_EscenarioDestinosMixin, TestCase):
+    def setUp(self):
+        self._preparar_destinos()
+        self._configurar_interno(
+            tiempo_objetivo_cantidad=3, tiempo_objetivo_unidad="DIAS", tiempo_objetivo_habiles=False,
+            politica_prorroga="SIN_APROBACION",
+        )
+
+    def test_direccionar_no_cambia_a_en_atencion(self):
+        for destino in (self.d_area, self.d_equipo, self.d_persona):
+            ticket = self._radicar_a(
+                destino, usuario=Usuario.objects.create_user(f"sol_{destino.pk}", password=CLAVE_PRUEBA)
+            )
+            self.assertEqual(ticket.estado, Ticket.Estado.RADICADO, destino)
+            tipos = set(ticket.historial.values_list("tipo_evento", flat=True))
+            self.assertFalse(tipos & {"TOMADO", "ASIGNADO", "ATENCION_INICIADA"})
+
+    def test_un_miembro_del_equipo_dirigido_toma_y_pasa_a_en_atencion(self):
+        ticket = self._radicar_a(self.d_area)
+        self.assertTrue(puede_tomar(self.miembro_tic, ticket))
+        ticket = tomar_ticket(ticket, self.miembro_tic)
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+        self.assertEqual((ticket.usuario_responsable, ticket.equipo_responsable), (self.miembro_tic, self.equipo_tic))
+
+    def test_quien_no_es_del_equipo_dirigido_no_puede_tomar(self):
+        ticket = self._radicar_a(self.d_area)
+        for usuario in (self.ajeno_g, self.miembro_dis, self.persona_g, self.usuario_g):
+            with self.subTest(usuario.username):
+                self.assertFalse(puede_tomar(usuario, ticket))
+                with self.assertRaises(PermissionDenied):
+                    tomar_ticket(ticket, usuario)
+        self.assertEqual(Ticket.objects.get(pk=ticket.pk).estado, Ticket.Estado.RADICADO)
+
+    def test_un_responsable_global_sigue_pudiendo_tomar(self):
+        ticket = self._radicar_a(self.d_area)
+        self.assertEqual(tomar_ticket(ticket, self.atiende_g).estado, Ticket.Estado.EN_ATENCION)
+
+    def test_ticket_dirigido_a_una_persona_solo_lo_inicia_esa_persona_o_quien_supervisa(self):
+        ticket = self._radicar_a(self.d_persona)
+        self.assertTrue(puede_iniciar_atencion(self.persona_g, ticket))
+        self.assertTrue(puede_iniciar_atencion(self.atiende_g, ticket))  # alcance global de tickets.atender
+        for usuario in (self.ajeno_g, self.miembro_tic, self.usuario_g):
+            self.assertFalse(puede_iniciar_atencion(usuario, ticket), usuario.username)
+            with self.assertRaises(PermissionDenied):
+                iniciar_atencion_ticket(ticket, usuario)
+        self.assertEqual(Ticket.objects.get(pk=ticket.pk).estado, Ticket.Estado.RADICADO)
+
+    def test_iniciar_atencion_cambia_el_estado_y_se_registra(self):
+        ticket = self._radicar_a(self.d_persona)
+        ticket = iniciar_atencion_ticket(ticket, self.persona_g)
+        self.assertEqual((ticket.estado, ticket.usuario_responsable), (Ticket.Estado.EN_ATENCION, self.persona_g))
+        evento = ticket.historial.get(tipo_evento="ATENCION_INICIADA")
+        self.assertEqual((evento.actor, evento.datos), (self.persona_g, {"usuario_id": self.persona_g.pk}))
+        cambios = [e.datos_nuevos for e in _auditorias_de_ticket(ticket) if e.datos_nuevos == {"estado": "EN_ATENCION"}]
+        self.assertEqual(len(cambios), 1)
+
+    def test_quien_supervisa_inicia_en_nombre_del_responsable_sin_reasignarlo(self):
+        ticket = self._radicar_a(self.d_persona)
+        ticket = iniciar_atencion_ticket(ticket, self.atiende_g)
+        self.assertEqual((ticket.estado, ticket.usuario_responsable), (Ticket.Estado.EN_ATENCION, self.persona_g))
+
+    def test_iniciar_atencion_exige_un_ticket_radicado_con_persona_responsable(self):
+        con_equipo = self._radicar_a(self.d_area)
+        with self.assertRaises(ValidationError):
+            iniciar_atencion_ticket(con_equipo, self.atiende_g)  # a un equipo se le TOMA
+        dirigido = self._radicar_a(self.d_persona, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        iniciar_atencion_ticket(dirigido, self.persona_g)
+        with self.assertRaises(ValidationError):
+            iniciar_atencion_ticket(dirigido, self.persona_g)  # ya está en atención
+
+    def test_tomar_no_aplica_si_ya_hay_una_persona_responsable(self):
+        ticket = self._radicar_a(self.d_persona)
+        self.assertFalse(puede_tomar(self.persona_g, ticket))
+        with self.assertRaises(ValidationError):
+            tomar_ticket(ticket, self.persona_g)
+
+    def test_asignar_ticket_conserva_su_contrato(self):
+        # Con usuario: RADICADO → EN_ATENCION, como siempre.
+        ticket = self._radicar_a(self.d_area)
+        ticket = asignar_ticket(ticket, self.atiende_g, usuario=self.miembro_tic)
+        self.assertEqual((ticket.estado, ticket.usuario_responsable), (Ticket.Estado.EN_ATENCION, self.miembro_tic))
+        # Solo equipo: no cambia el estado.
+        otro = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        otro = asignar_ticket(otro, self.atiende_g, equipo=self.equipo_dis)
+        self.assertEqual((otro.estado, otro.equipo_responsable), (Ticket.Estado.RADICADO, self.equipo_dis))
+        # Ya dirigido a una persona: no es un ticket "sin responsable" que asignar.
+        persona = self._radicar_a(self.d_persona, usuario=Usuario.objects.create_user("otro2_g", password=CLAVE_PRUEBA))
+        with self.assertRaises(PermissionDenied):
+            asignar_ticket(persona, self.atiende_g, usuario=self.miembro_tic)
+
+    def test_la_regla_de_tomar_de_servicios_normales_no_cambia(self):
+        self._preparar_catalogo_normal()
+        normal = crear_borrador(self.usuario_g, self.servicio_n)
+        radicar_ticket(normal, self.usuario_g)
+        normal = asignar_ticket(normal, self.atiende_g, equipo=self.equipo_tic)
+        self.assertFalse(puede_tomar(self.miembro_tic, normal))  # miembro del equipo, sin ser ServicioResponsable
+        with self.assertRaises(PermissionDenied):
+            tomar_ticket(normal, self.miembro_tic)
+
+    def test_las_vistas_de_tomar_e_iniciar_atencion(self):
+        persona = self._radicar_a(self.d_persona)
+        self.client.login(username="persona_g", password=CLAVE_PRUEBA)
+        detalle = self.client.get(reverse("tickets:detalle", args=[persona.pk]))
+        self.assertContains(detalle, "Iniciar atención")
+        self.assertNotContains(detalle, ">Tomar<")
+        self.assertEqual(self.client.get(reverse("tickets:iniciar_atencion", args=[persona.pk])).status_code, 405)
+        self.client.post(reverse("tickets:iniciar_atencion", args=[persona.pk]))
+        persona.refresh_from_db()
+        self.assertEqual(persona.estado, Ticket.Estado.EN_ATENCION)
+        self.assertNotContains(self.client.get(reverse("tickets:detalle", args=[persona.pk])), "Iniciar atención")
+        equipo = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        self.client.login(username="miembro_tic", password=CLAVE_PRUEBA)
+        self.assertContains(self.client.get(reverse("tickets:detalle", args=[equipo.pk])), ">Tomar<")
+        self.client.post(reverse("tickets:tomar", args=[equipo.pk]))
+        equipo.refresh_from_db()
+        self.assertEqual((equipo.estado, equipo.usuario_responsable), (Ticket.Estado.EN_ATENCION, self.miembro_tic))
+        self.client.login(username="ajeno_g", password=CLAVE_PRUEBA)
+        self.assertEqual(self.client.post(reverse("tickets:iniciar_atencion", args=[persona.pk])).status_code, 302)
+        self.assertEqual(self.client.get(reverse("tickets:detalle", args=[persona.pk])).status_code, 403)
+
+
+class TicketGeneralColaDestinoTests(_EscenarioDestinosMixin, TestCase):
+    def setUp(self):
+        self._preparar_destinos()
+
+    def _ids(self, respuesta):
+        return [t.pk for t in respuesta.context["tickets"]]
+
+    def test_el_equipo_dirigido_lo_ve_y_los_ajenos_no(self):
+        ticket = self._radicar_a(self.d_area)
+        self.assertIn(ticket.pk, self._ids(self._cola(self.miembro_tic)))
+        self.assertIn(ticket.pk, self._ids(self._cola(self.atiende_g)))
+        for usuario in (self.ajeno_g, self.miembro_dis, self.persona_g, self.usuario_g):
+            self.assertNotIn(ticket.pk, self._ids(self._cola(usuario)), usuario.username)
+
+    def test_la_persona_dirigida_lo_ve_y_los_ajenos_no(self):
+        ticket = self._radicar_a(self.d_persona)
+        self.assertIn(ticket.pk, self._ids(self._cola(self.persona_g)))
+        for usuario in (self.ajeno_g, self.miembro_tic, self.miembro_dis):
+            self.assertNotIn(ticket.pk, self._ids(self._cola(usuario)), usuario.username)
+
+    def test_un_ticket_dirigido_a_una_persona_aparece_sin_tomar_hasta_iniciar(self):
+        ticket = self._radicar_a(self.d_persona)
+        self.assertIn(ticket.pk, self._ids(self._cola(self.persona_g, ver="sin_tomar")))
+        self.assertNotIn(ticket.pk, self._ids(self._cola(self.persona_g, ver="en_atencion")))
+        self.assertIn(ticket.pk, self._ids(self._cola(self.persona_g, ver="mios")))
+        iniciar_atencion_ticket(ticket, self.persona_g)
+        self.assertNotIn(ticket.pk, self._ids(self._cola(self.persona_g, ver="sin_tomar")))
+        self.assertIn(ticket.pk, self._ids(self._cola(self.persona_g, ver="en_atencion")))
+
+    def test_la_cola_sigue_ordenada_por_llegada_con_los_tickets_generales(self):
+        primero = self._radicar_a(self.d_area)
+        normal_usuario = Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA)
+        segundo = self._radicar_a(self.d_area, usuario=normal_usuario)
+        self.assertEqual(self._ids(self._cola(self.atiende_g)), [primero.pk, segundo.pk])
+
+    def test_quien_toma_deja_el_ticket_en_atencion_en_la_misma_cola(self):
+        ticket = self._radicar_a(self.d_area)
+        tomar_ticket(ticket, self.miembro_tic)
+        self.assertIn(ticket.pk, self._ids(self._cola(self.miembro_tic, ver="mios")))
+        self.assertIn(ticket.pk, self._ids(self._cola(self.miembro_tic, ver="en_atencion")))
+
+    def test_los_ajenos_no_pueden_ver_el_detalle(self):
+        ticket = self._radicar_a(self.d_area)
+        self.client.login(username="ajeno_g", password=CLAVE_PRUEBA)
+        self.assertEqual(self.client.get(reverse("tickets:detalle", args=[ticket.pk])).status_code, 403)
+        self.client.login(username="miembro_tic", password=CLAVE_PRUEBA)
+        self.assertContains(self.client.get(reverse("tickets:detalle", args=[ticket.pk])), "Dirigido a:")
+
+
+class TicketGeneralDestinoHistoricoTests(_EscenarioDestinosMixin, TestCase):
+    def setUp(self):
+        self._preparar_destinos()
+
+    def test_cambiar_el_responsable_configurado_no_reasigna_tickets_existentes(self):
+        ticket = self._radicar_a(self.d_area)
+        self.destinos.cambiar_responsable(self.admin_g, self.d_area, responsable=self.miembro_dis)
+        ticket.refresh_from_db()
+        self.assertEqual((ticket.equipo_responsable, ticket.usuario_responsable), (self.equipo_tic, None))
+        self.assertIn(ticket.pk, [t.pk for t in self._cola(self.miembro_tic).context["tickets"]])
+
+    def test_desactivar_el_destino_no_rompe_tickets_existentes(self):
+        ticket = self._radicar_a(self.d_area)
+        self.destinos.desactivar_destino(self.admin_g, self.d_area)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.assertContains(self.client.get(reverse("tickets:detalle", args=[ticket.pk])), "Tecnología")
+        self.assertEqual(tomar_ticket(ticket, self.miembro_tic).estado, Ticket.Estado.EN_ATENCION)
+        otro = self._ticket_general(Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        from apps.tickets import direccionamiento
+
+        with self.assertRaises(ValidationError):
+            direccionamiento.seleccionar_destino_borrador(otro, otro.solicitante, self.d_area.pk)
+
+    def test_renombrar_o_inactivar_lo_dirigido_no_reescribe_la_foto(self):
+        from apps.tickets.models import DireccionamientoTicket
+
+        ticket = self._radicar_a(self.d_area)
+        persona = self._radicar_a(self.d_persona, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        Area.objects.filter(pk=self.area_tic.pk).update(nombre="Nuevo nombre", activo=False)
+        Usuario.objects.filter(pk=self.persona_g.pk).update(first_name="Otra", is_active=False)
+        self.assertEqual(DireccionamientoTicket.objects.get(ticket=ticket).etiqueta, "Tecnología")
+        self.assertEqual(DireccionamientoTicket.objects.get(ticket=persona).etiqueta, "María Pérez")
+        self.assertEqual(ticket.historial.get(tipo_evento="DIRECCIONADO").datos["destino_etiqueta"], "Tecnología")
+        self.assertEqual(self.destinos._consulta().get(pk=self.d_area.pk).etiqueta, "Nuevo nombre")
+
+    def test_el_historial_de_un_ticket_no_cambia_si_se_cambia_el_destino_despues(self):
+        ticket = self._radicar_a(self.d_area)
+        antes = list(ticket.historial.values_list("tipo_evento", "datos"))
+        self.destinos.cambiar_responsable(self.admin_g, self.d_area, responsable=self.equipo_dis)
+        self.destinos.desactivar_destino(self.admin_g, self.d_area)
+        self.assertEqual(list(ticket.historial.values_list("tipo_evento", "datos")), antes)
+
+    def test_un_destino_con_historial_no_se_elimina_fisicamente(self):
+        from django.db.models import ProtectedError
+
+        self._radicar_a(self.d_area)
+        with self.assertRaises(ProtectedError):
+            self.d_area.delete()
+
+    def _cola(self, usuario):
+        self.client.login(username=usuario.username, password=CLAVE_PRUEBA)
+        return self.client.get(reverse("tickets:cola"))
+
+
+class TicketGeneralDestinoRegresionTests(_EscenarioDestinosMixin, TestCase):
+    def setUp(self):
+        self._preparar_destinos()
+        self._configurar_interno(
+            tiempo_objetivo_cantidad=3, tiempo_objetivo_unidad="DIAS", tiempo_objetivo_habiles=False,
+            politica_prorroga="SIN_APROBACION",
+        )
+
+    def test_el_tiempo_objetivo_y_la_prorroga_siguen_viniendo_del_servicio_interno(self):
+        ticket = self._radicar_a(self.d_persona)
+        self.assertEqual((ticket.tiempo_objetivo_cantidad, ticket.tiempo_objetivo_unidad), (3, "DIAS"))
+        self.assertIsNotNone(ticket.fecha_objetivo_original)
+        self.assertEqual(ticket.fecha_objetivo_original, ticket.fecha_objetivo_vigente)
+        self.assertEqual(ticket.prorroga_politica, "SIN_APROBACION")
+        # Mismo compromiso para cualquier destino.
+        otro = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        self.assertEqual(otro.tiempo_objetivo_cantidad, ticket.tiempo_objetivo_cantidad)
+        self.assertEqual(otro.entrega_politica, ticket.entrega_politica)
+
+    def test_una_vez_en_atencion_se_solicita_prorroga_como_en_cualquier_ticket(self):
+        from apps.tickets import prorrogas
+
+        ticket = self._radicar_a(self.d_persona)
+        ticket = iniciar_atencion_ticket(ticket, self.persona_g)
+        prorroga = prorrogas.solicitar_prorroga(
+            Ticket.objects.get(pk=ticket.pk), self.persona_g,
+            nueva_fecha=ticket.fecha_objetivo_vigente + timedelta(days=2), motivo="Más tiempo",
+        )
+        self.assertEqual(prorroga.estado, "APROBADA")
+
+    def test_el_ticket_dirigido_a_un_equipo_completa_el_ciclo(self):
+        from apps.tickets import prorrogas
+
+        ticket = tomar_ticket(self._radicar_a(self.d_area), self.miembro_tic)
+        prorroga = prorrogas.solicitar_prorroga(
+            Ticket.objects.get(pk=ticket.pk), self.miembro_tic,
+            nueva_fecha=ticket.fecha_objetivo_vigente + timedelta(days=1), motivo="Más tiempo",
+        )
+        self.assertEqual(prorroga.estado, "APROBADA")
+        resolver_ticket(Ticket.objects.get(pk=ticket.pk), self.miembro_tic, "Resuelto")
+        cerrar_ticket(Ticket.objects.get(pk=ticket.pk), self.usuario_g)
+        self.assertEqual(Ticket.objects.get(pk=ticket.pk).estado, Ticket.Estado.CERRADO)
+
+    def test_los_servicios_normales_y_su_catalogo_no_cambian(self):
+        from apps.catalogo.visibilidad import servicios_visibles_para
+
+        self._preparar_catalogo_normal()
+        self.assertEqual(
+            {s.pk for s in servicios_visibles_para(self.usuario_g)}, {self.servicio_n.pk, self.proceso_n.pk}
+        )
+        normal = crear_borrador(self.usuario_g, self.servicio_n)
+        radicar_ticket(normal, self.usuario_g)
+        normal = tomar_ticket(normal, self.atiende_g)
+        self.assertEqual(normal.estado, Ticket.Estado.EN_ATENCION)
+
+    def test_no_se_crea_ningun_workflow_ni_formulario_por_destino(self):
+        from apps.catalogo.models import Formulario
+        from apps.workflows.models import InstanciaWorkflow, Workflow
+
+        antes = (Workflow.objects.count(), InstanciaWorkflow.objects.count(), Formulario.objects.count(), Servicio.objects.count())
+        self._radicar_a(self.d_area)
+        self.assertEqual(
+            (Workflow.objects.count(), InstanciaWorkflow.objects.count(), Formulario.objects.count(), Servicio.objects.count()),
+            antes,
+        )
+
+    def test_el_ticket_general_conserva_su_servicio_unico(self):
+        self.assertEqual(Servicio.objects.filter(es_ticket_general=True).count(), 1)
+        for destino in (self.d_area, self.d_equipo, self.d_persona):
+            ticket = self._radicar_a(
+                destino, usuario=Usuario.objects.create_user(f"sol_{destino.pk}", password=CLAVE_PRUEBA)
+            )
+            self.assertEqual(ticket.detalle_servicio.servicio, self.servicio_g)
+
+
+class TicketGeneralDestinoConcurrenciaTests(_EscenarioDestinosMixin, TransactionTestCase):
+    def setUp(self):
+        self._preparar_destinos()
+
+    def _correr(self, tareas):
+        resultados = {}
+        barrera = threading.Barrier(len(tareas))
+
+        def _hilo(clave, funcion):
+            barrera.wait()
+            try:
+                funcion()
+                resultados[clave] = "ok"
+            except ValidationError:
+                resultados[clave] = "rechazada"
+            finally:
+                connection.close()
+
+        hilos = [threading.Thread(target=_hilo, args=(c, f)) for c, f in tareas.items()]
+        for hilo in hilos:
+            hilo.start()
+        for hilo in hilos:
+            hilo.join()
+        return resultados
+
+    def test_dos_destinos_de_reserva_a_la_vez_dejan_uno_solo(self):
+        from apps.catalogo.models import ConfiguracionTicketGeneral
+
+        resultados = self._correr({
+            "a": lambda: self.destinos.definir_predeterminado(self.admin_g, self.d_area),
+            "b": lambda: self.destinos.definir_predeterminado(self.admin_g, self.d_equipo),
+        })
+        self.assertEqual(resultados, {"a": "ok", "b": "ok"})
+        self.assertEqual(ConfiguracionTicketGeneral.objects.count(), 1)
+        self.assertIn(ConfiguracionTicketGeneral.actual().destino_predeterminado_id, {self.d_area.pk, self.d_equipo.pk})
+
+    def test_ediciones_concurrentes_del_responsable_dejan_un_estado_coherente(self):
+        resultados = self._correr({
+            "a": lambda: self.destinos.cambiar_responsable(self.admin_g, self.d_area, responsable=self.equipo_dis),
+            "b": lambda: self.destinos.cambiar_responsable(self.admin_g, self.d_area, responsable=self.miembro_tic),
+        })
+        self.assertEqual(resultados, {"a": "ok", "b": "ok"})
+        destino = self.destinos._consulta().get(pk=self.d_area.pk)
+        self.assertEqual((destino.responsable_usuario_id is None) != (destino.responsable_equipo_id is None), True)
+
+    def test_la_radicacion_frente_a_la_desactivacion_es_consistente(self):
+        from apps.tickets import direccionamiento
+        from apps.tickets.models import DireccionamientoTicket
+
+        ticket = self._ticket_general()
+        direccionamiento.seleccionar_destino_borrador(ticket, self.usuario_g, self.d_area.pk)
+        guardar_respuestas_borrador(ticket, self.usuario_g, {self.campos_g["Asunto"].id: "Pedido"})
+        resultados = self._correr({
+            "radicar": lambda: radicar_ticket(Ticket.objects.get(pk=ticket.pk), self.usuario_g),
+            "desactivar": lambda: self.destinos.desactivar_destino(self.admin_g, self.d_area),
+        })
+        self.assertEqual(resultados["desactivar"], "ok")
+        ticket.refresh_from_db()
+        self.d_area.refresh_from_db()
+        self.assertFalse(self.d_area.activo)
+        if resultados["radicar"] == "ok":  # radicó antes de desactivarse: ticket completo y dirigido
+            self.assertEqual((ticket.estado, ticket.equipo_responsable), (Ticket.Estado.RADICADO, self.equipo_tic))
+            self.assertEqual(DireccionamientoTicket.objects.get(ticket=ticket).etiqueta, "Tecnología")
+        else:  # el destino ya estaba inactivo: el ticket sigue intacto como borrador
+            self.assertEqual((ticket.estado, ticket.equipo_responsable_id, ticket.radicado), (Ticket.Estado.BORRADOR, None, None))
+            self.assertFalse(DireccionamientoTicket.objects.get(ticket=ticket).esta_fijado)
+
+    def test_la_radicacion_frente_al_cambio_de_responsable_usa_uno_de_los_dos(self):
+        from apps.tickets import direccionamiento
+
+        ticket = self._ticket_general()
+        direccionamiento.seleccionar_destino_borrador(ticket, self.usuario_g, self.d_area.pk)
+        guardar_respuestas_borrador(ticket, self.usuario_g, {self.campos_g["Asunto"].id: "Pedido"})
+        resultados = self._correr({
+            "radicar": lambda: radicar_ticket(Ticket.objects.get(pk=ticket.pk), self.usuario_g),
+            "cambiar": lambda: self.destinos.cambiar_responsable(self.admin_g, self.d_area, responsable=self.equipo_dis),
+        })
+        self.assertEqual(resultados, {"radicar": "ok", "cambiar": "ok"})
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+        self.assertIn(ticket.equipo_responsable_id, {self.equipo_tic.pk, self.equipo_dis.pk})
+
+
+class TicketGeneralBuscadorTests(_EscenarioTicketGeneralMixin, TestCase):
+    """4.D — el buscador "¿Qué necesitas?" y el Ticket General: el Servicio interno
+    nunca es un resultado y la entrada "Crear ticket general" se ofrece como acción
+    alterna reutilizando la disponibilidad de 4.C1/4.C2 (sin duplicar sus reglas)."""
+
+    CTA = "Crear ticket general"
+
+    def setUp(self):
+        self._preparar_general(habilitar=True)
+        self._preparar_catalogo_normal()
+        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+
+    def _buscar(self, q, *, fragmento=False):
+        extra = {"HTTP_X_REQUESTED_WITH": "fetch"} if fragmento else {}
+        return self.client.get(reverse("core:necesidad"), {"q": q}, **extra)
+
+    def test_sin_coincidencias_se_ofrece_el_ticket_general(self):
+        respuesta = self._buscar("zzzz qqqq")
+        self.assertEqual(respuesta.context["resultados"], [])
+        self.assertContains(respuesta, "No encontramos un servicio o proceso que coincida suficientemente")
+        self.assertContains(respuesta, self.CTA)
+        self.assertContains(respuesta, f'href="{reverse("tickets:ticket_general")}"')
+
+    def test_con_coincidencias_el_ticket_general_es_una_alternativa_secundaria(self):
+        respuesta = self._buscar("servicio ordinario")
+        self.assertIn(self.servicio_n.pk, [r.servicio.pk for r in respuesta.context["resultados"]])
+        contenido = respuesta.content.decode()
+        self.assertIn("¿Ninguna opción corresponde a lo que necesitas?", contenido)
+        self.assertIn(self.CTA, contenido)
+        # Los resultados catalogados van primero; la alternativa, después.
+        self.assertLess(contenido.index("Servicio ordinario visible"), contenido.index(self.CTA))
+        self.assertLess(contenido.index("Esto puede ayudarte"), contenido.index("¿Ninguna opción"))
+
+    def test_el_servicio_interno_nunca_es_un_resultado(self):
+        from apps.catalogo.models import TerminoServicio
+
+        TerminoServicio.objects.create(servicio=self.servicio_g, termino="interno reservado")
+        for q in ("servicio interno reservado", "interno reservado", "Para solicitar algo que no está catalogado"):
+            respuesta = self._buscar(q)
+            self.assertNotIn(self.servicio_g.pk, [r.servicio.pk for r in respuesta.context["resultados"]], q)
+            self.assertNotContains(self._buscar(q, fragmento=True), self.NOMBRE_INTERNO)
+
+    def test_deshabilitado_no_hay_entrada_pero_si_el_mensaje(self):
+        self.general.configurar_habilitacion(self.admin_g, habilitado=False)
+        for q in ("zzzz qqqq", "servicio ordinario"):
+            respuesta = self._buscar(q)
+            self.assertNotContains(respuesta, self.CTA)
+            self.assertNotContains(respuesta, "Ninguna opción corresponde")
+        self.assertContains(self._buscar("zzzz qqqq"), "Prueba con otras palabras")
+
+    def test_sin_destinos_utilizables_no_hay_entrada(self):
+        self.destinos.desactivar_destino(self.admin_g, self.destino_g)
+        self.assertIsNone(self.general.servicio_disponible_para(self.usuario_g))
+        for q in ("zzzz qqqq", "servicio ordinario"):
+            self.assertNotContains(self._buscar(q), self.CTA)
+
+    def test_sin_acceso_o_sin_formulario_activo_no_hay_entrada(self):
+        self._configurar_interno(alcance_visibilidad="RESTRINGIDO")
+        self.assertNotContains(self._buscar("zzzz qqqq"), self.CTA)
+        self._configurar_interno(alcance_visibilidad="PUBLICO_INTERNO")
+        self.assertContains(self._buscar("zzzz qqqq"), self.CTA)
+        Formulario.objects.filter(pk=self.servicio_g.formulario_id).update(version_activa=None)
+        self.assertNotContains(self._buscar("zzzz qqqq"), self.CTA)
+
+    def test_la_consulta_invalida_no_ofrece_el_ticket_general(self):
+        respuesta = self._buscar("   ")
+        self.assertNotContains(respuesta, self.CTA)
+        self.assertContains(respuesta, "Escribe lo que necesitas.")
+
+    def test_buscar_no_crea_tickets_ni_direccionamientos(self):
+        from apps.tickets.models import DireccionamientoTicket
+
+        self._buscar("zzzz qqqq")
+        self._buscar("servicio ordinario", fragmento=True)
+        self.assertEqual(Ticket.objects.count(), 0)
+        self.assertEqual(DireccionamientoTicket.objects.count(), 0)
+
+    def test_la_entrada_ofrecida_sigue_siendo_la_de_4c1(self):
+        respuesta = self.client.get(reverse("tickets:ticket_general"))
+        ticket = Ticket.objects.get()
+        self.assertRedirects(respuesta, reverse("tickets:borrador", args=[ticket.pk]))
+
+    def test_un_servicio_encontrado_se_solicita_por_la_via_normal(self):
+        respuesta = self.client.get(reverse("tickets:solicitar", args=[self.servicio_n.pk]))
+        ticket = Ticket.objects.get()
+        self.assertRedirects(respuesta, reverse("tickets:borrador", args=[ticket.pk]))
+        self.assertEqual(ticket.detalle_servicio.servicio, self.servicio_n)
+
+    def test_el_ticket_general_sigue_radicando_y_direccionando(self):
+        from apps.tickets.models import DireccionamientoTicket
+
+        self._buscar("zzzz qqqq")
+        ticket = self._radicar_general()
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+        self.assertEqual(ticket.equipo_responsable, self.equipo_g)
+        self.assertTrue(DireccionamientoTicket.objects.get(ticket=ticket).esta_fijado)
+
+    def test_el_servicio_interno_sigue_fuera_del_catalogo_ordinario(self):
+        from apps.catalogo.visibilidad import servicios_visibles_para
+
+        self.assertNotIn(self.servicio_g.pk, [s.pk for s in servicios_visibles_para(self.usuario_g)])
+        with self.assertRaises(PermissionDenied):
+            crear_borrador(self.usuario_g, self.servicio_g)

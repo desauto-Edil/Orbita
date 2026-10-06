@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}{{ titulo_pagina }} — Órbita{% endblock %}
+{% block title %}{{ titulo_pagina }} — {{ sistema.nombre }}{% endblock %}
 
 {% block content_modifier %}content-area--portal{% endblock %}
 
@@ -63,6 +63,27 @@
                 <li><a href="#campo_{{ item.id }}">{{ item.campo.etiqueta }}</a></li>
               {% endfor %}
             </ul>
+          </div>
+        {% endif %}
+
+        {% if destino_general %}
+          <div class="sol-grid">
+            <div class="sol-field sol-field--completo{% if destino_general.error %} has-error{% endif %}" id="field_destino_general">
+              <label class="sol-label" for="destino_general">¿A quién diriges tu solicitud?{% if destino_general.obligatorio %}<span class="sol-req">Obligatorio</span>{% endif %}</label>
+              <p class="sol-help" id="help_destino_general">{% if destino_general.permite_omitir %}Si no estás seguro, la dirigiremos a quien corresponda.{% else %}Elige el área, equipo o persona que debe atenderla.{% endif %}</p>
+              <div class="sol-select">
+                <select id="destino_general" name="destino_general" aria-describedby="help_destino_general"{% if destino_general.obligatorio %} aria-required="true"{% endif %}{% if destino_general.error %} aria-invalid="true"{% endif %}>
+                  <option value="">{% if destino_general.permite_omitir %}No estoy seguro{% else %}Selecciona una opción{% endif %}</option>
+                  {% for grupo in destino_general.grupos %}
+                    <optgroup label="{{ grupo.titulo }}">
+                      {% for opcion in grupo.opciones %}<option value="{{ opcion.id }}"{% if opcion.id == destino_general.seleccionado %} selected{% endif %}>{{ opcion.etiqueta }}</option>{% endfor %}
+                    </optgroup>
+                  {% endfor %}
+                </select>
+                <span class="sol-select__icon" aria-hidden="true">{% include "components/icon.html" with name="chevron-down" size="sm" %}</span>
+              </div>
+              {% if destino_general.error %}<p class="sol-error" role="alert">{{ destino_general.error }}</p>{% endif %}
+            </div>
           </div>
         {% endif %}
 

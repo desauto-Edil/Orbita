@@ -1,0 +1,63 @@
+{% extends "configuracion/base.html" %}
+
+{% block config_titulo %}Roles y permisos{% endblock %}
+{% block config_subtitulo %}Un rol agrupa permisos. Se asigna a cada persona desde su ficha, con el alcance que corresponda.{% endblock %}
+{% block config_acciones %}
+  <a class="btn btn--primary" href="{% url 'core:configuracion_rol_crear' %}">{% include "components/icon.html" with name="plus" %}Nuevo rol</a>
+{% endblock %}
+
+{% block config_contenido %}
+  <section aria-labelledby="cfg-lista-roles" class="config-stack">
+    <h2 id="cfg-lista-roles">Roles</h2>
+    {% if roles %}
+      <div class="table-shell">
+        <table class="table">
+          <thead><tr><th scope="col">Rol</th><th scope="col" class="table__num">Permisos</th><th scope="col" class="table__num">Personas</th><th scope="col">Estado</th></tr></thead>
+          <tbody>
+            {% for rol in roles %}
+              <tr>
+                <td>
+                  <a class="config-link" href="{% url 'core:configuracion_rol' rol.pk %}">{{ rol.nombre }}</a>
+                  {% if rol.descripcion %}<span class="config-person__meta">{{ rol.descripcion|truncatechars:90 }}</span>{% endif %}
+                </td>
+                <td class="table__num">{{ rol.n_permisos }}</td>
+                <td class="table__num">{{ rol.n_personas }}</td>
+                <td>{% if rol.activo %}<span class="badge badge--success badge--dot">Activo</span>{% else %}<span class="badge badge--dot">Inactivo</span>{% endif %}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty-state">
+        <p>Todavía no hay roles. Crea el primero y elige qué permisos otorga.</p>
+        <a class="btn btn--primary btn--sm" href="{% url 'core:configuracion_rol_crear' %}">Crear rol</a>
+      </div>
+    {% endif %}
+  </section>
+
+  <section aria-labelledby="cfg-lista-permisos" class="config-stack">
+    <div class="config-section-head">
+      <div>
+        <h2 id="cfg-lista-permisos">Permisos</h2>
+        <p class="text-muted">Cada permiso autoriza una acción concreta de la plataforma.</p>
+      </div>
+      <a class="btn btn--secondary btn--sm" href="{% url 'core:configuracion_permiso_crear' %}">{% include "components/icon.html" with name="plus" size="sm" %}Nuevo permiso</a>
+    </div>
+    <div class="table-shell">
+      <table class="table">
+        <thead><tr><th scope="col">Permiso</th><th scope="col">Código</th><th scope="col" class="table__num">Roles que lo incluyen</th><th scope="col">Estado</th></tr></thead>
+        <tbody>
+          {% for permiso in permisos %}
+            <tr>
+              <td><a class="config-link" href="{% url 'core:configuracion_permiso' permiso.pk %}">{{ permiso.nombre }}</a></td>
+              <td><code class="config-code">{{ permiso.codigo }}</code></td>
+              <td class="table__num">{{ permiso.n_roles }}</td>
+              <td>{% if permiso.activo %}<span class="badge badge--success badge--dot">Activo</span>{% else %}<span class="badge badge--dot">Inactivo</span>{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

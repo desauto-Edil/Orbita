@@ -52,6 +52,14 @@
   text-decoration: none;
 }
 
+/* Logo configurado (Configuración › General): ocupa el lugar de la marca. */
+.app-header__brand-logo {
+  width: 30px;
+  height: 30px;
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+}
+
 .app-header__brand-mark {
   display: inline-flex;
   align-items: center;

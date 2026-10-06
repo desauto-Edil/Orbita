@@ -15,7 +15,23 @@ from apps.catalogo.models import Servicio, ServicioVisibilidad
 
 
 def servicios_visibles_para(usuario):
-    """Servicios activos que `usuario` puede consultar (CU-011).
+    """Servicios CATALOGADOS que `usuario` puede consultar: los de
+    `servicios_accesibles_para` sin el Servicio interno del Ticket General.
+
+    Es la única autoridad de qué se ofrece en el catálogo, el explorador, las
+    búsquedas, los frecuentes y cualquier selector de Servicio/Proceso; excluir
+    aquí al Ticket General evita repetir ese filtro en cada pantalla. Tampoco
+    permite crear un ticket por la vía normal (`crear_borrador`): el Ticket
+    General tiene su propia entrada de dominio (`crear_borrador_ticket_general`).
+    """
+    return servicios_accesibles_para(usuario).filter(es_ticket_general=False)
+
+
+def servicios_accesibles_para(usuario):
+    """Servicios activos que `usuario` puede consultar (CU-011), INCLUYENDO el
+    Servicio interno del Ticket General. Uso restringido a las entradas que
+    deben alcanzarlo (Ticket General); el resto del producto usa
+    `servicios_visibles_para`.
 
     RN-038: PUBLICO_INTERNO es visible para cualquier autenticado activo;
     RESTRINGIDO exige una `ServicioVisibilidad` activa por usuario, área o

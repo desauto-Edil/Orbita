@@ -1,0 +1,30 @@
+{% extends "configuracion/base.html" %}
+
+{% block config_miga %}
+  <nav class="breadcrumb" aria-label="Ruta"><a href="{% url 'core:configuracion_usuarios' %}">Usuarios</a><span class="breadcrumb__separator" aria-hidden="true">/</span><span class="breadcrumb__current" aria-current="page">Nuevo</span></nav>
+{% endblock %}
+{% block config_titulo %}Nuevo usuario{% endblock %}
+{% block config_subtitulo %}Crea la cuenta; después podrás indicar sus áreas, unidades y roles.{% endblock %}
+
+{% block config_contenido %}
+  <section class="card config-narrow">
+    <form method="post" class="form" novalidate>
+      {% csrf_token %}
+      {% include "configuracion/_errores.html" %}
+      <div class="config-form-grid">
+        {% include "configuracion/_campo.html" with campo=form.username %}
+        {% include "configuracion/_campo.html" with campo=form.email %}
+        {% include "configuracion/_campo.html" with campo=form.first_name %}
+        {% include "configuracion/_campo.html" with campo=form.last_name %}
+        {% include "configuracion/_campo.html" with campo=form.cargo %}
+        {% include "configuracion/_campo.html" with campo=form.telefono %}
+        {% include "configuracion/_campo.html" with campo=form.password1 %}
+        {% include "configuracion/_campo.html" with campo=form.password2 %}
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn--primary">Crear usuario</button>
+        <a class="btn btn--ghost" href="{% url 'core:configuracion_usuarios' %}">Cancelar</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

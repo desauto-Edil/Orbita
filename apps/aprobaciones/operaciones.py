@@ -255,3 +255,36 @@ def reasignar_aprobacion(aprobacion, actor, *, nuevo_aprobador_usuario=None, nue
         },
     )
     return aprobacion
+
+
+@transaction.atomic
+def anular_esquema_aprobacion(esquema, actor):
+    """Retira un esquema que sigue en curso porque el trabajo que lo originó ya
+    no lo necesita (p. ej. una solicitud cancelada por quien la hizo): sus
+    participaciones PENDIENTE pasan a NO_REQUERIDA — el mismo estado que ya usa
+    el cierre normal — y dejan de aparecer como pendientes de nadie.
+
+    No decide ni inventa un resultado (`resultado` sigue vacío: nadie aprobó,
+    rechazó ni devolvió) y no toca decisiones ya tomadas (RN-026). Mismo orden
+    de locks que `resolver_aprobacion` (esquema primero, luego todas sus
+    participaciones por `pk`). Sin `puede_*` interno: primitiva invocada por el
+    dominio dueño de la solicitud, que autoriza la cancelación."""
+    esquema = EsquemaAprobacion.objects.select_for_update().get(pk=esquema.pk)
+    participaciones = list(Aprobacion.objects.select_for_update().filter(esquema=esquema).order_by("pk"))
+    if esquema.resultado is not None:
+        raise ValidationError("Este esquema de aprobación ya cerró: no puede anularse.")
+    pendientes = [p.pk for p in participaciones if p.estado == Aprobacion.Estado.PENDIENTE]
+    if not pendientes:
+        return esquema
+    Aprobacion.objects.filter(pk__in=pendientes).update(
+        estado=Aprobacion.Estado.NO_REQUERIDA, actualizado_en=timezone.now()
+    )
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR,
+        instancia=esquema,
+        origen=RegistroAuditoria.Origen.USUARIO,
+        usuario=actor,
+        datos_anteriores={"aprobaciones_pendientes": len(pendientes)},
+        datos_nuevos={"aprobaciones_pendientes": 0, "anulado": True},
+    )
+    return esquema

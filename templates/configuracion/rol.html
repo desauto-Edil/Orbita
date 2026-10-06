@@ -1,0 +1,44 @@
+{% extends "configuracion/base.html" %}
+
+{% block config_miga %}
+  <nav class="breadcrumb" aria-label="Ruta"><a href="{% url 'core:configuracion_roles' %}">Roles y permisos</a><span class="breadcrumb__separator" aria-hidden="true">/</span><span class="breadcrumb__current" aria-current="page">{% if rol %}{{ rol.nombre }}{% else %}Nuevo rol{% endif %}</span></nav>
+{% endblock %}
+{% block config_titulo %}{% if rol %}{{ rol.nombre }}{% else %}Nuevo rol{% endif %}{% endblock %}
+{% block config_subtitulo %}Define qué permisos otorga este rol.{% endblock %}
+
+{% block config_contenido %}
+  <div class="config-split">
+    <section class="card">
+      <form method="post" class="form" novalidate>
+        {% csrf_token %}
+        {% include "configuracion/_errores.html" %}
+        {% include "configuracion/_campo.html" with campo=form.nombre %}
+        {% include "configuracion/_campo.html" with campo=form.descripcion %}
+        {% include "configuracion/_campo.html" with campo=form.activo %}
+        {% include "configuracion/_campo.html" with campo=form.permisos vacio="Todavía no hay permisos activos." %}
+        <div class="form-actions">
+          <button type="submit" class="btn btn--primary">{% if rol %}Guardar cambios{% else %}Crear rol{% endif %}</button>
+          <a class="btn btn--ghost" href="{% url 'core:configuracion_roles' %}">Cancelar</a>
+        </div>
+      </form>
+    </section>
+
+    {% if rol %}
+      <aside class="card" aria-labelledby="cfg-personas">
+        <h2 id="cfg-personas">Quién lo tiene</h2>
+        {% if personas %}
+          <ul class="list-row-group">
+            {% for asignacion in personas %}
+              <li class="list-row">
+                <a class="list-row__title" href="{% url 'core:configuracion_usuario' asignacion.usuario.pk %}">{{ asignacion.usuario.get_full_name|default:asignacion.usuario.get_username }}</a>
+                <span class="badge">{% if asignacion.tipo_alcance == "AREA" %}{{ asignacion.area.nombre }}{% elif asignacion.tipo_alcance == "UNIDAD" %}{{ asignacion.unidad_negocio.nombre }}{% else %}Toda la organización{% endif %}</span>
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="text-muted">Nadie tiene este rol todavía. Se asigna desde la ficha de cada persona, en Usuarios.</p>
+        {% endif %}
+      </aside>
+    {% endif %}
+  </div>
+{% endblock %}

@@ -28,10 +28,11 @@ from django.template.defaultfilters import filesizeformat
 from django.urls import reverse
 from django.utils import formats, timezone
 
+from apps.catalogo import destinos_ticket_general
 from apps.catalogo.campos import ESTRATEGIAS_POR_TIPO
 from apps.catalogo.models import Campo, ReglaCondicional
 from apps.catalogo.visibilidad import servicios_visibles_para
-from apps.tickets import operaciones
+from apps.tickets import direccionamiento, operaciones
 from apps.tickets.models import Ticket
 
 # Se reutilizan (no se reescriben) los dos criterios que ya definen qué es un
@@ -114,7 +115,21 @@ def obtener_o_crear_borrador(usuario, servicio):
     """
     if not servicios_visibles_para(usuario).filter(pk=servicio.pk).exists():
         raise PermissionDenied("El servicio no está activo o no es visible para este usuario.")
+    return _retomar_o_crear(usuario, servicio, operaciones.crear_borrador)
 
+
+def obtener_o_crear_borrador_general(usuario):
+    """4.C1 — igual que `obtener_o_crear_borrador`, para la entrada explícita
+    "Crear ticket general": mismo borrador vacío reutilizable, pero sobre el
+    Servicio interno y creado con `crear_borrador_ticket_general`. Valida
+    habilitación y acceso (`ValidationError`/`PermissionDenied`)."""
+    from apps.catalogo.ticket_general import servicio_para_crear_ticket
+
+    servicio = servicio_para_crear_ticket(usuario)
+    return _retomar_o_crear(usuario, servicio, lambda usuario, _servicio: operaciones.crear_borrador_ticket_general(usuario))
+
+
+def _retomar_o_crear(usuario, servicio, crear):
     version = version_activa_de(servicio)
     if version is not None:
         vacio = (
@@ -130,7 +145,7 @@ def obtener_o_crear_borrador(usuario, servicio):
         )
         if vacio is not None:
             return vacio
-    return operaciones.crear_borrador(usuario, servicio)
+    return crear(usuario, servicio)
 
 
 # ---------------------------------------------------------------------------
@@ -528,11 +543,41 @@ def resumen_de(items):
     return filas
 
 
-def contexto_workspace(ticket, *, errores=None, valores_envio=None):
+def contexto_destino_general(ticket, *, error=None):
+    """4.C2 — el selector "¿A quién diriges tu solicitud?" del Ticket General: una
+    sola lista agrupada (Áreas · Equipos · Personas) con los destinos activos y
+    utilizables hoy, la selección guardada y si se puede dejar sin elegir. `None`
+    para cualquier otro ticket. El destino es metadato de direccionamiento: no es
+    un campo del formulario versionado."""
+    if not ticket.detalle_servicio.servicio.es_ticket_general:
+        return None
+    opciones = destinos_ticket_general.opciones_de_seleccion()
+    fila = direccionamiento.direccionamiento_de(ticket)
+    seleccionado = fila.destino_id if fila is not None else None
+    ids_ofrecidos = {o["id"] for grupo in opciones["grupos"] for o in grupo["opciones"]}
+    return {
+        **opciones,
+        "seleccionado": seleccionado if seleccionado in ids_ofrecidos else None,
+        "obligatorio": not opciones["permite_omitir"],
+        "error": error,
+        "resumen": _resumen_destino(opciones, seleccionado if seleccionado in ids_ofrecidos else None),
+    }
+
+
+def _resumen_destino(opciones, seleccionado):
+    for grupo in opciones["grupos"]:
+        for opcion in grupo["opciones"]:
+            if opcion["id"] == seleccionado:
+                return opcion["etiqueta"]
+    return "No estoy seguro" if opciones["permite_omitir"] else None
+
+
+def contexto_workspace(ticket, *, errores=None, valores_envio=None, error_destino=None):
     respuesta_formulario = ticket.respuesta_formulario
     servicio = ticket.detalle_servicio.servicio
     items = construir_items(ticket, errores=errores, valores_envio=valores_envio)
     return {
+        "destino_general": contexto_destino_general(ticket, error=error_destino),
         "ticket": ticket,
         "servicio": servicio,
         "items": items,

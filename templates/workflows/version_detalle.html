@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ workflow.nombre }} — v{{ version.numero }} — Órbita{% endblock %}
+{% block title %}{{ workflow.nombre }} — v{{ version.numero }} — {{ sistema.nombre }}{% endblock %}
 
 {% block content %}
   {% url 'workflows:detalle' workflow.pk as url_flujo %}

@@ -41,19 +41,44 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.shortcuts import get_object_or_404, redirect, render
-from django.http import HttpResponseNotAllowed
+from django.http import HttpResponse, HttpResponseNotAllowed
+from django.template.loader import render_to_string
+from django.views.decorators.http import require_GET
 
 from apps.aprobaciones.autorizacion import puede_aprobar, puede_consultar_aprobacion, puede_reasignar_aprobacion
 from apps.aprobaciones.consultas import aprobaciones_pendientes_para, aprobaciones_visibles_para
 from apps.aprobaciones.forms import DecisionAprobacionForm, ReasignacionAprobacionForm
 from apps.aprobaciones.models import Aprobacion
 from apps.aprobaciones.operaciones import reasignar_aprobacion, resolver_aprobacion
+from apps.tickets.autorizacion import puede_consultar_ticket
+from apps.tickets.prorrogas import resolver_prorroga_por_aprobacion
 from apps.workflows.integracion import resolver_aprobacion_workflow
 from apps.workflows.models import EsquemaAprobacionWorkflow
 
 
 def _mensaje_error(exc):
     return "; ".join(exc.messages) if hasattr(exc, "messages") else str(exc)
+
+
+def _prorroga_del_esquema(esquema):
+    """4.A2 — la `ProrrogaTicket` que originó este esquema, o `None`. Misma
+    relación inversa por la que `vinculo_workflow` identifica trabajo de
+    Workflow: aprobaciones no necesita saber qué es una prórroga, solo que
+    existe quien debe enterarse cuando el esquema cierra."""
+    return getattr(esquema, "prorroga", None)
+
+
+def _contexto_prorroga(usuario, esquema):
+    prorroga = _prorroga_del_esquema(esquema)
+    if prorroga is None:
+        return None
+    ticket = prorroga.ticket
+    return {
+        "prorroga": prorroga,
+        "ticket": ticket,
+        "servicio": ticket.detalle_servicio.servicio,
+        "puede_ver_ticket": puede_consultar_ticket(usuario, ticket),
+    }
 
 
 def _contexto_workflow_por_esquema(esquema_ids):
@@ -96,6 +121,32 @@ def bandeja_view(request):
 
 
 @login_required
+@require_GET
+def vista_previa_view(request, pk):
+    """Fragmento de LECTURA para el panel de vista previa de Mi trabajo. Misma
+    autorización de objeto que el detalle (`puede_consultar_aprobacion`); la
+    decisión se registra al abrirla, nunca desde aquí."""
+    aprobacion = get_object_or_404(
+        Aprobacion.objects.select_related("esquema", "aprobador_usuario", "aprobador_equipo"), pk=pk
+    )
+    if not puede_consultar_aprobacion(request.user, aprobacion):
+        raise PermissionDenied
+    participaciones = list(
+        aprobacion.esquema.participaciones.select_related("aprobador_usuario", "aprobador_equipo").order_by("orden")
+    )
+    contexto = {
+        "aprobacion": aprobacion,
+        "esquema": aprobacion.esquema,
+        "contexto_workflow": _contexto_workflow_por_esquema([aprobacion.esquema_id]).get(aprobacion.esquema_id),
+        "participaciones": participaciones,
+        "decididas": sum(1 for p in participaciones if p.decidida_en is not None),
+        "puede_decidir": puede_aprobar(request.user, aprobacion),
+        "contexto_prorroga": _contexto_prorroga(request.user, aprobacion.esquema),
+    }
+    return HttpResponse(render_to_string("aprobaciones/_vista_previa.html", contexto))
+
+
+@login_required
 def detalle_view(request, pk):
     aprobacion = get_object_or_404(
         Aprobacion.objects.select_related("esquema", "aprobador_usuario", "aprobador_equipo", "decidido_por"),
@@ -107,11 +158,13 @@ def detalle_view(request, pk):
     puede_decidir = puede_aprobar(request.user, aprobacion)
     puede_reasignar = puede_reasignar_aprobacion(request.user, aprobacion)
     contexto_workflow = _contexto_workflow_por_esquema([aprobacion.esquema_id]).get(aprobacion.esquema_id)
+    contexto_prorroga = _contexto_prorroga(request.user, aprobacion.esquema)
 
     contexto = {
         "aprobacion": aprobacion,
         "esquema": aprobacion.esquema,
         "contexto_workflow": contexto_workflow,
+        "contexto_prorroga": contexto_prorroga,
         "participaciones": aprobacion.esquema.participaciones.select_related(
             "aprobador_usuario", "aprobador_equipo", "decidido_por"
         ).all(),
@@ -124,7 +177,9 @@ def detalle_view(request, pk):
         ).all(),
         "puede_decidir": puede_decidir,
         "puede_reasignar": puede_reasignar,
-        "decision_form": DecisionAprobacionForm() if puede_decidir else None,
+        "decision_form": (
+            DecisionAprobacionForm(permite_devolver=contexto_prorroga is None) if puede_decidir else None
+        ),
         "reasignacion_form": ReasignacionAprobacionForm() if puede_reasignar else None,
         "titulo_pagina": f"Aprobación #{aprobacion.pk}",
     }
@@ -138,12 +193,22 @@ def decidir_view(request, pk):
     aprobacion = get_object_or_404(Aprobacion.objects.select_related("esquema"), pk=pk)
     if not puede_aprobar(request.user, aprobacion):
         raise PermissionDenied
-    form = DecisionAprobacionForm(request.POST)
+    es_prorroga = _prorroga_del_esquema(aprobacion.esquema) is not None
+    form = DecisionAprobacionForm(request.POST, permite_devolver=not es_prorroga)
     if not form.is_valid():
         messages.error(request, "Revise los datos de la decisión.")
         return redirect("aprobaciones:detalle", pk=pk)
     try:
-        if hasattr(aprobacion.esquema, "vinculo_workflow"):
+        if es_prorroga:
+            # 4.A2: la decisión también aplica (o no) la nueva fecha del Ticket,
+            # en una sola transacción — nunca `resolver_aprobacion` a secas.
+            resolver_prorroga_por_aprobacion(
+                aprobacion,
+                request.user,
+                decision=form.cleaned_data["decision"],
+                observacion=form.cleaned_data.get("observacion", ""),
+            )
+        elif hasattr(aprobacion.esquema, "vinculo_workflow"):
             resolver_aprobacion_workflow(
                 aprobacion,
                 request.user,

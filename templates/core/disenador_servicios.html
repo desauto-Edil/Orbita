@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Servicios - Diseñador - Órbita{% endblock %}
+{% block title %}Servicios - Diseñador - {{ sistema.nombre }}{% endblock %}
 
 {% block content_modifier %}content-area--designer-home{% endblock %}
 
@@ -19,6 +19,157 @@
   </header>
 
   {% include "layout/disenador_tabs.html" %}
+
+  <section class="card" aria-labelledby="dis-ticket-general">
+    <div class="designer-section-head">
+      <div>
+        <h2 id="dis-ticket-general">Ticket general</h2>
+        <p>Para pedir algo que no está en el catálogo. Usa un único servicio interno que no aparece como servicio ordinario.</p>
+      </div>
+      <span class="designer-status{% if ticket_general.habilitado %} designer-status--published{% else %} designer-status--draft{% endif %}">{% if ticket_general.habilitado %}Habilitado{% else %}Deshabilitado{% endif %}</span>
+    </div>
+
+    {% if ticket_general.servicio %}
+      <p>
+        Servicio interno: <strong>{{ ticket_general.servicio.nombre }}</strong>
+        · {% if ticket_general.servicio.activo %}Publicado{% else %}Borrador{% endif %}
+        — <a href="{% url 'core:disenador_servicio' ticket_general.servicio.pk %}">Configurar formulario, tiempo objetivo, prórroga y entrega</a>
+      </p>
+      {% if ticket_general.problemas and not ticket_general.habilitado %}
+        <ul class="plain-list">
+          {% for problema in ticket_general.problemas %}<li class="text-muted">{{ problema }}</li>{% endfor %}
+        </ul>
+      {% endif %}
+      <form method="post" action="{% url 'catalogo:ticket_general_habilitar' %}" class="form">
+        {% csrf_token %}
+        {% if ticket_general.habilitado %}
+          <input type="hidden" name="habilitado" value="0">
+          <button type="submit" class="btn btn--secondary">Deshabilitar ticket general</button>
+        {% else %}
+          <input type="hidden" name="habilitado" value="1">
+          <button type="submit" class="btn btn--primary"{% if not ticket_general.puede_habilitar %} disabled{% endif %}>Habilitar ticket general</button>
+        {% endif %}
+      </form>
+      <h3 id="dis-tg-destinos">Destinos</h3>
+      <p class="text-muted">A quién puede dirigirse un ticket general. El destino es a quién va la solicitud; el responsable es quien la atiende. Los tickets ya radicados no cambian si editas o desactivas un destino.</p>
+      {% if ticket_general.destinos %}
+        <ul class="plain-list" aria-labelledby="dis-tg-destinos">
+          {% for fila in ticket_general.destinos %}
+            <li>
+              <strong>{{ fila.destino.get_tipo_display }}: {{ fila.destino.etiqueta }}</strong>
+              → responsable: {{ fila.destino.responsable_etiqueta }}
+              · {% if fila.destino.activo %}Activo{% else %}Inactivo{% endif %}{% if fila.predeterminado %} · <strong>Destino de reserva</strong>{% endif %}
+              {% if fila.destino.activo and fila.motivo %}<span class="text-muted"> — {{ fila.motivo }}</span>{% endif %}
+              <details class="work-fold">
+                <summary>Editar</summary>
+                <form method="post" action="{% url 'catalogo:ticket_general_destino_responsable' fila.destino.pk %}" class="form">
+                  {% csrf_token %}
+                  <div class="field">
+                    <label for="tg-resp-{{ fila.destino.pk }}">Responsable</label>
+                    {% include "core/_destino_responsable_select.html" with candidatos=ticket_general.destino_candidatos select_id="tg-resp-" sufijo=fila.destino.pk %}
+                  </div>
+                  <button type="submit" class="btn btn--secondary btn--sm">Guardar responsable</button>
+                </form>
+                <form method="post" action="{% url 'catalogo:ticket_general_destino_estado' fila.destino.pk %}" class="form">
+                  {% csrf_token %}
+                  {% if fila.destino.activo %}<input type="hidden" name="activo" value="0"><button type="submit" class="btn btn--secondary btn--sm">Desactivar</button>{% else %}<input type="hidden" name="activo" value="1"><button type="submit" class="btn btn--secondary btn--sm">Activar</button>{% endif %}
+                </form>
+              </details>
+            </li>
+          {% endfor %}
+        </ul>
+        <form method="post" action="{% url 'catalogo:ticket_general_destino_predeterminado' %}" class="form">
+          {% csrf_token %}
+          <div class="field">
+            <label for="tg-reserva">Destino de reserva ("No estoy seguro")</label>
+            <select name="destino" id="tg-reserva">
+              <option value="">Ninguno: el destino es obligatorio</option>
+              {% for fila in ticket_general.destinos %}{% if fila.utilizable %}<option value="{{ fila.destino.pk }}"{% if fila.predeterminado %} selected{% endif %}>{{ fila.destino.get_tipo_display }}: {{ fila.destino.etiqueta }}</option>{% endif %}{% endfor %}
+            </select>
+          </div>
+          <button type="submit" class="btn btn--secondary btn--sm">Guardar destino de reserva</button>
+        </form>
+      {% else %}
+        <p class="text-muted">Aún no hay destinos.</p>
+      {% endif %}
+      <details class="work-fold">
+        <summary>Agregar destino</summary>
+        <form method="post" action="{% url 'catalogo:ticket_general_destino_crear' %}" class="form">
+          {% csrf_token %}
+          <div class="field">
+            <label for="tg-dest-tipo">Tipo</label>
+            <select name="tipo" id="tg-dest-tipo">
+              <option value="AREA">Área</option>
+              <option value="EQUIPO">Equipo</option>
+              <option value="USUARIO">Persona</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="tg-dest-area">Área</label>
+            <select name="objeto_area" id="tg-dest-area"><option value="">—</option>{% for area in ticket_general.destino_candidatos.areas %}<option value="{{ area.pk }}">{{ area.nombre }}</option>{% endfor %}</select>
+          </div>
+          <div class="field">
+            <label for="tg-dest-equipo">Equipo</label>
+            <select name="objeto_equipo" id="tg-dest-equipo"><option value="">—</option>{% for equipo in ticket_general.destino_candidatos.equipos %}<option value="{{ equipo.pk }}">{{ equipo.nombre }}</option>{% endfor %}</select>
+          </div>
+          <div class="field">
+            <label for="tg-dest-usuario">Persona</label>
+            <select name="objeto_usuario" id="tg-dest-usuario"><option value="">—</option>{% for persona in ticket_general.destino_candidatos.usuarios %}<option value="{{ persona.pk }}">{{ persona.get_full_name|default:persona.username }}</option>{% endfor %}</select>
+          </div>
+          <div class="field">
+            <label for="tg-dest-resp">Responsable</label>
+            {% include "core/_destino_responsable_select.html" with candidatos=ticket_general.destino_candidatos select_id="tg-dest-resp" vacio="El propio destino (equipo o persona)" %}
+            <p class="text-muted">Un destino de área necesita un responsable: una persona o un equipo.</p>
+          </div>
+          <button type="submit" class="btn btn--primary btn--sm">Agregar destino</button>
+        </form>
+      </details>
+      {% if ticket_general.candidatos %}
+        <details class="work-fold">
+          <summary>Usar otro servicio como servicio interno</summary>
+          <form method="post" action="{% url 'catalogo:ticket_general_designar' %}" class="form">
+            {% csrf_token %}
+            <p class="text-muted">Solo servicios sin tickets. Al cambiarlo, el ticket general queda deshabilitado hasta validarlo.</p>
+            <div class="field">
+              <label for="tg-designar">Servicio</label>
+              <select name="servicio" id="tg-designar">{% for candidato in ticket_general.candidatos %}<option value="{{ candidato.pk }}">{{ candidato.nombre }}</option>{% endfor %}</select>
+            </div>
+            <button type="submit" class="btn btn--secondary">Usar este servicio</button>
+          </form>
+        </details>
+      {% endif %}
+    {% else %}
+      <form method="post" action="{% url 'catalogo:ticket_general_crear' %}" class="form">
+        {% csrf_token %}
+        <div class="field">
+          <label for="tg-nombre">Nombre del servicio interno</label>
+          <input type="text" name="nombre" id="tg-nombre" value="Ticket general" maxlength="150">
+        </div>
+        <div class="field">
+          <label for="tg-categoria">Categoría</label>
+          <select name="categoria" id="tg-categoria" required>
+            {% for categoria in ticket_general.categorias %}<option value="{{ categoria.pk }}">{{ categoria.nombre }}</option>{% endfor %}
+          </select>
+        </div>
+        <button type="submit" class="btn btn--primary"{% if not ticket_general.categorias %} disabled{% endif %}>Crear servicio interno</button>
+        {% if not ticket_general.categorias %}<p class="text-muted">Primero crea una categoría activa.</p>{% endif %}
+      </form>
+      {% if ticket_general.candidatos %}
+        <details class="work-fold">
+          <summary>O elige un servicio existente</summary>
+          <form method="post" action="{% url 'catalogo:ticket_general_designar' %}" class="form">
+            {% csrf_token %}
+            <p class="text-muted">Solo servicios sin tickets.</p>
+            <div class="field">
+              <label for="tg-existente">Servicio</label>
+              <select name="servicio" id="tg-existente">{% for candidato in ticket_general.candidatos %}<option value="{{ candidato.pk }}">{{ candidato.nombre }}</option>{% endfor %}</select>
+            </div>
+            <button type="submit" class="btn btn--secondary">Usar este servicio</button>
+          </form>
+        </details>
+      {% endif %}
+    {% endif %}
+  </section>
 
   <section class="designer-library" aria-labelledby="dis-servicios">
     <div class="designer-section-head">
@@ -68,6 +219,7 @@
             <div class="designer-object__footer">
               <div class="designer-object__states">
                 <span class="designer-status{% if servicio.tipo == 'PROCESO' %} designer-status--neutral{% endif %}">{{ servicio.get_tipo_display }}</span>
+                {% if servicio.es_ticket_general %}<span class="designer-status designer-status--neutral">Ticket general</span>{% endif %}
                 <span class="designer-status{% if servicio.activo %} designer-status--published{% else %} designer-status--draft{% endif %}">{% if servicio.activo %}Publicado{% else %}Borrador{% endif %}</span>
               </div>
               <a class="btn btn--secondary btn--sm" href="{% url 'core:disenador_servicio' servicio.pk %}">{% if servicio.activo %}Abrir{% else %}Continuar{% endif %}</a>

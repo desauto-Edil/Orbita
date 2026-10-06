@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}{{ titulo_pagina }} — Órbita{% endblock %}
+{% block title %}{{ titulo_pagina }} — {{ sistema.nombre }}{% endblock %}
 
 {% block extra_head %}<link rel="stylesheet" href="{% static 'css/solicitud.css' %}">{% endblock %}
 
@@ -26,6 +26,7 @@
   {% endif %}
 
   <section class="card sol-review" aria-label="Resumen de tu solicitud">
+    {% if destino_general and destino_general.resumen %}<p class="sol-lede">Dirigida a: <strong>{{ destino_general.resumen }}</strong></p>{% endif %}
     {% include "tickets/_solicitud_resumen.html" %}
   </section>
 

@@ -7,13 +7,23 @@ entregan junto con los comandos exactos para correrlas vía Docker.
 
 from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
-from django.db import IntegrityError, transaction
-from django.test import RequestFactory, TestCase, TransactionTestCase
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.contrib.auth.models import AnonymousUser
+from django.db import IntegrityError, connection, transaction
+from django.test import RequestFactory, SimpleTestCase, TestCase, TransactionTestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from apps.catalogo.admin import CampoAdmin, FormularioAdmin, FormularioVersionAdmin, ServicioAdmin
+from apps.catalogo import busqueda, normalizacion
 from apps.catalogo.campos import ESTRATEGIAS_POR_TIPO
+from apps.catalogo.terminos_busqueda import (
+    MAX_TERMINOS_POR_SERVICIO,
+    cambiar_estado_termino,
+    crear_termino,
+    editar_termino,
+    eliminar_termino,
+)
 from apps.catalogo.models import (
     BloqueOperativo,
     Campo,
@@ -28,6 +38,7 @@ from apps.catalogo.models import (
     ServicioContextoAtencion,
     ServicioResponsable,
     ServicioVisibilidad,
+    TerminoServicio,
     TransicionBloqueOperativo,
 )
 from apps.catalogo.reglas import EspecificacionRegla
@@ -4236,3 +4247,953 @@ def get_messages_de(respuesta):
     from django.contrib.messages import get_messages
 
     return list(get_messages(respuesta.wsgi_request))
+
+
+class TiempoObjetivoServicioTests(TestCase):
+    """4.A1 — tiempo objetivo de atención del Servicio/Proceso (Studio → Básico)."""
+
+    def setUp(self):
+        self.admin = Usuario.objects.create_user("tiempo_admin", password=CLAVE_PRUEBA)
+        _otorgar_permiso(self.admin, "catalogo.administrar")
+        self.sin_permiso = Usuario.objects.create_user("tiempo_sin_permiso", password=CLAVE_PRUEBA)
+        self.categoria = Categoria.objects.create(nombre="Tiempo")
+        self.servicio = Servicio.objects.create(nombre="Con tiempo", categoria=self.categoria, activo=False)
+        self.proceso = Servicio.objects.create(
+            nombre="Proceso con tiempo", categoria=self.categoria, tipo=Servicio.Tipo.PROCESO, activo=False
+        )
+
+    def _guardar(self, servicio=None, **datos):
+        servicio = servicio or self.servicio
+        return self.client.post(reverse("catalogo:studio_tiempo_objetivo_guardar", args=[servicio.pk]), datos)
+
+    def _auditorias(self, servicio=None):
+        servicio = servicio or self.servicio
+        return RegistroAuditoria.objects.filter(
+            modelo="catalogo.servicio", object_id=servicio.pk, accion=RegistroAuditoria.Accion.ACTUALIZAR
+        )
+
+    def _tiempo(self, servicio=None):
+        servicio = servicio or self.servicio
+        servicio.refresh_from_db()
+        return (servicio.tiempo_objetivo_cantidad, servicio.tiempo_objetivo_unidad, servicio.tiempo_objetivo_habiles)
+
+    def test_servicio_nuevo_no_tiene_compromiso_temporal_y_basico_lo_ofrece(self):
+        self.assertEqual(self._tiempo(), (None, "", False))
+        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "general"})
+        self.assertContains(respuesta, "Tiempo objetivo de atención")
+        self.assertContains(respuesta, "Guardar tiempo objetivo")
+        self.assertContains(respuesta, "Sin compromiso")
+
+    def test_configura_servicio_y_proceso_con_la_misma_regla(self):
+        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        self._guardar(self.servicio, cantidad="5", unidad="DIAS", habiles="on")
+        self._guardar(self.proceso, cantidad="8", unidad="HORAS")
+        self.assertEqual(self._tiempo(self.servicio), (5, "DIAS", True))
+        self.assertEqual(self._tiempo(self.proceso), (8, "HORAS", False))
+
+    def test_audita_con_valores_anteriores_y_nuevos(self):
+        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        self._guardar(cantidad="3", unidad="DIAS", habiles="on")
+        evento = self._auditorias().get()
+        self.assertEqual(
+            evento.datos_anteriores,
+            {"tiempo_objetivo_cantidad": None, "tiempo_objetivo_unidad": "", "tiempo_objetivo_habiles": False},
+        )
+        self.assertEqual(
+            evento.datos_nuevos,
+            {"tiempo_objetivo_cantidad": 3, "tiempo_objetivo_unidad": "DIAS", "tiempo_objetivo_habiles": True},
+        )
+        self.assertEqual(evento.usuario, self.admin)
+
+    def test_guardar_lo_mismo_no_duplica_auditoria(self):
+        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        self._guardar(cantidad="3", unidad="DIAS")
+        self._guardar(cantidad="3", unidad="DIAS")
+        self.assertEqual(self._auditorias().count(), 1)
+
+    def test_dejar_vacio_quita_el_compromiso_y_descarta_habiles(self):
+        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        self._guardar(cantidad="3", unidad="DIAS", habiles="on")
+        self._guardar(habiles="on")
+        self.assertEqual(self._tiempo(), (None, "", False))
+        self.assertEqual(self._auditorias().count(), 2)
+
+    def test_rechaza_datos_incoherentes_sin_tocar_el_servicio(self):
+        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        for datos in (
+            {"cantidad": "3"}, {"unidad": "DIAS"}, {"cantidad": "0", "unidad": "DIAS"},
+            {"cantidad": "1000", "unidad": "DIAS"}, {"cantidad": "3", "unidad": "SEMANAS"},
+            {"cantidad": "abc", "unidad": "DIAS"},
+        ):
+            with self.subTest(datos=datos):
+                self._guardar(**datos)
+        self.assertEqual(self._tiempo(), (None, "", False))
+        self.assertFalse(self._auditorias().exists())
+
+    def test_solo_post_y_exige_permiso_de_catalogo(self):
+        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        url = reverse("catalogo:studio_tiempo_objetivo_guardar", args=[self.servicio.pk])
+        self.assertEqual(self.client.get(url).status_code, 405)
+        self.client.logout()
+        self.client.login(username="tiempo_sin_permiso", password=CLAVE_PRUEBA)
+        self.assertEqual(self._guardar(cantidad="3", unidad="DIAS").status_code, 403)
+        self.assertEqual(self._tiempo(), (None, "", False))
+
+    def test_operacion_exige_permiso_y_valida_sin_pasar_por_la_vista(self):
+        from django.core.exceptions import PermissionDenied
+
+        from apps.catalogo.operaciones import configurar_tiempo_objetivo
+
+        with self.assertRaises(PermissionDenied):
+            configurar_tiempo_objetivo(self.servicio, self.sin_permiso, cantidad=3, unidad="DIAS")
+        for datos in (
+            {"cantidad": 0, "unidad": "DIAS"}, {"cantidad": True, "unidad": "DIAS"},
+            {"cantidad": 3, "unidad": ""}, {"cantidad": 3, "unidad": "SEMANAS"},
+            {"cantidad": None, "unidad": "DIAS"}, {"cantidad": 1000, "unidad": "HORAS"},
+        ):
+            with self.subTest(datos=datos), self.assertRaises(ValidationError):
+                configurar_tiempo_objetivo(self.servicio, self.admin, **datos)
+        self.assertEqual(self._tiempo(), (None, "", False))
+
+    def test_la_base_rechaza_estados_incoherentes(self):
+        for cambios in (
+            {"tiempo_objetivo_cantidad": 3},
+            {"tiempo_objetivo_cantidad": 3, "tiempo_objetivo_unidad": "SEMANAS"},
+            {"tiempo_objetivo_cantidad": 0, "tiempo_objetivo_unidad": "DIAS"},
+            {"tiempo_objetivo_unidad": "DIAS"},
+            {"tiempo_objetivo_habiles": True},
+        ):
+            with self.subTest(cambios=cambios), self.assertRaises(IntegrityError), transaction.atomic():
+                Servicio.objects.filter(pk=self.servicio.pk).update(**cambios)
+
+    def test_publicar_no_exige_tiempo_objetivo(self):
+        from apps.catalogo.operaciones import validar_publicacion
+
+        try:
+            validar_publicacion(self.servicio)
+        except ValidationError as exc:
+            self.assertFalse(any("tiempo" in mensaje.lower() for mensaje in exc.messages))
+
+
+class PoliticaProrrogaServicioTests(TestCase):
+    """4.A2 — política de prórroga del Servicio/Proceso (Studio → Básico)."""
+
+    def setUp(self):
+        from apps.core.models import Equipo
+
+        self.admin = Usuario.objects.create_user("prorroga_admin", password=CLAVE_PRUEBA)
+        _otorgar_permiso(self.admin, "catalogo.administrar")
+        self.sin_permiso = Usuario.objects.create_user("prorroga_sin_permiso", password=CLAVE_PRUEBA)
+        self.aprobador = Usuario.objects.create_user("prorroga_aprobador", password=CLAVE_PRUEBA)
+        self.inactivo = Usuario.objects.create_user("prorroga_inactivo", password=CLAVE_PRUEBA, is_active=False)
+        self.equipo = Equipo.objects.create(nombre="Equipo aprobador")
+        self.equipo_inactivo = Equipo.objects.create(nombre="Equipo apagado", activo=False)
+        self.categoria = Categoria.objects.create(nombre="Prórroga")
+        self.servicio = Servicio.objects.create(nombre="Con prórroga", categoria=self.categoria, activo=False)
+        self.proceso = Servicio.objects.create(
+            nombre="Proceso con prórroga", categoria=self.categoria, tipo=Servicio.Tipo.PROCESO, activo=False
+        )
+
+    def _guardar(self, servicio=None, **datos):
+        servicio = servicio or self.servicio
+        return self.client.post(reverse("catalogo:studio_prorroga_guardar", args=[servicio.pk]), datos)
+
+    def _estado(self, servicio=None):
+        servicio = servicio or self.servicio
+        servicio.refresh_from_db()
+        return (servicio.politica_prorroga, servicio.prorroga_aprobador_usuario_id, servicio.prorroga_aprobador_equipo_id)
+
+    def _auditorias(self, servicio=None):
+        servicio = servicio or self.servicio
+        return RegistroAuditoria.objects.filter(
+            modelo="catalogo.servicio", object_id=servicio.pk, accion=RegistroAuditoria.Accion.ACTUALIZAR
+        )
+
+    def test_servicio_nuevo_no_tiene_politica_y_basico_la_ofrece(self):
+        self.assertEqual(self._estado(), ("", None, None))
+        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "general"})
+        self.assertContains(respuesta, "Prórroga de la fecha objetivo")
+        self.assertContains(respuesta, "Guardar política de prórroga")
+
+    def test_las_tres_politicas_se_configuran_para_servicio_y_proceso(self):
+        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        self._guardar(self.servicio, politica="NO_PERMITE")
+        self.assertEqual(self._estado(self.servicio), ("NO_PERMITE", None, None))
+        self._guardar(self.servicio, politica="SIN_APROBACION")
+        self.assertEqual(self._estado(self.servicio), ("SIN_APROBACION", None, None))
+        self._guardar(self.proceso, politica="CON_APROBACION", aprobador_usuario=self.aprobador.pk)
+        self.assertEqual(self._estado(self.proceso), ("CON_APROBACION", self.aprobador.pk, None))
+        self._guardar(self.servicio, politica="CON_APROBACION", aprobador_equipo=self.equipo.pk)
+        self.assertEqual(self._estado(self.servicio), ("CON_APROBACION", None, self.equipo.pk))
+
+    def test_cambiar_a_una_politica_sin_aprobacion_descarta_el_aprobador(self):
+        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        self._guardar(politica="CON_APROBACION", aprobador_usuario=self.aprobador.pk)
+        self._guardar(politica="SIN_APROBACION", aprobador_usuario=self.aprobador.pk)
+        self.assertEqual(self._estado(), ("SIN_APROBACION", None, None))
+
+    def test_con_aprobacion_exige_exactamente_un_aprobador_activo(self):
+        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        for datos in (
+            {"politica": "CON_APROBACION"},
+            {"politica": "CON_APROBACION", "aprobador_usuario": self.aprobador.pk, "aprobador_equipo": self.equipo.pk},
+            {"politica": "CON_APROBACION", "aprobador_usuario": self.inactivo.pk},
+            {"politica": "CON_APROBACION", "aprobador_equipo": self.equipo_inactivo.pk},
+            {"politica": "TAL_VEZ"}, {"politica": ""},
+        ):
+            with self.subTest(datos=datos):
+                self._guardar(**datos)
+        self.assertEqual(self._estado(), ("", None, None))
+        self.assertFalse(self._auditorias().exists())
+
+    def test_la_operacion_valida_sin_pasar_por_la_vista(self):
+        from django.core.exceptions import PermissionDenied
+
+        from apps.catalogo.operaciones import configurar_politica_prorroga
+
+        with self.assertRaises(PermissionDenied):
+            configurar_politica_prorroga(self.servicio, self.sin_permiso, politica="SIN_APROBACION")
+        for datos in (
+            {"politica": "CON_APROBACION"},
+            {"politica": "CON_APROBACION", "aprobador_usuario": self.inactivo},
+            {"politica": "CON_APROBACION", "aprobador_usuario": self.aprobador, "aprobador_equipo": self.equipo},
+            {"politica": "NO_EXISTE"},
+        ):
+            with self.subTest(datos=datos), self.assertRaises(ValidationError):
+                configurar_politica_prorroga(self.servicio, self.admin, **datos)
+        self.assertEqual(self._estado(), ("", None, None))
+
+    def test_audita_y_es_idempotente(self):
+        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        self._guardar(politica="CON_APROBACION", aprobador_usuario=self.aprobador.pk)
+        self._guardar(politica="CON_APROBACION", aprobador_usuario=self.aprobador.pk)
+        evento = self._auditorias().get()
+        self.assertEqual(
+            evento.datos_anteriores,
+            {"politica_prorroga": "", "prorroga_aprobador_usuario_id": None, "prorroga_aprobador_equipo_id": None},
+        )
+        self.assertEqual(
+            evento.datos_nuevos,
+            {
+                "politica_prorroga": "CON_APROBACION",
+                "prorroga_aprobador_usuario_id": self.aprobador.pk,
+                "prorroga_aprobador_equipo_id": None,
+            },
+        )
+        self.assertEqual(evento.usuario, self.admin)
+
+    def test_solo_post_y_exige_permiso_de_catalogo(self):
+        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        self.assertEqual(
+            self.client.get(reverse("catalogo:studio_prorroga_guardar", args=[self.servicio.pk])).status_code, 405
+        )
+        self.client.logout()
+        self.client.login(username="prorroga_sin_permiso", password=CLAVE_PRUEBA)
+        self.assertEqual(self._guardar(politica="SIN_APROBACION").status_code, 403)
+        self.assertEqual(self._estado(), ("", None, None))
+
+    def test_la_base_rechaza_politicas_incoherentes(self):
+        for cambios in (
+            {"politica_prorroga": "CON_APROBACION"},
+            {
+                "politica_prorroga": "CON_APROBACION",
+                "prorroga_aprobador_usuario": self.aprobador, "prorroga_aprobador_equipo": self.equipo,
+            },
+            {"politica_prorroga": "SIN_APROBACION", "prorroga_aprobador_usuario": self.aprobador},
+            {"politica_prorroga": "", "prorroga_aprobador_equipo": self.equipo},
+        ):
+            with self.subTest(cambios=cambios), self.assertRaises(IntegrityError), transaction.atomic():
+                Servicio.objects.filter(pk=self.servicio.pk).update(**cambios)
+
+    def test_publicar_exige_un_aprobador_activo_si_la_politica_es_con_aprobacion(self):
+        from apps.catalogo.operaciones import validar_publicacion
+
+        Servicio.objects.filter(pk=self.servicio.pk).update(
+            politica_prorroga="CON_APROBACION", prorroga_aprobador_usuario=self.aprobador
+        )
+        self.servicio.refresh_from_db()
+        try:
+            validar_publicacion(self.servicio)
+        except ValidationError as exc:
+            self.assertFalse(any("aprobador" in mensaje for mensaje in exc.messages))
+        Usuario.objects.filter(pk=self.aprobador.pk).update(is_active=False)
+        self.servicio.refresh_from_db()
+        with self.assertRaises(ValidationError) as contexto:
+            validar_publicacion(self.servicio)
+        self.assertTrue(any("aprobador activo" in mensaje for mensaje in contexto.exception.messages))
+
+    def test_la_politica_no_depende_del_workflow(self):
+        self.assertIsNone(self.servicio.workflow_id)
+        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        self._guardar(politica="SIN_APROBACION")
+        self.assertEqual(self._estado(), ("SIN_APROBACION", None, None))
+
+
+# --- 4.D — buscador por reglas "¿Qué necesitas?" ----------------------------------------
+
+
+class NormalizacionBusquedaTests(SimpleTestCase):
+    """Normalización de texto del buscador (`apps.catalogo.normalizacion`): funciones
+    puras que nunca alteran lo almacenado."""
+
+    def test_minusculas_y_mayusculas_son_equivalentes(self):
+        self.assertEqual(normalizacion.normalizar("PRESENTACIÓN COMERCIAL"), "presentacion comercial")
+        self.assertEqual(normalizacion.normalizar("Presentación Comercial"), "presentacion comercial")
+
+    def test_acentos_y_diacriticos(self):
+        for texto in ("presentación", "presentacion", "PRESENTACIÓN", "Presentación"):
+            self.assertEqual(normalizacion.normalizar(texto), "presentacion")
+        self.assertEqual(normalizacion.normalizar("Año"), "ano")
+
+    def test_espacios_repetidos_y_extremos(self):
+        self.assertEqual(normalizacion.normalizar("  hola \t  mundo \n"), "hola mundo")
+
+    def test_puntuacion_irrelevante(self):
+        self.assertEqual(normalizacion.normalizar("¿Presentación, comercial!"), "presentacion comercial")
+        self.assertEqual(normalizacion.normalizar("días_libres; (sí)"), "dias libres si")
+        self.assertEqual(normalizacion.normalizar("¿¿??!!"), "")
+
+    def test_vacio_o_none(self):
+        self.assertEqual(normalizacion.normalizar(None), "")
+        self.assertEqual(normalizacion.normalizar(""), "")
+        self.assertEqual(normalizacion.palabras(None), [])
+
+    def test_tokenizacion_descarta_palabras_vacias_y_repetidas(self):
+        self.assertEqual(
+            normalizacion.palabras("Necesito hacer una presentación para un cliente"), ["presentacion", "cliente"]
+        )
+        self.assertEqual(normalizacion.palabras("vacaciones Vacaciones VACACIONES"), ["vacaciones"])
+
+    def test_tokenizacion_descarta_letras_sueltas_y_conserva_siglas_y_numeros(self):
+        self.assertEqual(normalizacion.palabras("a x ppt 365"), ["ppt", "365"])
+
+    def test_solo_palabras_vacias_no_tiene_palabras(self):
+        self.assertEqual(normalizacion.palabras("necesito hacer una"), [])
+
+    def test_raiz_une_plurales_y_derivaciones(self):
+        raiz = normalizacion.raiz
+        self.assertEqual(raiz("presentaciones"), raiz("presentacion"))
+        self.assertEqual(raiz("presentar"), raiz("presentacion"))
+        self.assertEqual(raiz("clientes"), raiz("cliente"))
+        self.assertEqual(raiz("diapositivas"), raiz("diapositiva"))
+        self.assertEqual(raiz("ppts"), "ppt")
+
+    def test_raiz_no_une_palabras_distintas_comunes(self):
+        self.assertNotEqual(normalizacion.raiz("contratos"), normalizacion.raiz("contrasena"))
+
+    def test_raices_conservan_la_palabra_original(self):
+        self.assertEqual(
+            normalizacion.raices("Diapositivas de la presentación"),
+            {"diaposi": "diapositivas", "present": "presentacion"},
+        )
+
+
+class TerminoServicioTests(TestCase):
+    """4.D — términos de búsqueda de un Servicio/Proceso: modelo, reglas, permisos,
+    auditoría y Studio (Básico)."""
+
+    def setUp(self):
+        self.admin = Usuario.objects.create_user("terminos_admin", password=CLAVE_PRUEBA)
+        _otorgar_permiso(self.admin, "catalogo.administrar")
+        self.sin_permiso = Usuario.objects.create_user("terminos_sin_permiso", password=CLAVE_PRUEBA)
+        self.categoria = Categoria.objects.create(nombre="Términos")
+        self.servicio = Servicio.objects.create(nombre="Creación de presentaciones", categoria=self.categoria, activo=False)
+        self.proceso = Servicio.objects.create(
+            nombre="Vacaciones", categoria=self.categoria, tipo=Servicio.Tipo.PROCESO, activo=False
+        )
+
+    def _auditorias(self, accion):
+        return RegistroAuditoria.objects.filter(modelo="catalogo.terminoservicio", accion=accion)
+
+    # --- modelo y reglas ---
+
+    def test_crea_termino_activo_y_pertenece_al_servicio_o_al_proceso(self):
+        t_servicio = crear_termino(self.servicio, self.admin, "Presentación")
+        t_proceso = crear_termino(self.proceso, self.admin, "descanso")
+        self.assertTrue(t_servicio.activo and t_proceso.activo)
+        self.assertEqual(list(self.servicio.terminos_busqueda.all()), [t_servicio])
+        self.assertEqual(list(self.proceso.terminos_busqueda.all()), [t_proceso])
+
+    def test_guarda_el_texto_sin_espacios_sobrantes_pero_sin_normalizarlo(self):
+        termino = crear_termino(self.servicio, self.admin, "  Días    libres ")
+        self.assertEqual(termino.termino, "Días libres")
+
+    def test_un_servicio_admite_varios_terminos(self):
+        for texto in ("presentación", "diapositivas", "powerpoint", "ppt"):
+            crear_termino(self.servicio, self.admin, texto)
+        self.assertEqual(self.servicio.terminos_busqueda.count(), 4)
+
+    def test_activar_y_desactivar(self):
+        termino = crear_termino(self.servicio, self.admin, "powerpoint")
+        cambiar_estado_termino(termino, self.admin, activo=False)
+        termino.refresh_from_db()
+        self.assertFalse(termino.activo)
+        cambiar_estado_termino(termino, self.admin, activo=True)
+        termino.refresh_from_db()
+        self.assertTrue(termino.activo)
+
+    def test_desactivar_dos_veces_no_duplica_auditoria(self):
+        termino = crear_termino(self.servicio, self.admin, "powerpoint")
+        cambiar_estado_termino(termino, self.admin, activo=False)
+        cambiar_estado_termino(termino, self.admin, activo=False)
+        self.assertEqual(self._auditorias(RegistroAuditoria.Accion.ACTUALIZAR).count(), 1)
+
+    def test_rechaza_un_termino_equivalente_en_el_mismo_servicio(self):
+        crear_termino(self.servicio, self.admin, "Presentación")
+        for repetido in ("presentacion", "PRESENTACIÓN", " presentación! "):
+            with self.assertRaises(ValidationError):
+                crear_termino(self.servicio, self.admin, repetido)
+        self.assertEqual(self.servicio.terminos_busqueda.count(), 1)
+
+    def test_el_duplicado_desactivado_sugiere_activarlo(self):
+        termino = crear_termino(self.servicio, self.admin, "Presentación")
+        cambiar_estado_termino(termino, self.admin, activo=False)
+        with self.assertRaises(ValidationError) as contexto:
+            crear_termino(self.servicio, self.admin, "presentacion")
+        self.assertIn("desactivado", "; ".join(contexto.exception.messages))
+
+    def test_el_mismo_termino_puede_existir_en_otro_servicio(self):
+        crear_termino(self.servicio, self.admin, "vacaciones")
+        crear_termino(self.proceso, self.admin, "vacaciones")
+        self.assertEqual(TerminoServicio.objects.filter(termino="vacaciones").count(), 2)
+
+    def test_rechaza_vacio_solo_palabras_vacias_y_demasiado_largo(self):
+        for invalido in ("", "   ", "para de la", "¿?", "x" * 101):
+            with self.assertRaises(ValidationError, msg=repr(invalido)):
+                crear_termino(self.servicio, self.admin, invalido)
+        self.assertEqual(TerminoServicio.objects.count(), 0)
+
+    def test_tope_de_terminos_por_servicio(self):
+        for n in range(MAX_TERMINOS_POR_SERVICIO):
+            crear_termino(self.servicio, self.admin, f"termino{n}")
+        with self.assertRaises(ValidationError):
+            crear_termino(self.servicio, self.admin, "extra31")
+        self.assertEqual(self.servicio.terminos_busqueda.count(), MAX_TERMINOS_POR_SERVICIO)
+
+    def test_el_ticket_general_no_admite_terminos(self):
+        Servicio.objects.filter(pk=self.servicio.pk).update(es_ticket_general=True)
+        self.servicio.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            crear_termino(self.servicio, self.admin, "ayuda")
+        self.assertEqual(TerminoServicio.objects.count(), 0)
+
+    def test_editar_cambia_el_texto_y_respeta_la_equivalencia(self):
+        uno = crear_termino(self.servicio, self.admin, "presentación")
+        dos = crear_termino(self.servicio, self.admin, "diapositivas")
+        editar_termino(uno, self.admin, "Presentación comercial")
+        uno.refresh_from_db()
+        self.assertEqual(uno.termino, "Presentación comercial")
+        with self.assertRaises(ValidationError):
+            editar_termino(dos, self.admin, "PRESENTACION COMERCIAL")
+        editar_termino(uno, self.admin, "presentacion comercial")  # equivalente a sí mismo: permitido
+        uno.refresh_from_db()
+        self.assertEqual(uno.termino, "presentacion comercial")
+
+    def test_editar_sin_cambios_no_audita(self):
+        termino = crear_termino(self.servicio, self.admin, "powerpoint")
+        editar_termino(termino, self.admin, "powerpoint")
+        self.assertEqual(self._auditorias(RegistroAuditoria.Accion.ACTUALIZAR).count(), 0)
+
+    def test_eliminar_borra_el_termino(self):
+        termino = crear_termino(self.servicio, self.admin, "powerpoint")
+        eliminar_termino(termino, self.admin)
+        self.assertFalse(TerminoServicio.objects.filter(servicio=self.servicio).exists())
+
+    def test_no_son_campos_del_formulario(self):
+        antes = Campo.objects.count()
+        crear_termino(self.servicio, self.admin, "powerpoint")
+        self.assertEqual(Campo.objects.count(), antes)
+
+    # --- permisos ---
+
+    def test_toda_operacion_exige_catalogo_administrar(self):
+        termino = crear_termino(self.servicio, self.admin, "powerpoint")
+        with self.assertRaises(PermissionDenied):
+            crear_termino(self.servicio, self.sin_permiso, "otro")
+        with self.assertRaises(PermissionDenied):
+            editar_termino(termino, self.sin_permiso, "otro")
+        with self.assertRaises(PermissionDenied):
+            cambiar_estado_termino(termino, self.sin_permiso, activo=False)
+        with self.assertRaises(PermissionDenied):
+            eliminar_termino(termino, self.sin_permiso)
+        termino.refresh_from_db()
+        self.assertEqual((termino.termino, termino.activo), ("powerpoint", True))
+
+    # --- auditoría ---
+
+    def test_audita_alta_edicion_estado_y_borrado(self):
+        termino = crear_termino(self.servicio, self.admin, "powerpoint")
+        alta = self._auditorias(RegistroAuditoria.Accion.CREAR).get()
+        self.assertEqual(alta.usuario, self.admin)
+        self.assertIsNone(alta.datos_anteriores)
+        self.assertEqual(alta.datos_nuevos["termino"], "powerpoint")
+
+        editar_termino(termino, self.admin, "ppt")
+        cambiar_estado_termino(termino, self.admin, activo=False)
+        cambios = list(self._auditorias(RegistroAuditoria.Accion.ACTUALIZAR).order_by("pk"))
+        self.assertEqual(len(cambios), 2)
+        self.assertEqual(cambios[0].datos_anteriores["termino"], "powerpoint")
+        self.assertEqual(cambios[0].datos_nuevos["termino"], "ppt")
+        self.assertTrue(cambios[1].datos_anteriores["activo"])
+        self.assertFalse(cambios[1].datos_nuevos["activo"])
+
+        eliminar_termino(termino, self.admin)
+        baja = self._auditorias(RegistroAuditoria.Accion.ELIMINAR).get()
+        self.assertEqual(baja.datos_anteriores["termino"], "ppt")
+        self.assertIsNone(baja.datos_nuevos)
+
+    # --- Studio ---
+
+    def _crear_por_studio(self, servicio, texto):
+        return self.client.post(reverse("catalogo:studio_termino_crear", args=[servicio.pk]), {"termino-nuevo-termino": texto})
+
+    def test_studio_muestra_la_seccion_en_servicio_y_en_proceso(self):
+        crear_termino(self.servicio, self.admin, "powerpoint")
+        self.client.login(username="terminos_admin", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "general"})
+        self.assertContains(respuesta, "Términos de búsqueda")
+        self.assertContains(respuesta, "powerpoint")
+        self.assertContains(respuesta, "Agregar término")
+        respuesta = self.client.get(reverse("catalogo:studio", args=[self.proceso.pk]), {"tab": "general"})
+        self.assertContains(respuesta, "Términos de búsqueda")
+
+    def test_studio_no_ofrece_terminos_para_el_ticket_general(self):
+        Servicio.objects.filter(pk=self.servicio.pk).update(es_ticket_general=True)
+        self.client.login(username="terminos_admin", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "general"})
+        self.assertNotContains(respuesta, "Términos de búsqueda")
+
+    def test_studio_agrega_edita_desactiva_y_elimina(self):
+        self.client.login(username="terminos_admin", password=CLAVE_PRUEBA)
+        self._crear_por_studio(self.servicio, "powerpoint")
+        termino = TerminoServicio.objects.get(servicio=self.servicio)
+        self.client.post(
+            reverse("catalogo:studio_termino_editar", args=[self.servicio.pk, termino.pk]),
+            {f"termino-{termino.pk}-editar-termino": "diapositivas"},
+        )
+        termino.refresh_from_db()
+        self.assertEqual(termino.termino, "diapositivas")
+        self.client.post(
+            reverse("catalogo:studio_termino_estado", args=[self.servicio.pk, termino.pk]), {"activo": "0"}
+        )
+        termino.refresh_from_db()
+        self.assertFalse(termino.activo)
+        self.client.post(
+            reverse("catalogo:studio_termino_estado", args=[self.servicio.pk, termino.pk]), {"activo": "1"}
+        )
+        termino.refresh_from_db()
+        self.assertTrue(termino.activo)
+        self.client.post(reverse("catalogo:studio_termino_eliminar", args=[self.servicio.pk, termino.pk]))
+        self.assertFalse(TerminoServicio.objects.exists())
+
+    def test_studio_informa_el_error_de_un_duplicado(self):
+        self.client.login(username="terminos_admin", password=CLAVE_PRUEBA)
+        self._crear_por_studio(self.servicio, "powerpoint")
+        respuesta = self._crear_por_studio(self.servicio, "POWERPOINT")
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertIn("equivalente", " ".join(str(m) for m in get_messages_de(respuesta)))
+        self.assertEqual(TerminoServicio.objects.count(), 1)
+
+    def test_studio_sin_permiso_no_puede_nada(self):
+        termino = crear_termino(self.servicio, self.admin, "powerpoint")
+        self.client.login(username="terminos_sin_permiso", password=CLAVE_PRUEBA)
+        self.assertEqual(self._crear_por_studio(self.servicio, "otro").status_code, 403)
+        self.assertEqual(
+            self.client.post(
+                reverse("catalogo:studio_termino_estado", args=[self.servicio.pk, termino.pk]), {"activo": "0"}
+            ).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.post(reverse("catalogo:studio_termino_eliminar", args=[self.servicio.pk, termino.pk])).status_code,
+            403,
+        )
+        self.assertEqual(
+            self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "general"}).status_code, 403
+        )
+        termino.refresh_from_db()
+        self.assertTrue(termino.activo)
+
+    def test_studio_solo_acepta_post_y_no_cruza_servicios(self):
+        otro = crear_termino(self.proceso, self.admin, "descanso")
+        self.client.login(username="terminos_admin", password=CLAVE_PRUEBA)
+        self.assertEqual(
+            self.client.get(reverse("catalogo:studio_termino_crear", args=[self.servicio.pk])).status_code, 405
+        )
+        respuesta = self.client.post(
+            reverse("catalogo:studio_termino_editar", args=[self.servicio.pk, otro.pk]),
+            {f"termino-{otro.pk}-editar-termino": "cambiado"},
+        )
+        self.assertEqual(respuesta.status_code, 404)
+        otro.refresh_from_db()
+        self.assertEqual(otro.termino, "descanso")
+
+
+class BusquedaPorNecesidadTests(TestCase):
+    """4.D — dominio del buscador (`apps.catalogo.busqueda`): puntaje, umbral, orden,
+    seguridad y rendimiento."""
+
+    def setUp(self):
+        self.admin = Usuario.objects.create_user("busqueda_admin", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("busqueda_usuario", password=CLAVE_PRUEBA)
+        self.otro = Usuario.objects.create_user("busqueda_otro", password=CLAVE_PRUEBA)
+        self.tecnologia = Categoria.objects.create(nombre="Tecnología")
+        self.rrhh = Categoria.objects.create(nombre="Recursos humanos")
+
+    # --- helpers ---
+
+    def _servicio(
+        self, nombre, *, categoria=None, descripcion="", instrucciones="", tipo=Servicio.Tipo.SERVICIO,
+        publico=True, activo=True, con_formulario=True,
+    ):
+        formulario = None
+        if con_formulario:
+            formulario = Formulario.objects.create(nombre=f"Formulario {nombre}"[:150])
+            version = crear_nueva_version(formulario, actor=self.admin)
+            activar_version(formulario, version, actor=self.admin)
+        return Servicio.objects.create(
+            nombre=nombre, categoria=categoria or self.tecnologia, descripcion=descripcion,
+            instrucciones=instrucciones, tipo=tipo, activo=activo, formulario=formulario,
+            alcance_visibilidad=(
+                Servicio.AlcanceVisibilidad.PUBLICO_INTERNO if publico else Servicio.AlcanceVisibilidad.RESTRINGIDO
+            ),
+        )
+
+    def _termino(self, servicio, texto, activo=True):
+        return TerminoServicio.objects.create(servicio=servicio, termino=texto, activo=activo)
+
+    def _buscar(self, texto, usuario=None, **kwargs):
+        return busqueda.buscar_servicios_por_necesidad(usuario or self.usuario, texto, **kwargs)
+
+    def _pks(self, texto, usuario=None):
+        return [r.servicio.pk for r in self._buscar(texto, usuario)]
+
+    def _puntuar(self, servicio, texto, terminos=()):
+        return busqueda.puntuar(servicio, list(terminos), busqueda.preparar_consulta(texto))
+
+    # --- puntaje por campo ---
+
+    def test_el_termino_configurado_gana_sobre_el_nombre(self):
+        con_termino = self._servicio("Diseño de piezas")
+        self._termino(con_termino, "powerpoint")
+        con_nombre = self._servicio("Powerpoint")
+        resultados = self._buscar("powerpoint")
+        self.assertEqual([r.servicio.pk for r in resultados], [con_termino.pk, con_nombre.pk])
+        self.assertEqual(resultados[0].campo, busqueda.TERMINO)
+        self.assertEqual(resultados[0].razon, "Coincide con: powerpoint")
+        self.assertEqual(resultados[0].puntos[busqueda.TERMINO], busqueda.PESO_TERMINO_EXACTO)
+        self.assertEqual(resultados[1].campo, busqueda.NOMBRE)
+        self.assertEqual(resultados[1].razon, "Coincidencia por nombre")
+        self.assertEqual(resultados[1].puntos[busqueda.NOMBRE], busqueda.PESO_NOMBRE_EXACTO)
+
+    def test_el_nombre_tiene_prioridad_sobre_la_descripcion(self):
+        por_nombre = self._servicio("Vacaciones")
+        por_descripcion = self._servicio("Gestión de permisos", descripcion="Aquí gestionas tus vacaciones y licencias")
+        resultados = self._buscar("vacaciones")
+        self.assertEqual([r.servicio.pk for r in resultados], [por_nombre.pk, por_descripcion.pk])
+        self.assertEqual(resultados[1].campo, busqueda.DESCRIPCION)
+        self.assertEqual(resultados[1].razon, "Coincidencia en la descripción")
+        self.assertEqual(resultados[1].puntos[busqueda.DESCRIPCION], busqueda.PESO_DESCRIPCION)
+
+    def test_prioridad_de_pesos_termino_nombre_categoria_descripcion_instrucciones(self):
+        self.assertGreater(busqueda.PESO_TERMINO_EXACTO, busqueda.PESO_NOMBRE_EXACTO)
+        self.assertGreater(busqueda.PESO_NOMBRE_EXACTO, busqueda.PESO_CATEGORIA_EXACTA)
+        self.assertGreater(busqueda.PESO_NOMBRE_COBERTURA, busqueda.PESO_CATEGORIA_COBERTURA)
+        self.assertGreater(busqueda.PESO_CATEGORIA_EXACTA, busqueda.PESO_DESCRIPCION)
+        self.assertGreater(busqueda.PESO_DESCRIPCION, busqueda.PESO_INSTRUCCIONES)
+
+    def test_la_categoria_escrita_exactamente_lista_sus_servicios(self):
+        servicio = self._servicio("Nómina", categoria=self.rrhh)
+        resultados = self._buscar("recursos humanos")
+        self.assertEqual([r.servicio.pk for r in resultados], [servicio.pk])
+        self.assertEqual(resultados[0].campo, busqueda.CATEGORIA)
+        self.assertEqual(resultados[0].razon, "Coincidencia por categoría")
+
+    def test_una_categoria_parcial_sola_no_alcanza_el_umbral(self):
+        self._servicio("Nómina", categoria=self.rrhh)
+        self.assertEqual(self._buscar("recursos"), [])
+
+    def test_la_categoria_refuerza_una_coincidencia_por_nombre(self):
+        servicio = self._servicio("Certificados laborales", categoria=self.rrhh)
+        (resultado,) = self._buscar("certificados recursos")
+        self.assertEqual(resultado.servicio.pk, servicio.pk)
+        self.assertEqual(resultado.puntos[busqueda.NOMBRE], 30)
+        self.assertEqual(resultado.puntos[busqueda.CATEGORIA], 12)
+        self.assertEqual(resultado.puntuacion, 42)
+
+    def test_las_instrucciones_puntuan_pero_solas_no_alcanzan_el_umbral(self):
+        servicio = self._servicio("Alta de usuarios", instrucciones="Adjunta el formato de autorización firmado.")
+        resultado = self._puntuar(servicio, "formato autorizacion")
+        self.assertEqual(resultado.campo, busqueda.INSTRUCCIONES)
+        self.assertEqual(resultado.puntuacion, busqueda.PESO_INSTRUCCIONES)
+        self.assertLess(busqueda.PESO_INSTRUCCIONES, busqueda.UMBRAL_RELEVANCIA)
+        self.assertEqual(self._buscar("formato autorizacion"), [])
+
+    def test_una_descripcion_que_explica_solo_parte_de_la_consulta_no_alcanza(self):
+        self._servicio("Gestión de permisos", descripcion="Tus vacaciones")
+        self.assertEqual(self._buscar("vacaciones licencias"), [])
+
+    def test_termino_exacto_cubierto_contiene_y_parcial(self):
+        servicio = self._servicio("Zzz")
+        termino = TerminoServicio(termino="presentación comercial")
+        self.assertEqual(
+            self._puntuar(servicio, "presentacion comercial", [termino]).puntos[busqueda.TERMINO],
+            busqueda.PESO_TERMINO_EXACTO,
+        )
+        self.assertEqual(
+            self._puntuar(servicio, "necesito una presentación comercial para un cliente", [termino]).puntos[busqueda.TERMINO],
+            busqueda.PESO_TERMINO_CUBIERTO,
+        )
+        self.assertEqual(
+            self._puntuar(servicio, "presentacion", [termino]).puntos[busqueda.TERMINO],
+            busqueda.PESO_TERMINO_CONTIENE_CONSULTA,
+        )
+        parcial = TerminoServicio(termino="presentacion comercial cliente")
+        self.assertEqual(
+            self._puntuar(servicio, "presentacion cliente final", [parcial]).puntos[busqueda.TERMINO],
+            busqueda.PESO_TERMINO_PARCIAL * 2 // 3,
+        )
+
+    def test_sin_coincidencia_alguna_no_hay_resultado(self):
+        servicio = self._servicio("Zzz")
+        self.assertIsNone(self._puntuar(servicio, "vacaciones"))
+
+    # --- coincidencias parciales y varios tokens ---
+
+    def test_una_frase_larga_encuentra_el_servicio_aunque_la_frase_completa_no_exista(self):
+        servicio = self._servicio("Creación de presentaciones")
+        self._termino(servicio, "diapositivas")
+        resultados = self._buscar("necesito crear unas diapositivas para presentar una propuesta")
+        self.assertEqual([r.servicio.pk for r in resultados], [servicio.pk])
+        self.assertEqual(resultados[0].campo, busqueda.TERMINO)
+
+    def test_tambien_lo_encuentra_solo_por_nombre_con_palabras_parciales(self):
+        servicio = self._servicio("Creación de presentaciones")
+        self.assertEqual(self._pks("presentar propuesta"), [servicio.pk])
+
+    def test_mas_terminos_coincidentes_ordenan_antes(self):
+        a = self._servicio("Servicio A")
+        b = self._servicio("Servicio B")
+        self._termino(a, "diapositivas")
+        self._termino(a, "presentación")
+        self._termino(b, "diapositivas")
+        resultados = self._buscar("diapositivas presentacion")
+        self.assertEqual([r.servicio.pk for r in resultados], [a.pk, b.pk])
+        self.assertEqual(resultados[0].puntos[busqueda.TERMINO], busqueda.PESO_TERMINO_CUBIERTO + busqueda.PESO_TERMINO_ADICIONAL)
+        self.assertEqual(resultados[1].puntos[busqueda.TERMINO], busqueda.PESO_TERMINO_CUBIERTO)
+
+    def test_un_termino_inactivo_no_cuenta(self):
+        servicio = self._servicio("Diseño gráfico")
+        termino = self._termino(servicio, "ppt", activo=False)
+        self.assertEqual(self._buscar("ppt"), [])
+        termino.activo = True
+        termino.save()
+        self.assertEqual(self._pks("ppt"), [servicio.pk])
+
+    # --- acentos y mayúsculas ---
+
+    def test_acentos_y_mayusculas_conducen_al_mismo_resultado(self):
+        servicio = self._servicio("Presentación comercial")
+        puntajes = set()
+        for texto in ("presentación", "presentacion", "PRESENTACIÓN", "Presentacion!"):
+            resultados = self._buscar(texto)
+            self.assertEqual([r.servicio.pk for r in resultados], [servicio.pk], texto)
+            puntajes.add(resultados[0].puntuacion)
+        self.assertEqual(len(puntajes), 1)
+
+    def test_acentos_y_mayusculas_tambien_en_terminos_configurados(self):
+        servicio = self._servicio("Zzz")
+        self._termino(servicio, "Presentación Comercial")
+        for texto in ("presentacion comercial", "PRESENTACIÓN COMERCIAL!", "presentación comercial"):
+            (resultado,) = self._buscar(texto)
+            self.assertEqual(resultado.servicio.pk, servicio.pk)
+            self.assertEqual(resultado.puntos[busqueda.TERMINO], busqueda.PESO_TERMINO_EXACTO)
+
+    # --- servicio y proceso ---
+
+    def test_busca_servicios_y_procesos(self):
+        servicio = self._servicio("Soporte de vacaciones")
+        proceso = self._servicio("Solicitud de vacaciones", tipo=Servicio.Tipo.PROCESO)
+        resultados = self._buscar("vacaciones")
+        self.assertEqual({r.servicio.pk for r in resultados}, {servicio.pk, proceso.pk})
+        tipos = {r.servicio.pk: r.servicio.tipo for r in resultados}
+        self.assertEqual(tipos[servicio.pk], Servicio.Tipo.SERVICIO)
+        self.assertEqual(tipos[proceso.pk], Servicio.Tipo.PROCESO)
+
+    # --- un servicio, un resultado ---
+
+    def test_las_coincidencias_se_suman_en_un_solo_resultado(self):
+        categoria = Categoria.objects.create(nombre="Presentación")
+        servicio = self._servicio(
+            "Presentación comercial", categoria=categoria, descripcion="Preparamos tu presentación",
+            instrucciones="Envía el contenido de la presentación",
+        )
+        self._termino(servicio, "presentación")
+        resultados = self._buscar("presentación")
+        self.assertEqual([r.servicio.pk for r in resultados], [servicio.pk])
+        (resultado,) = resultados
+        self.assertTrue(all(puntos > 0 for puntos in resultado.puntos.values()), resultado.puntos)
+        self.assertEqual(resultado.puntuacion, sum(resultado.puntos.values()))
+
+    # --- umbral, orden y cantidad ---
+
+    def test_todo_resultado_alcanza_el_umbral(self):
+        self._servicio("Vacaciones")
+        self._servicio("Nómina", categoria=self.rrhh)
+        self._servicio("Otra cosa", descripcion="vacaciones")
+        for resultado in self._buscar("vacaciones recursos"):
+            self.assertGreaterEqual(resultado.puntuacion, busqueda.UMBRAL_RELEVANCIA)
+
+    def test_el_umbral_esta_centralizado(self):
+        from unittest import mock
+
+        self._servicio("Nómina", categoria=self.rrhh)  # solo coincide por categoría parcial: 12 puntos
+        self.assertEqual(self._buscar("recursos"), [])
+        with mock.patch.object(busqueda, "UMBRAL_RELEVANCIA", 1):
+            self.assertEqual(len(self._buscar("recursos")), 1)
+        self._servicio("Vacaciones")
+        with mock.patch.object(busqueda, "UMBRAL_RELEVANCIA", 1000):
+            self.assertEqual(self._buscar("vacaciones"), [])
+
+    def test_las_palabras_triviales_no_dominan_ni_listan_nada(self):
+        self._servicio("Solicitud para la compra")
+        self.assertEqual(busqueda.validar_consulta("para la"), busqueda.MENSAJE_POCO_ESPECIFICA)
+        self.assertEqual(self._buscar("para la"), [])
+
+    def test_empates_se_ordenan_por_nombre_y_luego_por_id(self):
+        zeta = self._servicio("Zeta vacaciones")
+        alfa = self._servicio("Alfa vacaciones")
+        medio = self._servicio("Mid vacaciones")
+        igual_1 = self._servicio("Igual vacaciones")
+        igual_2 = self._servicio("Igual vacaciones")
+        esperado = [alfa.pk, igual_1.pk, igual_2.pk, medio.pk, zeta.pk]
+        self.assertEqual(len({r.puntuacion for r in self._buscar("vacaciones")}), 1)
+        for _ in range(3):
+            self.assertEqual(self._pks("vacaciones"), esperado)
+
+    def test_maximo_de_resultados(self):
+        for palabra in ("alfa", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"):
+            self._servicio(f"Vacaciones {palabra}")
+        self.assertEqual(len(self._buscar("vacaciones")), busqueda.MAX_RESULTADOS)
+        self.assertEqual(busqueda.MAX_RESULTADOS, 5)
+        self.assertEqual(len(self._buscar("vacaciones", limite=3)), 3)
+
+    # --- consulta vacía ---
+
+    def test_validar_consulta(self):
+        self.assertEqual(busqueda.validar_consulta(None), busqueda.MENSAJE_VACIA)
+        self.assertEqual(busqueda.validar_consulta(""), busqueda.MENSAJE_VACIA)
+        self.assertEqual(busqueda.validar_consulta("   \n"), busqueda.MENSAJE_VACIA)
+        self.assertEqual(busqueda.validar_consulta("¿¿??"), busqueda.MENSAJE_VACIA)
+        self.assertEqual(busqueda.validar_consulta("necesito hacer una"), busqueda.MENSAJE_POCO_ESPECIFICA)
+        self.assertIsNone(busqueda.validar_consulta("vacaciones"))
+
+    def test_una_consulta_vacia_no_lista_el_catalogo_ni_consulta_la_base(self):
+        self._servicio("Vacaciones")
+        with self.assertNumQueries(0):
+            self.assertEqual(self._buscar(""), [])
+            self.assertEqual(self._buscar("   "), [])
+            self.assertEqual(self._buscar("para de la"), [])
+
+    def test_una_consulta_enorme_no_falla(self):
+        self._servicio("Vacaciones")
+        self.assertEqual(self._buscar("vacaciones " * 500), self._buscar("vacaciones " * 500))
+
+    # --- seguridad y visibilidad ---
+
+    def test_un_servicio_restringido_no_aparece_y_con_concesion_si(self):
+        servicio = self._servicio("Vacaciones restringidas", publico=False)
+        self.assertEqual(self._buscar("vacaciones"), [])
+        ServicioVisibilidad.objects.create(
+            servicio=servicio, tipo_alcance=ServicioVisibilidad.TipoAlcance.USUARIO, usuario=self.usuario
+        )
+        self.assertEqual(self._pks("vacaciones"), [servicio.pk])
+        self.assertEqual(self._buscar("vacaciones", self.otro), [])
+
+    def test_un_proceso_restringido_no_aparece(self):
+        self._servicio("Proceso reservado de vacaciones", tipo=Servicio.Tipo.PROCESO, publico=False)
+        self.assertEqual(self._buscar("vacaciones"), [])
+
+    def test_los_terminos_de_un_servicio_restringido_no_filtran_informacion(self):
+        secreto = self._servicio(
+            "Investigación adquisición Empresa X", publico=False, descripcion="Evaluación confidencial de Empresa X"
+        )
+        self._termino(secreto, "Empresa X")
+        for texto in ("Empresa X", "empresa x adquisicion", "investigación", "confidencial"):
+            self.assertEqual(self._buscar(texto), [], texto)
+        ServicioVisibilidad.objects.create(
+            servicio=secreto, tipo_alcance=ServicioVisibilidad.TipoAlcance.USUARIO, usuario=self.otro
+        )
+        self.assertEqual(self._pks("Empresa X", self.otro), [secreto.pk])
+
+    def test_inactivo_o_no_publicado_no_aparece(self):
+        self._servicio("Vacaciones apagadas", activo=False)
+        self.assertEqual(self._buscar("vacaciones"), [])
+
+    def test_sin_formulario_con_version_activa_no_aparece(self):
+        self._servicio("Vacaciones sin formulario", con_formulario=False)
+        sin_version = self._servicio("Vacaciones sin versión", con_formulario=False)
+        sin_version.formulario = Formulario.objects.create(nombre="Sin versión activa")
+        sin_version.save()
+        self.assertEqual(self._buscar("vacaciones"), [])
+
+    def test_una_categoria_inactiva_no_aparece(self):
+        inactiva = Categoria.objects.create(nombre="Archivada", activo=False)
+        self._servicio("Vacaciones archivadas", categoria=inactiva)
+        self.assertEqual(self._buscar("vacaciones"), [])
+
+    def test_el_ticket_general_nunca_aparece(self):
+        general = self._servicio("Ticket general", descripcion="Ticket general para pedir algo")
+        self._termino(general, "ticket general")
+        Servicio.objects.filter(pk=general.pk).update(es_ticket_general=True)
+        self.assertEqual(self._buscar("ticket general"), [])
+        self.assertEqual(self._buscar("pedir algo ticket"), [])
+        self.assertNotIn(general.pk, [s.pk for s in busqueda.servicios_buscables_para(self.usuario)])
+
+    def test_los_candidatos_salen_de_servicios_visibles_para(self):
+        self._servicio("Visible")
+        self._servicio("Restringido", publico=False)
+        self._servicio("Apagado", activo=False)
+        buscables = {s.pk for s in busqueda.servicios_buscables_para(self.usuario)}
+        visibles = {s.pk for s in servicios_visibles_para(self.usuario)}
+        self.assertTrue(buscables)
+        self.assertLessEqual(buscables, visibles)
+
+    def test_anonimo_o_inactivo_no_obtienen_nada(self):
+        self._servicio("Vacaciones")
+        self.assertEqual(self._buscar("vacaciones", AnonymousUser()), [])
+        self.usuario.is_active = False
+        self.assertEqual(self._buscar("vacaciones", self.usuario), [])
+
+    def test_buscar_no_crea_tickets_ni_audita(self):
+        from apps.tickets.models import Ticket
+
+        self._servicio("Vacaciones")
+        auditorias = RegistroAuditoria.objects.count()
+        self._buscar("vacaciones")
+        self._buscar("nada que ver con el catalogo")
+        self.assertEqual(Ticket.objects.count(), 0)
+        self.assertEqual(RegistroAuditoria.objects.count(), auditorias)
+
+    # --- rendimiento ---
+
+    def _consultas(self, texto):
+        with CaptureQueriesContext(connection) as contexto:
+            self._buscar(texto)
+        return len(contexto)
+
+    def test_el_numero_de_consultas_no_crece_con_el_catalogo(self):
+        for n in range(3):
+            servicio = self._servicio(f"Vacaciones {n}x")
+            self._termino(servicio, f"descanso{n}")
+            self._termino(servicio, f"licencia{n}")
+        pocas = self._consultas("vacaciones descanso")
+        for n in range(3, 15):
+            servicio = self._servicio(f"Vacaciones {n}x")
+            self._termino(servicio, f"descanso{n}")
+            self._termino(servicio, f"licencia{n}")
+        muchas = self._consultas("vacaciones descanso")
+        self.assertEqual(pocas, muchas)
+        self.assertLessEqual(muchas, 3)

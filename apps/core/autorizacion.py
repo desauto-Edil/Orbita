@@ -30,8 +30,8 @@ from django.utils import timezone
 from apps.core.models import AsignacionRol
 
 
-def _asignaciones_vigentes(usuario, permiso_codigo):
-    """Asignaciones de `usuario` que otorgan `permiso_codigo` hoy.
+def _asignaciones_vigentes(usuario, *permiso_codigos):
+    """Asignaciones de `usuario` que otorgan hoy alguno de `permiso_codigos`.
 
     Respeta `activo` en los cuatro niveles que intervienen en la decisión
     (Permiso, RolFuncional, RolPermiso, AsignacionRol) y la vigencia por
@@ -47,7 +47,7 @@ def _asignaciones_vigentes(usuario, permiso_codigo):
         fecha_inicio__lte=hoy,
         rol__activo=True,
         rol__rolpermiso__activo=True,
-        rol__rolpermiso__permiso__codigo=permiso_codigo,
+        rol__rolpermiso__permiso__codigo__in=permiso_codigos,
         rol__rolpermiso__permiso__activo=True,
     ).filter(Q(fecha_fin__isnull=True) | Q(fecha_fin__gte=hoy))
 
@@ -102,3 +102,18 @@ def alcances_autorizados(usuario, permiso_codigo):
             )
         ),
     }
+
+
+def permisos_globales(usuario, permiso_codigos):
+    """Subconjunto de `permiso_codigos` que `usuario` tiene vigente en alcance
+    GLOBAL, resuelto en una sola consulta.
+
+    Para pantallas que dependen de varias capacidades a la vez (Configuración):
+    evita una consulta por permiso en cada request. Misma regla que
+    `usuario_tiene_permiso(usuario, codigo)` sin `area`/`unidad_negocio`.
+    """
+    return set(
+        _asignaciones_vigentes(usuario, *permiso_codigos)
+        .filter(tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL)
+        .values_list("rol__rolpermiso__permiso__codigo", flat=True)
+    )

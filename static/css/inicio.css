@@ -193,6 +193,103 @@
   transform: translateX(2px);
 }
 
+/* Entrada al Ticket General (4.C1): una línea discreta bajo Explorar, solo
+   cuando está habilitado y disponible. */
+.portal-general {
+  margin: var(--space-4) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+}
+
+/* Sugerencias de "¿Qué necesitas?" (4.D): bajo el buscador, ancho completo.
+   Tarjetas con lo necesario para decidir (nombre, tipo, categoría, descripción
+   breve) y una acción explícita; ningún resultado crea nada por sí solo. */
+.need {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.need__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.need__title {
+  margin: 0;
+  font-size: var(--font-size-section-title);
+}
+
+.need__lista {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.need__aviso {
+  margin: 0;
+  color: var(--text-secondary);
+}
+
+.need__alterna {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+}
+
+.need-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+}
+
+.need-card__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.need-card__name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+}
+
+.need-card__meta,
+.need-card__text {
+  margin: 0;
+  font-size: var(--font-size-caption);
+}
+
+.need-card__meta {
+  color: var(--text-muted);
+}
+
+.need-card__text {
+  margin-top: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+}
+
+@media (max-width: 639px) {
+  .need-card {
+    flex-wrap: wrap;
+  }
+
+  .need-card .btn {
+    margin-left: auto;
+  }
+}
+
 /* Estado vacío de Explorar: con presencia propia para equilibrar la columna
    de Tu día, pero sobrio — superficie cálida apenas diferenciada, sin caja
    punteada ni sombra, con un único acento lima. Desaparece cuando hay

@@ -1,10 +1,10 @@
 {% extends "base.html" %}
 
-{% block title %}Iniciar sesión — Órbita{% endblock %}
+{% block title %}Iniciar sesión — {{ sistema.nombre }}{% endblock %}
 
 {% block content %}
   <div class="auth-card card">
-    <h1 class="auth-card__brand">Órbita</h1>
+    <h1 class="auth-card__brand">{% include "layout/marca.html" %}{{ sistema.nombre }}</h1>
 
     {% if form.errors %}
       <div class="alert alert--danger" role="alert">Usuario o contraseña incorrectos.</div>

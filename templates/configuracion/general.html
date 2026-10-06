@@ -1,0 +1,34 @@
+{% extends "configuracion/base.html" %}
+
+{% block config_titulo %}General{% endblock %}
+{% block config_subtitulo %}Cómo se llama y cómo se identifica la plataforma para todas las personas.{% endblock %}
+
+{% block config_contenido %}
+  <div class="config-split">
+    <section class="card" aria-labelledby="cfg-identidad">
+      <h2 id="cfg-identidad">Identidad</h2>
+      <form method="post" enctype="multipart/form-data" class="form" novalidate>
+        {% csrf_token %}
+        {% include "configuracion/_errores.html" %}
+        {% include "configuracion/_campo.html" with campo=form.nombre %}
+        {% include "configuracion/_campo.html" with campo=form.logo %}
+        {% if sistema.logo %}{% include "configuracion/_campo.html" with campo=form.quitar_logo %}{% endif %}
+        <div class="form-actions">
+          <button type="submit" class="btn btn--primary">Guardar cambios</button>
+        </div>
+      </form>
+    </section>
+
+    <aside class="card" aria-labelledby="cfg-vista">
+      <h2 id="cfg-vista">Así se ve hoy</h2>
+      <p class="text-muted">En el encabezado y en la pantalla de inicio de sesión.</p>
+      <div class="config-brand-preview">
+        {% include "layout/marca.html" %}
+        <strong>{{ sistema.nombre }}</strong>
+      </div>
+      {% if not sistema.logo %}
+        <p class="field__hint">Sin logo se muestra la inicial del nombre.</p>
+      {% endif %}
+    </aside>
+  </div>
+{% endblock %}

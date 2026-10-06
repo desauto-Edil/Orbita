@@ -7,40 +7,53 @@ from django.contrib import messages
 from django.contrib.auth import get_user_model
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
+from django.core.paginator import Paginator
 from django.db.models import Exists, OuterRef, Q
-from django.http import FileResponse, HttpResponseNotAllowed, JsonResponse
+from django.http import FileResponse, Http404, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
 from django.views.decorators.http import require_GET, require_POST
 
 from apps.catalogo.campos import ESTRATEGIAS_POR_TIPO
+from apps.catalogo import destinos_ticket_general as destinos_ops
+from apps.catalogo import ticket_general as general_ops
 from apps.catalogo.models import Campo, Servicio
 from apps.catalogo.visibilidad import servicios_visibles_para
 from apps.core.models import Equipo
 from apps.tickets import entregables as entregables_ops
 from apps.tickets import entregas as entregas_ops
-from apps.tickets import operaciones, solicitud
+from apps.tickets import direccionamiento, operaciones, prorrogas, solicitud
 from apps.tickets.autorizacion import (
     es_propietario_borrador,
+    es_responsable_actual,
     puede_asignar,
+    aprobacion_pendiente_de_prorroga,
+    motivo_no_elegible_para_prorroga,
+    puede_cancelar_prorroga,
     puede_cancelar_ticket,
     puede_cerrar_ticket,
     puede_comentar_ticket,
     puede_consultar_ticket,
     puede_entregar_ticket,
     puede_escribir_entregables_finales,
+    puede_iniciar_atencion,
     puede_reabrir_ticket,
+    puede_consultar_prorrogas,
     puede_reasignar,
+    puede_resolver_prorroga,
     puede_resolver_ticket,
     puede_responder_entrega,
     puede_solicitar_informacion,
+    puede_solicitar_prorroga,
     puede_tomar,
     puede_ver_en_cola,
 )
+from apps.tickets.forms import CancelacionProrrogaForm, SolicitudProrrogaForm
 from apps.tickets.models import (
     Adjunto,
     ArchivoRespuestaCampo,
     EntregableTicket,
     EntregaTicket,
+    ProrrogaTicket,
     ResultadoEntregaTicket,
     SolicitudInformacion,
     Ticket,
@@ -70,6 +83,9 @@ def mis_tickets_view(request):
     return render(request, "tickets/mis_tickets.html", contexto)
 
 
+COLA_POR_PAGINA = 30
+
+
 @login_required
 def cola_atencion_view(request):
     """CU-017/RQF-061 — separada de `mis_tickets_view`: aquí nunca aparecen
@@ -77,15 +93,52 @@ def cola_atencion_view(request):
     por estado en SQL; la autorización efectiva (`puede_ver_en_cola`, que
     combina alcance de `tickets.atender` con la relación operacional real)
     se evalúa en Python — volumen esperado bajo para una herramienta
-    interna, sin necesidad de traducir la lógica de autorización a SQL."""
+    interna, sin necesidad de traducir la lógica de autorización a SQL.
+
+    Orden de llegada: el que lleva más tiempo radicado va primero, y su
+    posición en la cola no cambia al filtrar. `ver` es un filtro LOCAL de
+    presentación (sin tomar / en atención / míos) sobre esa misma población
+    autorizada; no concede ni oculta nada por permisos."""
     candidatos = (
         Ticket.objects.filter(estado__in=[Ticket.Estado.RADICADO, Ticket.Estado.EN_ATENCION])
-        .select_related("detalle_servicio__servicio", "usuario_responsable", "equipo_responsable")
+        .select_related("detalle_servicio__servicio", "solicitante", "usuario_responsable", "equipo_responsable")
         .prefetch_related("contextos_atencion")
-        .order_by("-radicado_en")
+        .order_by("radicado_en", "pk")
     )
-    tickets = [t for t in candidatos if puede_ver_en_cola(request.user, t)]
-    contexto = {"tickets": tickets, "titulo_pagina": "Cola de atención"}
+    visibles = [t for t in candidatos if puede_ver_en_cola(request.user, t)]
+    for posicion, ticket in enumerate(visibles, start=1):
+        ticket.posicion = posicion
+        # "Sin tomar" = todavía no se inició la atención. Un Ticket General dirigido a
+        # una persona (4.C2) está RADICADO con responsable: sigue sin iniciar.
+        ticket.sin_tomar = ticket.estado == Ticket.Estado.RADICADO
+        ticket.es_mio = ticket.usuario_responsable_id == request.user.pk
+
+    filtros = {
+        "todos": lambda t: True,
+        "sin_tomar": lambda t: t.sin_tomar,
+        "en_atencion": lambda t: not t.sin_tomar,
+        "mios": lambda t: t.es_mio,
+    }
+    ver = request.GET.get("ver")
+    if ver not in filtros:
+        ver = "todos"
+    conteos = {clave: sum(1 for t in visibles if criterio(t)) for clave, criterio in filtros.items()}
+    pagina = Paginator([t for t in visibles if filtros[ver](t)], COLA_POR_PAGINA).get_page(request.GET.get("pagina"))
+    contexto = {
+        "tickets": pagina.object_list,
+        "pagina": pagina,
+        "ver": ver,
+        "conteos": conteos,
+        "segmentos": [
+            {"clave": "todos", "etiqueta": "Todos"},
+            {"clave": "sin_tomar", "etiqueta": "Sin tomar"},
+            {"clave": "en_atencion", "etiqueta": "En atención"},
+            {"clave": "mios", "etiqueta": "Míos"},
+        ],
+        "titulo_pagina": "Cola de atención",
+    }
+    for segmento in contexto["segmentos"]:
+        segmento["total"] = conteos[segmento["clave"]]
     return render(request, "tickets/cola_atencion.html", contexto)
 
 
@@ -120,6 +173,33 @@ def solicitar_view(request, servicio_id):
         )
     try:
         ticket = solicitud.obtener_o_crear_borrador(request.user, servicio)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+        return redirect("core:inicio")
+    return redirect("tickets:borrador", pk=ticket.pk)
+
+
+@login_required
+@require_GET
+def solicitar_general_view(request):
+    """4.C1 — entrada explícita "Crear ticket general". GET idempotente, igual que
+    `solicitar_view`: retoma el borrador vacío del usuario sobre el Servicio
+    interno o crea uno, y sigue por el workspace de solicitud de siempre. Si el
+    Ticket General está deshabilitado, no está configurado o no es accesible para
+    el usuario, responde 404 como si no existiera: ocultar el botón no basta."""
+    try:
+        servicio = general_ops.servicio_para_crear_ticket(request.user)
+    except (PermissionDenied, ValidationError):
+        raise Http404("El ticket general no está disponible.")
+    # 4.C2: sin un destino utilizable (ni de reserva) no podría radicarse.
+    if solicitud.version_activa_de(servicio) is None or not destinos_ops.hay_destinos_utilizables():
+        return render(
+            request,
+            "tickets/solicitud_no_disponible.html",
+            {"servicio": servicio, "titulo_pagina": servicio.nombre},
+        )
+    try:
+        ticket = solicitud.obtener_o_crear_borrador_general(request.user)
     except (PermissionDenied, ValidationError) as exc:
         messages.error(request, _mensaje_error(exc))
         return redirect("core:inicio")
@@ -186,8 +266,23 @@ def _ticket_propio(request, pk):
     return ticket
 
 
-def _render_workspace(request, ticket, *, errores=None, valores_envio=None):
-    contexto = solicitud.contexto_workspace(ticket, errores=errores, valores_envio=valores_envio)
+def _guardar_destino_general(request, ticket):
+    """4.C2 — el selector de destino viaja con el formulario del Ticket General
+    (`destino_general`). Devuelve el mensaje de error o `None`. Un campo ausente
+    (otro tipo de ticket, o un envío que no lo trae) no cambia nada."""
+    if "destino_general" not in request.POST or not direccionamiento.es_ticket_general(ticket):
+        return None
+    try:
+        direccionamiento.seleccionar_destino_borrador(ticket, request.user, request.POST.get("destino_general"))
+    except ValidationError as exc:
+        return _mensaje_error(exc)
+    return None
+
+
+def _render_workspace(request, ticket, *, errores=None, valores_envio=None, error_destino=None):
+    contexto = solicitud.contexto_workspace(
+        ticket, errores=errores, valores_envio=valores_envio, error_destino=error_destino
+    )
     contexto["titulo_pagina"] = f"Nuevo ticket — {contexto['servicio'].nombre}"
     return render(request, "tickets/solicitud.html", contexto)
 
@@ -221,17 +316,20 @@ def borrador_formulario_view(request, pk):
     version = ticket.respuesta_formulario.formulario_version
 
     if request.method == "POST":
+        error_destino = _guardar_destino_general(request, ticket)
         errores, valores_con_error, error_general = _guardar_envio(request, ticket, version)
         if error_general:
             messages.error(request, error_general)
             return redirect("tickets:borrador", pk=ticket.pk)
-        if not errores:
+        if not errores and not error_destino:
             messages.success(request, "Borrador guardado.")
             return redirect("tickets:borrador", pk=ticket.pk)
         messages.warning(
             request, "Guardamos lo que estaba correcto. Revisa los campos señalados para completarlos."
         )
-        return _render_workspace(request, ticket, errores=errores, valores_envio=valores_con_error)
+        return _render_workspace(
+            request, ticket, errores=errores, valores_envio=valores_con_error, error_destino=error_destino
+        )
 
     return _render_workspace(request, ticket)
 
@@ -271,7 +369,9 @@ def revisar_view(request, pk):
     version = ticket.respuesta_formulario.formulario_version
 
     errores_formato, valores_con_error = {}, {}
+    error_destino = None
     if request.method == "POST":
+        error_destino = _guardar_destino_general(request, ticket)
         errores_formato, valores_con_error, error_general = _guardar_envio(request, ticket, version)
         if error_general:
             messages.error(request, error_general)
@@ -282,9 +382,14 @@ def revisar_view(request, pk):
     # Si un valor enviado tiene un error de formato, ese mensaje es el útil
     # (el campo quedó sin guardar, así que además figuraría como pendiente).
     errores = {**_errores_para_revisar(ticket), **errores_formato}
-    if errores:
+    # 4.C2: el destino también es parte de lo que se revisa antes de enviar.
+    if direccionamiento.es_ticket_general(ticket):
+        error_destino = error_destino or direccionamiento.error_de_destino(ticket)
+    if errores or error_destino:
         messages.error(request, "Revisa los campos señalados antes de continuar.")
-        return _render_workspace(request, ticket, errores=errores, valores_envio=valores_con_error)
+        return _render_workspace(
+            request, ticket, errores=errores, valores_envio=valores_con_error, error_destino=error_destino
+        )
 
     if request.method == "POST":
         return redirect("tickets:revisar", pk=ticket.pk)
@@ -358,6 +463,10 @@ def radicar_view(request, pk):
     version = ticket.respuesta_formulario.formulario_version
     respuestas_crudas = _leer_respuestas_de_request(request, version)
 
+    error_destino = _guardar_destino_general(request, ticket)
+    if error_destino:
+        messages.error(request, error_destino)
+        return redirect("tickets:borrador", pk=ticket.pk)
     try:
         operaciones.guardar_respuestas_borrador(ticket, request.user, respuestas_crudas)
     except ValidationError as exc:
@@ -410,6 +519,8 @@ def detalle_view(request, pk):
         "campos_formulario": _construir_campos_formulario(respuesta_formulario, version),
         "historial": ticket.historial.select_related("actor").all(),
         "puede_tomar": puede_tomar(request.user, ticket),
+        "puede_iniciar_atencion": puede_iniciar_atencion(request.user, ticket),
+        "direccionamiento": direccionamiento.direccionamiento_de(ticket),
         "puede_asignar": usuario_puede_asignar,
         "puede_reasignar": usuario_puede_reasignar,
         "usuarios_disponibles": get_user_model().objects.filter(is_active=True).order_by("username")
@@ -442,7 +553,43 @@ def detalle_view(request, pk):
         "titulo_pagina": f"Ticket {ticket.radicado} — {ticket.detalle_servicio.servicio.nombre}",
     }
     contexto.update(_contexto_entrega(request.user, ticket))
+    contexto.update(_contexto_prorrogas(request.user, ticket))
     return render(request, "tickets/detalle.html", contexto)
+
+
+def _contexto_prorrogas(usuario, ticket):
+    """4.A2 — compromiso temporal e historial de prórrogas del detalle. Solo
+    presentación: qué se ofrece lo decide `autorizacion`, y cada operación vuelve
+    a validarlo. La prórroga pertenece al Ticket: aquí se pide, se cancela y se
+    consulta; el aprobador la resuelve en su pantalla de Aprobaciones."""
+    historial_visible = puede_consultar_prorrogas(usuario, ticket)
+    filas = []
+    if historial_visible:
+        for prorroga in ticket.prorrogas.select_related("solicitada_por", "resuelta_por"):
+            aprobacion = aprobacion_pendiente_de_prorroga(prorroga) if puede_resolver_prorroga(usuario, prorroga) else None
+            filas.append({
+                "prorroga": prorroga,
+                "puede_cancelar": puede_cancelar_prorroga(usuario, prorroga),
+                "aprobacion_a_resolver": aprobacion,
+            })
+        filas.reverse()  # la más reciente primero
+    puede_solicitar = puede_solicitar_prorroga(usuario, ticket)
+    return {
+        "compromiso": {
+            "original": ticket.fecha_objetivo_original,
+            "vigente": ticket.fecha_objetivo_vigente,
+            "ampliado": ticket.fecha_objetivo_original is not None
+            and ticket.fecha_objetivo_vigente != ticket.fecha_objetivo_original,
+        },
+        "prorrogas": filas,
+        "muestra_prorrogas": ticket.fecha_objetivo_original is not None or bool(filas),
+        "puede_solicitar_prorroga": puede_solicitar,
+        "prorroga_form": SolicitudProrrogaForm() if puede_solicitar else None,
+        "prorroga_sin_aprobacion": ticket.prorroga_politica == "SIN_APROBACION",
+        "prorroga_no_disponible": motivo_no_elegible_para_prorroga(ticket)
+        if es_responsable_actual(usuario, ticket) and ticket.estado == Ticket.Estado.EN_ATENCION
+        else None,
+    }
 
 
 def _contexto_entrega(usuario, ticket):
@@ -488,6 +635,21 @@ def tomar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Ticket tomado.")
+    return redirect("tickets:detalle", pk=pk)
+
+
+@login_required
+def iniciar_atencion_view(request, pk):
+    """4.C2 — iniciar la atención de un ticket ya dirigido a una persona."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    ticket = get_object_or_404(Ticket, pk=pk)
+    try:
+        operaciones.iniciar_atencion_ticket(ticket, request.user)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Atención iniciada.")
     return redirect("tickets:detalle", pk=pk)
 
 
@@ -545,6 +707,46 @@ def resolver_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Ticket resuelto.")
+    return redirect("tickets:detalle", pk=pk)
+
+
+@login_required
+def solicitar_prorroga_view(request, pk):
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    ticket = get_object_or_404(Ticket, pk=pk)
+    form = SolicitudProrrogaForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "Indica una nueva fecha válida y el motivo de la prórroga.")
+        return redirect("tickets:detalle", pk=pk)
+    try:
+        prorroga = prorrogas.solicitar_prorroga(
+            ticket, request.user, nueva_fecha=form.cleaned_data["nueva_fecha"], motivo=form.cleaned_data["motivo"]
+        )
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        if prorroga.estado == ProrrogaTicket.Estado.APROBADA:
+            messages.success(request, "Prórroga aplicada: la fecha objetivo vigente ya es la nueva.")
+        else:
+            messages.success(request, "Prórroga enviada para aprobación.")
+    return redirect("tickets:detalle", pk=pk)
+
+
+@login_required
+def cancelar_prorroga_view(request, pk, prorroga_id):
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    prorroga = get_object_or_404(ProrrogaTicket, pk=prorroga_id, ticket_id=pk)
+    form = CancelacionProrrogaForm(request.POST)
+    try:
+        prorrogas.cancelar_prorroga(
+            prorroga, request.user, motivo=form.cleaned_data.get("motivo", "") if form.is_valid() else ""
+        )
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Prórroga cancelada.")
     return redirect("tickets:detalle", pk=pk)
 
 

@@ -10,6 +10,8 @@ urlpatterns = [
     path("nuevo/<int:servicio_id>/", views.iniciar_borrador_view, name="iniciar"),
     # V2 — experiencia de solicitud: entrar → completar → revisar → enviar → confirmar
     path("solicitar/<int:servicio_id>/", views.solicitar_view, name="solicitar"),
+    # 4.C1 — entrada explícita del Ticket General (no es un Servicio catalogado)
+    path("general/", views.solicitar_general_view, name="ticket_general"),
     path("<int:pk>/borrador/", views.borrador_formulario_view, name="borrador"),
     path("<int:pk>/solicitud/estado/", views.solicitud_estado_view, name="solicitud_estado"),
     path("<int:pk>/revisar/", views.revisar_view, name="revisar"),
@@ -18,9 +20,13 @@ urlpatterns = [
     path("<int:pk>/radicar/", views.radicar_view, name="radicar"),
     path("<int:pk>/detalle/", views.detalle_view, name="detalle"),
     path("<int:pk>/tomar/", views.tomar_view, name="tomar"),
+    path("<int:pk>/iniciar-atencion/", views.iniciar_atencion_view, name="iniciar_atencion"),
     path("<int:pk>/asignar/", views.asignar_view, name="asignar"),
     path("<int:pk>/reasignar/", views.reasignar_view, name="reasignar"),
     path("<int:pk>/resolver/", views.resolver_view, name="resolver"),
+    # 4.A2 — prórrogas de la fecha objetivo (se resuelven en Aprobaciones)
+    path("<int:pk>/prorroga/solicitar/", views.solicitar_prorroga_view, name="solicitar_prorroga"),
+    path("<int:pk>/prorrogas/<int:prorroga_id>/cancelar/", views.cancelar_prorroga_view, name="cancelar_prorroga"),
     path("<int:pk>/cerrar/", views.cerrar_view, name="cerrar"),
     path("<int:pk>/cancelar/", views.cancelar_view, name="cancelar"),
     path("<int:pk>/reabrir/", views.reabrir_view, name="reabrir"),

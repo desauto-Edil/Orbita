@@ -1,0 +1,33 @@
+{% comment %}Vista previa de una Aprobación en Mi trabajo (fragmento, solo lectura).{% endcomment %}
+<header class="work-preview__head">
+  <p class="work-preview__eyebrow">Aprobación</p>
+  <h2 class="work-preview__title">{% if contexto_workflow %}{{ contexto_workflow.etapa.nombre }}{% else %}Aprobación #{{ aprobacion.pk }}{% endif %}</h2>
+  <p class="work-preview__badges">
+    <span class="badge badge--dot {% if aprobacion.estado == 'APROBADA' %}badge--success{% elif aprobacion.estado == 'RECHAZADA' %}badge--danger{% elif aprobacion.estado == 'PENDIENTE' %}badge--warning{% else %}badge--info{% endif %}">{{ aprobacion.get_estado_display }}</span>
+    {% if puede_decidir %}<span class="badge">Espera tu decisión</span>{% endif %}
+  </p>
+</header>
+
+<dl class="work-facts">
+  {% if contexto_prorroga %}<div><dt>Qué se aprueba</dt><dd>Prórroga de la fecha objetivo · {{ contexto_prorroga.servicio.nombre }}</dd></div>{% endif %}
+  {% if contexto_workflow %}<div><dt>Flujo</dt><dd>{{ contexto_workflow.workflow.nombre }}</dd></div>{% endif %}
+  <div><dt>Referencia</dt><dd>Aprobación #{{ aprobacion.pk }}</dd></div>
+  <div><dt>Cómo se decide</dt><dd>{{ esquema.get_modo_display }}{% if esquema.politica %} · {{ esquema.get_politica_display }}{% endif %}</dd></div>
+  <div><dt>Avance</dt><dd>{{ decididas }} de {{ participaciones|length }} ya decidieron</dd></div>
+</dl>
+
+{% if participaciones|length > 1 %}
+  <ul class="work-people">
+    {% for participacion in participaciones|slice:":5" %}
+      <li>
+        <span>{% if participacion.aprobador_usuario %}{{ participacion.aprobador_usuario.get_full_name|default:participacion.aprobador_usuario.get_username }}{% elif participacion.aprobador_equipo %}{{ participacion.aprobador_equipo }}{% else %}Sin aprobador{% endif %}</span>
+        <span class="work-people__state">{{ participacion.get_estado_display }}</span>
+      </li>
+    {% endfor %}
+    {% if participaciones|length > 5 %}<li class="work-people__state">y {{ participaciones|length|add:"-5" }} más</li>{% endif %}
+  </ul>
+{% endif %}
+
+<div class="work-preview__actions">
+  <a class="btn btn--primary" href="{% url 'aprobaciones:detalle' aprobacion.pk %}">{% if puede_decidir %}Abrir y decidir{% else %}Abrir aprobación{% endif %}</a>
+</div>

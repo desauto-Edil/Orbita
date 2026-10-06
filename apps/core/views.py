@@ -33,6 +33,7 @@ from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.forms import AuthenticationForm
 from django.core.exceptions import PermissionDenied
+from django.core.paginator import Paginator
 from django.db import connections
 from django.db.models import Q
 from django.db.utils import OperationalError
@@ -40,10 +41,12 @@ from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
+from django.utils import timezone
 from django.views.decorators.http import require_GET
 
 from apps.aprobaciones.consultas import aprobaciones_pendientes_para
 from apps.aprobaciones.models import Aprobacion
+from apps.catalogo import busqueda
 from apps.core import disenador, inicio
 from apps.tareas.consultas import tareas_asignadas_a, tareas_disponibles_para_tomar
 from apps.tareas.models import Tarea
@@ -138,6 +141,7 @@ def inicio_view(request):
         "recientes": usados["recientes"],
         "tiene_usados": bool(usados["frecuentes"] or usados["recientes"]),
         "trabajo": inicio.resumen_trabajo(usuario),
+        "ticket_general": inicio.ticket_general_disponible(usuario),
         "agenda": inicio.agenda(usuario, request.GET.get("mes")),
         "tickets_recientes": inicio.tickets_recientes(usuario),
         "titulo_pagina": "Inicio",
@@ -165,6 +169,39 @@ def explorar_view(request):
     return HttpResponse(render_to_string("portal/_explorador_resultados.html", contexto))
 
 
+@login_required
+@require_GET
+def necesidad_view(request):
+    """4.D — buscador "¿Qué necesitas?". Solo GET y sin efectos: no crea tickets ni
+    borradores, no guarda el texto escrito y no audita la búsqueda. La vista recibe
+    el texto, lo valida, llama al buscador de dominio (`apps.catalogo.busqueda`: la
+    visibilidad, el puntaje y el umbral viven allí) y presenta. El Ticket General
+    nunca es un resultado; se ofrece aparte cuando está disponible
+    (`inicio.ticket_general_disponible`, la misma regla de 4.C1/4.C2).
+
+    Con `X-Requested-With: fetch` (Inicio con JS) responde solo el fragmento; sin
+    él, la página completa, que es el respaldo sin JS."""
+    es_fragmento = request.headers.get("X-Requested-With") == "fetch"
+    enviada = es_fragmento or "q" in request.GET
+    texto = request.GET.get("q", "")[: busqueda.LARGO_MAXIMO_CONSULTA]
+    error, resultados, ticket_general = None, [], False
+    if enviada:
+        error = busqueda.validar_consulta(texto)
+        if error is None:
+            resultados = busqueda.buscar_servicios_por_necesidad(request.user, texto)
+            for resultado in resultados:
+                resultado.servicio.tono = inicio.tono(resultado.servicio.categoria_id)
+            ticket_general = inicio.ticket_general_disponible(request.user)
+    contexto = {
+        "q": texto, "enviada": enviada, "error": error, "resultados": resultados, "ticket_general": ticket_general,
+    }
+    if es_fragmento:
+        # Sin `request`: fragmento sin shell, no corren los context processors de navegación.
+        return HttpResponse(render_to_string("portal/_necesidad_resultados.html", contexto))
+    contexto["titulo_pagina"] = "¿Qué necesitas?"
+    return render(request, "portal/necesidad.html", contexto)
+
+
 def _clase_badge_tarea(estado):
     if estado == Tarea.Estado.COMPLETADA:
         return "success"
@@ -185,17 +222,29 @@ def _clase_badge_aprobacion(estado):
     return ""
 
 
-def _fila_tarea(tarea):
+def _responsable(usuario, equipo):
+    if usuario is not None:
+        return usuario.get_full_name() or usuario.get_username()
+    return str(equipo) if equipo is not None else ""
+
+
+def _fila_tarea(tarea, ahora):
     """Representación de presentación mínima (3.UI.5, punto 4) — no una
     nueva entidad de dominio: nada de esto se persiste ni se reutiliza
     fuera del render de `mi_trabajo.html`."""
+    pendiente = tarea.estado != Tarea.Estado.COMPLETADA
     return {
         "tipo": "tarea",
         "titulo": tarea.titulo,
         "estado": tarea.get_estado_display(),
         "estado_clase": _clase_badge_tarea(tarea.estado),
         "fecha_relevante": tarea.fecha_limite,
+        "vencida": pendiente and tarea.fecha_limite is not None and tarea.fecha_limite < ahora,
+        # Sin responsable directo: está disponible para que alguien la tome.
+        "por_tomar": pendiente and tarea.usuario_responsable_id is None,
+        "responsable": _responsable(tarea.usuario_responsable, tarea.equipo_responsable),
         "url": reverse("tareas:detalle", args=[tarea.pk]),
+        "vista_url": reverse("tareas:vista_previa", args=[tarea.pk]),
         "creado_en": tarea.creado_en,
     }
 
@@ -207,9 +256,16 @@ def _fila_aprobacion(aprobacion):
         "estado": aprobacion.get_estado_display(),
         "estado_clase": _clase_badge_aprobacion(aprobacion.estado),
         "fecha_relevante": None,
+        "vencida": False,
+        "por_tomar": False,
+        "responsable": _responsable(aprobacion.aprobador_usuario, aprobacion.aprobador_equipo),
         "url": reverse("aprobaciones:detalle", args=[aprobacion.pk]),
+        "vista_url": reverse("aprobaciones:vista_previa", args=[aprobacion.pk]),
         "creado_en": aprobacion.creado_en,
     }
+
+
+MI_TRABAJO_POR_PAGINA = 30
 
 
 @login_required
@@ -254,7 +310,8 @@ def mi_trabajo_view(request):
         .order_by("-creado_en")
     )
 
-    filas_tareas = [_fila_tarea(tarea) for tarea in tareas_qs]
+    ahora = timezone.now()
+    filas_tareas = [_fila_tarea(tarea, ahora) for tarea in tareas_qs]
     filas_aprobaciones = [_fila_aprobacion(aprobacion) for aprobacion in aprobaciones_qs]
 
     if tab == "tareas":
@@ -264,9 +321,14 @@ def mi_trabajo_view(request):
     else:
         filas = sorted(filas_tareas + filas_aprobaciones, key=lambda fila: fila["creado_en"], reverse=True)
 
+    # Con mucho trabajo acumulado la lista se pagina: la pantalla nunca crece
+    # sin límite. Los totales de las pestañas siguen siendo los reales.
+    pagina = Paginator(filas, MI_TRABAJO_POR_PAGINA).get_page(request.GET.get("pagina"))
     contexto = {
         "tab": tab,
-        "filas": filas,
+        "filas": pagina.object_list,
+        "pagina": pagina,
+        "total": len(filas_tareas) + len(filas_aprobaciones),
         # Directo de las listas ya construidas — ninguna consulta adicional
         # solo para contar (punto 11).
         "total_tareas": len(filas_tareas),
@@ -332,4 +394,5 @@ def disenador_servicios_view(request):
     if not caps["ve_servicios"]:
         raise PermissionDenied
     contexto["servicios"] = disenador.lista_de_servicios()
+    contexto["ticket_general"] = disenador.ticket_general()
     return render(request, "core/disenador_servicios.html", contexto)

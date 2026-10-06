@@ -1,0 +1,8 @@
+{% comment %}Buscador "¿Qué necesitas?" (4.D): lo que describe la persona se busca por reglas (`apps.catalogo.busqueda`) sobre lo que puede solicitar. Sin JS envía el formulario a la página de resultados (`core:necesidad`); con JS, `necesidad.js` pide el mismo contenido como fragmento. Espera opcionalmente `q` (texto ya enviado).{% endcomment %}
+<form class="portal-search" role="search" method="get" action="{% url 'core:necesidad' %}" data-necesidad-search>
+  <span class="portal-search__icon" aria-hidden="true">{% include "components/icon.html" with name="compass" %}</span>
+  <label class="sr-only" for="portal-q">Describe lo que necesitas</label>
+  <input id="portal-q" class="portal-search__input" type="search" name="q" value="{{ q|default:'' }}" maxlength="200"
+         autocomplete="off" placeholder="Buscar un servicio, proceso o necesidad…" aria-controls="necesidad-resultados">
+  <button type="submit" class="btn btn--primary">Buscar</button>
+</form>

@@ -60,6 +60,48 @@
     </aside>
   </div>
 
+  <section class="svc-panel svc-panel--time">
+    <div class="svc-panel__head">
+      <div>
+        <h3>Tiempo objetivo de atención</h3>
+        <p>En cuánto tiempo se compromete la atención de cada ticket de este {{ servicio.get_tipo_display|lower }}.</p>
+      </div>
+      {% if servicio.tiempo_objetivo_cantidad %}<span class="svc-pill svc-pill--ok">Configurado</span>{% else %}<span class="svc-pill">Sin compromiso</span>{% endif %}
+    </div>
+    <form method="post" action="{% url 'catalogo:studio_tiempo_objetivo_guardar' servicio.pk %}" class="form">
+      {% csrf_token %}
+      <div class="svc-form-grid svc-form-grid--two">
+        <div class="field">{{ form_tiempo.cantidad.label_tag }}{{ form_tiempo.cantidad }}</div>
+        <div class="field">{{ form_tiempo.unidad.label_tag }}{{ form_tiempo.unidad }}</div>
+      </div>
+      <label class="choice">{{ form_tiempo.habiles }} {{ form_tiempo.habiles.label_tag }}</label>
+      <p class="svc-help">Déjalo vacío si no hay compromiso temporal. Aplica a los tickets que se creen desde ahora; los ya creados conservan el suyo.</p>
+      <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar tiempo objetivo</button></div>
+    </form>
+  </section>
+
+  <section class="svc-panel svc-panel--extension">
+    <div class="svc-panel__head">
+      <div>
+        <h3>Prórroga de la fecha objetivo</h3>
+        <p>Si quien atiende puede pedir más tiempo cuando el ticket ya está en atención.</p>
+      </div>
+      {% if servicio.politica_prorroga == "NO_PERMITE" or not servicio.politica_prorroga %}<span class="svc-pill">No permite</span>{% else %}<span class="svc-pill svc-pill--ok">{{ servicio.get_politica_prorroga_display }}</span>{% endif %}
+    </div>
+    <form method="post" action="{% url 'catalogo:studio_prorroga_guardar' servicio.pk %}" class="form">
+      {% csrf_token %}
+      <div class="svc-form-grid svc-form-grid--two">
+        <div class="field">{{ form_prorroga.politica.label_tag }}{{ form_prorroga.politica }}</div>
+      </div>
+      <div class="svc-form-grid svc-form-grid--two">
+        <div class="field">{{ form_prorroga.aprobador_usuario.label_tag }}{{ form_prorroga.aprobador_usuario }}</div>
+        <div class="field">{{ form_prorroga.aprobador_equipo.label_tag }}{{ form_prorroga.aprobador_equipo }}</div>
+      </div>
+      <p class="svc-help">El aprobador solo aplica con aprobación: elige un usuario o un equipo. Aplica a los tickets que se creen desde ahora; los ya creados conservan su política.</p>
+      <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar política de prórroga</button></div>
+    </form>
+  </section>
+
   <section class="svc-panel svc-panel--visibility">
     <div class="svc-panel__head">
       <div>
@@ -104,4 +146,56 @@
       <p class="svc-muted">Público interno: cualquier persona de la organización puede encontrarlo y solicitarlo.</p>
     {% endif %}
   </section>
+  {% if terminos_aplican %}
+    <section class="svc-panel svc-panel--terms" id="terminos-busqueda">
+      <div class="svc-panel__head">
+        <div>
+          <h3>Términos de búsqueda</h3>
+          <p>Palabras o frases con las que alguien describiría lo que necesita y que deberían llevarlo a este {% if servicio.tipo == "PROCESO" %}proceso{% else %}servicio{% endif %}.</p>
+        </div>
+      </div>
+      <p class="svc-help">No son preguntas del formulario: solo ayudan a encontrarlo desde «¿Qué necesitas?» en Inicio. Usa palabras o frases específicas (por ejemplo «diapositivas», «días libres»); una palabra demasiado general lo mostraría para búsquedas que no corresponden. Mayúsculas y acentos no importan.</p>
+
+      {% if terminos %}
+        <ul class="svc-block-list">
+          {% for item in terminos %}
+            <li class="svc-block-row">
+              <span class="svc-block-row__main">
+                <strong>{{ item.obj.termino }}</strong>
+                {% if not item.obj.activo %}<span class="svc-tag">Desactivado</span>{% endif %}
+              </span>
+              <div class="svc-row-actions">
+                <button type="button" class="btn btn--ghost btn--sm" data-action="toggle-panel" data-target="panel-termino-{{ item.obj.pk }}">Editar</button>
+                <form method="post" action="{% url 'catalogo:studio_termino_estado' servicio.pk item.obj.pk %}">
+                  {% csrf_token %}
+                  <input type="hidden" name="activo" value="{% if item.obj.activo %}0{% else %}1{% endif %}">
+                  <button type="submit" class="btn btn--ghost btn--sm">{% if item.obj.activo %}Desactivar{% else %}Activar{% endif %}</button>
+                </form>
+                <form method="post" action="{% url 'catalogo:studio_termino_eliminar' servicio.pk item.obj.pk %}">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn--ghost btn--sm">Eliminar</button>
+                </form>
+              </div>
+              <div id="panel-termino-{{ item.obj.pk }}" class="svc-inline-editor" hidden>
+                <form method="post" action="{% url 'catalogo:studio_termino_editar' servicio.pk item.obj.pk %}" class="form">
+                  {% csrf_token %}
+                  <div class="field">{{ item.form.termino.label_tag }}{{ item.form.termino }}</div>
+                  <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar</button></div>
+                </form>
+              </div>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="svc-empty">Aún no hay términos. Sin ellos se encuentra por su nombre, categoría, descripción e instrucciones.</div>
+      {% endif %}
+
+      <form method="post" action="{% url 'catalogo:studio_termino_crear' servicio.pk %}" class="form svc-inline-form">
+        {% csrf_token %}
+        <div class="field">{{ form_termino_nuevo.termino.label_tag }}{{ form_termino_nuevo.termino }}</div>
+        <div class="form-actions"><button type="submit" class="btn btn--secondary">Agregar término</button></div>
+        <p class="svc-help">Hasta {{ max_terminos }} términos por {% if servicio.tipo == "PROCESO" %}proceso{% else %}servicio{% endif %}.</p>
+      </form>
+    </section>
+  {% endif %}
 </section>

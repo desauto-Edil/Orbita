@@ -1,144 +1,154 @@
 {% extends "base.html" %}
+{% load static %}
 
-{% block title %}Aprobación #{{ aprobacion.pk }} — Órbita{% endblock %}
+{% block title %}Aprobación #{{ aprobacion.pk }} — {{ sistema.nombre }}{% endblock %}
+
+{% block content_modifier %}content-area--wide{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/trabajo.css' %}">{% endblock %}
 
 {% block content %}
   <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'core:mi_trabajo' %}">Mi trabajo</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
     <a href="{% url 'aprobaciones:lista' %}">Aprobaciones</a>
     <span class="breadcrumb__separator" aria-hidden="true">/</span>
     <span class="breadcrumb__current">Aprobación #{{ aprobacion.pk }}</span>
   </nav>
 
-  <section class="card">
-    <h1>Aprobación #{{ aprobacion.pk }}</h1>
-    <span class="badge
-      {% if aprobacion.estado == 'APROBADA' %}badge--success
-      {% elif aprobacion.estado == 'RECHAZADA' %}badge--danger
-      {% elif aprobacion.estado == 'DEVUELTA' %}badge--info
-      {% elif aprobacion.estado == 'PENDIENTE' %}badge--warning
-      {% endif %}">{{ aprobacion.get_estado_display }}</span>
-    <span class="badge badge--info">{{ aprobacion.get_tipo_aprobador_display }}</span>
-  </section>
+  <header class="work-detail__head">
+    <div>
+      <p class="work-detail__eyebrow">Aprobación</p>
+      <h1>Aprobación #{{ aprobacion.pk }}</h1>
+      <p class="work-detail__badges">
+        <span class="badge badge--dot
+          {% if aprobacion.estado == 'APROBADA' %}badge--success
+          {% elif aprobacion.estado == 'RECHAZADA' %}badge--danger
+          {% elif aprobacion.estado == 'DEVUELTA' %}badge--info
+          {% elif aprobacion.estado == 'PENDIENTE' %}badge--warning
+          {% endif %}">{{ aprobacion.get_estado_display }}</span>
+        <span class="badge">{{ aprobacion.get_tipo_aprobador_display }}</span>
+      </p>
+    </div>
+  </header>
 
-  <section class="card">
-    <h3>Qué se está aprobando</h3>
-    {% if contexto_workflow %}
-      <dl class="definition-list">
-        <div>
-          <dt>Workflow</dt>
-          <dd>{{ contexto_workflow.workflow.nombre }}</dd>
-        </div>
-        <div>
-          <dt>Versión</dt>
-          <dd>v{{ contexto_workflow.version.numero }}</dd>
-        </div>
-        <div>
-          <dt>Etapa</dt>
-          <dd>{{ contexto_workflow.etapa.nombre }}</dd>
-        </div>
-      </dl>
-    {% else %}
-      <p class="text-muted">Esquema de aprobación #{{ aprobacion.esquema_id }}, sin vínculo a un Workflow.</p>
-    {% endif %}
-  </section>
-
-  <section class="card">
-    <h3>Esquema</h3>
-    <dl class="definition-list">
-      <div>
-        <dt>Modo</dt>
-        <dd>{{ esquema.get_modo_display }}</dd>
-      </div>
-      {% if esquema.politica %}
-        <div>
-          <dt>Política</dt>
-          <dd>{{ esquema.get_politica_display }}</dd>
-        </div>
-      {% endif %}
-      <div>
-        <dt>Resultado global</dt>
-        <dd>{% if esquema.resultado %}{{ esquema.get_resultado_display }}{% else %}En curso{% endif %}</dd>
-      </div>
-    </dl>
-  </section>
-
-  <section class="card">
-    <h3>Participación</h3>
-    <ul class="plain-list">
-      {% for participacion in participaciones %}
-        <li>
-          <span>
-            {% if participacion.aprobador_usuario %}{{ participacion.aprobador_usuario }}
-            {% elif participacion.aprobador_equipo %}{{ participacion.aprobador_equipo }}
-            {% else %}Sin aprobador{% endif %}
-          </span>
-          {% if esquema.modo == 'SECUENCIAL' %}<span class="text-muted">Orden {{ participacion.orden }}</span>{% endif %}
-          <span class="badge
-            {% if participacion.estado == 'APROBADA' %}badge--success
-            {% elif participacion.estado == 'RECHAZADA' %}badge--danger
-            {% elif participacion.estado == 'DEVUELTA' %}badge--info
-            {% elif participacion.estado == 'PENDIENTE' %}badge--warning
-            {% else %}badge--info{% endif %}">{{ participacion.get_estado_display }}</span>
-          {% if participacion.decidido_por %}
-            <span class="text-muted">{{ participacion.decidido_por }} — {{ participacion.decidida_en|date:"d/m/Y H:i" }}</span>
+  <div class="work-detail">
+    <div class="work-detail__col">
+      <section class="card">
+        <h2>Qué se está aprobando</h2>
+        {% if contexto_prorroga %}
+          <dl class="work-facts">
+            <div><dt>Qué se aprueba</dt><dd>Prórroga #{{ contexto_prorroga.prorroga.numero }} de la fecha objetivo de un ticket</dd></div>
+            <div><dt>Servicio</dt><dd>{{ contexto_prorroga.servicio.nombre }}</dd></div>
+            <div><dt>Solicitada por</dt><dd>{{ contexto_prorroga.prorroga.solicitada_por }}</dd></div>
+            <div><dt>Fecha objetivo vigente</dt><dd>{{ contexto_prorroga.prorroga.fecha_objetivo_vigente_al_solicitar|date:"d/m/Y H:i" }}</dd></div>
+            <div><dt>Nueva fecha solicitada</dt><dd>{{ contexto_prorroga.prorroga.nueva_fecha_solicitada|date:"d/m/Y H:i" }}</dd></div>
+            <div><dt>Motivo</dt><dd>{{ contexto_prorroga.prorroga.motivo }}</dd></div>
+          </dl>
+          {% if contexto_prorroga.puede_ver_ticket %}
+            <p><a href="{% url 'tickets:detalle' contexto_prorroga.ticket.pk %}">Ver el ticket</a></p>
           {% endif %}
-          {% if participacion.observacion %}
-            <p class="text-muted">{{ participacion.observacion }}</p>
-          {% endif %}
-        </li>
-      {% endfor %}
-    </ul>
-  </section>
-
-  {% if puede_decidir or puede_reasignar %}
-    <section class="card">
-      <h3>Acciones</h3>
+        {% elif contexto_workflow %}
+          <dl class="work-facts">
+            <div><dt>Flujo</dt><dd>{{ contexto_workflow.workflow.nombre }}</dd></div>
+            <div><dt>Versión</dt><dd>v{{ contexto_workflow.version.numero }}</dd></div>
+            <div><dt>Etapa</dt><dd>{{ contexto_workflow.etapa.nombre }}</dd></div>
+          </dl>
+        {% else %}
+          <p class="text-muted">Esquema de aprobación #{{ aprobacion.esquema_id }}, sin vínculo a un flujo.</p>
+        {% endif %}
+      </section>
 
       {% if puede_decidir %}
-        <form method="post" action="{% url 'aprobaciones:decidir' aprobacion.pk %}" class="form">
-          {% csrf_token %}
-          <div class="field">
-            <label>Decisión</label>
-            {{ decision_form.decision }}
-          </div>
-          <div class="field">
-            <label for="id_observacion">Observación</label>
-            {{ decision_form.observacion }}
-          </div>
-          <button type="submit" class="btn btn--primary">Registrar decisión</button>
-        </form>
+        <section class="card">
+          <h2>Tu decisión</h2>
+          <form method="post" action="{% url 'aprobaciones:decidir' aprobacion.pk %}" class="form">
+            {% csrf_token %}
+            <div class="field">
+              <label>Decisión</label>
+              {{ decision_form.decision }}
+            </div>
+            <div class="field">
+              <label for="id_observacion">Observación</label>
+              {{ decision_form.observacion }}
+            </div>
+            <button type="submit" class="btn btn--primary">Registrar decisión</button>
+          </form>
+        </section>
       {% endif %}
 
-      {% if puede_reasignar %}
-        <form method="post" action="{% url 'aprobaciones:reasignar' aprobacion.pk %}" class="form">
-          {% csrf_token %}
-          <div class="field">
-            <label for="id_usuario">Usuario</label>
-            {{ reasignacion_form.usuario }}
-          </div>
-          <div class="field">
-            <label for="id_equipo">Equipo</label>
-            {{ reasignacion_form.equipo }}
-          </div>
-          <button type="submit" class="btn btn--secondary">Reasignar</button>
-        </form>
-      {% endif %}
-    </section>
-  {% endif %}
+      <section class="card">
+        <h2>Participación</h2>
+        <ul class="work-thread">
+          {% for participacion in participaciones %}
+            <li>
+              <strong>
+                {% if participacion.aprobador_usuario %}{{ participacion.aprobador_usuario }}
+                {% elif participacion.aprobador_equipo %}{{ participacion.aprobador_equipo }}
+                {% else %}Sin aprobador{% endif %}
+              </strong>
+              <span class="badge
+                {% if participacion.estado == 'APROBADA' %}badge--success
+                {% elif participacion.estado == 'RECHAZADA' %}badge--danger
+                {% elif participacion.estado == 'DEVUELTA' %}badge--info
+                {% elif participacion.estado == 'PENDIENTE' %}badge--warning
+                {% else %}badge--info{% endif %}">{{ participacion.get_estado_display }}</span>
+              {% if esquema.modo == 'SECUENCIAL' %}<span class="work-thread__meta">Orden {{ participacion.orden }}</span>{% endif %}
+              {% if participacion.decidido_por %}
+                <span class="work-thread__meta">{{ participacion.decidido_por }} — {{ participacion.decidida_en|date:"d/m/Y H:i" }}</span>
+              {% endif %}
+              {% if participacion.observacion %}
+                <p class="text-muted">{{ participacion.observacion }}</p>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    </div>
 
-  {% if reasignaciones %}
-    <section class="card">
-      <h3>Historial de reasignaciones</h3>
-      <ul class="plain-list">
-        {% for reasignacion in reasignaciones %}
-          <li class="text-muted">
-            {% if reasignacion.aprobador_anterior_usuario %}{{ reasignacion.aprobador_anterior_usuario }}{% elif reasignacion.aprobador_anterior_equipo %}{{ reasignacion.aprobador_anterior_equipo }}{% else %}—{% endif %}
-            →
-            {% if reasignacion.aprobador_nuevo_usuario %}{{ reasignacion.aprobador_nuevo_usuario }}{% elif reasignacion.aprobador_nuevo_equipo %}{{ reasignacion.aprobador_nuevo_equipo }}{% endif %}
-            (por {{ reasignacion.reasignado_por }} — {{ reasignacion.creado_en|date:"d/m/Y H:i" }})
-          </li>
-        {% endfor %}
-      </ul>
-    </section>
-  {% endif %}
+    <aside class="work-detail__col">
+      <section class="card">
+        <h2>Esquema</h2>
+        <dl class="work-facts">
+          <div><dt>Modo</dt><dd>{{ esquema.get_modo_display }}</dd></div>
+          {% if esquema.politica %}<div><dt>Política</dt><dd>{{ esquema.get_politica_display }}</dd></div>{% endif %}
+          <div><dt>Resultado global</dt><dd>{% if esquema.resultado %}{{ esquema.get_resultado_display }}{% else %}En curso{% endif %}</dd></div>
+        </dl>
+
+        {% if puede_reasignar %}
+          <details class="work-fold">
+            <summary>Reasignar</summary>
+            <form method="post" action="{% url 'aprobaciones:reasignar' aprobacion.pk %}" class="form">
+              {% csrf_token %}
+              <div class="field">
+                <label for="id_usuario">Usuario</label>
+                {{ reasignacion_form.usuario }}
+              </div>
+              <div class="field">
+                <label for="id_equipo">Equipo</label>
+                {{ reasignacion_form.equipo }}
+              </div>
+              <button type="submit" class="btn btn--secondary">Reasignar</button>
+            </form>
+          </details>
+        {% endif %}
+
+        {% if reasignaciones %}
+          <details class="work-fold">
+            <summary>Historial de reasignaciones</summary>
+            <ul class="work-timeline">
+              {% for reasignacion in reasignaciones %}
+                <li>
+                  {% if reasignacion.aprobador_anterior_usuario %}{{ reasignacion.aprobador_anterior_usuario }}{% elif reasignacion.aprobador_anterior_equipo %}{{ reasignacion.aprobador_anterior_equipo }}{% else %}—{% endif %}
+                  →
+                  {% if reasignacion.aprobador_nuevo_usuario %}{{ reasignacion.aprobador_nuevo_usuario }}{% elif reasignacion.aprobador_nuevo_equipo %}{{ reasignacion.aprobador_nuevo_equipo }}{% endif %}
+                  <span>por {{ reasignacion.reasignado_por }} — {{ reasignacion.creado_en|date:"d/m/Y H:i" }}</span>
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
+      </section>
+    </aside>
+  </div>
 {% endblock %}

@@ -1,0 +1,9 @@
+{% comment %}Selector único de responsable (persona o equipo) de un destino del ticket general. Espera `candidatos` (destino_candidatos), `select_id` (+ `sufijo` opcional) y `vacio` (texto de la opción vacía, opcional).{% endcomment %}<select name="responsable" id="{{ select_id }}{{ sufijo }}">
+  {% if vacio %}<option value="">{{ vacio }}</option>{% endif %}
+  <optgroup label="Equipos">
+    {% for equipo in candidatos.responsables_equipos %}<option value="EQUIPO:{{ equipo.pk }}">{{ equipo.nombre }}</option>{% endfor %}
+  </optgroup>
+  <optgroup label="Personas">
+    {% for persona in candidatos.responsables_usuarios %}<option value="USUARIO:{{ persona.pk }}">{{ persona.get_full_name|default:persona.username }}</option>{% endfor %}
+  </optgroup>
+</select>

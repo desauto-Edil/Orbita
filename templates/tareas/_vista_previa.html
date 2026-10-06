@@ -1,0 +1,28 @@
+{% comment %}Vista previa de una Tarea en Mi trabajo (fragmento, solo lectura).{% endcomment %}
+<header class="work-preview__head">
+  <p class="work-preview__eyebrow">Tarea</p>
+  <h2 class="work-preview__title">{{ tarea.titulo }}</h2>
+  <p class="work-preview__badges">
+    <span class="badge badge--dot {% if tarea.estado == 'COMPLETADA' %}badge--success{% elif tarea.estado == 'EN_PROGRESO' %}badge--info{% else %}badge--warning{% endif %}">{{ tarea.get_estado_display }}</span>
+    {% if vencida %}<span class="badge badge--danger">Vencida</span>{% endif %}
+    {% if por_tomar %}<span class="badge">Disponible para tomar</span>{% endif %}
+  </p>
+</header>
+
+{% if tarea.descripcion %}
+  <p class="work-preview__text">{{ tarea.descripcion|truncatewords:60 }}</p>
+{% endif %}
+
+<dl class="work-facts">
+  <div><dt>Vence</dt><dd>{% if tarea.fecha_limite %}{{ tarea.fecha_limite|date:"j \d\e F, H:i" }}{% else %}Sin fecha límite{% endif %}</dd></div>
+  <div><dt>Responsable</dt><dd>{% if tarea.usuario_responsable %}{{ tarea.usuario_responsable.get_full_name|default:tarea.usuario_responsable.get_username }}{% elif tarea.equipo_responsable %}{{ tarea.equipo_responsable }}{% else %}Sin asignar{% endif %}</dd></div>
+  {% if delegado_actual %}<div><dt>Delegada a</dt><dd>{{ delegado_actual }}</dd></div>{% endif %}
+  {% if ticket_vinculado %}<div><dt>Ticket</dt><dd><a href="{% url 'tickets:detalle' ticket_vinculado.pk %}">{{ ticket_vinculado.detalle_servicio.servicio.nombre }}</a></dd></div>{% endif %}
+  {% if tarea.tarea_padre %}<div><dt>Parte de</dt><dd>{{ tarea.tarea_padre.titulo }}</dd></div>{% endif %}
+  {% if subtareas %}<div><dt>Subtareas</dt><dd>{{ subtareas_listas }} de {{ subtareas }} completadas</dd></div>{% endif %}
+  {% if n_comentarios or n_evidencias %}<div><dt>Actividad</dt><dd>{{ n_comentarios }} comentario{{ n_comentarios|pluralize }} · {{ n_evidencias }} evidencia{{ n_evidencias|pluralize }}</dd></div>{% endif %}
+</dl>
+
+<div class="work-preview__actions">
+  <a class="btn btn--primary" href="{% url 'tareas:detalle' tarea.pk %}">Abrir tarea</a>
+</div>

@@ -1,0 +1,237 @@
+/* Configuración — composición local de sus pantallas. Solo tokens semánticos
+   (`tokens.css`); los componentes (card, table, tabs, badge, form…) vienen de
+   `components.css` y aquí no se redefinen. */
+
+/* --- Portada: una tarjeta por sección ---------------------------------- */
+
+.config-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.config-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.config-tile:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.config-tile__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--control-h-md);
+  height: var(--control-h-md);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.config-tile__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  flex: 1;
+}
+
+.config-tile__title {
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-semibold);
+}
+
+.config-tile__text,
+.config-tile__count {
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+}
+
+.config-tile__count strong {
+  font-size: var(--font-size-section-title);
+  color: var(--text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Composición de pantallas ------------------------------------------ */
+
+.config-split {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.config-split--even {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.config-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.config-narrow {
+  width: 100%;
+  max-width: var(--content-narrow);
+}
+
+.config-section-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.config-section-head p {
+  margin: 0;
+}
+
+.config-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--space-4);
+}
+
+@media (max-width: 899px) {
+  .config-split,
+  .config-split--even {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 639px) {
+  .config-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* --- Formularios -------------------------------------------------------- */
+
+.config-opcional {
+  font-weight: var(--font-weight-regular);
+  color: var(--text-disabled);
+}
+
+.config-checks {
+  border: none;
+  padding: 0;
+  min-width: 0;
+}
+
+.config-checks__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: var(--space-2) var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.config-checks__grid .choice {
+  align-items: flex-start;
+}
+
+.config-checks__grid .choice input {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+
+/* Panel «Añadir…» plegable (details): el resumen es el botón. */
+.config-add {
+  margin-top: var(--space-4);
+}
+
+.config-add > summary {
+  list-style: none;
+  width: fit-content;
+  cursor: pointer;
+}
+
+.config-add > summary::-webkit-details-marker {
+  display: none;
+}
+
+.config-inline-form {
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.config-inline-form input,
+.config-inline-form select {
+  background: var(--surface-card);
+}
+
+.config-row-actions {
+  display: flex;
+  gap: var(--space-1);
+  margin-left: auto;
+}
+
+.config-search {
+  flex: 1 1 260px;
+  max-width: 420px;
+}
+
+/* --- Tablas y filas ----------------------------------------------------- */
+
+.config-link {
+  display: block;
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.config-link:hover {
+  text-decoration: underline;
+}
+
+.config-person {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  color: var(--text-primary);
+  text-decoration: none;
+}
+
+.config-person strong {
+  display: block;
+}
+
+.config-person:hover strong {
+  text-decoration: underline;
+}
+
+.config-person__meta {
+  display: block;
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.config-code {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
+/* --- General: vista previa de la marca ---------------------------------- */
+
+.config-brand-preview {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-page);
+  font-size: var(--font-size-body-lg);
+}

@@ -1,0 +1,35 @@
+{% comment %}Resultado del buscador "¿Qué necesitas?" (`core:necesidad`), tanto fragmento como página completa. Solo presenta: la validación, el puntaje y la disponibilidad del Ticket General ya vienen resueltos por el servidor. Espera `error`, `resultados` y `ticket_general`. Nada de esto crea un ticket: "Solicitar" y "Crear ticket general" son enlaces que la persona elige.{% endcomment %}
+<div class="need">
+  <div class="need__head">
+    <h2 class="need__title" id="t-necesidad">{% if resultados %}Esto puede ayudarte{% elif error %}Cuéntanos qué necesitas{% else %}No encontramos coincidencias{% endif %}</h2>
+    <a class="portal-link" href="{% url 'core:inicio' %}" data-necesidad-cerrar>Cerrar</a>
+  </div>
+
+  {% if error %}
+    <p class="need__aviso" role="alert">{{ error }}</p>
+  {% elif resultados %}
+    <div class="need__lista">
+      {% for resultado in resultados %}
+        <article class="need-card">
+          <span class="svc-card__tile tone-{{ resultado.servicio.tono }}" aria-hidden="true">{% if resultado.servicio.tipo == "PROCESO" %}{% include "components/icon.html" with name="workflow" %}{% else %}{% include "components/icon.html" with name="tickets" %}{% endif %}</span>
+          <div class="need-card__body">
+            <h3 class="need-card__name">{{ resultado.servicio.nombre }} <span class="badge">{{ resultado.servicio.get_tipo_display }}</span></h3>
+            <p class="need-card__meta">{{ resultado.servicio.categoria.nombre }} · {{ resultado.razon }}</p>
+            {% if resultado.servicio.descripcion %}<p class="need-card__text">{{ resultado.servicio.descripcion|truncatechars:140 }}</p>{% endif %}
+          </div>
+          <a class="btn btn--primary btn--sm" href="{% url 'tickets:solicitar' resultado.servicio.pk %}">Solicitar<span class="sr-only"> {{ resultado.servicio.nombre }}</span></a>
+        </article>
+      {% endfor %}
+    </div>
+    {% if ticket_general %}
+      <p class="need__alterna">¿Ninguna opción corresponde a lo que necesitas? <a class="portal-link" href="{% url 'tickets:ticket_general' %}">Crear ticket general {% include "components/icon.html" with name="arrow-right" size="sm" %}</a></p>
+    {% endif %}
+  {% else %}
+    <p class="need__aviso" role="status">No encontramos un servicio o proceso que coincida suficientemente con lo que necesitas.</p>
+    {% if ticket_general %}
+      <p class="need__alterna"><a class="btn btn--primary" href="{% url 'tickets:ticket_general' %}">Crear ticket general</a></p>
+    {% else %}
+      <p class="need__alterna">Prueba con otras palabras o explora lo que hay disponible.</p>
+    {% endif %}
+  {% endif %}
+</div>

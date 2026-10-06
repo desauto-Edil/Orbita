@@ -9,9 +9,11 @@ por estado: ninguna transición tiene comportamiento propio más allá de su
 estado destino, ni en 2.5 (7 entradas en total no justifican un
 `EstadoResuelto`/`EstadoCerrado`/... por transición).
 
-Solo dos entradas producen RADICADO→EN_ATENCION: `TOMAR` (autoasignación)
-y `ASIGNAR_USUARIO` (un tercero asigna un `usuario_responsable` por primera
-vez). `REASIGNAR` y "asignar solo `equipo_responsable`, sin usuario" no
+Solo tres entradas producen RADICADO→EN_ATENCION: `TOMAR` (autoasignación),
+`ASIGNAR_USUARIO` (un tercero asigna un `usuario_responsable` por primera vez) y,
+desde 4.C2, `INICIAR_ATENCION` (el ticket ya fue DIRECCIONADO a una persona al
+radicarse —el Ticket General— y esa persona, o quien supervisa, inicia la
+atención: no se asigna a nadie, solo cambia el estado). `REASIGNAR` y "asignar solo `equipo_responsable`, sin usuario" no
 aparecen aquí — no cambian de estado (decisión explícita del usuario: no
 existe una falsa transición EN_ATENCION→EN_ATENCION) — `operaciones.py` las
 ejecuta sin pasar por esta tabla.
@@ -34,6 +36,7 @@ from apps.tickets.models import Ticket
 TRANSICIONES = {
     (Ticket.Estado.RADICADO, "TOMAR"): Ticket.Estado.EN_ATENCION,
     (Ticket.Estado.RADICADO, "ASIGNAR_USUARIO"): Ticket.Estado.EN_ATENCION,
+    (Ticket.Estado.RADICADO, "INICIAR_ATENCION"): Ticket.Estado.EN_ATENCION,
     (Ticket.Estado.RADICADO, "CANCELAR"): Ticket.Estado.CANCELADO,
     (Ticket.Estado.EN_ATENCION, "CANCELAR"): Ticket.Estado.CANCELADO,
     (Ticket.Estado.EN_ATENCION, "RESOLVER"): Ticket.Estado.RESUELTO,

@@ -1,0 +1,454 @@
+/* Trabajo (Cola · Mi trabajo · detalle de tarea y aprobación).
+   Un espacio tranquilo: filas de una sola línea de peso, color solo para el
+   estado y mucho aire. Solo tokens semánticos (`tokens.css`); los componentes
+   base (badge, segmented, tabs, btn…) vienen de `components.css`. */
+
+/* --- Barra local de filtros --------------------------------------------- */
+
+.work-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.work-toolbar .segmented {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.work-toolbar .segmented__item {
+  white-space: nowrap;
+  text-decoration: none;
+}
+
+.work-toolbar__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+  font-size: var(--font-size-small);
+}
+
+.work-toolbar__links a {
+  color: var(--text-muted);
+}
+
+.work-toolbar__links a:hover {
+  color: var(--text-primary);
+}
+
+.work-count {
+  margin-left: var(--space-1);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Lista ---------------------------------------------------------------- */
+
+.work-list {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-2);
+  background: var(--surface-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.work-list > li + li {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.work-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  color: var(--text-primary);
+  text-decoration: none;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.work-row:hover {
+  background: var(--surface-sunken);
+}
+
+.work-row:focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: -2px;
+}
+
+.work-row.is-selected {
+  background: var(--surface-hover);
+}
+
+/* Mi trabajo: filas más bajas para que una lista larga no pese. */
+.work-row--compact {
+  padding-block: var(--space-2);
+  gap: var(--space-3);
+}
+
+.work-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.work-row__title {
+  font-weight: var(--font-weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-row__meta,
+.work-row__when,
+.work-row__owner {
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.work-row__late {
+  color: var(--status-danger);
+  font-weight: var(--font-weight-semibold);
+}
+
+.work-row__state {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.work-row__kind {
+  display: inline-flex;
+  color: var(--text-muted);
+}
+
+/* Estado como un punto discreto (con su texto al lado: nunca solo color). */
+.work-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--border-strong);
+  flex-shrink: 0;
+}
+
+.work-dot--success { background: var(--status-success); }
+.work-dot--warning { background: var(--status-warning); }
+.work-dot--danger { background: var(--status-danger); }
+.work-dot--info { background: var(--status-info); }
+
+/* Cola: posición · ticket · llegada · responsable · estado. */
+.work-list--queue .work-row {
+  grid-template-columns: var(--space-6) minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) auto;
+}
+
+.work-row__position {
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+@media (max-width: 899px) {
+  .work-list--queue .work-row {
+    grid-template-columns: var(--space-5) minmax(0, 1fr) auto;
+    row-gap: var(--space-1);
+  }
+
+  .work-list--queue .work-row__when,
+  .work-list--queue .work-row__owner {
+    grid-column: 2 / -1;
+  }
+
+  .work-list--queue .work-row__state {
+    grid-row: 1;
+    grid-column: 3;
+  }
+}
+
+@media (max-width: 639px) {
+  .work-row--compact .work-row__state {
+    font-size: 0; /* queda el punto; el estado completo está en el detalle */
+    gap: 0;
+  }
+}
+
+/* --- Mi trabajo: lista + vista previa ------------------------------------- */
+
+.work-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.work-split.has-preview {
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 400px);
+}
+
+.work-split__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-width: 0;
+}
+
+.work-preview {
+  position: sticky;
+  top: calc(var(--header-h) + var(--space-4));
+  max-height: calc(100vh - var(--header-h) - var(--dock-clearance));
+  overflow-y: auto;
+  padding: var(--space-5);
+  background: var(--surface-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+  transition: opacity var(--duration-fast) var(--ease-standard);
+}
+
+.work-preview.is-loading {
+  opacity: 0.6;
+}
+
+.work-preview__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-7) var(--space-4);
+  text-align: center;
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+}
+
+.work-preview__empty p {
+  margin: 0;
+  max-width: 28ch;
+}
+
+.work-preview__body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.work-preview__eyebrow,
+.work-detail__eyebrow {
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.work-preview__title {
+  margin: 0;
+  font-size: var(--font-size-section-title);
+}
+
+.work-preview__badges,
+.work-detail__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+}
+
+.work-preview__text {
+  margin: 0;
+  color: var(--text-secondary);
+  white-space: pre-line;
+}
+
+.work-preview__actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* Datos clave: etiqueta tenue + valor, sin líneas ni cajas. */
+.work-facts {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+}
+
+.work-facts div {
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: var(--space-3);
+  font-size: var(--font-size-small);
+}
+
+.work-facts dt {
+  color: var(--text-muted);
+}
+
+.work-facts dd {
+  margin: 0;
+  color: var(--text-primary);
+}
+
+.work-people {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-3) 0 0;
+  border-top: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  font-size: var(--font-size-small);
+}
+
+.work-people li {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.work-people__state {
+  color: var(--text-muted);
+}
+
+/* --- Detalle (al abrir) ---------------------------------------------------- */
+
+.work-back {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: fit-content;
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.work-back:hover {
+  color: var(--text-primary);
+}
+
+.work-detail__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.work-detail__head h1 {
+  margin: 0;
+}
+
+.work-detail__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.work-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.work-detail__col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+@media (max-width: 899px) {
+  .work-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.work-detail .card h2 {
+  font-size: var(--font-size-card-title);
+  margin-bottom: var(--space-3);
+}
+
+.work-detail__text {
+  margin: 0;
+  white-space: pre-line;
+}
+
+/* Lo secundario (reasignar, delegar, historial…) queda plegado: está a un
+   clic, pero no compite con lo que hay que hacer. */
+.work-fold {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: var(--space-4);
+  padding-top: var(--space-3);
+}
+
+.work-fold > summary {
+  cursor: pointer;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+}
+
+.work-fold > summary:hover {
+  color: var(--text-primary);
+}
+
+.work-fold[open] > summary {
+  margin-bottom: var(--space-4);
+}
+
+.card > .work-fold:first-child {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.work-thread {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.work-thread p {
+  margin: var(--space-1) 0 0;
+  white-space: pre-line;
+}
+
+.work-thread__meta {
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.work-timeline {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  font-size: var(--font-size-small);
+}
+
+.work-timeline li {
+  display: flex;
+  flex-direction: column;
+}
+
+.work-timeline span {
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+}

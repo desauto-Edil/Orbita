@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}Inicio — Órbita{% endblock %}
+{% block title %}Inicio — {{ sistema.nombre }}{% endblock %}
 
 {% block extra_head %}<link rel="stylesheet" href="{% static 'css/inicio.css' %}">{% endblock %}
 
@@ -23,15 +23,12 @@
       <span class="portal-hero__ask">¿Qué necesitas hoy?</span>
     </h1>
 
-    {# Descubrimiento de lo que se puede solicitar (distinto de la búsqueda global del header). Sin JS cae al catálogo con el mismo filtro `q`. #}
-    <form class="portal-search" role="search" method="get" action="{% url 'catalogo:lista' %}" data-explorer-search>
-      <span class="portal-search__icon" aria-hidden="true">{% include "components/icon.html" with name="compass" %}</span>
-      <label class="sr-only" for="portal-q">Buscar un servicio, proceso o necesidad</label>
-      <input id="portal-q" class="portal-search__input" type="search" name="q" autocomplete="off"
-             placeholder="Buscar un servicio, proceso o necesidad…">
-      <button type="submit" class="btn btn--primary">Buscar</button>
-    </form>
+    {# "¿Qué necesitas?" (4.D): busca por reglas lo que la persona puede solicitar (distinto de la búsqueda global del header). Sin JS cae a la página `core:necesidad`. #}
+    {% include "portal/_buscador_necesidad.html" %}
   </header>
+
+  {# Sugerencias del buscador: las pinta `necesidad.js` bajo el buscador; vacío y oculto hasta que se busca. #}
+  <section class="portal-necesidad" id="necesidad-resultados" aria-live="polite" hidden></section>
 
   {# ------------------------------ 2. CUERPO ------------------------------ #}
   <div class="portal-body">
@@ -66,6 +63,9 @@
             <p class="portal-empty__title">Aún no hay nada para solicitar</p>
             <p class="portal-empty__text">Cuando haya servicios o procesos disponibles para ti, los encontrarás aquí.</p>
           </div>
+        {% endif %}
+        {% if ticket_general %}
+          <p class="portal-general">¿No encuentras lo que necesitas? <a class="portal-link" href="{% url 'tickets:ticket_general' %}">Crear ticket general {% include "components/icon.html" with name="arrow-right" size="sm" %}</a></p>
         {% endif %}
       </section>
 
@@ -216,4 +216,4 @@
 {% endif %}
 {% endblock %}
 
-{% block extra_scripts %}<script src="{% static 'js/inicio.js' %}" defer></script>{% endblock %}
+{% block extra_scripts %}<script src="{% static 'js/necesidad.js' %}" defer></script><script src="{% static 'js/inicio.js' %}" defer></script>{% endblock %}

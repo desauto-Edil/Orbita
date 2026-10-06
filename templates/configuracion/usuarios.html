@@ -1,0 +1,85 @@
+{% extends "configuracion/base.html" %}
+
+{% block config_titulo %}Usuarios{% endblock %}
+{% block config_subtitulo %}Las personas que pueden entrar a {{ sistema.nombre }}.{% endblock %}
+{% block config_acciones %}
+  {% if caps.usuarios %}
+    <a class="btn btn--primary" href="{% url 'core:configuracion_usuario_crear' %}">{% include "components/icon.html" with name="plus" %}Nuevo usuario</a>
+  {% endif %}
+{% endblock %}
+
+{% block config_contenido %}
+  <form method="get" class="filter-bar" role="search">
+    <div class="search config-search">
+      <span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" %}</span>
+      <input class="search__input" type="search" name="q" value="{{ texto }}" placeholder="Buscar por nombre, usuario o correo" aria-label="Buscar usuarios">
+    </div>
+    <input type="hidden" name="estado" value="{{ estado }}">
+    <button type="submit" class="btn btn--secondary btn--sm">Buscar</button>
+    <div class="segmented" role="group" aria-label="Estado de la cuenta">
+      <a class="segmented__item" href="?estado=activos{% if texto %}&q={{ texto|urlencode }}{% endif %}"{% if estado == "activos" %} aria-current="page"{% endif %}>Activos</a>
+      <a class="segmented__item" href="?estado=inactivos{% if texto %}&q={{ texto|urlencode }}{% endif %}"{% if estado == "inactivos" %} aria-current="page"{% endif %}>Inactivos</a>
+      <a class="segmented__item" href="?estado=todos{% if texto %}&q={{ texto|urlencode }}{% endif %}"{% if estado == "todos" %} aria-current="page"{% endif %}>Todos</a>
+    </div>
+  </form>
+
+  {% if pagina.object_list %}
+    <div class="table-shell">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Persona</th>
+            <th scope="col">Correo</th>
+            <th scope="col">Área principal</th>
+            <th scope="col" class="table__num">Roles</th>
+            <th scope="col">Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for persona in pagina.object_list %}
+            <tr>
+              <td>
+                <a class="config-person" href="{% url 'core:configuracion_usuario' persona.pk %}">
+                  <span class="avatar avatar--neutral" aria-hidden="true">{{ persona.get_username|slice:":1"|upper }}</span>
+                  <span>
+                    <strong>{{ persona.get_full_name|default:persona.get_username }}</strong>
+                    <span class="config-person__meta">{{ persona.get_username }}</span>
+                  </span>
+                </a>
+              </td>
+              <td>{{ persona.email|default:"—" }}</td>
+              <td>{% for ua in persona.area_principal %}{{ ua.area.nombre }}{% empty %}—{% endfor %}</td>
+              <td class="table__num">{{ persona.n_roles }}</td>
+              <td>
+                {% if persona.is_active %}<span class="badge badge--success badge--dot">Activa</span>{% else %}<span class="badge badge--dot">Inactiva</span>{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if pagina.has_other_pages %}
+      <nav aria-label="Páginas de usuarios">
+        <ul class="pagination">
+          {% if pagina.has_previous %}
+            <li><a class="pagination__link" href="?pagina={{ pagina.previous_page_number }}&estado={{ estado }}{% if texto %}&q={{ texto|urlencode }}{% endif %}">Anterior</a></li>
+          {% endif %}
+          <li><span class="pagination__link" aria-current="page">{{ pagina.number }} de {{ pagina.paginator.num_pages }}</span></li>
+          {% if pagina.has_next %}
+            <li><a class="pagination__link" href="?pagina={{ pagina.next_page_number }}&estado={{ estado }}{% if texto %}&q={{ texto|urlencode }}{% endif %}">Siguiente</a></li>
+          {% endif %}
+        </ul>
+      </nav>
+    {% endif %}
+  {% else %}
+    <div class="empty-state">
+      {% if texto %}
+        <p>Nadie coincide con «{{ texto }}».</p>
+        <a class="btn btn--ghost btn--sm" href="{% url 'core:configuracion_usuarios' %}">Limpiar búsqueda</a>
+      {% else %}
+        <p>No hay usuarios {% if estado == "inactivos" %}inactivos{% else %}en esta vista{% endif %}.</p>
+      {% endif %}
+    </div>
+  {% endif %}
+{% endblock %}

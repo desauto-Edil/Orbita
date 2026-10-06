@@ -1,3 +1,4 @@
+from apps.core.models import ConfiguracionSistema
 from apps.core.navegacion import construir_navegacion
 
 
@@ -8,3 +9,9 @@ def navegacion(request):
     `nav_item_activo`. Toda la lógica de qué ve cada usuario vive en
     `apps.core.navegacion`."""
     return construir_navegacion(request.user, request.resolver_match)
+
+
+def sistema(request):
+    """Identidad configurable de la plataforma (`sistema.nombre`, `sistema.logo`)
+    para el encabezado, el inicio de sesión y el título de cada página."""
+    return {"sistema": ConfiguracionSistema.actual()}

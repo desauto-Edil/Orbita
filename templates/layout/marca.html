@@ -1,0 +1,5 @@
+{% comment %}
+  Marca de la plataforma: el logo configurado en Configuración › General o, si
+  no hay, la inicial del nombre del sistema. Decorativa: el nombre va al lado.
+{% endcomment %}
+{% if sistema.logo %}<img class="app-header__brand-logo" src="{% url 'core:logo' %}?v={{ sistema.actualizado_en|date:'U' }}" alt="">{% else %}<span class="app-header__brand-mark" aria-hidden="true">{{ sistema.inicial }}</span>{% endif %}

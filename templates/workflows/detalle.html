@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}{{ workflow.nombre }} — Órbita{% endblock %}
+{% block title %}{{ workflow.nombre }} — {{ sistema.nombre }}{% endblock %}
 
 {% block content %}
   {% include "components/disenador_miga.html" with seccion="flujos" actual=workflow.nombre %}

@@ -38,6 +38,15 @@ class DecisionAprobacionForm(forms.Form):
     decision = forms.ChoiceField(choices=DECISIONES, label="Decisión", widget=forms.RadioSelect)
     observacion = forms.CharField(required=False, widget=forms.Textarea, label="Observación")
 
+    def __init__(self, *args, permite_devolver=True, **kwargs):
+        """`permite_devolver=False` para trabajo que solo se aprueba o se
+        rechaza (p. ej. una prórroga): "Devolver" no existe como salida."""
+        super().__init__(*args, **kwargs)
+        if not permite_devolver:
+            self.fields["decision"].choices = [
+                opcion for opcion in self.DECISIONES if opcion[0] != Aprobacion.Estado.DEVUELTA
+            ]
+
     def clean(self):
         cleaned = super().clean()
         decision = cleaned.get("decision")

@@ -128,6 +128,16 @@ def buscar_servicios(usuario, texto="", categoria_id=None, limite=LIMITE_RESULTA
     return resultados[:limite], len(resultados) > limite
 
 
+def ticket_general_disponible(usuario):
+    """4.C1 — ¿se ofrece la entrada "Crear ticket general"? Solo si está
+    habilitado, el Servicio interno es accesible para el usuario y tiene un
+    formulario activo. Es solo un CTA: la vista y la operación de dominio vuelven
+    a validarlo. El Servicio interno nunca aparece como Servicio ordinario."""
+    from apps.catalogo.ticket_general import servicio_disponible_para
+
+    return servicio_disponible_para(usuario) is not None
+
+
 # --- Frecuentes y recientes ---------------------------------------------------
 
 

@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% load static %}
+{% comment %}
+  Marco común de Configuración: cabecera + pestañas LOCALES (no son navegación
+  global). Qué pestañas existen lo decide `apps/core/configuracion.py`.
+{% endcomment %}
+
+{% block title %}{{ titulo_pagina }} — {{ sistema.nombre }}{% endblock %}
+
+{% block content_modifier %}content-area--wide{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/configuracion.css' %}">{% endblock %}
+
+{% block content %}
+  <header class="page-header">
+    <div>
+      {% block config_miga %}{% endblock %}
+      <h1 class="page-header__title">{% block config_titulo %}Configuración{% endblock %}</h1>
+      <p class="page-header__subtitle">{% block config_subtitulo %}{% endblock %}</p>
+    </div>
+    <div class="page-header__actions">{% block config_acciones %}{% endblock %}</div>
+  </header>
+
+  <nav class="tabs" aria-label="Secciones de Configuración">
+    <a class="tabs__tab" href="{% url 'core:configuracion' %}"{% if request.resolver_match.url_name == "configuracion" %} aria-current="page"{% endif %}>Resumen</a>
+    {% for seccion in config_secciones %}
+      <a class="tabs__tab" href="{% url seccion.url_name %}"{% if seccion.activa %} aria-current="page"{% endif %}>{{ seccion.etiqueta }}</a>
+    {% endfor %}
+  </nav>
+
+  {% block config_contenido %}{% endblock %}
+{% endblock %}

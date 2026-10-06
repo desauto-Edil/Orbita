@@ -73,6 +73,10 @@ def validar_publicacion(servicio):
         validar_ejecucion(servicio)
     except ValidationError as exc:
         errores.extend(exc.messages)
+    if servicio.politica_prorroga == Servicio.PoliticaProrroga.CON_APROBACION:
+        usuario, equipo = servicio.prorroga_aprobador_usuario, servicio.prorroga_aprobador_equipo
+        if not ((usuario is not None and usuario.is_active) or (equipo is not None and equipo.activo)):
+            errores.append("La prórroga con aprobación necesita un aprobador activo (usuario o equipo).")
     if errores:
         raise ValidationError(errores)
 
@@ -383,6 +387,94 @@ def configurar_politica_entrega(servicio, actor, *, politica, dias_observacion=N
     servicio.politica_entrega = politica
     servicio.dias_observacion = dias_observacion
     servicio.save(update_fields=["politica_entrega", "dias_observacion", "actualizado_en"])
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=servicio,
+        origen=RegistroAuditoria.Origen.USUARIO, usuario=actor,
+        datos_anteriores=anterior, datos_nuevos=nuevo,
+    )
+    return servicio
+
+
+@transaction.atomic
+def configurar_tiempo_objetivo(servicio, actor, *, cantidad=None, unidad="", habiles=False):
+    """4.A1 — define (o quita) el tiempo objetivo de atención del Servicio/
+    Proceso. Sin `cantidad` se QUITA el compromiso temporal.
+
+    Solo configura el Servicio. Cada Ticket congela estos valores al crear su
+    borrador (`Ticket.tiempo_objetivo_*`), así que un cambio aquí NO modifica
+    tickets ya creados. No calcula fechas: eso es de `apps.tickets.tiempos`."""
+    from apps.tickets.tiempos import MAX_CANTIDAD, UNIDADES
+
+    _exigir_administracion(actor)
+    unidad = unidad or ""
+    if cantidad is None:
+        if unidad:
+            raise ValidationError("Indique la cantidad del tiempo objetivo.")
+        habiles = False
+    else:
+        if isinstance(cantidad, bool) or not isinstance(cantidad, int) or not 1 <= cantidad <= MAX_CANTIDAD:
+            raise ValidationError(f"El tiempo objetivo debe ser un entero de 1 a {MAX_CANTIDAD}.")
+        if unidad not in UNIDADES:
+            raise ValidationError("Seleccione la unidad del tiempo objetivo (horas o días).")
+        habiles = bool(habiles)
+    servicio = Servicio.objects.select_for_update().get(pk=servicio.pk)
+    campos = ("tiempo_objetivo_cantidad", "tiempo_objetivo_unidad", "tiempo_objetivo_habiles")
+    anterior = {campo: getattr(servicio, campo) for campo in campos}
+    nuevo = dict(zip(campos, (cantidad, unidad, habiles)))
+    if anterior == nuevo:
+        return servicio
+    for campo, valor in nuevo.items():
+        setattr(servicio, campo, valor)
+    servicio.save(update_fields=[*campos, "actualizado_en"])
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=servicio,
+        origen=RegistroAuditoria.Origen.USUARIO, usuario=actor,
+        datos_anteriores=anterior, datos_nuevos=nuevo,
+    )
+    return servicio
+
+
+@transaction.atomic
+def configurar_politica_prorroga(servicio, actor, *, politica, aprobador_usuario=None, aprobador_equipo=None):
+    """4.A2 — define si los tickets de este Servicio/Proceso admiten prórroga de
+    su fecha objetivo y, con aprobación, quién la resuelve (un usuario O un
+    equipo activos, los mismos tipos de `ServicioResponsable`).
+
+    Solo configura el Servicio. Cada Ticket congela política y aprobador al
+    crear su borrador, así que un cambio aquí NO modifica tickets existentes. No
+    depende de Workflow: un Servicio sin flujo también admite prórrogas."""
+    _exigir_administracion(actor)
+    Politica = Servicio.PoliticaProrroga
+    if politica not in Politica.values:
+        raise ValidationError("Seleccione una política de prórroga válida.")
+    if politica == Politica.CON_APROBACION:
+        if (aprobador_usuario is None) == (aprobador_equipo is None):
+            raise ValidationError("La prórroga con aprobación necesita un aprobador: un usuario o un equipo, no ambos.")
+        if aprobador_usuario is not None and not aprobador_usuario.is_active:
+            raise ValidationError("El aprobador seleccionado no está activo.")
+        if aprobador_equipo is not None and not aprobador_equipo.activo:
+            raise ValidationError("El equipo aprobador seleccionado no está activo.")
+    else:
+        aprobador_usuario = aprobador_equipo = None
+    servicio = Servicio.objects.select_for_update().get(pk=servicio.pk)
+    anterior = {
+        "politica_prorroga": servicio.politica_prorroga,
+        "prorroga_aprobador_usuario_id": servicio.prorroga_aprobador_usuario_id,
+        "prorroga_aprobador_equipo_id": servicio.prorroga_aprobador_equipo_id,
+    }
+    nuevo = {
+        "politica_prorroga": politica,
+        "prorroga_aprobador_usuario_id": aprobador_usuario.pk if aprobador_usuario else None,
+        "prorroga_aprobador_equipo_id": aprobador_equipo.pk if aprobador_equipo else None,
+    }
+    if anterior == nuevo:
+        return servicio
+    servicio.politica_prorroga = politica
+    servicio.prorroga_aprobador_usuario = aprobador_usuario
+    servicio.prorroga_aprobador_equipo = aprobador_equipo
+    servicio.save(
+        update_fields=["politica_prorroga", "prorroga_aprobador_usuario", "prorroga_aprobador_equipo", "actualizado_en"]
+    )
     registrar_evento(
         accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=servicio,
         origen=RegistroAuditoria.Origen.USUARIO, usuario=actor,

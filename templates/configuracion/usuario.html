@@ -1,0 +1,134 @@
+{% extends "configuracion/base.html" %}
+
+{% block config_miga %}
+  <nav class="breadcrumb" aria-label="Ruta"><a href="{% url 'core:configuracion_usuarios' %}">Usuarios</a><span class="breadcrumb__separator" aria-hidden="true">/</span><span class="breadcrumb__current" aria-current="page">{{ objetivo.get_username }}</span></nav>
+{% endblock %}
+{% block config_titulo %}{{ objetivo.get_full_name|default:objetivo.get_username }}{% endblock %}
+{% block config_subtitulo %}
+  {% if objetivo.is_active %}<span class="badge badge--success badge--dot">Cuenta activa</span>{% else %}<span class="badge badge--dot">Cuenta inactiva</span>{% endif %}
+  {% if objetivo.is_superuser %}<span class="badge badge--info">Superusuario</span>{% endif %}
+  {% if es_propia %}<span class="badge">Tu cuenta</span>{% endif %}
+{% endblock %}
+
+{% block config_contenido %}
+  <div class="config-split config-split--even">
+    <div class="config-stack">
+      <section class="card" aria-labelledby="cfg-datos">
+        <h2 id="cfg-datos">Cuenta y perfil</h2>
+        {% if edita_cuenta %}
+          <form method="post" class="form" novalidate>
+            {% csrf_token %}
+            {% include "configuracion/_errores.html" with form=form_datos %}
+            <div class="config-form-grid">
+              {% include "configuracion/_campo.html" with campo=form_datos.username %}
+              {% include "configuracion/_campo.html" with campo=form_datos.email %}
+              {% include "configuracion/_campo.html" with campo=form_datos.first_name %}
+              {% include "configuracion/_campo.html" with campo=form_datos.last_name %}
+              {% include "configuracion/_campo.html" with campo=form_datos.cargo %}
+              {% include "configuracion/_campo.html" with campo=form_datos.telefono %}
+            </div>
+            {% include "configuracion/_campo.html" with campo=form_datos.is_active %}
+            {% if form_datos.is_staff %}{% include "configuracion/_campo.html" with campo=form_datos.is_staff %}{% endif %}
+            {% if form_datos.is_superuser %}{% include "configuracion/_campo.html" with campo=form_datos.is_superuser %}{% endif %}
+            <div class="form-actions"><button type="submit" name="accion" value="datos" class="btn btn--primary">Guardar cambios</button></div>
+          </form>
+        {% else %}
+          <dl class="definition-list">
+            <div><dt>Usuario</dt><dd>{{ objetivo.get_username }}</dd></div>
+            <div><dt>Correo</dt><dd>{{ objetivo.email|default:"—" }}</dd></div>
+            <div><dt>Cargo</dt><dd>{{ objetivo.perfil_organizacional.cargo|default:"—" }}</dd></div>
+          </dl>
+          {% if caps.usuarios %}<p class="field__hint">Solo un superusuario puede modificar esta cuenta.</p>{% endif %}
+        {% endif %}
+      </section>
+
+      {% if edita_cuenta %}
+        <section class="card" aria-labelledby="cfg-clave">
+          <h2 id="cfg-clave">Contraseña</h2>
+          <p class="text-muted">Define una contraseña nueva y compártela con la persona por un canal seguro.</p>
+          <details class="config-add"{% if form_clave.is_bound %} open{% endif %}>
+            <summary class="btn btn--secondary btn--sm">Cambiar contraseña</summary>
+            <form method="post" class="form config-inline-form" novalidate>
+              {% csrf_token %}
+              {% include "configuracion/_campo.html" with campo=form_clave.new_password1 %}
+              {% include "configuracion/_campo.html" with campo=form_clave.new_password2 %}
+              <div class="form-actions"><button type="submit" name="accion" value="clave" class="btn btn--primary btn--sm">Cambiar contraseña</button></div>
+            </form>
+          </details>
+        </section>
+      {% endif %}
+    </div>
+
+    <div class="config-stack">
+      {% include "configuracion/_membresias.html" with tipo="area" titulo="Áreas" filas=areas form=form_area vacio="Todavía no pertenece a ningún área." %}
+      {% include "configuracion/_membresias.html" with tipo="unidad" titulo="Unidades de negocio" filas=unidades form=form_unidad vacio="Todavía no pertenece a ninguna unidad de negocio." %}
+
+      <section class="card" aria-labelledby="cfg-roles">
+        <h2 id="cfg-roles">Roles</h2>
+        <p class="text-muted">Lo que esta persona puede hacer, y dónde.</p>
+        {% if asignaciones %}
+          <ul class="list-row-group">
+            {% for asignacion in asignaciones %}
+              <li class="list-row">
+                <span class="list-row__title">{{ asignacion.rol.nombre }}</span>
+                <span class="badge">
+                  {% if asignacion.tipo_alcance == "AREA" %}Área · {{ asignacion.area.nombre }}{% elif asignacion.tipo_alcance == "UNIDAD" %}Unidad · {{ asignacion.unidad_negocio.nombre }}{% else %}Toda la organización{% endif %}
+                </span>
+                {% if asignacion.vencida %}<span class="badge badge--warning badge--dot">Venció el {{ asignacion.fecha_fin|date:"j M Y" }}</span>
+                {% elif asignacion.futura %}<span class="badge badge--info badge--dot">Desde el {{ asignacion.fecha_inicio|date:"j M Y" }}</span>
+                {% elif asignacion.fecha_fin %}<span class="config-person__meta">hasta el {{ asignacion.fecha_fin|date:"j M Y" }}</span>{% endif %}
+                {% if not asignacion.rol.activo %}<span class="badge badge--warning">Rol inactivo</span>{% endif %}
+                {% if edita_roles %}
+                  <form method="post" class="config-row-actions">
+                    {% csrf_token %}
+                    <input type="hidden" name="asignacion" value="{{ asignacion.pk }}">
+                    <button type="submit" name="accion" value="rol_retirar" class="btn btn--ghost btn--sm">Retirar</button>
+                  </form>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="text-muted">Todavía no tiene roles asignados.</p>
+        {% endif %}
+
+        {% if edita_roles %}
+          <details class="config-add"{% if form_rol.is_bound %} open{% endif %}>
+            <summary class="btn btn--secondary btn--sm">{% include "components/icon.html" with name="plus" size="sm" %}Asignar rol</summary>
+            <form method="post" class="form config-inline-form" novalidate data-alcance>
+              {% csrf_token %}
+              {% include "configuracion/_errores.html" with form=form_rol %}
+              {% include "configuracion/_campo.html" with campo=form_rol.rol %}
+              {% include "configuracion/_campo.html" with campo=form_rol.tipo_alcance %}
+              <div data-alcance-campo="AREA">{% include "configuracion/_campo.html" with campo=form_rol.area %}</div>
+              <div data-alcance-campo="UNIDAD">{% include "configuracion/_campo.html" with campo=form_rol.unidad_negocio %}</div>
+              <div class="config-form-grid">
+                {% include "configuracion/_campo.html" with campo=form_rol.fecha_inicio %}
+                {% include "configuracion/_campo.html" with campo=form_rol.fecha_fin %}
+              </div>
+              <div class="form-actions"><button type="submit" name="accion" value="rol_asignar" class="btn btn--primary btn--sm">Asignar rol</button></div>
+            </form>
+          </details>
+        {% endif %}
+      </section>
+    </div>
+  </div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+  /* Mejora progresiva: muestra solo el selector (Área o Unidad) que
+     corresponde al alcance elegido. La validación real la hace el servidor. */
+  document.querySelectorAll("[data-alcance]").forEach(function (formulario) {
+    var alcance = formulario.querySelector('select[name$="tipo_alcance"]');
+    if (!alcance) return;
+    function aplicar() {
+      formulario.querySelectorAll("[data-alcance-campo]").forEach(function (bloque) {
+        bloque.hidden = bloque.getAttribute("data-alcance-campo") !== alcance.value;
+      });
+    }
+    alcance.addEventListener("change", aplicar);
+    aplicar();
+  });
+</script>
+{% endblock %}

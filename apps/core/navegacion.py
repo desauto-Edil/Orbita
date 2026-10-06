@@ -26,11 +26,15 @@ depende de una capacidad real que ya existe en el dominio:
                         `catalogo.administrar` o `workflows.consultar|
                         administrar`. Qué ve cada quien dentro lo decide
                         `apps/core/disenador.py` por capacidades.
-  Más › Administración  Configuración (por ahora Django Admin, interfaz
-                        administrativa provisional desde Sprint 0): `is_staff`,
-                        la compuerta nativa de Django Admin. No se crea un
-                        Permiso de Órbita para duplicarla ni se usa
-                        "Administrador" como autorización implícita.
+  Más › Administración  Configuración (usuarios, roles y permisos, áreas,
+                        unidades, categorías e identidad del sistema): alguna
+                        de las capacidades de `apps/core/configuracion.py`,
+                        que también decide qué sección ve cada quien.
+                        Administración avanzada (Django Admin, para lo que aún
+                        no tiene interfaz propia): `is_staff`, la compuerta
+                        nativa de Django Admin. No se crea un Permiso de Órbita
+                        para duplicarla ni se usa "Administrador" como
+                        autorización implícita.
 
 "Más" solo se renderiza si el usuario tiene al menos un destino dentro; los
 grupos vacíos tampoco. El Diseñador nunca va dentro de Trabajo.
@@ -46,6 +50,7 @@ que ya alimentan la pantalla Mi trabajo, sin reglas nuevas.
 """
 
 from apps.core.autorizacion import alcances_autorizados
+from apps.core.configuracion import accede_a_configuracion
 from apps.core.disenador import accede_al_disenador
 
 VISTA_COLA = "tickets:cola"
@@ -143,12 +148,23 @@ def _construir_elementos(usuario, acceso_cola, trabajo_personal):
                 "grupo": "Gestión",
             }
         )
-    if usuario.is_staff:
+    if accede_a_configuracion(usuario):
         elementos.append(
             {
                 "etiqueta": "Configuración",
-                "url_name": "admin:index",
+                "url_name": "core:configuracion",
                 "icono": "settings",
+                "prefijos": ("core:configuracion",),
+                "en_mas": True,
+                "grupo": "Administración",
+            }
+        )
+    if usuario.is_staff:
+        elementos.append(
+            {
+                "etiqueta": "Administración avanzada",
+                "url_name": "admin:index",
+                "icono": "lock",
                 "namespaces": ("admin",),
                 "en_mas": True,
                 "grupo": "Administración",

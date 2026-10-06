@@ -57,7 +57,7 @@ from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import URLValidator
 from django.db import models
-from django.db.models import Q, UniqueConstraint
+from django.db.models import F, Q, UniqueConstraint
 
 from apps.catalogo.models import Campo, DefinicionEntregable, FormularioVersion, Servicio
 from apps.core.models import Area, Equipo, RegistroBase, UnidadNegocio
@@ -131,11 +131,86 @@ class Ticket(RegistroBase):
     )
     entrega_dias_observacion = models.PositiveSmallIntegerField(null=True, blank=True, editable=False)
 
+    # 4.A1 — compromiso temporal. El tiempo objetivo del Servicio se CONGELA al
+    # crear el borrador (misma regla que `entrega_*`): cambiar el Servicio no
+    # altera tickets existentes. La fecha objetivo ORIGINAL se fija una sola vez,
+    # al radicar (`apps.tickets.tiempos`), y no puede modificarse ni borrarse; la
+    # VIGENTE nace igual a la original y es la única que podrá moverse (prórrogas,
+    # 4.A2). Tickets anteriores a 4.A1 o de servicios sin tiempo objetivo quedan
+    # con todo en NULL: no se recalculan ni se inventan fechas.
+    tiempo_objetivo_cantidad = models.PositiveSmallIntegerField(null=True, blank=True, editable=False)
+    tiempo_objetivo_unidad = models.CharField(
+        max_length=10, choices=Servicio.UnidadTiempo.choices, blank=True, default="", editable=False
+    )
+    tiempo_objetivo_habiles = models.BooleanField(default=False, editable=False)
+    fecha_objetivo_original = models.DateTimeField(null=True, blank=True, editable=False)
+    fecha_objetivo_vigente = models.DateTimeField(null=True, blank=True, editable=False)
+
+    # 4.A2 — política de prórroga CONGELADA al crear el borrador (misma regla que
+    # `entrega_*` y el tiempo objetivo). Vacía = tickets anteriores o de servicios
+    # sin política: no permiten prórroga. El aprobador (solo CON_APROBACION) también
+    # se congela. La prórroga vive en `ProrrogaTicket`; solo ella mueve
+    # `fecha_objetivo_vigente`.
+    prorroga_politica = models.CharField(
+        max_length=30, choices=Servicio.PoliticaProrroga.choices, blank=True, default="", editable=False
+    )
+    prorroga_aprobador_usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, editable=False, related_name="+"
+    )
+    prorroga_aprobador_equipo = models.ForeignKey(
+        Equipo, on_delete=models.PROTECT, null=True, blank=True, editable=False, related_name="+"
+    )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        prorroga_politica="CON_APROBACION",
+                        prorroga_aprobador_usuario__isnull=False,
+                        prorroga_aprobador_equipo__isnull=True,
+                    )
+                    | Q(
+                        prorroga_politica="CON_APROBACION",
+                        prorroga_aprobador_usuario__isnull=True,
+                        prorroga_aprobador_equipo__isnull=False,
+                    )
+                    | (
+                        ~Q(prorroga_politica="CON_APROBACION")
+                        & Q(prorroga_aprobador_usuario__isnull=True, prorroga_aprobador_equipo__isnull=True)
+                    )
+                ),
+                name="ck_ticket_prorroga_coherente",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(tiempo_objetivo_cantidad__isnull=True, tiempo_objetivo_unidad="", tiempo_objetivo_habiles=False)
+                    | Q(tiempo_objetivo_cantidad__isnull=False, tiempo_objetivo_cantidad__gte=1, tiempo_objetivo_unidad__in=["HORAS", "DIAS"])
+                ),
+                name="ck_ticket_tiempo_objetivo_coherente",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(fecha_objetivo_original__isnull=True, fecha_objetivo_vigente__isnull=True)
+                    | Q(
+                        fecha_objetivo_original__isnull=False,
+                        fecha_objetivo_vigente__isnull=False,
+                        tiempo_objetivo_cantidad__isnull=False,
+                    )
+                ),
+                name="ck_ticket_fechas_objetivo_coherentes",
+            ),
+        ]
+
+    _CAMPOS_TIEMPO_CONGELADOS = ("tiempo_objetivo_cantidad", "tiempo_objetivo_unidad", "tiempo_objetivo_habiles")
+    _CAMPOS_PRORROGA_CONGELADOS = ("prorroga_politica", "prorroga_aprobador_usuario_id", "prorroga_aprobador_equipo_id")
+
     def save(self, *args, **kwargs):
         if self.pk is not None:
             anterior = Ticket.objects.filter(pk=self.pk).values(
                 "instancia_workflow_id", "entregables_materializados",
                 "entrega_politica", "entrega_dias_observacion",
+                "fecha_objetivo_original", *self._CAMPOS_TIEMPO_CONGELADOS, *self._CAMPOS_PRORROGA_CONGELADOS,
             ).first()
             if anterior is not None:
                 if anterior["instancia_workflow_id"] is not None and anterior["instancia_workflow_id"] != self.instancia_workflow_id:
@@ -147,6 +222,15 @@ class Ticket(RegistroBase):
                     or anterior["entrega_dias_observacion"] != self.entrega_dias_observacion
                 ):
                     raise ValidationError("La política de entrega de un Ticket se congela al crearlo y no puede modificarse.")
+                if any(anterior[campo] != getattr(self, campo) for campo in self._CAMPOS_TIEMPO_CONGELADOS):
+                    raise ValidationError("El tiempo objetivo de un Ticket se congela al crearlo y no puede modificarse.")
+                if any(anterior[campo] != getattr(self, campo) for campo in self._CAMPOS_PRORROGA_CONGELADOS):
+                    raise ValidationError("La política de prórroga de un Ticket se congela al crearlo y no puede modificarse.")
+                if (
+                    anterior["fecha_objetivo_original"] is not None
+                    and anterior["fecha_objetivo_original"] != self.fecha_objetivo_original
+                ):
+                    raise ValidationError("La fecha objetivo original de un Ticket no puede modificarse ni borrarse.")
         super().save(*args, **kwargs)
 
     def exigir_eliminable(self):
@@ -236,6 +320,16 @@ class HistorialTicket(models.Model):
         # automático se registran como CERRADO con `datos.causa`.
         ENTREGADO = "ENTREGADO", "Resultado entregado"
         ENTREGA_OBSERVADA = "ENTREGA_OBSERVADA", "Entrega con observaciones"
+        # 4.A2 — prórrogas de la fecha objetivo (una entrada por acción).
+        PRORROGA_SOLICITADA = "PRORROGA_SOLICITADA", "Prórroga solicitada"
+        PRORROGA_APROBADA = "PRORROGA_APROBADA", "Prórroga aprobada"
+        PRORROGA_RECHAZADA = "PRORROGA_RECHAZADA", "Prórroga rechazada"
+        PRORROGA_CANCELADA = "PRORROGA_CANCELADA", "Prórroga cancelada"
+        # 4.C2 — el direccionamiento inicial del Ticket General (destino y
+        # responsable) y el inicio de atención de un ticket ya dirigido a una
+        # persona. Direccionar NO inicia la atención: son eventos distintos.
+        DIRECCIONADO = "DIRECCIONADO", "Direccionado"
+        ATENCION_INICIADA = "ATENCION_INICIADA", "Atención iniciada"
 
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="historial")
     tipo_evento = models.CharField(max_length=30, choices=TipoEvento.choices)
@@ -987,3 +1081,164 @@ class ResultadoEntregaTicket(models.Model):
 
     def __str__(self):
         return f"{self.nombre} ({self.entrega})"
+
+
+class ProrrogaTicket(RegistroBase):
+    """Solicitud de prórroga de la fecha objetivo de UN Ticket — 4.A2.
+
+    Pertenece al Ticket (no a Workflow, Tarea ni Bloque) y solo mueve
+    `Ticket.fecha_objetivo_vigente`; la original nunca cambia. Una fila por
+    solicitud: ninguna se elimina ni se reescribe, así `ticket.prorrogas`
+    reconstruye el historial completo (prórroga 1 → 2 → …).
+
+    Estados: PENDIENTE (solo CON_APROBACION, mientras espera al aprobador),
+    APROBADA, RECHAZADA y CANCELADA (por quien la solicitó). Con política
+    SIN_APROBACION la fila nace APROBADA y `resuelta_por` queda NULL (la resolvió
+    el Sistema por política, no una persona).
+
+    CON_APROBACION reutiliza `apps.aprobaciones` sin acoplarlo a Workflow: la
+    relación vive aquí (`esquema_aprobacion`, mismo patrón que
+    `EsquemaAprobacionWorkflow`), `apps.aprobaciones` no conoce a Tickets.
+
+    Inmutabilidad: los datos de la solicitud no cambian nunca y, una vez
+    resuelta o cancelada, la fila queda cerrada (`save()` lo rechaza). A lo
+    sumo UNA PENDIENTE por Ticket, garantizado por constraint parcial además
+    del lock del Ticket en las operaciones."""
+
+    class Estado(models.TextChoices):
+        PENDIENTE = "PENDIENTE", "Pendiente"
+        APROBADA = "APROBADA", "Aprobada"
+        RECHAZADA = "RECHAZADA", "Rechazada"
+        CANCELADA = "CANCELADA", "Cancelada"
+
+    ticket = models.ForeignKey(Ticket, on_delete=models.PROTECT, related_name="prorrogas")
+    numero = models.PositiveIntegerField()
+    politica = models.CharField(
+        max_length=30,
+        choices=[
+            (Servicio.PoliticaProrroga.SIN_APROBACION, Servicio.PoliticaProrroga.SIN_APROBACION.label),
+            (Servicio.PoliticaProrroga.CON_APROBACION, Servicio.PoliticaProrroga.CON_APROBACION.label),
+        ],
+    )
+    solicitada_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    solicitada_en = models.DateTimeField()
+    fecha_objetivo_vigente_al_solicitar = models.DateTimeField()
+    nueva_fecha_solicitada = models.DateTimeField()
+    motivo = models.TextField()
+    estado = models.CharField(max_length=10, choices=Estado.choices, default=Estado.PENDIENTE)
+    esquema_aprobacion = models.OneToOneField(
+        "aprobaciones.EsquemaAprobacion",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        editable=False,
+        related_name="prorroga",
+    )
+    resuelta_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    resuelta_en = models.DateTimeField(null=True, blank=True)
+    observaciones_resolucion = models.TextField(blank=True)
+
+    _CAMPOS_INMUTABLES = (
+        "ticket_id", "numero", "politica", "solicitada_por_id", "solicitada_en",
+        "fecha_objetivo_vigente_al_solicitar", "nueva_fecha_solicitada", "motivo", "esquema_aprobacion_id",
+    )
+
+    class Meta:
+        ordering = ["ticket_id", "numero"]
+        constraints = [
+            UniqueConstraint(fields=["ticket", "numero"], name="uq_prorroga_ticket_numero"),
+            # A lo sumo una PENDIENTE por ticket: protege la doble solicitud.
+            UniqueConstraint(
+                fields=["ticket"], condition=Q(estado="PENDIENTE"), name="uq_prorroga_pendiente_por_ticket"
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(estado="PENDIENTE", resuelta_en__isnull=True, resuelta_por__isnull=True)
+                    | (~Q(estado="PENDIENTE") & Q(resuelta_en__isnull=False))
+                ),
+                name="ck_prorroga_resolucion_coherente",
+            ),
+            models.CheckConstraint(
+                condition=Q(nueva_fecha_solicitada__gt=F("fecha_objetivo_vigente_al_solicitar")),
+                name="ck_prorroga_fecha_posterior",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(politica="CON_APROBACION", esquema_aprobacion__isnull=False)
+                    | Q(politica="SIN_APROBACION", esquema_aprobacion__isnull=True, estado="APROBADA")
+                ),
+                name="ck_prorroga_politica_coherente",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            campos = ("estado", *self._CAMPOS_INMUTABLES)
+            anterior = type(self).objects.filter(pk=self.pk).values(*campos).first()
+            if anterior is not None:
+                if anterior["estado"] != self.Estado.PENDIENTE:
+                    raise ValidationError("Una prórroga ya resuelta o cancelada forma parte de la historia y no puede modificarse.")
+                if any(anterior[campo] != getattr(self, campo) for campo in self._CAMPOS_INMUTABLES):
+                    raise ValidationError("Los datos de una solicitud de prórroga no pueden modificarse.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Una prórroga forma parte de la historia del ticket y no puede eliminarse.")
+
+    def __str__(self):
+        return f"Prórroga #{self.numero} de {self.ticket}"
+
+
+class DireccionamientoTicket(RegistroBase):
+    """A quién se dirigió un Ticket General — 4.C2.
+
+    Una fila por Ticket. Mientras es BORRADOR solo guarda la SELECCIÓN del
+    usuario (`destino`, o ninguno = "No estoy seguro"); al radicar se FIJA la foto:
+    tipo, referencia y etiqueta del destino tal como eran en ese momento
+    (`fijado_en`), de modo que cambiar o desactivar después el destino
+    configurado no reescribe la historia de ningún ticket. Una vez fijada la fila
+    es inmutable (`save()` lo rechaza). El responsable asignado vive en el propio
+    Ticket (`usuario_responsable`/`equipo_responsable`) y el evento DIRECCIONADO
+    del historial recuerda cuál fue el inicial.
+
+    No es `TicketContextoAtencion`: ese es el contexto organizacional (alcance de
+    quien SUPERVISA) copiado del Servicio; el destino es a quién se pidió algo.
+    """
+
+    ticket = models.OneToOneField(Ticket, on_delete=models.CASCADE, related_name="direccionamiento")
+    destino = models.ForeignKey(
+        "catalogo.DestinoTicketGeneral", on_delete=models.PROTECT, null=True, blank=True, related_name="direccionamientos"
+    )
+    tipo = models.CharField(max_length=10, blank=True, default="", editable=False)
+    referencia_id = models.PositiveIntegerField(null=True, blank=True, editable=False)
+    etiqueta = models.CharField(max_length=200, blank=True, default="", editable=False)
+    es_predeterminado = models.BooleanField(default=False, editable=False)
+    fijado_en = models.DateTimeField(null=True, blank=True, editable=False)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(fijado_en__isnull=True, tipo="", etiqueta="", referencia_id__isnull=True, es_predeterminado=False)
+                    | Q(
+                        fijado_en__isnull=False, destino__isnull=False, referencia_id__isnull=False,
+                        tipo__in=["AREA", "EQUIPO", "USUARIO"],
+                    )
+                    & ~Q(etiqueta="")
+                ),
+                name="ck_direccionamiento_fijado_coherente",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            fijado = type(self).objects.filter(pk=self.pk).values_list("fijado_en", flat=True).first()
+            if fijado is not None:
+                raise ValidationError("El direccionamiento de un ticket radicado no puede modificarse.")
+        super().save(*args, **kwargs)
+
+    @property
+    def esta_fijado(self):
+        return self.fijado_en is not None

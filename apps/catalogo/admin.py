@@ -119,7 +119,7 @@ class ServicioAdmin(PermisoGlobalAdminMixin, AdminAuditableMixin, admin.ModelAdm
     permiso_codigo = "catalogo.administrar"
     list_display = ("nombre", "tipo", "categoria", "formulario", "workflow", "alcance_visibilidad", "activo")
     list_filter = ("tipo", "categoria", "alcance_visibilidad", "activo")
-    readonly_fields = ("activo",)
+    readonly_fields = ("activo", "es_ticket_general")
     actions = ["activar_action", "desactivar_action"]
     search_fields = ("nombre",)
     inlines = [ServicioVisibilidadInline, ServicioResponsableInline, ServicioContextoAtencionInline]

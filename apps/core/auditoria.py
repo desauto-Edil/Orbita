@@ -13,6 +13,7 @@ llamará a este mismo helper con `origen=RegistroAuditoria.Origen.SISTEMA` y
 """
 
 from django.contrib.contenttypes.models import ContentType
+from django.db.models import FileField
 
 from apps.core.models.auditoria import RegistroAuditoria
 
@@ -32,7 +33,9 @@ def serializar(instancia):
     for campo in instancia._meta.fields:
         if campo.name in CAMPOS_SENSIBLES:
             continue
-        datos[campo.name] = campo.value_from_object(instancia)
+        valor = campo.value_from_object(instancia)
+        # Un archivo se audita por su ruta: el `FieldFile` no es serializable.
+        datos[campo.name] = valor.name if isinstance(campo, FileField) else valor
     return datos
 
 
@@ -62,6 +65,23 @@ def registrar_evento(*, accion, instancia, origen, usuario=None, datos_anteriore
         usuario=usuario,
         datos_anteriores=datos_anteriores,
         datos_nuevos=datos_nuevos,
+    )
+
+
+def auditar_guardado(instancia, usuario, datos_anteriores=None):
+    """Registra el alta (sin `datos_anteriores`) o la edición de `instancia`,
+    ya guardada, hecha por `usuario`. Para puntos de mutación fuera de Django
+    Admin (Configuración) — misma captura explícita que `AdminAuditableMixin`.
+    """
+    return registrar_evento(
+        accion=(
+            RegistroAuditoria.Accion.CREAR if datos_anteriores is None else RegistroAuditoria.Accion.ACTUALIZAR
+        ),
+        instancia=instancia,
+        origen=RegistroAuditoria.Origen.USUARIO,
+        usuario=usuario,
+        datos_anteriores=datos_anteriores,
+        datos_nuevos=serializar(instancia),
     )
 
 

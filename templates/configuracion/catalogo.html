@@ -1,0 +1,44 @@
+{% extends "configuracion/base.html" %}
+{% comment %}Lista compartida por Áreas, Unidades y Categorías (`views_configuracion._catalogo`).{% endcomment %}
+
+{% block config_titulo %}{{ cat.plural }}{% endblock %}
+{% block config_subtitulo %}{{ cat.descripcion }}{% endblock %}
+{% block config_acciones %}
+  <a class="btn btn--primary" href="{% url cat.crear %}">{% include "components/icon.html" with name="plus" %}{{ cat.nueva }}</a>
+{% endblock %}
+
+{% block config_contenido %}
+  {% if filas %}
+    <div class="table-shell">
+      <table class="table">
+        <thead>
+          <tr>
+            <th scope="col">Nombre</th>
+            {% if con_codigo %}<th scope="col">Código</th>{% endif %}
+            {% for etiqueta in etiquetas %}<th scope="col" class="table__num">{{ etiqueta|capfirst }}</th>{% endfor %}
+            <th scope="col">Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for fila in filas %}
+            <tr>
+              <td>
+                <a class="config-link" href="{% url cat.editar fila.pk %}">{{ fila.nombre }}</a>
+                {% if fila.descripcion %}<span class="config-person__meta">{{ fila.descripcion|truncatechars:90 }}</span>{% endif %}
+              </td>
+              {% if con_codigo %}<td><code class="config-code">{{ fila.codigo }}</code></td>{% endif %}
+              <td class="table__num">{{ fila.n_a }}</td>
+              {% if etiquetas|length > 1 %}<td class="table__num">{{ fila.n_b }}</td>{% endif %}
+              <td>{% if fila.activo %}<span class="badge badge--success badge--dot">Activa</span>{% else %}<span class="badge badge--dot">Inactiva</span>{% endif %}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state">
+      <p>Todavía no hay {{ cat.plural|lower }}.</p>
+      <a class="btn btn--primary btn--sm" href="{% url cat.crear %}">{{ cat.nueva }}</a>
+    </div>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}¿Qué necesitas? — {{ sistema.nombre }}{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/inicio.css' %}">{% endblock %}
+
+{% block content_modifier %}content-area--portal{% endblock %}
+
+{% block content %}
+{% comment %}Misma búsqueda de Inicio como página completa: es el respaldo sin JS y lo que abre quien llega por enlace.{% endcomment %}
+<div class="portal">
+  <header class="portal-hero">
+    <h1 class="portal-hero__title"><span class="portal-hero__ask">¿Qué necesitas?</span></h1>
+    {% include "portal/_buscador_necesidad.html" %}
+  </header>
+  {% if enviada %}
+    <section id="necesidad-resultados" aria-labelledby="t-necesidad" aria-live="polite">
+      {% include "portal/_necesidad_resultados.html" %}
+    </section>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_scripts %}<script src="{% static 'js/necesidad.js' %}" defer></script>{% endblock %}

@@ -86,8 +86,93 @@ class Servicio(RegistroBase):
     # Ticket (`Ticket.entrega_dias_observacion`) al crear su borrador.
     dias_observacion = models.PositiveSmallIntegerField(null=True, blank=True)
 
+    class UnidadTiempo(models.TextChoices):
+        HORAS = "HORAS", "Horas"
+        DIAS = "DIAS", "Días"
+
+    # 4.A1 — tiempo objetivo de atención. Pertenece al Servicio/Proceso, no al
+    # Workflow (un mismo flujo puede servir a servicios con tiempos distintos).
+    # Vacío = sin compromiso temporal. Cada Ticket congela estos tres valores al
+    # crear su borrador (`Ticket.tiempo_objetivo_*`); cambiarlos aquí no altera
+    # tickets existentes. `habiles` = lunes a viernes, sin festivos (el cálculo
+    # vive en `apps.tickets.tiempos`).
+    tiempo_objetivo_cantidad = models.PositiveSmallIntegerField(null=True, blank=True)
+    tiempo_objetivo_unidad = models.CharField(max_length=10, choices=UnidadTiempo.choices, blank=True, default="")
+    tiempo_objetivo_habiles = models.BooleanField(default=False)
+
+    class PoliticaProrroga(models.TextChoices):
+        NO_PERMITE = "NO_PERMITE", "No permite prórrogas"
+        SIN_APROBACION = "SIN_APROBACION", "Prórroga directa, sin aprobación"
+        CON_APROBACION = "CON_APROBACION", "Prórroga con aprobación"
+
+    # 4.A2 — política de prórroga de la fecha objetivo. Vacío = sin política
+    # definida (equivale a NO_PERMITE: así se comportan los tickets anteriores).
+    # Cada Ticket congela política y aprobador al crear su borrador. Solo con
+    # CON_APROBACION hay UN aprobador fijo (usuario o equipo, los mismos tipos
+    # que `ServicioResponsable`); el Servicio no puede quedar con esa política
+    # sin aprobador (constraint), y publicarlo exige que siga activo.
+    politica_prorroga = models.CharField(max_length=30, choices=PoliticaProrroga.choices, blank=True, default="")
+    prorroga_aprobador_usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    prorroga_aprobador_equipo = models.ForeignKey(
+        Equipo, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+
+    # 4.C1 — marca al ÚNICO Servicio interno que respalda al Ticket General (la
+    # entrada para pedir algo que no está catalogado). Es un Servicio normal para
+    # el dominio (formulario, tiempo objetivo, prórroga, entrega, visibilidad,
+    # Ticket/TicketServicio), pero nunca se ofrece como Servicio catalogado: la
+    # exclusión vive en `apps.catalogo.visibilidad.servicios_visibles_para`. Solo
+    # se cambia mediante `apps.catalogo.ticket_general` (no es editable aquí ni en
+    # Admin): un servicio con tickets no puede dejar de serlo, así el origen de un
+    # ticket se deduce siempre de `TicketServicio.servicio` sin duplicarlo.
+    es_ticket_general = models.BooleanField(default=False)
+
     class Meta:
         constraints = [
+            # A lo sumo UN Servicio marcado como Ticket General.
+            models.UniqueConstraint(
+                fields=["es_ticket_general"],
+                condition=Q(es_ticket_general=True),
+                name="uq_servicio_ticket_general_unico",
+            ),
+            models.CheckConstraint(
+                condition=Q(es_ticket_general=False) | Q(tipo="SERVICIO"),
+                name="ck_servicio_ticket_general_es_servicio",
+                violation_error_message="El ticket general debe ser un Servicio, no un Proceso.",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        politica_prorroga="CON_APROBACION",
+                        prorroga_aprobador_usuario__isnull=False,
+                        prorroga_aprobador_equipo__isnull=True,
+                    )
+                    | Q(
+                        politica_prorroga="CON_APROBACION",
+                        prorroga_aprobador_usuario__isnull=True,
+                        prorroga_aprobador_equipo__isnull=False,
+                    )
+                    | (
+                        ~Q(politica_prorroga="CON_APROBACION")
+                        & Q(prorroga_aprobador_usuario__isnull=True, prorroga_aprobador_equipo__isnull=True)
+                    )
+                ),
+                name="ck_servicio_prorroga_coherente",
+                violation_error_message="La prórroga con aprobación necesita exactamente un aprobador (usuario o equipo).",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(tiempo_objetivo_cantidad__isnull=True, tiempo_objetivo_unidad="", tiempo_objetivo_habiles=False)
+                    | Q(
+                        tiempo_objetivo_cantidad__isnull=False, tiempo_objetivo_cantidad__gte=1,
+                        tiempo_objetivo_unidad__in=["HORAS", "DIAS"],
+                    )
+                ),
+                name="ck_servicio_tiempo_objetivo_coherente",
+                violation_error_message="El tiempo objetivo necesita cantidad (1 o más) y unidad, o ninguno de los dos.",
+            ),
             models.CheckConstraint(
                 condition=(
                     Q(politica_entrega="PERIODO_OBSERVACIONES", dias_observacion__isnull=False, dias_observacion__gte=1)
@@ -287,6 +372,33 @@ class ServicioContextoAtencion(RegistroBase):
 
     def __str__(self):
         return f"{self.servicio} — {self.tipo_alcance}"
+
+
+class TerminoServicio(RegistroBase):
+    """4.D — palabra o frase con la que una persona puede describir la necesidad
+    que cubre un Servicio/Proceso ("presentación", "diapositivas", "días libres").
+
+    Es metadato de DESCUBRIMIENTO del buscador "¿Qué necesitas?": no es un campo
+    del formulario, no se le pregunta al solicitante y no tiene efecto en el
+    Ticket ni en el Workflow. Pertenece al Servicio (no hay sinónimos globales).
+    `termino` se guarda tal como lo escribió quien administra; la comparación
+    normaliza ambos lados (`apps.catalogo.normalizacion`). Evitar dos términos
+    equivalentes en un mismo Servicio es una regla de dominio
+    (`apps.catalogo.terminos_busqueda`), no una constraint: la equivalencia
+    depende de la normalización, que puede evolucionar sin migrar datos.
+    """
+
+    LARGO_MAXIMO = 100
+
+    servicio = models.ForeignKey(Servicio, on_delete=models.CASCADE, related_name="terminos_busqueda")
+    termino = models.CharField(max_length=LARGO_MAXIMO)
+    activo = models.BooleanField(default=True)
+
+    class Meta:
+        ordering = ["termino", "pk"]
+
+    def __str__(self):
+        return self.termino
 
 
 class DefinicionEntregable(RegistroBase):

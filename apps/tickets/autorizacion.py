@@ -70,10 +70,11 @@ definen en términos de `puede_consultar_ticket`:
 
 from django.db.models import Q
 
-from apps.catalogo.models import ServicioResponsable
+from apps.aprobaciones.autorizacion import puede_aprobar
+from apps.catalogo.models import Servicio, ServicioResponsable
 from apps.core.autorizacion import alcances_autorizados
 from apps.core.models import MiembroEquipo
-from apps.tickets.models import Ticket, TicketContextoAtencion
+from apps.tickets.models import ProrrogaTicket, Ticket, TicketContextoAtencion
 
 PERMISO_ATENDER = "tickets.atender"
 
@@ -141,7 +142,26 @@ def puede_tomar(usuario, ticket):
         return False
     if alcances["global"]:
         return True
-    return usuario_es_responsable_configurado(usuario, ticket.detalle_servicio.servicio)
+    servicio = ticket.detalle_servicio.servicio
+    if usuario_es_responsable_configurado(usuario, servicio):
+        return True
+    # 4.C2 — un Ticket General se dirige a un destino y su responsable no sale de
+    # `ServicioResponsable` (el único Servicio interno no puede enumerar a todos
+    # los destinos): quien pertenece al equipo al que se dirigió SÍ puede tomarlo.
+    # Solo para el Ticket General; para el resto de servicios la regla no cambia.
+    return servicio.es_ticket_general and es_responsable_actual(usuario, ticket)
+
+
+def puede_iniciar_atencion(usuario, ticket):
+    """4.C2 — INICIAR ATENCIÓN de un ticket RADICADO que ya fue direccionado a una
+    PERSONA concreta (`usuario_responsable` desde la radicación): solo esa persona
+    o quien supervisa por alcance (`tickets.atender`, como ASIGNAR) puede hacerlo.
+    Si el responsable es un equipo (sin persona), se TOMA (`puede_tomar`)."""
+    if not getattr(usuario, "is_authenticated", False) or not getattr(usuario, "is_active", False):
+        return False
+    if ticket.estado != Ticket.Estado.RADICADO or ticket.usuario_responsable_id is None:
+        return False
+    return ticket.usuario_responsable_id == usuario.pk or _alcance_cubre_ticket(usuario, ticket)
 
 
 def puede_asignar(usuario, ticket):
@@ -178,6 +198,7 @@ def puede_ver_en_cola(usuario, ticket):
         or puede_tomar(usuario, ticket)
         or puede_asignar(usuario, ticket)
         or puede_reasignar(usuario, ticket)
+        or puede_iniciar_atencion(usuario, ticket)
     )
 
 
@@ -320,3 +341,69 @@ def puede_responder_entrega(usuario, entrega):
         and ticket.estado == Ticket.Estado.RESUELTO
         and ticket.solicitante_id == usuario.pk
     )
+
+
+# --- 4.A2 — Prórrogas de la fecha objetivo -----------------------------------
+#
+# Separadas, nunca por UI: solicitar ≠ resolver (aprobar/rechazar) ≠ cancelar ≠
+# consultar el historial. Las operaciones de `apps.tickets.prorrogas` vuelven a
+# validar todo bajo lock; estas funciones solo responden "¿corresponde ofrecerlo?"
+
+
+def motivo_no_elegible_para_prorroga(ticket):
+    """Mensaje de por qué `ticket` NO admite hoy una solicitud de prórroga, o
+    `None` si es elegible. Solo mira el Ticket (estado, compromiso temporal,
+    política congelada, solicitud pendiente), nunca al usuario."""
+    if ticket.estado != Ticket.Estado.EN_ATENCION:
+        return "Solo se puede solicitar una prórroga mientras el ticket está en atención."
+    if ticket.fecha_objetivo_vigente is None:
+        return "Este ticket no tiene un compromiso de tiempo (fecha objetivo) que prorrogar."
+    if ticket.prorroga_politica not in (
+        Servicio.PoliticaProrroga.SIN_APROBACION, Servicio.PoliticaProrroga.CON_APROBACION,
+    ):
+        return "Este servicio no permite prórrogas."
+    if ticket.prorrogas.filter(estado=ProrrogaTicket.Estado.PENDIENTE).exists():
+        return "Ya hay una prórroga pendiente de resolver para este ticket."
+    return None
+
+
+def puede_solicitar_prorroga(usuario, ticket):
+    """Quien atiende el ticket (responsable individual o miembro activo del
+    equipo responsable) — la misma relación directa que
+    `puede_solicitar_informacion` — y solo si el ticket es elegible. Tener
+    `tickets.atender` por alcance, sin ser responsable de ESTE ticket, no basta."""
+    return es_responsable_actual(usuario, ticket) and motivo_no_elegible_para_prorroga(ticket) is None
+
+
+def aprobacion_pendiente_de_prorroga(prorroga):
+    """La `Aprobacion` PENDIENTE del esquema de una prórroga CON_APROBACION, o
+    `None`. Es una única participación por diseño."""
+    if prorroga.esquema_aprobacion_id is None:
+        return None
+    return prorroga.esquema_aprobacion.participaciones.filter(estado="PENDIENTE").first()
+
+
+def puede_resolver_prorroga(usuario, prorroga):
+    """Aprobar o rechazar: exclusivamente el aprobador designado de la
+    `Aprobacion` de esa prórroga (reutiliza `apps.aprobaciones`, RN-025 — el
+    permiso de supervisar aprobaciones no permite decidirlas)."""
+    if prorroga.estado != ProrrogaTicket.Estado.PENDIENTE:
+        return False
+    aprobacion = aprobacion_pendiente_de_prorroga(prorroga)
+    return aprobacion is not None and puede_aprobar(usuario, aprobacion)
+
+
+def puede_cancelar_prorroga(usuario, prorroga):
+    """Solo quien la solicitó y mientras siga PENDIENTE."""
+    return (
+        prorroga.estado == ProrrogaTicket.Estado.PENDIENTE
+        and bool(getattr(usuario, "is_authenticated", False))
+        and bool(getattr(usuario, "is_active", False))
+        and prorroga.solicitada_por_id == usuario.pk
+    )
+
+
+def puede_consultar_prorrogas(usuario, ticket):
+    """El historial de prórrogas es parte del detalle del ticket: lo ve
+    exactamente quien puede consultarlo."""
+    return puede_consultar_ticket(usuario, ticket)

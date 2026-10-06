@@ -1,6 +1,7 @@
 /* Órbita — explorador de Inicio ("Ver todo"), V1.
-   Mejora progresiva: sin JS, "Ver todo", las categorías y el buscador caen
-   al catálogo (`catalogo:lista`) con los mismos filtros. Con JS abren un
+   Mejora progresiva: sin JS, "Ver todo" y las categorías caen al catálogo
+   (`catalogo:lista`) con los mismos filtros. (El buscador del hero ya no abre
+   este explorador: es "¿Qué necesitas?", ver `necesidad.js`.) Con JS abren un
    <dialog> (foco atrapado, Escape y retorno de foco los gestiona el
    navegador) cuyo contenido el servidor entrega ya filtrado por visibilidad
    (`core:explorar`): Inicio nunca carga el catálogo completo. El cierre por
@@ -73,14 +74,6 @@
     evento.preventDefault();
     abrir("", disparador.getAttribute("data-categoria") || "");
   });
-
-  var formulario = document.querySelector("[data-explorer-search]");
-  if (formulario) {
-    formulario.addEventListener("submit", function (evento) {
-      evento.preventDefault();
-      abrir(formulario.querySelector("input[name=q]").value, "");
-    });
-  }
 
   campo.addEventListener("input", function () {
     window.clearTimeout(temporizador);

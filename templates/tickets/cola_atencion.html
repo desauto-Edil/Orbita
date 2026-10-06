@@ -1,36 +1,65 @@
 {% extends "base.html" %}
+{% load static humanize %}
 
-{% block title %}Cola de atención — Órbita{% endblock %}
+{% block title %}Cola de atención — {{ sistema.nombre }}{% endblock %}
 
 {% block content_modifier %}content-area--wide{% endblock %}
 
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/trabajo.css' %}">{% endblock %}
+
 {% block content %}
+  <header class="page-header">
+    <div>
+      <h1 class="page-header__title">Cola de atención</h1>
+      <p class="page-header__subtitle">Tickets que puedes atender, en orden de llegada: el que más lleva esperando va primero.</p>
+    </div>
+  </header>
+
   {% include "layout/trabajo_tabs.html" %}
-  <section class="card">
-    <h1>Cola de atención</h1>
-    <p class="text-muted">Tickets que puedes atender según tu autorización.</p>
-  </section>
+
+  {% if conteos.todos %}
+    <div class="work-toolbar">
+      <nav class="segmented" aria-label="Filtrar la cola">
+        {% for segmento in segmentos %}
+          <a class="segmented__item" href="?ver={{ segmento.clave }}"{% if segmento.clave == ver %} aria-current="page"{% endif %}>{{ segmento.etiqueta }} <span class="work-count">{{ segmento.total }}</span></a>
+        {% endfor %}
+      </nav>
+    </div>
+  {% endif %}
 
   {% if tickets %}
-    <section class="card">
-      <ul class="plain-list">
-        {% for ticket in tickets %}
-          <li>
-            <a href="{% url 'tickets:detalle' ticket.pk %}">{{ ticket.detalle_servicio.servicio.nombre }}</a>
-            <span class="badge badge--info">{{ ticket.get_estado_display }}</span>
-            <span class="text-muted">
-              {% if ticket.usuario_responsable %}{{ ticket.usuario_responsable }}
+    <ol class="work-list work-list--queue" aria-label="Tickets en la cola">
+      {% for ticket in tickets %}
+        <li>
+          <a class="work-row" href="{% url 'tickets:detalle' ticket.pk %}">
+            <span class="work-row__position" aria-label="Posición {{ ticket.posicion }} en la cola">{{ ticket.posicion }}</span>
+            <span class="work-row__main">
+              <span class="work-row__title">{{ ticket.detalle_servicio.servicio.nombre }}</span>
+              <span class="work-row__meta">Solicita {{ ticket.solicitante.get_full_name|default:ticket.solicitante.get_username }}</span>
+            </span>
+            <span class="work-row__when" title="{{ ticket.radicado_en|date:'j \d\e F \d\e Y, H:i' }}">Llegó {{ ticket.radicado_en|naturaltime }}</span>
+            <span class="work-row__owner">
+              {% if ticket.es_mio %}Lo atiendes tú
+              {% elif ticket.usuario_responsable %}{{ ticket.usuario_responsable.get_full_name|default:ticket.usuario_responsable.get_username }}
               {% elif ticket.equipo_responsable %}{{ ticket.equipo_responsable }}
               {% else %}Sin responsable{% endif %}
             </span>
-            <span class="text-muted">{{ ticket.radicado_en|date:"d/m/Y H:i" }}</span>
-          </li>
-        {% endfor %}
-      </ul>
-    </section>
+            <span class="work-row__state">
+              {% if ticket.sin_tomar %}<span class="badge badge--warning badge--dot">Sin tomar</span>{% else %}<span class="badge badge--info badge--dot">{{ ticket.get_estado_display }}</span>{% endif %}
+            </span>
+          </a>
+        </li>
+      {% endfor %}
+    </ol>
+    {% include "layout/_paginacion.html" with extra="ver" valor=ver %}
   {% else %}
     <div class="empty-state">
-      <p>No hay tickets en tu cola de atención.</p>
+      {% if conteos.todos %}
+        <p>Ningún ticket coincide con este filtro.</p>
+        <a class="btn btn--ghost btn--sm" href="{% url 'tickets:cola' %}">Ver todos</a>
+      {% else %}
+        <p>No hay tickets en tu cola de atención.</p>
+      {% endif %}
     </div>
   {% endif %}
 {% endblock %}

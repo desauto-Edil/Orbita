@@ -1,0 +1,24 @@
+{% extends "configuracion/base.html" %}
+{% comment %}Formulario compartido por Áreas, Unidades, Categorías y Permisos.{% endcomment %}
+
+{% block config_miga %}
+  <nav class="breadcrumb" aria-label="Ruta"><a href="{% url cat.lista %}">{{ cat.plural }}</a><span class="breadcrumb__separator" aria-hidden="true">/</span><span class="breadcrumb__current" aria-current="page">{% if instancia %}{{ instancia }}{% else %}{{ cat.nueva }}{% endif %}</span></nav>
+{% endblock %}
+{% block config_titulo %}{% if instancia %}{{ instancia }}{% else %}{{ cat.nueva }}{% endif %}{% endblock %}
+{% block config_subtitulo %}{% if instancia %}Editar {{ cat.singular }}.{% else %}Completa los datos y guarda.{% endif %}{% endblock %}
+
+{% block config_contenido %}
+  <section class="card config-narrow">
+    <form method="post" class="form" novalidate>
+      {% csrf_token %}
+      {% include "configuracion/_errores.html" %}
+      {% for campo in form %}
+        {% include "configuracion/_campo.html" with campo=campo %}
+      {% endfor %}
+      <div class="form-actions">
+        <button type="submit" class="btn btn--primary">{% if instancia %}Guardar cambios{% else %}Crear{% endif %}</button>
+        <a class="btn btn--ghost" href="{% url cat.lista %}">Cancelar</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

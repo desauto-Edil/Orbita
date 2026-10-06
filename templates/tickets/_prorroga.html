@@ -1,0 +1,92 @@
+{% comment %}
+  4.A2 — Compromiso de atención y prórrogas del ticket. Espera `compromiso`, `prorrogas`
+  (filas con `prorroga`, `puede_cancelar`, `aprobacion_a_resolver`), `puede_solicitar_prorroga`,
+  `prorroga_form`, `prorroga_sin_aprobacion` y `prorroga_no_disponible`. Solo presentación:
+  cada acción se vuelve a validar en el dominio.
+{% endcomment %}
+{% if muestra_prorrogas %}
+  <section class="card" id="compromiso-atencion">
+    <h3>Compromiso de atención</h3>
+    {% if compromiso.original %}
+      <dl class="work-facts">
+        <div><dt>Fecha objetivo original</dt><dd>{{ compromiso.original|date:"d/m/Y H:i" }}</dd></div>
+        <div>
+          <dt>Fecha objetivo vigente</dt>
+          <dd>
+            {{ compromiso.vigente|date:"d/m/Y H:i" }}
+            {% if compromiso.ampliado %}<span class="badge badge--warning">Ampliada</span>{% endif %}
+          </dd>
+        </div>
+      </dl>
+    {% else %}
+      <p class="text-muted">Este ticket no tiene una fecha objetivo.</p>
+    {% endif %}
+
+    {% if puede_solicitar_prorroga %}
+      <details class="work-fold">
+        <summary>Solicitar prórroga</summary>
+        <form method="post" action="{% url 'tickets:solicitar_prorroga' ticket.pk %}" class="form">
+          {% csrf_token %}
+          <p class="text-muted">
+            {% if prorroga_sin_aprobacion %}La nueva fecha se aplicará directamente, sin aprobación.
+            {% else %}La solicitud se enviará para aprobación; la fecha vigente no cambia hasta que se apruebe.{% endif %}
+          </p>
+          <div class="field">
+            <label for="id_prorroga_nueva_fecha">Nueva fecha objetivo</label>
+            <input type="datetime-local" name="nueva_fecha" id="id_prorroga_nueva_fecha" required>
+          </div>
+          <div class="field">
+            <label for="id_prorroga_motivo">Motivo</label>
+            <textarea name="motivo" id="id_prorroga_motivo" rows="3" maxlength="2000" required></textarea>
+          </div>
+          <button type="submit" class="btn btn--primary">{% if prorroga_sin_aprobacion %}Aplicar prórroga{% else %}Enviar para aprobación{% endif %}</button>
+        </form>
+      </details>
+    {% elif prorroga_no_disponible %}
+      <p class="text-muted">{{ prorroga_no_disponible }}</p>
+    {% endif %}
+
+    {% if prorrogas %}
+      <details class="work-fold"{% for fila in prorrogas %}{% if fila.prorroga.estado == "PENDIENTE" %} open{% endif %}{% endfor %}>
+        <summary>Historial de prórrogas ({{ prorrogas|length }})</summary>
+        <ul class="plain-list">
+          {% for fila in prorrogas %}
+            {% with prorroga=fila.prorroga %}
+              <li>
+                <strong>Prórroga {{ prorroga.numero }}</strong>
+                <span class="badge
+                  {% if prorroga.estado == 'APROBADA' %}badge--success
+                  {% elif prorroga.estado == 'RECHAZADA' %}badge--danger
+                  {% elif prorroga.estado == 'PENDIENTE' %}badge--warning
+                  {% else %}badge--info{% endif %}">{{ prorroga.get_estado_display }}</span>
+                <span class="text-muted">
+                  {{ prorroga.fecha_objetivo_vigente_al_solicitar|date:"d/m/Y H:i" }} → {{ prorroga.nueva_fecha_solicitada|date:"d/m/Y H:i" }}
+                </span>
+                <p class="text-muted">
+                  Solicitada por {{ prorroga.solicitada_por }} el {{ prorroga.solicitada_en|date:"d/m/Y H:i" }}.
+                  Motivo: {{ prorroga.motivo }}
+                </p>
+                {% if prorroga.estado != "PENDIENTE" %}
+                  <p class="text-muted">
+                    {% if prorroga.resuelta_por %}{{ prorroga.get_estado_display }} por {{ prorroga.resuelta_por }}{% else %}Aprobada automáticamente (sin aprobación){% endif %}
+                    el {{ prorroga.resuelta_en|date:"d/m/Y H:i" }}.
+                    {% if prorroga.observaciones_resolucion %}Observaciones: {{ prorroga.observaciones_resolucion }}{% endif %}
+                  </p>
+                {% endif %}
+                {% if fila.aprobacion_a_resolver %}
+                  <p><a class="btn btn--secondary btn--sm" href="{% url 'aprobaciones:detalle' fila.aprobacion_a_resolver.pk %}">Resolver prórroga</a></p>
+                {% endif %}
+                {% if fila.puede_cancelar %}
+                  <form method="post" action="{% url 'tickets:cancelar_prorroga' ticket.pk prorroga.pk %}" class="form">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn--ghost btn--sm">Cancelar solicitud</button>
+                  </form>
+                {% endif %}
+              </li>
+            {% endwith %}
+          {% endfor %}
+        </ul>
+      </details>
+    {% endif %}
+  </section>
+{% endif %}

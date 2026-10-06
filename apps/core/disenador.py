@@ -174,3 +174,11 @@ def resumen_de_servicios():
     )
     recientes = list(_servicios().filter(activo=False).order_by("-actualizado_en")[:LIMITE_RECIENTES])
     return {**cuentas, "total": cuentas["publicados"] + cuentas["borradores"], "recientes": recientes}
+
+
+def ticket_general():
+    """Estado del Ticket General para la tarjeta de Diseñador › Servicios
+    (4.C1): lo calcula el dominio de catálogo; aquí solo se compone."""
+    from apps.catalogo.ticket_general import estado_para_administracion
+
+    return estado_para_administracion()

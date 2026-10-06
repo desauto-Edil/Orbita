@@ -32,6 +32,13 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 
 from apps.catalogo.entregables import configurar_definicion_entregable, retirar_definicion_entregable
+from apps.catalogo.terminos_busqueda import (
+    MAX_TERMINOS_POR_SERVICIO,
+    cambiar_estado_termino,
+    crear_termino,
+    editar_termino,
+    eliminar_termino,
+)
 from apps.catalogo.configuracion_ejecucion import (
     activar_configuracion_ejecucion,
     agregar_bloque_operativo,
@@ -79,6 +86,7 @@ from apps.catalogo.forms import (
     OpcionCampoForm,
     ParticipanteAprobacionFormSet,
     PoliticaEntregaForm,
+    PoliticaProrrogaForm,
     ReglaCondicionalForm,
     ResponsableForm,
     RutaAprobacionForm,
@@ -86,6 +94,8 @@ from apps.catalogo.forms import (
     ServicioGeneralForm,
     TIPOS_BLOQUE_CHOICES,
     TIPOS_BLOQUE_DESCRIPCION,
+    TerminoServicioForm,
+    TiempoObjetivoForm,
     VisibilidadForm,
 )
 from apps.catalogo.models import (
@@ -99,6 +109,7 @@ from apps.catalogo.models import (
     Servicio,
     ServicioResponsable,
     ServicioVisibilidad,
+    TerminoServicio,
     TransicionBloqueOperativo,
 )
 from apps.catalogo.operaciones import (
@@ -107,6 +118,8 @@ from apps.catalogo.operaciones import (
     asociar_formulario_nuevo,
     conceder_visibilidad,
     configurar_politica_entrega,
+    configurar_politica_prorroga,
+    configurar_tiempo_objetivo,
     crear_categoria,
     crear_servicio,
     editar_servicio_general,
@@ -662,12 +675,46 @@ def _concesiones_visibilidad(servicio):
     )
 
 
+def _contexto_terminos(servicio):
+    """4.D — "Términos de búsqueda" (Básico). El Servicio interno del Ticket General
+    no participa en la búsqueda, así que no los ofrece."""
+    return {
+        "terminos_aplican": not servicio.es_ticket_general,
+        "terminos": [
+            {
+                "obj": termino,
+                "form": TerminoServicioForm(
+                    initial={"termino": termino.termino}, prefix=f"termino-{termino.pk}-editar"
+                ),
+            }
+            for termino in servicio.terminos_busqueda.all()
+        ],
+        "form_termino_nuevo": TerminoServicioForm(prefix="termino-nuevo"),
+        "max_terminos": MAX_TERMINOS_POR_SERVICIO,
+    }
+
+
 def _contexto_general(servicio):
     return {
         "form_general": ServicioGeneralForm(instance=servicio),
+        "form_prorroga": PoliticaProrrogaForm(
+            initial={
+                "politica": servicio.politica_prorroga,
+                "aprobador_usuario": servicio.prorroga_aprobador_usuario_id,
+                "aprobador_equipo": servicio.prorroga_aprobador_equipo_id,
+            }
+        ),
+        "form_tiempo": TiempoObjetivoForm(
+            initial={
+                "cantidad": servicio.tiempo_objetivo_cantidad,
+                "unidad": servicio.tiempo_objetivo_unidad,
+                "habiles": servicio.tiempo_objetivo_habiles,
+            }
+        ),
         "concesiones": _concesiones_visibilidad(servicio),
         "form_visibilidad": VisibilidadForm(),
         "es_restringido": servicio.alcance_visibilidad == Servicio.AlcanceVisibilidad.RESTRINGIDO,
+        **_contexto_terminos(servicio),
     }
 
 
@@ -1231,6 +1278,57 @@ def studio_general_guardar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Información general actualizada.")
+    return redirect(_volver(pk, "general"))
+
+
+@login_required
+def studio_tiempo_objetivo_guardar_view(request, pk):
+    """4.A1 — tiempo objetivo de atención, dentro de la pestaña Básico."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    if not _puede_catalogo(request.user):
+        raise PermissionDenied
+    servicio = get_object_or_404(Servicio, pk=pk)
+    form = TiempoObjetivoForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "; ".join(e for errores in form.errors.values() for e in errores))
+        return redirect(_volver(pk, "general"))
+    try:
+        configurar_tiempo_objetivo(
+            servicio, request.user, cantidad=form.cleaned_data.get("cantidad"),
+            unidad=form.cleaned_data.get("unidad") or "", habiles=form.cleaned_data.get("habiles", False),
+        )
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(
+            request, "Tiempo objetivo guardado. Aplica a los tickets que se creen desde ahora."
+        )
+    return redirect(_volver(pk, "general"))
+
+
+@login_required
+def studio_prorroga_guardar_view(request, pk):
+    """4.A2 — política de prórroga, dentro de la pestaña Básico."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    if not _puede_catalogo(request.user):
+        raise PermissionDenied
+    servicio = get_object_or_404(Servicio, pk=pk)
+    form = PoliticaProrrogaForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "; ".join(e for errores in form.errors.values() for e in errores))
+        return redirect(_volver(pk, "general"))
+    try:
+        configurar_politica_prorroga(
+            servicio, request.user, politica=form.cleaned_data["politica"],
+            aprobador_usuario=form.cleaned_data.get("aprobador_usuario"),
+            aprobador_equipo=form.cleaned_data.get("aprobador_equipo"),
+        )
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Política de prórroga guardada. Aplica a los tickets que se creen desde ahora.")
     return redirect(_volver(pk, "general"))
 
 
@@ -2086,6 +2184,62 @@ def studio_entregable_retirar_view(request, pk, definicion_id):
     retirar_definicion_entregable(definicion, request.user)
     messages.success(request, "Entregable retirado.")
     return redirect(_volver(pk, "salida"))
+
+
+# --- TÉRMINOS DE BÚSQUEDA (4.D) -----------------------------------------------
+
+
+@login_required
+def studio_termino_guardar_view(request, pk, termino_id=None):
+    """Alta o edición de un término de búsqueda (Básico). No toca el formulario del
+    Servicio: son metadatos para descubrirlo desde "¿Qué necesitas?"."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    if not _puede_catalogo(request.user):
+        raise PermissionDenied
+    servicio = get_object_or_404(Servicio, pk=pk)
+    termino = get_object_or_404(TerminoServicio, pk=termino_id, servicio=servicio) if termino_id is not None else None
+    prefix = f"termino-{termino_id}-editar" if termino_id is not None else "termino-nuevo"
+    form = TerminoServicioForm(request.POST, prefix=prefix)
+    if not form.is_valid():
+        messages.error(request, "Revise el término: " + "; ".join(e for errores in form.errors.values() for e in errores))
+        return redirect(_volver(pk, "general"))
+    try:
+        if termino is None:
+            crear_termino(servicio, request.user, form.cleaned_data["termino"])
+        else:
+            editar_termino(termino, request.user, form.cleaned_data["termino"])
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Término guardado.")
+    return redirect(_volver(pk, "general"))
+
+
+@login_required
+def studio_termino_estado_view(request, pk, termino_id):
+    """Activa o desactiva un término (`activo=1` / `activo=0`)."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    if not _puede_catalogo(request.user):
+        raise PermissionDenied
+    termino = get_object_or_404(TerminoServicio, pk=termino_id, servicio_id=pk)
+    activo = request.POST.get("activo") == "1"
+    cambiar_estado_termino(termino, request.user, activo=activo)
+    messages.success(request, "Término activado." if activo else "Término desactivado.")
+    return redirect(_volver(pk, "general"))
+
+
+@login_required
+def studio_termino_eliminar_view(request, pk, termino_id):
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    if not _puede_catalogo(request.user):
+        raise PermissionDenied
+    termino = get_object_or_404(TerminoServicio, pk=termino_id, servicio_id=pk)
+    eliminar_termino(termino, request.user)
+    messages.success(request, "Término eliminado.")
+    return redirect(_volver(pk, "general"))
 
 
 # --- PUBLICACIÓN -----------------------------------------------------------

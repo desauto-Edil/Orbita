@@ -42,9 +42,11 @@ comprobación adicional aquí."""
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.http import FileResponse, HttpResponseNotAllowed
+from django.http import FileResponse, HttpResponse, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
 from django.utils import timezone
+from django.views.decorators.http import require_GET
 
 from apps.tareas import operaciones
 from apps.tareas.autorizacion import (
@@ -69,7 +71,10 @@ from apps.tareas.forms import (
     SubtareaForm,
 )
 from apps.tareas.models import AdjuntoTarea, Tarea
+from apps.tickets.autorizacion import puede_consultar_ticket
+from apps.tickets.models import Ticket
 from apps.workflows.integracion import completar_tarea_workflow
+from apps.workflows.models import TareaWorkflow
 
 
 def _mensaje_error(exc):
@@ -102,6 +107,55 @@ def bandeja_view(request):
     return render(request, "tareas/lista.html", contexto)
 
 
+def _ticket_de_la_tarea(tarea, usuario):
+    """4.A2 — navegación Tarea → Ticket. Una Tarea que provino de un Workflow de
+    un Ticket (`TareaWorkflow`, o la de su Tarea padre si es una subtarea) lleva
+    al Ticket; el enlace solo se ofrece a quien puede consultarlo. Es solo
+    navegación: la prórroga (y cualquier acción) pertenece al Ticket."""
+    principal = tarea.tarea_padre if tarea.tarea_padre_id else tarea
+    vinculo = (
+        TareaWorkflow.objects.filter(tarea=principal).select_related("instancia_etapa__instancia_workflow").first()
+    )
+    if vinculo is None:
+        return None
+    ticket = (
+        Ticket.objects.filter(instancia_workflow_id=vinculo.instancia_etapa.instancia_workflow_id)
+        .select_related("detalle_servicio__servicio")
+        .first()
+    )
+    if ticket is None or not puede_consultar_ticket(usuario, ticket):
+        return None
+    return ticket
+
+
+@login_required
+@require_GET
+def vista_previa_view(request, pk):
+    """Fragmento de LECTURA para el panel de vista previa de Mi trabajo: lo
+    esencial de la Tarea sin salir de la lista. Misma autorización de objeto
+    que el detalle (`puede_consultar_tarea`); no ofrece acciones — se actúa
+    al abrirla. Sin `request` en el render: es un fragmento que no usa el
+    shell, así que no se ejecutan los context processors de navegación."""
+    tarea = get_object_or_404(
+        Tarea.objects.select_related("usuario_responsable", "equipo_responsable", "tarea_padre"), pk=pk
+    )
+    if not puede_consultar_tarea(request.user, tarea):
+        raise PermissionDenied
+    ahora = timezone.now()
+    contexto = {
+        "tarea": tarea,
+        "vencida": _es_vencida(tarea, ahora),
+        "delegado_actual": delegado_actual(tarea, ahora=ahora),
+        "por_tomar": puede_tomar_tarea(request.user, tarea),
+        "ticket_vinculado": _ticket_de_la_tarea(tarea, request.user),
+        "n_comentarios": tarea.comentarios.count(),
+        "n_evidencias": tarea.adjuntos.count(),
+        "subtareas": tarea.subtareas.count(),
+        "subtareas_listas": tarea.subtareas.filter(estado=Tarea.Estado.COMPLETADA).count(),
+    }
+    return HttpResponse(render_to_string("tareas/_vista_previa.html", contexto))
+
+
 @login_required
 def detalle_view(request, pk):
     tarea = get_object_or_404(
@@ -124,6 +178,7 @@ def detalle_view(request, pk):
     contexto = {
         "tarea": tarea,
         "vencida": _es_vencida(tarea, ahora),
+        "ticket_vinculado": _ticket_de_la_tarea(tarea, request.user),
         "delegado_actual": delegado_actual(tarea, ahora=ahora),
         "puede_tomar": puede_tomar_tarea(request.user, tarea),
         "puede_iniciar": puede_iniciar_tarea(request.user, tarea),

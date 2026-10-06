@@ -1,38 +1,65 @@
 {% extends "base.html" %}
+{% load static %}
 
-{% block title %}Mi trabajo — Órbita{% endblock %}
+{% block title %}Mi trabajo — {{ sistema.nombre }}{% endblock %}
 
 {% block content_modifier %}content-area--wide{% endblock %}
 
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/trabajo.css' %}">{% endblock %}
+
 {% block content %}
+  <header class="page-header">
+    <div>
+      <h1 class="page-header__title">Mi trabajo</h1>
+      <p class="page-header__subtitle">Tareas y aprobaciones que requieren tu atención.</p>
+    </div>
+  </header>
+
   {% include "layout/trabajo_tabs.html" %}
-  <section class="card">
-    <h1>Mi trabajo</h1>
-    <p class="text-muted">Tareas y aprobaciones que requieren tu atención.</p>
-    <nav class="breadcrumb" aria-label="Pestañas de Mi trabajo">
-      <a href="{% url 'core:mi_trabajo' %}?tab=todo" class="{% if tab == 'todo' %}breadcrumb__current{% endif %}">Todo</a>
-      <span class="breadcrumb__separator" aria-hidden="true">/</span>
-      <a href="{% url 'core:mi_trabajo' %}?tab=tareas" class="{% if tab == 'tareas' %}breadcrumb__current{% endif %}">Tareas{% if total_tareas %} ({{ total_tareas }}){% endif %}</a>
-      <span class="breadcrumb__separator" aria-hidden="true">/</span>
-      <a href="{% url 'core:mi_trabajo' %}?tab=aprobaciones" class="{% if tab == 'aprobaciones' %}breadcrumb__current{% endif %}">Aprobaciones{% if total_aprobaciones %} ({{ total_aprobaciones }}){% endif %}</a>
+
+  <div class="work-toolbar">
+    <nav class="segmented" aria-label="Qué ver en Mi trabajo">
+      <a class="segmented__item" href="{% url 'core:mi_trabajo' %}?tab=todo"{% if tab == "todo" %} aria-current="page"{% endif %}>Todo <span class="work-count">{{ total }}</span></a>
+      <a class="segmented__item" href="{% url 'core:mi_trabajo' %}?tab=tareas"{% if tab == "tareas" %} aria-current="page"{% endif %}>Tareas <span class="work-count">{{ total_tareas }}</span></a>
+      <a class="segmented__item" href="{% url 'core:mi_trabajo' %}?tab=aprobaciones"{% if tab == "aprobaciones" %} aria-current="page"{% endif %}>Aprobaciones <span class="work-count">{{ total_aprobaciones }}</span></a>
     </nav>
-  </section>
+    <span class="work-toolbar__links">
+      <a href="{% url 'tareas:lista' %}">Ver todas las tareas</a>
+      <a href="{% url 'aprobaciones:lista' %}">Ver todas las aprobaciones</a>
+    </span>
+  </div>
 
   {% if filas %}
-    <section class="card">
-      <ul class="list-row-group">
-        {% for fila in filas %}
-          <li class="list-row">
-            <a class="list-row__title" href="{{ fila.url }}">{{ fila.titulo }}</a>
-            <span class="badge{% if fila.estado_clase %} badge--{{ fila.estado_clase }}{% endif %}">{{ fila.estado }}</span>
-            <span class="text-muted">{% if fila.tipo == "tarea" %}Tarea{% else %}Aprobación{% endif %}</span>
-            {% if fila.fecha_relevante %}
-              <span class="text-muted">Vence: {{ fila.fecha_relevante|date:"d/m/Y H:i" }}</span>
-            {% endif %}
-          </li>
-        {% endfor %}
-      </ul>
-    </section>
+    <div class="work-split" data-trabajo>
+      <div class="work-split__list">
+        <ul class="work-list" aria-label="Trabajo pendiente">
+          {% for fila in filas %}
+            <li>
+              <a class="work-row work-row--compact" href="{{ fila.url }}" data-vista="{{ fila.vista_url }}">
+                <span class="work-row__kind" aria-hidden="true">{% if fila.tipo == "tarea" %}{% include "components/icon.html" with name="trabajo" size="sm" %}{% else %}{% include "components/icon.html" with name="check-circle" size="sm" %}{% endif %}</span>
+                <span class="work-row__main">
+                  <span class="work-row__title">{{ fila.titulo }}</span>
+                  <span class="work-row__meta">
+                    {% if fila.tipo == "tarea" %}Tarea{% else %}Aprobación{% endif %}{% if fila.por_tomar %} · disponible para tomar{% endif %}{% if fila.fecha_relevante %} · {% if fila.vencida %}<span class="work-row__late">venció el {{ fila.fecha_relevante|date:"j M" }}</span>{% else %}vence el {{ fila.fecha_relevante|date:"j M, H:i" }}{% endif %}{% endif %}
+                  </span>
+                </span>
+                <span class="work-row__state"><span class="work-dot work-dot--{{ fila.estado_clase|default:'neutral' }}" aria-hidden="true"></span>{{ fila.estado }}</span>
+              </a>
+            </li>
+          {% endfor %}
+        </ul>
+        {% include "layout/_paginacion.html" with extra="tab" valor=tab %}
+      </div>
+
+      {# Vista previa: solo con JS y en pantallas amplias; sin ella cada fila abre su detalle. #}
+      <aside class="work-preview" aria-label="Vista previa" aria-live="polite" data-trabajo-vista hidden>
+        <div class="work-preview__empty" data-trabajo-vacio>
+          <span aria-hidden="true">{% include "components/icon.html" with name="eye" %}</span>
+          <p>Elige un elemento de la lista para verlo aquí sin salir de tu trabajo.</p>
+        </div>
+        <div class="work-preview__body" data-trabajo-contenido hidden></div>
+      </aside>
+    </div>
   {% else %}
     <div class="empty-state">
       <p>
@@ -42,11 +69,6 @@
       </p>
     </div>
   {% endif %}
-
-  <section class="card">
-    <div class="form-actions">
-      <a class="btn btn--secondary" href="{% url 'tareas:lista' %}">Ver todas las tareas</a>
-      <a class="btn btn--secondary" href="{% url 'aprobaciones:lista' %}">Ver todas las aprobaciones</a>
-    </div>
-  </section>
 {% endblock %}
+
+{% block extra_scripts %}<script src="{% static 'js/trabajo.js' %}" defer></script>{% endblock %}

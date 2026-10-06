@@ -1,8 +1,9 @@
 """Django Admin como interfaz administrativa provisional de Sprint 0.
 
 No es la UX definitiva de Órbita (decisión estructural ya aprobada) — cubre
-CU-004, CU-005, CU-006, CU-007 y CU-008 mientras el módulo de navegación
-"Administración" no está diseñado.
+CU-004, CU-005, CU-006, CU-007 y CU-008. La interfaz cotidiana para esos CU es
+ahora Configuración (`apps/core/configuracion.py`); este Admin se conserva
+como «Administración avanzada» para lo que aún no tiene interfaz propia.
 """
 
 from django.contrib import admin

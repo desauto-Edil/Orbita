@@ -1,16 +1,41 @@
 from django.urls import path
 
-from apps.catalogo import studio, views
+from apps.catalogo import studio, views, views_ticket_general
 
 app_name = "catalogo"
 
 urlpatterns = [
     path("", views.catalogo_lista_view, name="lista"),
+    # 4.C1 — administración del Ticket General (desde Diseñador › Servicios)
+    path("ticket-general/habilitar/", views_ticket_general.habilitar_view, name="ticket_general_habilitar"),
+    path("ticket-general/crear/", views_ticket_general.crear_view, name="ticket_general_crear"),
+    path("ticket-general/designar/", views_ticket_general.designar_view, name="ticket_general_designar"),
+    path("ticket-general/destinos/crear/", views_ticket_general.destino_crear_view, name="ticket_general_destino_crear"),
+    path(
+        "ticket-general/destinos/predeterminado/",
+        views_ticket_general.destino_predeterminado_view, name="ticket_general_destino_predeterminado",
+    ),
+    path(
+        "ticket-general/destinos/<int:pk>/responsable/",
+        views_ticket_general.destino_responsable_view, name="ticket_general_destino_responsable",
+    ),
+    path(
+        "ticket-general/destinos/<int:pk>/estado/",
+        views_ticket_general.destino_estado_view, name="ticket_general_destino_estado",
+    ),
     path("studio/", studio.studio_lista_view, name="studio_lista"),
     path("studio/nuevo/", studio.studio_crear_view, name="studio_crear"),
     path("<int:pk>/", views.catalogo_detalle_view, name="detalle"),
     path("<int:pk>/studio/", studio.studio_view, name="studio"),
     path("<int:pk>/studio/general/", studio.studio_general_guardar_view, name="studio_general_guardar"),
+    path(
+        "<int:pk>/studio/general/tiempo/",
+        studio.studio_tiempo_objetivo_guardar_view, name="studio_tiempo_objetivo_guardar",
+    ),
+    path(
+        "<int:pk>/studio/general/prorroga/",
+        studio.studio_prorroga_guardar_view, name="studio_prorroga_guardar",
+    ),
     # Entrada
     path("<int:pk>/studio/entrada/version/", studio.studio_entrada_version_view, name="studio_entrada_version"),
     path(
@@ -127,5 +152,18 @@ urlpatterns = [
         studio.studio_responsable_retirar_view, name="studio_responsable_retirar",
     ),
     # Publicación
+    path("<int:pk>/studio/terminos/nuevo/", studio.studio_termino_guardar_view, name="studio_termino_crear"),
+    path(
+        "<int:pk>/studio/terminos/<int:termino_id>/editar/",
+        studio.studio_termino_guardar_view, name="studio_termino_editar",
+    ),
+    path(
+        "<int:pk>/studio/terminos/<int:termino_id>/estado/",
+        studio.studio_termino_estado_view, name="studio_termino_estado",
+    ),
+    path(
+        "<int:pk>/studio/terminos/<int:termino_id>/eliminar/",
+        studio.studio_termino_eliminar_view, name="studio_termino_eliminar",
+    ),
     path("<int:pk>/studio/publicar/", studio.studio_publicar_view, name="studio_publicar"),
 ]

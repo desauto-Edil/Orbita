@@ -1,0 +1,28 @@
+{% comment %}Un campo de formulario con su etiqueta, ayuda y errores. Uso: {% include "configuracion/_campo.html" with campo=form.nombre %}{% endcomment %}
+{% if campo.widget_type == "checkbox" %}
+  <div class="field">
+    <label class="switch">{{ campo }}<span class="switch__track" aria-hidden="true"></span>{{ campo.label }}</label>
+    {% if campo.help_text %}<span class="field__hint">{{ campo.help_text|safe }}</span>{% endif %}
+    {% if campo.errors %}<ul class="field-errors">{% for error in campo.errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
+  </div>
+{% elif campo.widget_type == "checkboxselectmultiple" %}
+  <fieldset class="field config-checks">
+    <legend class="label">{{ campo.label }}</legend>
+    {% if campo.help_text %}<span class="field__hint">{{ campo.help_text|safe }}</span>{% endif %}
+    {% if campo.errors %}<ul class="field-errors">{% for error in campo.errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
+    <div class="config-checks__grid">
+      {% for opcion in campo %}
+        <label class="choice">{{ opcion.tag }}<span>{{ opcion.choice_label }}</span></label>
+      {% empty %}
+        <span class="text-muted">{{ vacio|default:"Todavía no hay opciones para elegir." }}</span>
+      {% endfor %}
+    </div>
+  </fieldset>
+{% else %}
+  <div class="field">
+    <label for="{{ campo.id_for_label }}">{{ campo.label }}{% if not campo.field.required %} <span class="config-opcional">opcional</span>{% endif %}</label>
+    {{ campo }}
+    {% if campo.help_text %}<span class="field__hint">{{ campo.help_text|safe }}</span>{% endif %}
+    {% if campo.errors %}<ul class="field-errors">{% for error in campo.errors %}<li>{{ error }}</li>{% endfor %}</ul>{% endif %}
+  </div>
+{% endif %}

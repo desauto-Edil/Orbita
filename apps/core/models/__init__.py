@@ -13,6 +13,7 @@ from .organizacion import (
     UsuarioUnidadNegocio,
 )
 from .permisos import AsignacionRol, Permiso, RolFuncional, RolPermiso
+from .sistema import ConfiguracionSistema
 
 __all__ = [
     "RegistroBase",
@@ -32,4 +33,5 @@ __all__ = [
     "RolPermiso",
     "AsignacionRol",
     "RegistroAuditoria",
+    "ConfiguracionSistema",
 ]

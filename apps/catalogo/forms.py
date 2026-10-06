@@ -19,6 +19,7 @@ from apps.catalogo.models import (
     Servicio,
     ServicioResponsable,
     ServicioVisibilidad,
+    TerminoServicio,
 )
 from apps.core.models import Area, Equipo, UnidadNegocio, Usuario
 from apps.workflows.models import ConfiguracionEtapaAprobacion, TransicionEtapa
@@ -34,6 +35,49 @@ class ServicioGeneralForm(forms.ModelForm):
             "descripcion": forms.Textarea(attrs={"rows": 3}),
             "instrucciones": forms.Textarea(attrs={"rows": 3}),
         }
+
+
+class TiempoObjetivoForm(forms.Form):
+    """4.A1 — tiempo objetivo de atención (Studio → Básico). Vacío = sin
+    compromiso temporal. Solo valida forma/UX: la regla final vive en
+    `operaciones.configurar_tiempo_objetivo`."""
+
+    cantidad = forms.IntegerField(required=False, min_value=1, max_value=999, label="Tiempo objetivo")
+    unidad = forms.ChoiceField(
+        required=False, choices=[("", "—")] + list(Servicio.UnidadTiempo.choices), label="Unidad"
+    )
+    habiles = forms.BooleanField(required=False, label="Solo cuentan días hábiles (lunes a viernes)")
+
+    def clean(self):
+        datos = super().clean()
+        cantidad, unidad = datos.get("cantidad"), datos.get("unidad")
+        if cantidad and not unidad:
+            raise forms.ValidationError("Seleccione la unidad del tiempo objetivo.")
+        if unidad and not cantidad:
+            raise forms.ValidationError("Indique la cantidad del tiempo objetivo.")
+        return datos
+
+
+class PoliticaProrrogaForm(forms.Form):
+    """4.A2 — política de prórroga (Studio → Básico). Solo forma/UX: la regla
+    final vive en `operaciones.configurar_politica_prorroga`."""
+
+    politica = forms.ChoiceField(
+        choices=[("", "— Seleccione —")] + list(Servicio.PoliticaProrroga.choices), label="Prórroga de la fecha objetivo"
+    )
+    aprobador_usuario = forms.ModelChoiceField(
+        queryset=Usuario.objects.filter(is_active=True).order_by("username"), required=False, label="Aprobador (usuario)"
+    )
+    aprobador_equipo = forms.ModelChoiceField(
+        queryset=Equipo.objects.filter(activo=True).order_by("nombre"), required=False, label="o aprobador (equipo)"
+    )
+
+    def clean(self):
+        datos = super().clean()
+        if datos.get("politica") == Servicio.PoliticaProrroga.CON_APROBACION:
+            if bool(datos.get("aprobador_usuario")) == bool(datos.get("aprobador_equipo")):
+                raise forms.ValidationError("Con aprobación, indique un aprobador: un usuario o un equipo, no ambos.")
+        return datos
 
 
 class ServicioCreacionForm(forms.Form):
@@ -370,6 +414,13 @@ class DefinicionEntregableForm(forms.Form):
     tipo = forms.ChoiceField(choices=DefinicionEntregable.Tipo.choices)
     obligatorio = forms.BooleanField(required=False)
     orden = forms.IntegerField(initial=0, min_value=0)
+
+
+class TerminoServicioForm(forms.Form):
+    """4.D — un término de búsqueda de un Servicio/Proceso. Las reglas de dominio
+    (palabra concreta, sin equivalentes, tope) las valida `apps.catalogo.terminos_busqueda`."""
+
+    termino = forms.CharField(max_length=TerminoServicio.LARGO_MAXIMO, label="Término")
 
 
 class PoliticaEntregaForm(forms.Form):

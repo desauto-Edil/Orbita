@@ -15,20 +15,23 @@ from datetime import timedelta
 from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import IntegrityError, transaction
-from django.test import RequestFactory, TestCase
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 
 from apps.aprobaciones.models import Aprobacion, EsquemaAprobacion
 from apps.aprobaciones.operaciones import crear_esquema_aprobacion
+from apps.catalogo import busqueda
 from apps.core.admin import RegistroAuditoriaAdmin
 from apps.core.auditoria import registrar_evento, serializar
-from apps.core.autorizacion import alcances_autorizados, usuario_tiene_permiso
+from apps.core.autorizacion import alcances_autorizados, permisos_globales, usuario_tiene_permiso
 from apps.core.models import (
     Area,
     AreaUnidadNegocio,
     AsignacionRol,
+    ConfiguracionSistema,
     Equipo,
     EquipoArea,
     EquipoUnidadNegocio,
@@ -914,7 +917,7 @@ class ApplicationShellTests(TestCase):
         self.usuario.save()
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertContains(respuesta, "Administración")
-        self.assertContains(respuesta, "Configuración")
+        self.assertContains(respuesta, "Administración avanzada")
 
     def test_perfil_muestra_badge_principal_solo_en_la_relacion_marcada(self):
         area_principal = Area.objects.create(nombre="Finanzas", codigo="FIN-SHELL")
@@ -1053,7 +1056,7 @@ class MiTrabajoTests(TestCase):
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "Propia gestor")
         self.assertContains(respuesta, "Libre para tomar")
-        self.assertContains(respuesta, "Tareas (2)")
+        self.assertEqual(respuesta.context["total_tareas"], 2)
 
     def test_tarea_de_otro_usuario_no_aparece(self):
         otro = Usuario.objects.create_user(username="otro_mt", password=CLAVE_PRUEBA)
@@ -1096,7 +1099,7 @@ class MiTrabajoTests(TestCase):
         respuesta = self.client.get(reverse("core:mi_trabajo"), {"tab": "no-existe"})
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "Con tab invalido")
-        self.assertContains(respuesta, 'breadcrumb__current">Todo')
+        self.assertEqual(respuesta.context["tab"], "todo")
 
     def test_pestana_tareas_no_muestra_aprobaciones(self):
         crear_tarea(titulo="Solo tarea", creada_por=self.usuario, usuario_responsable=self.usuario)
@@ -1136,8 +1139,9 @@ class MiTrabajoTests(TestCase):
         self._crear_esquema(self.usuario)
         self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
         respuesta = self.client.get(reverse("core:mi_trabajo"))
-        self.assertContains(respuesta, "Tareas (2)")
-        self.assertContains(respuesta, "Aprobaciones (1)")
+        self.assertEqual(respuesta.context["total_tareas"], 2)
+        self.assertEqual(respuesta.context["total_aprobaciones"], 1)
+        self.assertEqual(respuesta.context["total"], 3)
 
     def test_trabajo_aparece_en_navegacion_solo_con_trabajo_personal(self):
         # V0: sin rol/permiso especial (nada de rol hardcodeado), pero ya no
@@ -1275,7 +1279,8 @@ class NavegacionGlobalTests(TestCase):
         _otorgar_permiso_nav(self.usuario, "catalogo.administrar")
         respuesta = self._get()
         self.assertEqual(self._dock(respuesta), ["Inicio", "Mis tickets"])
-        self.assertEqual(self._mas(respuesta), {"Gestión": ["Diseñador"]})
+        # `catalogo.administrar` también administra las Categorías (Configuración).
+        self.assertEqual(self._mas(respuesta), {"Gestión": ["Diseñador"], "Administración": ["Configuración"]})
         self.assertContains(respuesta, 'id="dock-more"')
 
     def test_escenario_c_atiende_tickets_ve_trabajo_sin_mas(self):
@@ -1292,7 +1297,7 @@ class NavegacionGlobalTests(TestCase):
         respuesta = self._get()
         self.assertEqual(self._dock(respuesta), ["Inicio", "Mis tickets", "Trabajo"])
         # Studio y Workflows avanzados ya no son destinos separados: un solo Diseñador.
-        self.assertEqual(self._mas(respuesta), {"Gestión": ["Diseñador"]})
+        self.assertEqual(self._mas(respuesta), {"Gestión": ["Diseñador"], "Administración": ["Configuración"]})
 
     # --- Trabajo ---
 
@@ -1356,7 +1361,7 @@ class NavegacionGlobalTests(TestCase):
 
     def test_el_disenador_se_abre_con_cualquiera_de_sus_capacidades(self):
         _otorgar_permiso_nav(self.usuario, "catalogo.administrar")
-        self.assertEqual(self._mas(self._get()), {"Gestión": ["Diseñador"]})
+        self.assertEqual(self._mas(self._get()), {"Gestión": ["Diseñador"], "Administración": ["Configuración"]})
 
         for codigo in ("workflows.consultar", "workflows.administrar"):
             otro = Usuario.objects.create_user(username=f"nav_d1_{codigo}", password=CLAVE_PRUEBA)
@@ -1371,11 +1376,23 @@ class NavegacionGlobalTests(TestCase):
         self.assertEqual(self._mas(self._get()), {})
         self.assertEqual(self.client.get(reverse("core:disenador")).status_code, 403)
 
-    def test_configuracion_solo_para_is_staff(self):
+    def test_administracion_avanzada_solo_para_is_staff(self):
         self.assertEqual(self._mas(self._get()), {})
         self.usuario.is_staff = True
         self.usuario.save()
-        self.assertEqual(self._mas(self._get()), {"Administración": ["Configuración"]})
+        self.assertEqual(self._mas(self._get()), {"Administración": ["Administración avanzada"]})
+
+    def test_configuracion_depende_de_capacidades_no_de_is_staff(self):
+        for codigo in (
+            "sistema.configurar",
+            "usuarios.administrar",
+            "permisos.administrar",
+            "organizacion.administrar",
+            "catalogo.administrar",
+        ):
+            AsignacionRol.objects.filter(usuario=self.usuario).delete()
+            _otorgar_permiso_nav(self.usuario, codigo)
+            self.assertIn("Configuración", self._mas(self._get()).get("Administración", []), codigo)
 
     def test_mas_no_muestra_grupos_vacios(self):
         _otorgar_permiso_nav(self.usuario, "workflows.administrar")
@@ -1540,9 +1557,14 @@ class InicioPortalTests(TestCase):
         self.assertEqual(saludo(self.otro)["nombre"], "portal_otro")
 
     def test_hero_incluye_el_buscador_de_necesidades_con_respaldo_sin_js(self):
+        # 4.D: el buscador del hero es "¿Qué necesitas?" (búsqueda por reglas); sin JS
+        # envía a su propia página en vez de filtrar el catálogo.
         respuesta = self._inicio()
-        self.assertContains(respuesta, "data-explorer-search")
-        self.assertContains(respuesta, f'action="{reverse("catalogo:lista")}"')
+        self.assertContains(respuesta, "data-necesidad-search")
+        self.assertContains(respuesta, f'action="{reverse("core:necesidad")}"')
+        self.assertNotContains(respuesta, "data-explorer-search")
+        self.assertContains(respuesta, 'id="necesidad-resultados"')
+        self.assertContains(respuesta, "js/necesidad.js")
         self.assertContains(respuesta, "¿Qué necesitas hoy?")
 
     # --- Explorar: catálogo según visibilidad ---
@@ -2136,3 +2158,597 @@ class DisenadorTests(TestCase):
             respuesta = self.client.get(url)
             self.assertEqual(respuesta.status_code, 200, url)
             self.assertContains(respuesta, f'href="{reverse("core:disenador")}"', msg_prefix=url)
+
+
+PNG_MINIMO = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+class ConfiguracionTests(TestCase):
+    """Configuración — interfaz propia para CU-004 a CU-008 (usuarios,
+    organización, roles, permisos, asignaciones), las categorías de CU-010 y
+    la identidad del sistema. Solo comportamiento del servidor: quién entra a
+    cada sección por capacidades reales, que cada cambio respeta las reglas
+    del modelo, que nada se borra y que todo queda auditado (CU-040)."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="cfg_admin", password=CLAVE_PRUEBA)
+        self.client.login(username="cfg_admin", password=CLAVE_PRUEBA)
+        self.persona = Usuario.objects.create_user(username="cfg_persona", password=CLAVE_PRUEBA)
+
+    def _con(self, *codigos):
+        for codigo in codigos:
+            _otorgar_permiso_nav(self.usuario, codigo)
+
+    def _url(self, nombre, *args):
+        return reverse(f"core:configuracion{nombre}", args=args)
+
+    def _ficha(self, datos):
+        return self.client.post(self._url("_usuario", self.persona.pk), datos)
+
+    def _auditados(self, instancia, accion=None):
+        eventos = RegistroAuditoria.objects.filter(
+            content_type=ContentType.objects.get_for_model(type(instancia)), object_id=instancia.pk
+        )
+        return eventos.filter(accion=accion) if accion else eventos
+
+    # --- quién entra ---
+
+    def test_exige_autenticacion(self):
+        self.client.logout()
+        respuesta = self.client.get(self._url(""))
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertIn(reverse("core:login"), respuesta.url)
+
+    def test_sin_capacidades_no_entra_a_ninguna_seccion(self):
+        for nombre in ("", "_general", "_usuarios", "_usuario_crear", "_roles", "_rol_crear", "_areas",
+                       "_area_crear", "_unidades", "_categorias", "_permiso_crear"):
+            self.assertEqual(self.client.get(self._url(nombre)).status_code, 403, nombre)
+        self.assertEqual(self.client.get(self._url("_usuario", self.persona.pk)).status_code, 403)
+
+    def test_is_staff_por_si_solo_no_abre_configuracion(self):
+        self.usuario.is_staff = True
+        self.usuario.save()
+        self.assertEqual(self.client.get(self._url("")).status_code, 403)
+
+    def test_cada_capacidad_abre_solo_su_seccion(self):
+        casos = {
+            "sistema.configurar": ["general"],
+            "usuarios.administrar": ["usuarios"],
+            "permisos.administrar": ["usuarios", "roles"],
+            "organizacion.administrar": ["areas", "unidades"],
+            "catalogo.administrar": ["categorias"],
+        }
+        for codigo, esperadas in casos.items():
+            AsignacionRol.objects.filter(usuario=self.usuario).delete()
+            _otorgar_permiso_nav(self.usuario, codigo)
+            respuesta = self.client.get(self._url(""))
+            self.assertEqual(respuesta.status_code, 200, codigo)
+            self.assertEqual([s["clave"] for s in respuesta.context["config_secciones"]], esperadas, codigo)
+            for clave in ("general", "usuarios", "roles", "areas", "unidades", "categorias"):
+                estado = self.client.get(self._url(f"_{clave}")).status_code
+                self.assertEqual(estado, 200 if clave in esperadas else 403, f"{codigo} → {clave}")
+
+    def test_superusuario_abre_las_secciones_del_nucleo_pero_no_categorias(self):
+        self.usuario.is_superuser = True
+        self.usuario.save()
+        claves = [s["clave"] for s in self.client.get(self._url("")).context["config_secciones"]]
+        self.assertEqual(claves, ["general", "usuarios", "roles", "areas", "unidades"])
+        self.assertEqual(self.client.get(self._url("_categorias")).status_code, 403)
+
+    def test_permisos_globales_respeta_alcance_y_vigencia(self):
+        area = Area.objects.create(nombre="Zona", codigo="CFG-ZONA")
+        _otorgar_permiso_nav(self.usuario, "usuarios.administrar", AsignacionRol.TipoAlcance.AREA, area)
+        vencida = _otorgar_permiso_nav(self.usuario, "sistema.configurar")
+        vencida.fecha_fin = timezone.now().date() - timedelta(days=1)
+        vencida.save()
+        _otorgar_permiso_nav(self.usuario, "permisos.administrar")
+        codigos = ["usuarios.administrar", "sistema.configurar", "permisos.administrar"]
+        self.assertEqual(permisos_globales(self.usuario, codigos), {"permisos.administrar"})
+
+    # --- General ---
+
+    def test_el_nombre_configurado_se_usa_en_toda_la_interfaz(self):
+        self._con("sistema.configurar")
+        respuesta = self.client.post(self._url("_general"), {"nombre": "  Portal Edil  "})
+        self.assertRedirects(respuesta, self._url("_general"))
+        config = ConfiguracionSistema.actual()
+        self.assertEqual(config.nombre, "Portal Edil")
+        self.assertEqual(self._auditados(config).count(), 1)
+
+        inicio = self.client.get(reverse("core:inicio"))
+        self.assertContains(inicio, "<title>Inicio — Portal Edil</title>", html=True)
+        self.assertContains(inicio, '<span class="app-header__brand-name">Portal Edil</span>', html=True)
+        self.client.logout()
+        self.assertContains(self.client.get(reverse("core:login")), "Portal Edil")
+
+    def test_sin_configurar_se_usa_el_nombre_por_defecto_sin_escribir(self):
+        self.assertContains(self.client.get(reverse("core:inicio")), "Órbita")
+        self.assertFalse(ConfiguracionSistema.objects.exists())
+        self.assertEqual(self.client.get(reverse("core:logo")).status_code, 404)
+
+    def test_logo_se_valida_por_contenido_y_se_sirve_publicamente(self):
+        self._con("sistema.configurar")
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as media, override_settings(MEDIA_ROOT=media):
+            falso = SimpleUploadedFile("logo.png", b"<svg onload=alert(1)>", content_type="image/png")
+            respuesta = self.client.post(self._url("_general"), {"nombre": "Órbita", "logo": falso})
+            self.assertEqual(respuesta.status_code, 200)
+            self.assertTrue(respuesta.context["form"].errors["logo"])
+            svg = SimpleUploadedFile("logo.svg", PNG_MINIMO, content_type="image/svg+xml")
+            respuesta = self.client.post(self._url("_general"), {"nombre": "Órbita", "logo": svg})
+            self.assertTrue(respuesta.context["form"].errors["logo"])
+            self.assertFalse(ConfiguracionSistema.objects.exists())
+
+            valido = SimpleUploadedFile("logo.png", PNG_MINIMO, content_type="image/png")
+            self.client.post(self._url("_general"), {"nombre": "Órbita", "logo": valido})
+            self.assertTrue(ConfiguracionSistema.actual().logo)
+            self.assertContains(self.client.get(reverse("core:inicio")), reverse("core:logo"))
+
+            self.client.logout()
+            respuesta = self.client.get(reverse("core:logo"))
+            self.assertEqual(respuesta.status_code, 200)
+            self.assertEqual(respuesta["Content-Type"], "image/png")
+            self.assertEqual(b"".join(respuesta.streaming_content), PNG_MINIMO)
+
+            self.client.login(username="cfg_admin", password=CLAVE_PRUEBA)
+            self.client.post(self._url("_general"), {"nombre": "Órbita", "quitar_logo": "on"})
+            self.assertFalse(ConfiguracionSistema.actual().logo)
+
+    # --- Usuarios ---
+
+    def test_crear_usuario_con_perfil_y_auditoria_sin_contrasena(self):
+        self._con("usuarios.administrar")
+        respuesta = self.client.post(
+            self._url("_usuario_crear"),
+            {
+                "username": "nueva.persona", "first_name": "Nueva", "last_name": "Persona",
+                "email": "nueva@edilandina.com", "cargo": "Analista", "telefono": "",
+                "password1": CLAVE_PRUEBA, "password2": CLAVE_PRUEBA,
+            },
+        )
+        creado = Usuario.objects.get(username="nueva.persona")
+        self.assertRedirects(respuesta, self._url("_usuario", creado.pk))
+        self.assertTrue(creado.check_password(CLAVE_PRUEBA))
+        self.assertEqual(creado.perfil_organizacional.cargo, "Analista")
+        evento = self._auditados(creado, RegistroAuditoria.Accion.CREAR).get()
+        self.assertEqual(evento.usuario, self.usuario)
+        self.assertNotIn("password", evento.datos_nuevos)
+
+    def test_lista_de_usuarios_busca_y_filtra_por_estado(self):
+        self._con("usuarios.administrar")
+        self.persona.is_active = False
+        self.persona.save()
+        nombres = lambda r: [u.username for u in r.context["pagina"].object_list]  # noqa: E731
+        self.assertEqual(nombres(self.client.get(self._url("_usuarios"))), ["cfg_admin"])
+        self.assertEqual(nombres(self.client.get(self._url("_usuarios") + "?estado=inactivos")), ["cfg_persona"])
+        self.assertEqual(nombres(self.client.get(self._url("_usuarios") + "?estado=todos&q=persona")), ["cfg_persona"])
+
+    def test_editar_datos_y_desactivar_conserva_la_cuenta(self):
+        self._con("usuarios.administrar")
+        self._ficha({"accion": "datos", "username": "cfg_persona", "first_name": "Ana", "last_name": "",
+                     "email": "", "cargo": "Jefe", "telefono": "123"})
+        self.persona.refresh_from_db()
+        self.assertEqual(self.persona.first_name, "Ana")
+        self.assertFalse(self.persona.is_active)  # el interruptor no vino marcado
+        self.assertEqual(self.persona.perfil_organizacional.telefono, "123")
+        evento = self._auditados(self.persona, RegistroAuditoria.Accion.ACTUALIZAR).get()
+        self.assertTrue(evento.datos_anteriores["is_active"])
+        self.assertFalse(evento.datos_nuevos["is_active"])
+
+    def test_no_puede_desactivar_su_propia_cuenta(self):
+        self._con("usuarios.administrar")
+        respuesta = self.client.post(
+            self._url("_usuario", self.usuario.pk), {"accion": "datos", "username": "cfg_admin"}
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertIn("is_active", respuesta.context["form_datos"].errors)
+        self.usuario.refresh_from_db()
+        self.assertTrue(self.usuario.is_active)
+
+    def test_solo_un_superusuario_modifica_privilegios_o_cuentas_de_superusuario(self):
+        self._con("usuarios.administrar")
+        # Sin ser superusuario, los campos de privilegio se ignoran aunque se envíen.
+        self._ficha({"accion": "datos", "username": "cfg_persona", "is_active": "on",
+                     "is_staff": "on", "is_superuser": "on"})
+        self.persona.refresh_from_db()
+        self.assertFalse(self.persona.is_staff or self.persona.is_superuser)
+
+        jefe = Usuario.objects.create_user(username="cfg_root", password=CLAVE_PRUEBA, is_superuser=True)
+        url = self._url("_usuario", jefe.pk)
+        self.assertFalse(self.client.get(url).context["edita_cuenta"])
+        for accion in ("datos", "clave", "area_agregar"):
+            self.assertEqual(self.client.post(url, {"accion": accion}).status_code, 403, accion)
+        self.assertTrue(Usuario.objects.get(pk=jefe.pk).check_password(CLAVE_PRUEBA))
+
+    def test_cambiar_contrasena(self):
+        self._con("usuarios.administrar")
+        self._ficha({"accion": "clave", "new_password1": "Otra-Clave-456", "new_password2": "Otra-Clave-456"})
+        self.persona.refresh_from_db()
+        self.assertTrue(self.persona.check_password("Otra-Clave-456"))
+        self.assertEqual(self._auditados(self.persona).count(), 1)
+
+    def test_pertenencias_una_sola_principal_y_quitar_no_borra(self):
+        self._con("usuarios.administrar")
+        a = Area.objects.create(nombre="Tecnología", codigo="CFG-TEC")
+        b = Area.objects.create(nombre="Finanzas", codigo="CFG-FIN")
+        self._ficha({"accion": "area_agregar", "area-destino": a.pk, "area-es_principal": "on"})
+        self._ficha({"accion": "area_agregar", "area-destino": b.pk, "area-es_principal": "on"})
+        ua, ub = UsuarioArea.objects.get(area=a), UsuarioArea.objects.get(area=b)
+        self.assertFalse(ua.es_principal)
+        self.assertTrue(ub.es_principal)
+
+        self._ficha({"accion": "area_principal", "membresia": ua.pk})
+        ua.refresh_from_db(), ub.refresh_from_db()
+        self.assertTrue(ua.es_principal)
+        self.assertFalse(ub.es_principal)
+
+        self._ficha({"accion": "area_quitar", "membresia": ua.pk})
+        ua.refresh_from_db()
+        self.assertFalse(ua.activo or ua.es_principal)
+        # Volver a añadirla reactiva la misma fila (restricción única usuario+área).
+        self._ficha({"accion": "area_agregar", "area-destino": a.pk})
+        self.assertEqual(UsuarioArea.objects.filter(usuario=self.persona, area=a, activo=True).count(), 1)
+        self.assertEqual(UsuarioArea.objects.filter(usuario=self.persona).count(), 2)
+        self.assertGreaterEqual(self._auditados(ua).count(), 4)
+
+        unidad = UnidadNegocio.objects.create(nombre="Retail", codigo="CFG-RET")
+        self._ficha({"accion": "unidad_agregar", "unidad-destino": unidad.pk, "unidad-es_principal": "on"})
+        self.assertTrue(UsuarioUnidadNegocio.objects.get(usuario=self.persona, unidad_negocio=unidad).es_principal)
+
+    def test_roles_solo_los_asigna_quien_administra_permisos(self):
+        rol = RolFuncional.objects.create(nombre="Ejecutor CFG")
+        self._con("usuarios.administrar")
+        respuesta = self._ficha({"accion": "rol_asignar", "rol-rol": rol.pk, "rol-tipo_alcance": "GLOBAL",
+                                 "rol-fecha_inicio": "2026-01-01"})
+        self.assertEqual(respuesta.status_code, 403)
+        self.assertFalse(AsignacionRol.objects.filter(usuario=self.persona).exists())
+
+    def test_quien_administra_permisos_asigna_roles_pero_no_modifica_la_cuenta(self):
+        self._con("permisos.administrar")
+        contexto = self.client.get(self._url("_usuario", self.persona.pk)).context
+        self.assertTrue(contexto["edita_roles"])
+        self.assertFalse(contexto["edita_cuenta"])
+        self.assertEqual(self._ficha({"accion": "datos", "username": "x"}).status_code, 403)
+        self.assertEqual(self.client.get(self._url("_usuario_crear")).status_code, 403)
+
+    def test_asignar_y_retirar_rol_con_alcance(self):
+        self._con("permisos.administrar")
+        rol = RolFuncional.objects.create(nombre="Ejecutor CFG")
+        permiso = Permiso.objects.create(codigo="cfg.prueba", nombre="Prueba")
+        RolPermiso.objects.create(rol=rol, permiso=permiso)
+        area = Area.objects.create(nombre="Tecnología", codigo="CFG-TEC2")
+        hoy = timezone.localdate().isoformat()
+
+        # AREA sin área: el formulario lo explica, no llega un IntegrityError.
+        respuesta = self._ficha({"accion": "rol_asignar", "rol-rol": rol.pk, "rol-tipo_alcance": "AREA",
+                                 "rol-fecha_inicio": hoy})
+        self.assertIn("area", respuesta.context["form_rol"].errors)
+
+        datos = {"accion": "rol_asignar", "rol-rol": rol.pk, "rol-tipo_alcance": "AREA", "rol-area": area.pk,
+                 "rol-fecha_inicio": hoy}
+        self._ficha(datos)
+        asignacion = AsignacionRol.objects.get(usuario=self.persona)
+        self.assertTrue(usuario_tiene_permiso(self.persona, "cfg.prueba", area=area))
+        self.assertFalse(usuario_tiene_permiso(self.persona, "cfg.prueba"))
+        self.assertEqual(self._auditados(asignacion, RegistroAuditoria.Accion.CREAR).count(), 1)
+
+        # Repetir la misma asignación activa se rechaza con un mensaje.
+        respuesta = self._ficha(datos)
+        self.assertTrue(respuesta.context["form_rol"].non_field_errors())
+        self.assertEqual(AsignacionRol.objects.filter(usuario=self.persona).count(), 1)
+
+        self._ficha({"accion": "rol_retirar", "asignacion": asignacion.pk})
+        asignacion.refresh_from_db()
+        self.assertFalse(asignacion.activo)
+        self.assertEqual(asignacion.fecha_fin, timezone.localdate())
+        self.assertFalse(usuario_tiene_permiso(self.persona, "cfg.prueba", area=area))
+
+    # --- Roles y permisos ---
+
+    def test_rol_sincroniza_permisos_sin_borrar_y_audita(self):
+        self._con("permisos.administrar")
+        p1 = Permiso.objects.create(codigo="cfg.uno", nombre="Uno")
+        p2 = Permiso.objects.create(codigo="cfg.dos", nombre="Dos")
+        self.client.post(self._url("_rol_crear"), {"nombre": "Gestor CFG", "descripcion": "", "activo": "on",
+                                                    "permisos": [p1.pk, p2.pk]})
+        rol = RolFuncional.objects.get(nombre="Gestor CFG")
+        self.assertEqual(RolPermiso.objects.filter(rol=rol, activo=True).count(), 2)
+
+        self.client.post(self._url("_rol", rol.pk), {"nombre": "Gestor CFG", "activo": "on", "permisos": [p2.pk]})
+        rp1 = RolPermiso.objects.get(rol=rol, permiso=p1)
+        self.assertFalse(rp1.activo)
+        self.assertEqual(self._auditados(rp1).count(), 2)
+        # Volver a marcarlo reactiva la misma relación.
+        self.client.post(self._url("_rol", rol.pk), {"nombre": "Gestor CFG", "activo": "on", "permisos": [p1.pk, p2.pk]})
+        self.assertEqual(RolPermiso.objects.filter(rol=rol).count(), 2)
+        self.assertTrue(RolPermiso.objects.get(pk=rp1.pk).activo)
+
+        respuesta = self.client.post(self._url("_rol_crear"), {"nombre": "gestor cfg", "activo": "on"})
+        self.assertIn("nombre", respuesta.context["form"].errors)
+
+    def test_el_codigo_de_un_permiso_no_cambia_al_editarlo(self):
+        self._con("permisos.administrar")
+        self.client.post(self._url("_permiso_crear"), {"codigo": "cfg.nuevo", "nombre": "Nuevo", "activo": "on"})
+        permiso = Permiso.objects.get(codigo="cfg.nuevo")
+        self.client.post(self._url("_permiso", permiso.pk), {"codigo": "otro.codigo", "nombre": "Renombrado"})
+        permiso.refresh_from_db()
+        self.assertEqual((permiso.codigo, permiso.nombre, permiso.activo), ("cfg.nuevo", "Renombrado", False))
+
+    # --- Áreas, Unidades y Categorías ---
+
+    def test_area_y_unidad_se_relacionan_desde_ambos_lados(self):
+        self._con("organizacion.administrar")
+        unidad = UnidadNegocio.objects.create(nombre="Retail", codigo="CFG-RET2")
+        self.client.post(self._url("_area_crear"), {"nombre": "Tecnología", "codigo": "CFG-TEC3", "activo": "on",
+                                                     "relacionadas": [unidad.pk]})
+        area = Area.objects.get(codigo="CFG-TEC3")
+        relacion = AreaUnidadNegocio.objects.get(area=area, unidad_negocio=unidad)
+        self.assertTrue(relacion.activo)
+        self.assertEqual(self._auditados(area, RegistroAuditoria.Accion.CREAR).count(), 1)
+
+        # Desde la Unidad se desmarca: la relación se desactiva, no se borra.
+        self.client.post(self._url("_unidad", unidad.pk), {"nombre": "Retail", "codigo": "CFG-RET2", "activo": "on"})
+        relacion.refresh_from_db()
+        self.assertFalse(relacion.activo)
+
+        respuesta = self.client.post(self._url("_area_crear"), {"nombre": "Otra", "codigo": "CFG-TEC3", "activo": "on"})
+        self.assertIn("codigo", respuesta.context["form"].errors)
+        self.assertContains(self.client.get(self._url("_areas")), "Tecnología")
+
+    def test_categorias_con_catalogo_administrar(self):
+        from apps.catalogo.models import Categoria
+
+        self._con("catalogo.administrar")
+        self.client.post(self._url("_categoria_crear"), {"nombre": "Tecnología", "descripcion": "", "activo": "on"})
+        categoria = Categoria.objects.get(nombre="Tecnología")
+        self.assertEqual(self._auditados(categoria).count(), 1)
+        respuesta = self.client.post(self._url("_categoria_crear"), {"nombre": "tecnología", "activo": "on"})
+        self.assertIn("nombre", respuesta.context["form"].errors)
+        self.client.post(self._url("_categoria", categoria.pk), {"nombre": "Tecnología"})
+        categoria.refresh_from_db()
+        self.assertFalse(categoria.activo)
+        self.assertContains(self.client.get(self._url("_categorias")), "Inactiva")
+
+
+class TrabajoTests(TestCase):
+    """Trabajo (ajuste visual) — sin CU propio: presentación de la Cola
+    (CU-017) y de Mi trabajo (RQF-071/073/078). Solo lo verificable en el
+    servidor: orden de llegada, filtros locales que no alteran la población
+    autorizada, paginación y que la vista previa respeta la misma
+    autorización de objeto que el detalle."""
+
+    def setUp(self):
+        from apps.tickets.tests import _EscenarioAtencionMixin
+
+        self.escenario = _EscenarioAtencionMixin()
+        self.escenario._preparar_escenario()
+        self.responsable = self.escenario.responsable_directo
+        self.client.login(username=self.responsable.username, password=CLAVE_PRUEBA)
+
+    def _otro_ticket(self):
+        from apps.tickets.operaciones import crear_borrador, radicar_ticket
+        from apps.tickets.tests import _completar_texto
+
+        e = self.escenario
+        ticket = crear_borrador(e.solicitante, e.servicio)
+        _completar_texto(ticket, e.solicitante, e.campos)
+        radicar_ticket(ticket, e.solicitante)
+        ticket.refresh_from_db()
+        return ticket
+
+    def _cola(self, consulta=""):
+        return self.client.get(reverse("tickets:cola") + consulta)
+
+    # --- Cola ---
+
+    def test_la_cola_va_en_orden_de_llegada_y_numera_la_posicion(self):
+        primero, segundo = self.escenario.ticket, self._otro_ticket()
+        tickets = list(self._cola().context["tickets"])
+        self.assertEqual(tickets, [primero, segundo])
+        self.assertEqual([t.posicion for t in tickets], [1, 2])
+
+    def test_los_filtros_no_cambian_la_posicion_ni_la_poblacion(self):
+        from apps.tickets.operaciones import tomar_ticket
+
+        primero, segundo = self.escenario.ticket, self._otro_ticket()
+        tomar_ticket(primero, self.responsable)
+
+        respuesta = self._cola("?ver=sin_tomar")
+        self.assertEqual([(t.pk, t.posicion) for t in respuesta.context["tickets"]], [(segundo.pk, 2)])
+        self.assertEqual(respuesta.context["conteos"], {"todos": 2, "sin_tomar": 1, "en_atencion": 1, "mios": 1})
+        self.assertEqual([t.pk for t in self._cola("?ver=mios").context["tickets"]], [primero.pk])
+        # Un filtro desconocido cae en "todos"; nunca amplía lo autorizado.
+        self.assertEqual(self._cola("?ver=otra-cosa").context["ver"], "todos")
+        self.client.logout()
+        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        self.assertEqual(list(self._cola("?ver=todos").context["tickets"]), [])
+
+    # --- Mi trabajo: vista previa ---
+
+    def test_cada_fila_de_mi_trabajo_trae_su_vista_previa_y_su_detalle(self):
+        tarea = crear_tarea(titulo="Revisar anexos", creada_por=self.responsable, usuario_responsable=self.responsable)
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        fila = respuesta.context["filas"][0]
+        self.assertEqual(fila["vista_url"], reverse("tareas:vista_previa", args=[tarea.pk]))
+        self.assertContains(respuesta, f'data-vista="{fila["vista_url"]}"')
+        self.assertContains(respuesta, f'href="{reverse("tareas:detalle", args=[tarea.pk])}"')
+
+    def test_vista_previa_de_tarea_respeta_la_autorizacion_del_detalle(self):
+        tarea = crear_tarea(
+            titulo="Revisar anexos", descripcion="Validar firmas", creada_por=self.responsable,
+            usuario_responsable=self.responsable,
+        )
+        url = reverse("tareas:vista_previa", args=[tarea.pk])
+        respuesta = self.client.get(url)
+        self.assertContains(respuesta, "Revisar anexos")
+        self.assertContains(respuesta, "Validar firmas")
+        self.assertContains(respuesta, reverse("tareas:detalle", args=[tarea.pk]))
+        self.assertNotContains(respuesta, "<form")  # solo lectura
+        self.assertEqual(self.client.post(url).status_code, 405)
+
+        self.client.logout()
+        self.assertEqual(self.client.get(url).status_code, 302)
+        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        self.assertEqual(self.client.get(url).status_code, 403)
+
+    def test_vista_previa_de_aprobacion_respeta_la_autorizacion_del_detalle(self):
+        esquema = crear_esquema_aprobacion(
+            modo=EsquemaAprobacion.Modo.PARALELA,
+            politica=EsquemaAprobacion.Politica.CUALQUIERA,
+            participantes=[(Aprobacion.TipoAprobador.USUARIO, self.responsable)],
+        )
+        aprobacion = esquema.participaciones.get()
+        url = reverse("aprobaciones:vista_previa", args=[aprobacion.pk])
+        respuesta = self.client.get(url)
+        self.assertContains(respuesta, f"Aprobación #{aprobacion.pk}")
+        self.assertContains(respuesta, "Abrir y decidir")
+        self.assertNotContains(respuesta, "<form")
+
+        self.client.logout()
+        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        self.assertEqual(self.client.get(url).status_code, 403)
+
+    def test_mi_trabajo_se_pagina_cuando_hay_mucho(self):
+        for n in range(35):
+            crear_tarea(titulo=f"Tarea {n}", creada_por=self.responsable, usuario_responsable=self.responsable)
+        respuesta = self.client.get(reverse("core:mi_trabajo"))
+        self.assertEqual(len(respuesta.context["filas"]), 30)
+        self.assertEqual(respuesta.context["total_tareas"], 35)
+        self.assertEqual(len(self.client.get(reverse("core:mi_trabajo") + "?pagina=2").context["filas"]), 5)
+
+
+class NecesidadBuscadorTests(TestCase):
+    """4.D — buscador "¿Qué necesitas?" de Inicio (`core:necesidad`): validación,
+    resultados, fragmento, privacidad y que buscar no crea nada. Puntaje y seguridad
+    del dominio se prueban en `apps.catalogo.tests.BusquedaPorNecesidadTests`."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user("necesidad_u", password=CLAVE_PRUEBA)
+        self.client.login(username="necesidad_u", password=CLAVE_PRUEBA)
+
+    def _servicio(self, nombre, *, tipo="SERVICIO", publico=True, descripcion="", activo=True):
+        from apps.catalogo.models import Servicio
+        from apps.tickets.tests import _crear_servicio_con_formulario
+
+        servicio, _version, _campos = _crear_servicio_con_formulario(self.usuario, [])
+        Servicio.objects.filter(pk=servicio.pk).update(
+            nombre=nombre, tipo=tipo, descripcion=descripcion, activo=activo,
+            alcance_visibilidad=(
+                Servicio.AlcanceVisibilidad.PUBLICO_INTERNO if publico else Servicio.AlcanceVisibilidad.RESTRINGIDO
+            ),
+        )
+        servicio.refresh_from_db()
+        return servicio
+
+    def _buscar(self, q=None, *, fragmento=False):
+        extra = {"HTTP_X_REQUESTED_WITH": "fetch"} if fragmento else {}
+        return self.client.get(reverse("core:necesidad"), {} if q is None else {"q": q}, **extra)
+
+    def test_exige_sesion(self):
+        self.client.logout()
+        respuesta = self._buscar("vacaciones")
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertIn("login", respuesta["Location"])
+
+    def test_solo_acepta_get(self):
+        self.assertEqual(self.client.post(reverse("core:necesidad"), {"q": "vacaciones"}).status_code, 405)
+
+    def test_sin_consulta_muestra_el_buscador_y_nada_mas(self):
+        self._servicio("Solicitud de vacaciones")
+        respuesta = self._buscar()
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertFalse(respuesta.context["enviada"])
+        self.assertEqual(respuesta.context["resultados"], [])
+        self.assertContains(respuesta, "data-necesidad-search")
+        self.assertNotContains(respuesta, "Solicitud de vacaciones")
+
+    def test_consulta_vacia_o_de_espacios_valida_y_no_lista_el_catalogo(self):
+        self._servicio("Solicitud de vacaciones")
+        for q in ("", "   ", "¿?"):
+            respuesta = self._buscar(q)
+            self.assertContains(respuesta, busqueda.MENSAJE_VACIA)
+            self.assertEqual(respuesta.context["resultados"], [])
+            self.assertNotContains(respuesta, "Solicitud de vacaciones")
+
+    def test_consulta_sin_palabras_concretas_pide_mas_detalle(self):
+        self._servicio("Solicitud para la compra")
+        respuesta = self._buscar("necesito hacer una")
+        self.assertContains(respuesta, "Cuéntanos un poco más")
+        self.assertNotContains(respuesta, "Solicitud para la compra")
+
+    def test_resultados_muestran_servicio_y_proceso_con_su_accion(self):
+        servicio = self._servicio("Soporte de vacaciones", descripcion="Resuelve dudas sobre tus días de descanso")
+        proceso = self._servicio("Vacaciones del equipo", tipo="PROCESO")
+        respuesta = self._buscar("necesito solicitar vacaciones")
+        self.assertContains(respuesta, "Esto puede ayudarte")
+        self.assertContains(respuesta, "Soporte de vacaciones")
+        self.assertContains(respuesta, "Vacaciones del equipo")
+        self.assertContains(respuesta, '<span class="badge">Servicio</span>')
+        self.assertContains(respuesta, '<span class="badge">Proceso</span>')
+        self.assertContains(respuesta, "Categoría de prueba")
+        self.assertContains(respuesta, "Resuelve dudas sobre tus días de descanso")
+        self.assertContains(respuesta, f'href="{reverse("tickets:solicitar", args=[servicio.pk])}"')
+        self.assertContains(respuesta, f'href="{reverse("tickets:solicitar", args=[proceso.pk])}"')
+        self.assertContains(respuesta, "Solicitar")
+
+    def test_el_fragmento_es_solo_el_contenido(self):
+        self._servicio("Soporte de vacaciones")
+        respuesta = self._buscar("vacaciones", fragmento=True)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "Esto puede ayudarte")
+        self.assertNotContains(respuesta, "<html")
+        self.assertContains(self._buscar("", fragmento=True), busqueda.MENSAJE_VACIA)
+        self.assertContains(self._buscar(None, fragmento=True), busqueda.MENSAJE_VACIA)
+
+    def test_sin_coincidencias_lo_dice(self):
+        self._servicio("Soporte de vacaciones")
+        respuesta = self._buscar("zzzz qqqq")
+        self.assertContains(
+            respuesta, "No encontramos un servicio o proceso que coincida suficientemente con lo que necesitas."
+        )
+        self.assertEqual(respuesta.context["resultados"], [])
+
+    def test_buscar_no_crea_tickets_ni_borradores(self):
+        from apps.tickets.models import Ticket
+
+        self._servicio("Soporte de vacaciones")
+        self._buscar("vacaciones")
+        self._buscar("vacaciones", fragmento=True)
+        self._buscar("nada")
+        self.assertEqual(Ticket.objects.count(), 0)
+
+    def test_no_guarda_ni_audita_lo_que_se_busca(self):
+        self._servicio("Soporte de vacaciones")
+        auditorias = RegistroAuditoria.objects.count()
+        self._buscar("texto muy particular de esta busqueda")
+        self.assertEqual(RegistroAuditoria.objects.count(), auditorias)
+
+    def test_no_revela_servicios_ni_terminos_restringidos(self):
+        from apps.catalogo.models import TerminoServicio
+
+        secreto = self._servicio("Investigación adquisición Empresa X", publico=False)
+        TerminoServicio.objects.create(servicio=secreto, termino="Empresa X")
+        for q in ("Empresa X", "adquisicion", "investigación"):
+            respuesta = self._buscar(q)
+            self.assertNotContains(respuesta, "Investigación adquisición Empresa X")
+            self.assertEqual(respuesta.context["resultados"], [])
+            self.assertNotContains(self._buscar(q, fragmento=True), "Investigación adquisición Empresa X")
+
+    def test_no_ofrece_servicios_apagados(self):
+        self._servicio("Vacaciones apagadas", activo=False)
+        self.assertNotContains(self._buscar("vacaciones"), "Vacaciones apagadas")
+
+    def test_el_texto_escrito_se_escapa(self):
+        respuesta = self._buscar("<script>alert(1)</script>")
+        self.assertNotContains(respuesta, "<script>alert(1)</script>")
+        self.assertContains(respuesta, "&lt;script&gt;alert(1)&lt;/script&gt;")
+
+    def test_una_consulta_enorme_se_acota(self):
+        self.assertEqual(self._buscar("vacaciones " * 400).status_code, 200)
+
+    def test_explorar_y_el_catalogo_siguen_funcionando(self):
+        self._servicio("Soporte de vacaciones")
+        self.assertContains(self.client.get(reverse("core:explorar")), "Soporte de vacaciones")
+        self.assertContains(self.client.get(reverse("core:explorar"), {"q": "vacaciones"}), "Soporte de vacaciones")
+        self.assertEqual(self.client.get(reverse("core:inicio")).status_code, 200)

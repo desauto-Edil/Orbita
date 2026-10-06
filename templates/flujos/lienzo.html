@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}{{ workflow.nombre }} - Flujos - Orbita{% endblock %}
+{% block title %}{{ workflow.nombre }} - Flujos - {{ sistema.nombre }}{% endblock %}
 {% block content_modifier %}content-area--flow-workspace{% endblock %}
 {% block extra_head %}<link rel="stylesheet" href="{% static 'css/disenador.css' %}">{% endblock %}
 

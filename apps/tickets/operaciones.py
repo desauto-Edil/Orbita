@@ -42,13 +42,14 @@ from apps.catalogo.operaciones import validar_ejecucion
 from apps.catalogo.visibilidad import servicios_visibles_para
 from apps.core.auditoria import registrar_evento
 from apps.core.models import RegistroAuditoria
-from apps.tickets import historial
+from apps.tickets import direccionamiento, historial, tiempos
 from apps.tickets.autorizacion import (
     es_propietario_borrador,
     puede_asignar,
     puede_cancelar_ticket,
     puede_cerrar_ticket,
     puede_comentar_ticket,
+    puede_iniciar_atencion,
     puede_reabrir_ticket,
     puede_reasignar,
     puede_resolver_ticket,
@@ -88,7 +89,29 @@ def crear_borrador(usuario, servicio):
     """
     if not servicios_visibles_para(usuario).filter(pk=servicio.pk).exists():
         raise PermissionDenied("El servicio no está activo o no es visible para este usuario.")
+    return _crear_borrador_de_servicio(usuario, servicio)
 
+
+@transaction.atomic
+def crear_borrador_ticket_general(usuario):
+    """4.C1 — inicia un Ticket General en BORRADOR: el mismo Ticket/TicketServicio
+    de siempre, sobre el Servicio interno configurado. Es la única vía de crear un
+    ticket sobre ese Servicio: `crear_borrador` lo rechaza porque no es un Servicio
+    catalogado (`servicios_visibles_para` no debilita su regla).
+
+    Exige Ticket General habilitado, Servicio interno accesible para `usuario`
+    (`ValidationError`/`PermissionDenied` si no) y un formulario activo. Todo lo
+    demás —formulario versionado congelado, tiempo objetivo, prórroga, entrega,
+    entregables— lo congela exactamente la misma lógica común que un ticket
+    catalogado: no hay una segunda implementación."""
+    from apps.catalogo.ticket_general import servicio_para_crear_ticket
+
+    return _crear_borrador_de_servicio(usuario, servicio_para_crear_ticket(usuario))
+
+
+def _crear_borrador_de_servicio(usuario, servicio):
+    """Lógica común de `crear_borrador` y `crear_borrador_ticket_general`: el
+    llamador ya comprobó que `usuario` puede crear tickets de `servicio`."""
     servicio = Servicio.objects.select_related("formulario__version_activa").get(pk=servicio.pk)
     formulario = servicio.formulario
     version = formulario.version_activa if formulario else None
@@ -100,6 +123,15 @@ def crear_borrador(usuario, servicio):
     ticket = Ticket.objects.create(
         solicitante=usuario, tipo=servicio.tipo, entregables_materializados=False,
         entrega_politica=servicio.politica_entrega, entrega_dias_observacion=servicio.dias_observacion,
+        # 4.A1: el compromiso temporal también se congela aquí; la fecha objetivo
+        # se calcula recién al radicar.
+        tiempo_objetivo_cantidad=servicio.tiempo_objetivo_cantidad,
+        tiempo_objetivo_unidad=servicio.tiempo_objetivo_unidad,
+        tiempo_objetivo_habiles=servicio.tiempo_objetivo_habiles,
+        # 4.A2: política de prórroga y su aprobador, también congelados aquí.
+        prorroga_politica=servicio.politica_prorroga,
+        prorroga_aprobador_usuario=servicio.prorroga_aprobador_usuario,
+        prorroga_aprobador_equipo=servicio.prorroga_aprobador_equipo,
     )
     TicketServicio.objects.create(ticket=ticket, servicio=servicio, formulario_version=version)
     RespuestaFormulario.objects.create(ticket=ticket, formulario_version=version)
@@ -335,7 +367,16 @@ def radicar_ticket(ticket, actor):
 
     ticket.radicado = uuid.uuid4()
     ticket.radicado_en = timezone.now()
+    # 4.A1: única vez que se fija la fecha objetivo (original = vigente). Sin
+    # compromiso temporal congelado queda en NULL.
+    fecha_objetivo = tiempos.fecha_objetivo_de(ticket, ticket.radicado_en)
+    ticket.fecha_objetivo_original = fecha_objetivo
+    ticket.fecha_objetivo_vigente = fecha_objetivo
     ticket.estado = Ticket.Estado.RADICADO
+    # 4.C2: un Ticket General se DIRIGE al radicarse (destino + responsable
+    # inicial), pero NO cambia a EN_ATENCION: sigue RADICADO hasta que se tome o
+    # inicie la atención. Sin un destino/responsable válido no se radica.
+    direccion = direccionamiento.preparar(ticket) if servicio.es_ticket_general else None
     ticket.save()
 
     for contexto in servicio.contextos_atencion.filter(activo=True):
@@ -347,6 +388,12 @@ def radicar_ticket(ticket, actor):
         )
 
     historial.registrar(ticket, HistorialTicket.TipoEvento.RADICADO, actor)
+    if direccion is not None:
+        direccionamiento.fijar(ticket, actor, *direccion)
+        _auditar_cambio_responsable(
+            ticket, actor, usuario_anterior_id=None, usuario_nuevo_id=ticket.usuario_responsable_id,
+            equipo_anterior_id=None, equipo_nuevo_id=ticket.equipo_responsable_id,
+        )
 
     # Conserva el contrato anterior: el objeto recibido refleja el éxito.
     ticket_original.refresh_from_db()
@@ -381,6 +428,28 @@ def tomar_ticket(ticket, actor):
         equipo_anterior_id=equipo_anterior_id,
         equipo_nuevo_id=ticket.equipo_responsable_id,
     )
+    return ticket
+
+
+@transaction.atomic
+def iniciar_atencion_ticket(ticket, actor):
+    """4.C2 — RADICADO → EN_ATENCION de un ticket que YA tiene `usuario_responsable`
+    desde que se radicó (el Ticket General dirigido a una persona). No asigna a
+    nadie —`tomar_ticket` y `asignar_ticket` exigen justo lo contrario— y no cambia
+    su contrato: solo mueve el estado y lo registra. Mismo lock que las demás
+    operaciones de atención; la autorización se revalida bajo lock."""
+    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    if ticket.estado != Ticket.Estado.RADICADO or ticket.usuario_responsable_id is None:
+        raise ValidationError("Solo un ticket RADICADO dirigido a una persona puede iniciarse por esta vía.")
+    if not puede_iniciar_atencion(actor, ticket):
+        raise PermissionDenied("No tiene autorización para iniciar la atención de este ticket.")
+    estado_anterior = ticket.estado
+    exigir_transicion(ticket, "INICIAR_ATENCION")
+    ticket.save()
+    historial.registrar(
+        ticket, HistorialTicket.TipoEvento.ATENCION_INICIADA, actor, usuario_id=ticket.usuario_responsable_id
+    )
+    _auditar_cambio_estado(ticket, actor, estado_anterior)
     return ticket
 
 
