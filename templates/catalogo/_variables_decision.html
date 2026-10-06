@@ -1,0 +1,15 @@
+{% comment %}
+  Ayuda para configurar una decisión (4.B0): qué referencias existen. Espera
+  `variables_decision` (lista de (referencia, descripción)); sin ella no muestra nada.
+{% endcomment %}
+{% if variables_decision %}
+  <details class="svc-note">
+    <summary>¿Qué variable puedo usar?</summary>
+    <p>Escribe la referencia tal como aparece. Si este servicio no tiene esa variable, la condición no se cumple y el flujo sigue por la ruta alternativa.</p>
+    <ul>
+      {% for referencia, descripcion in variables_decision %}
+        <li><code>{{ referencia }}</code> — {{ descripcion }}</li>
+      {% endfor %}
+    </ul>
+  </details>
+{% endif %}

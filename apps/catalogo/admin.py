@@ -195,7 +195,7 @@ class FormularioAdmin(PermisoGlobalAdminMixin, AdminAuditableMixin, admin.ModelA
 
 class CampoInline(admin.TabularInline):
     model = Campo
-    fields = ("orden", "tipo", "etiqueta", "obligatorio", "configuracion")
+    fields = ("orden", "tipo", "etiqueta", "clave", "obligatorio", "configuracion")
     extra = 1
     show_change_link = True
 
@@ -273,7 +273,7 @@ class OpcionCampoInline(admin.TabularInline):
 @admin.register(Campo)
 class CampoAdmin(PermisoGlobalAdminMixin, AdminAuditableMixin, admin.ModelAdmin):
     permiso_codigo = "formulario.administrar"
-    list_display = ("etiqueta", "version", "tipo", "obligatorio", "orden")
+    list_display = ("etiqueta", "clave", "version", "tipo", "obligatorio", "orden")
     list_filter = ("tipo",)
     inlines = [OpcionCampoInline]
 

@@ -131,6 +131,7 @@ from apps.catalogo.versionamiento import activar_version, crear_nueva_version
 from apps.core.autorizacion import usuario_tiene_permiso
 from apps.workflows.autorizacion import puede_administrar_workflows, puede_vincular_workflows
 from apps.workflows.models import Etapa, FaseWorkflow, TransicionEtapa, Workflow, WorkflowVersion
+from apps.workflows.variables import referencias_disponibles
 
 TABS = ("general", "entrada", "ejecucion", "salida", "publicacion")
 TAB_LABELS = {
@@ -254,6 +255,18 @@ def _version_entrada_editable(servicio):
     if servicio.formulario_id is None:
         return None
     return servicio.formulario.versiones.filter(estado=FormularioVersion.Estado.BORRADOR).order_by("-numero").first()
+
+
+def _variables_para_decisiones(servicio, bloques=()):
+    """Referencias que una DECISION de este servicio puede usar (4.B0): datos del ticket,
+    los campos del formulario de entrada (borrador si lo hay, si no el activo) y el
+    resultado de sus bloques de aprobación. Solo ayuda de configuración: no valida."""
+    campos = []
+    if servicio.formulario_id is not None:
+        version = _version_entrada_editable(servicio) or servicio.formulario.version_activa
+        if version is not None:
+            campos = list(version.campos.all())
+    return referencias_disponibles(campos=campos, bloques=bloques)
 
 
 def _version_ejecucion_editable(servicio):
@@ -982,6 +995,9 @@ def _contexto_configuracion_operativa(servicio):
         "bloques_disponibles": [
             (codigo, etiqueta, TIPOS_BLOQUE_DESCRIPCION[codigo]) for codigo, etiqueta in TIPOS_BLOQUE_CHOICES
         ],
+        "variables_decision": _variables_para_decisiones(
+            servicio, config_mostrada.bloques.all() if config_mostrada is not None else ()
+        ),
         "bloque_general_form": BloqueGeneralForm(prefix="nuevo") if editable else None,
         "form_actividad_nuevo": ActividadConfigForm(prefix="nuevo-config"),
         "form_espera_nuevo": EsperaConfigForm(prefix="nuevo-config"),
@@ -1056,6 +1072,7 @@ def _contexto_ejecucion(servicio, despues=None, plantilla=None):
         "version_ejecucion": version_mostrada,
         "editable_ejecucion": version_borrador is not None,
         "ancla": _ancla_urls_servicio(servicio),
+        "variables_decision": _variables_para_decisiones(servicio),
     }
     contexto.update(_contexto_bloques(version_borrador, version_mostrada, despues))
     return contexto

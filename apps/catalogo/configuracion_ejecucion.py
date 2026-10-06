@@ -124,6 +124,8 @@ def crear_nueva_version_configuracion(servicio, actor, *, workflow_version=None,
                 fase=bloque.fase,
                 tipo=bloque.tipo,
                 nombre=bloque.nombre,
+                # 4.B0: la clave es la identidad estable del bloque entre versiones.
+                clave=bloque.clave,
                 descripcion=bloque.descripcion,
                 orden=bloque.orden,
                 configuracion=bloque.configuracion,
@@ -167,7 +169,9 @@ def preparar_configuracion_ejecucion(servicio, actor):
 
 
 @transaction.atomic
-def agregar_bloque_operativo(version, actor, *, fase, tipo, nombre, descripcion="", orden=None, configuracion=None):
+def agregar_bloque_operativo(
+    version, actor, *, fase, tipo, nombre, descripcion="", orden=None, configuracion=None, clave=""
+):
     _exigir_administracion(actor)
     version = ConfiguracionEjecucionVersion.objects.select_for_update().get(pk=version.pk)
     version.exigir_editable()
@@ -181,6 +185,7 @@ def agregar_bloque_operativo(version, actor, *, fase, tipo, nombre, descripcion=
         fase=fase,
         tipo=tipo,
         nombre=nombre,
+        clave=clave,
         descripcion=descripcion,
         orden=orden,
         configuracion=configuracion or {},
@@ -257,7 +262,9 @@ def eliminar_transicion_bloque_operativo(transicion, actor):
 
 
 @transaction.atomic
-def editar_bloque_operativo(version, bloque, actor, *, nombre=None, descripcion=None, orden=None, configuracion=None):
+def editar_bloque_operativo(
+    version, bloque, actor, *, nombre=None, descripcion=None, orden=None, configuracion=None, clave=None
+):
     _exigir_administracion(actor)
     version = ConfiguracionEjecucionVersion.objects.select_for_update().get(pk=version.pk)
     version.exigir_editable()
@@ -267,8 +274,13 @@ def editar_bloque_operativo(version, bloque, actor, *, nombre=None, descripcion=
     anterior = serializar(bloque)
     campos = []
     if nombre is not None:
+        # Renombrar NO cambia la clave: es la identidad estable del bloque (4.B0).
         bloque.nombre = nombre
         campos.append("nombre")
+    if clave:
+        # Cambio explícito de identidad, solo posible mientras la configuración es BORRADOR.
+        bloque.clave = clave
+        campos.append("clave")
     if descripcion is not None:
         bloque.descripcion = descripcion
         campos.append("descripcion")

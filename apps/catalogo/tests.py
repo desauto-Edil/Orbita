@@ -5197,3 +5197,398 @@ class BusquedaPorNecesidadTests(TestCase):
         muchas = self._consultas("vacaciones descanso")
         self.assertEqual(pocas, muchas)
         self.assertLessEqual(muchas, 3)
+
+
+# ---------------------------------------------------------------------------
+# 4.B0 — claves estables de Campo y BloqueOperativo
+# ---------------------------------------------------------------------------
+
+
+class ClavesPurasTests(SimpleTestCase):
+    """`apps.catalogo.claves`: funciones puras de generación y formato."""
+
+    def test_clave_desde_texto_normaliza_a_identificador_legible(self):
+        from apps.catalogo import claves
+
+        self.assertEqual(claves.clave_desde_texto("Valor estimado", por_defecto="campo"), "valor_estimado")
+        self.assertEqual(claves.clave_desde_texto("  ¿Tipo de CLIENTE?  ", por_defecto="campo"), "tipo_de_cliente")
+        self.assertEqual(claves.clave_desde_texto("Aprobación del jefe", por_defecto="bloque"), "aprobacion_del_jefe")
+
+    def test_clave_sin_caracteres_utilizables_usa_el_valor_por_defecto(self):
+        from apps.catalogo import claves
+
+        self.assertEqual(claves.clave_desde_texto("¿?!", por_defecto="campo"), "campo")
+        self.assertEqual(claves.clave_desde_texto("", por_defecto="aprobacion"), "aprobacion")
+
+    def test_clave_que_empieza_con_numero_se_prefija(self):
+        from apps.catalogo import claves
+
+        clave = claves.clave_desde_texto("2024 meta", por_defecto="campo")
+        self.assertEqual(clave, "campo_2024_meta")
+        claves.validar_clave(clave)
+
+    def test_clave_larga_se_recorta_al_maximo(self):
+        from apps.catalogo import claves
+
+        clave = claves.clave_desde_texto("palabra " * 30, por_defecto="campo")
+        self.assertLessEqual(len(clave), claves.LARGO_MAXIMO)
+        claves.validar_clave(clave)
+
+    def test_colisiones_reciben_sufijo_determinista(self):
+        from apps.catalogo import claves
+
+        self.assertEqual(claves.clave_unica("tipo_cliente", []), "tipo_cliente")
+        self.assertEqual(claves.clave_unica("tipo_cliente", ["tipo_cliente"]), "tipo_cliente_2")
+        self.assertEqual(claves.clave_unica("tipo_cliente", ["tipo_cliente", "tipo_cliente_2"]), "tipo_cliente_3")
+
+    def test_sufijo_cabe_dentro_del_maximo_aunque_la_base_ya_lo_llene(self):
+        from apps.catalogo import claves
+
+        base = "a" * claves.LARGO_MAXIMO
+        resultado = claves.clave_unica(base, [base])
+        self.assertLessEqual(len(resultado), claves.LARGO_MAXIMO)
+        self.assertTrue(resultado.endswith("_2"))
+
+    def test_validar_clave_acepta_y_rechaza_formatos(self):
+        from apps.catalogo import claves
+
+        for valida in ("valor_estimado", "a", "monto_2"):
+            claves.validar_clave(valida)
+        for invalida in ("Valor", "valor estimado", "1valor", "valor.estimado", "_valor", "valor-x"):
+            with self.assertRaises(ValidationError, msg=invalida):
+                claves.validar_clave(invalida)
+
+
+class CampoClaveTests(TestCase):
+    def setUp(self):
+        self.actor = Usuario.objects.create_user(username="clave_actor", password=CLAVE_PRUEBA)
+        self.formulario = Formulario.objects.create(nombre="Formulario con claves")
+        self.version = crear_nueva_version(self.formulario, self.actor)
+
+    def _campo(self, etiqueta, version=None, **extra):
+        return Campo.objects.create(
+            version=version or self.version, tipo=Campo.TipoCampo.TEXTO, etiqueta=etiqueta, **extra
+        )
+
+    def test_campo_nuevo_genera_su_clave_desde_la_etiqueta(self):
+        self.assertEqual(self._campo("Valor estimado").clave, "valor_estimado")
+
+    def test_colision_dentro_de_la_version_usa_sufijo(self):
+        self.assertEqual(self._campo("Tipo cliente").clave, "tipo_cliente")
+        self.assertEqual(self._campo("Tipo cliente").clave, "tipo_cliente_2")
+        self.assertEqual(self._campo("Tipo  Cliente!").clave, "tipo_cliente_3")
+
+    def test_clave_explicita_se_respeta(self):
+        self.assertEqual(self._campo("Valor estimado", clave="monto").clave, "monto")
+
+    def test_la_clave_es_unica_dentro_de_la_version(self):
+        self._campo("Uno", clave="monto")
+        duplicado = Campo(version=self.version, tipo=Campo.TipoCampo.TEXTO, etiqueta="Dos", clave="monto")
+        with self.assertRaises(ValidationError) as ctx:
+            duplicado.full_clean()
+        self.assertIn("clave", ctx.exception.message_dict)
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                duplicado.save()
+
+    def test_el_mismo_nombre_es_valido_en_formularios_distintos(self):
+        otro = Formulario.objects.create(nombre="Otro formulario")
+        version_otro = crear_nueva_version(otro, self.actor)
+        self.assertEqual(self._campo("Monto").clave, "monto")
+        self.assertEqual(self._campo("Monto", version=version_otro).clave, "monto")
+
+    def test_la_clave_tambien_se_repite_entre_versiones_del_mismo_formulario(self):
+        campo = self._campo("Monto")
+        activar_version(self.formulario, self.version, self.actor)
+        nueva = crear_nueva_version(self.formulario, self.actor)
+        self.assertEqual(nueva.campos.get().clave, campo.clave)
+
+    def test_cambiar_la_etiqueta_no_cambia_la_identidad(self):
+        campo = self._campo("Valor estimado")
+        campo.etiqueta = "Valor total estimado"
+        campo.save()
+        campo.refresh_from_db()
+        self.assertEqual(campo.clave, "valor_estimado")
+
+    def test_clonar_conserva_la_clave_y_renombrar_el_borrador_no_la_cambia(self):
+        campo = self._campo("Valor estimado")
+        activar_version(self.formulario, self.version, self.actor)
+        nueva = crear_nueva_version(self.formulario, self.actor)
+        clon = nueva.campos.get()
+        self.assertNotEqual(clon.pk, campo.pk)
+        self.assertEqual((clon.etiqueta, clon.clave), ("Valor estimado", "valor_estimado"))
+        clon.etiqueta = "Valor total estimado"
+        clon.save()
+        clon.refresh_from_db()
+        self.assertEqual(clon.clave, "valor_estimado")
+
+    def test_la_clave_se_puede_cambiar_explicitamente_solo_en_borrador(self):
+        campo = self._campo("Valor estimado")
+        campo.clave = "monto_estimado"
+        campo.save()
+        campo.refresh_from_db()
+        self.assertEqual(campo.clave, "monto_estimado")
+
+        activar_version(self.formulario, self.version, self.actor)
+        campo.refresh_from_db()
+        campo.clave = "otra"
+        with self.assertRaises(ValidationError):
+            campo.save()
+
+    def test_save_parcial_sin_clave_la_completa(self):
+        campo = self._campo("Monto")
+        Campo.objects.filter(pk=campo.pk).update(clave="")
+        campo.refresh_from_db()
+        campo.etiqueta = "Monto nuevo"
+        campo.save(update_fields=["etiqueta"])
+        campo.refresh_from_db()
+        self.assertEqual(campo.clave, "monto_nuevo")
+
+    def test_formulario_de_studio_vacio_conserva_la_clave_al_editar_y_genera_al_crear(self):
+        from apps.catalogo.forms import CampoForm
+
+        campo = self._campo("Valor estimado")
+        datos = {"tipo": "TEXTO", "etiqueta": "Valor total estimado", "clave": "", "orden": 0}
+        form = CampoForm(datos, instance=campo)
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["clave"], "valor_estimado")
+
+        nuevo = CampoForm({"tipo": "TEXTO", "etiqueta": "Otro", "clave": "", "orden": 1})
+        self.assertTrue(nuevo.is_valid(), nuevo.errors)
+        self.assertEqual(nuevo.cleaned_data["clave"], "")  # `Campo.save` la genera
+
+    def test_formulario_de_studio_normaliza_y_valida_la_clave(self):
+        from apps.catalogo.forms import CampoForm
+
+        form = CampoForm({"tipo": "TEXTO", "etiqueta": "X", "clave": "Mi-Clave", "orden": 0})
+        self.assertTrue(form.is_valid(), form.errors)
+        self.assertEqual(form.cleaned_data["clave"], "mi_clave")
+        invalido = CampoForm({"tipo": "TEXTO", "etiqueta": "X", "clave": "1mala", "orden": 0})
+        self.assertFalse(invalido.is_valid())
+        self.assertIn("clave", invalido.errors)
+
+
+class _EscenarioBloquesClaveMixin:
+    """Plantilla de fases publicada + dos Servicios que la usan (4.B0)."""
+
+    def _preparar_escenario_bloques(self):
+        from apps.workflows import fases as fases_ops
+        from apps.workflows.versionamiento import activar_version as activar_workflow
+
+        self.actor = Usuario.objects.create_user(username="bloque_clave", password=CLAVE_PRUEBA)
+        _otorgar_permiso(self.actor, "catalogo.administrar", nombre_rol="Catalogo claves de bloque")
+        categoria = Categoria.objects.create(nombre="Claves")
+        self.servicio = Servicio.objects.create(nombre="Servicio con claves", categoria=categoria)
+        self.otro_servicio = Servicio.objects.create(nombre="Otro servicio con claves", categoria=categoria)
+        self.workflow = fases_ops.crear_plantilla_fases(self.actor, nombre="Plantilla de claves")
+        self.workflow_version = self.workflow.versiones.get(numero=1)
+        self.fase = fases_ops.agregar_fase(self.workflow_version, self.actor, nombre="Recepcion")
+        self.fase_dos = fases_ops.agregar_fase(self.workflow_version, self.actor, nombre="Revision")
+        fases_ops.conectar_fases(self.fase, self.fase_dos, self.actor)
+        activar_workflow(self.workflow, self.workflow_version, actor=self.actor)
+        for servicio in (self.servicio, self.otro_servicio):
+            servicio.workflow = self.workflow
+            servicio.save(update_fields=["workflow", "actualizado_en"])
+
+    def _version(self, servicio=None):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        return crear_nueva_version_configuracion(servicio or self.servicio, self.actor)
+
+    def _bloque(self, version, nombre, fase=None, tipo=BloqueOperativo.Tipo.ACTIVIDAD, **extra):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo
+
+        return agregar_bloque_operativo(
+            version, self.actor, fase=fase or self.fase, tipo=tipo, nombre=nombre,
+            configuracion={"tipo_actor": "SOLICITANTE"}, **extra,
+        )
+
+
+class BloqueClaveTests(_EscenarioBloquesClaveMixin, TestCase):
+    """`BloqueOperativo.clave`: única por configuración (`version`), no global."""
+
+    def setUp(self):
+        self._preparar_escenario_bloques()
+
+    def test_la_clave_se_genera_desde_el_nombre(self):
+        bloque = self._bloque(self._version(), "Aprobación del jefe inmediato")
+        self.assertEqual(bloque.clave, "aprobacion_del_jefe_inmediato")
+
+    def test_nombre_sin_texto_usa_el_tipo(self):
+        bloque = self._bloque(self._version(), "???", tipo=BloqueOperativo.Tipo.ACTIVIDAD)
+        self.assertEqual(bloque.clave, "actividad")
+
+    def test_colision_en_la_misma_configuracion_usa_sufijo(self):
+        version = self._version()
+        self.assertEqual(self._bloque(version, "Revisar").clave, "revisar")
+        self.assertEqual(self._bloque(version, "Revisar").clave, "revisar_2")
+        self.assertEqual(self._bloque(version, "Revisar", fase=self.fase_dos).clave, "revisar_3")
+
+    def test_unicidad_es_por_configuracion_no_global(self):
+        v1 = self._version()
+        v2 = self._version(self.otro_servicio)
+        self.assertEqual(self._bloque(v1, "Revisar").clave, "revisar")
+        self.assertEqual(self._bloque(v2, "Revisar").clave, "revisar")
+
+    def test_clave_explicita_duplicada_en_la_configuracion_se_rechaza(self):
+        version = self._version()
+        self._bloque(version, "Uno", clave="aprobacion_jefe")
+        with self.assertRaises(ValidationError):
+            self._bloque(version, "Dos", clave="aprobacion_jefe")
+
+    def test_constraint_de_base_de_datos_respalda_la_unicidad(self):
+        version = self._version()
+        bloque = self._bloque(version, "Uno", clave="k")
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                BloqueOperativo.objects.filter(pk=bloque.pk).update(clave="k")
+                otro = self._bloque(version, "Dos")
+                BloqueOperativo.objects.filter(pk=otro.pk).update(clave="k")
+
+    def test_clonar_la_configuracion_conserva_las_claves(self):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        version = self._version()
+        a = self._bloque(version, "Aprobación jefe")
+        b = self._bloque(version, "Aprobación jefe", fase=self.fase_dos)
+        clon = crear_nueva_version_configuracion(self.servicio, self.actor, clonar_desde=version)
+        claves_clon = list(clon.bloques.order_by("fase_id", "orden").values_list("clave", flat=True))
+        self.assertEqual(claves_clon, [a.clave, b.clave])
+        self.assertEqual(set(claves_clon), {"aprobacion_jefe", "aprobacion_jefe_2"})
+
+    def test_renombrar_el_bloque_no_cambia_su_clave(self):
+        from apps.catalogo.configuracion_ejecucion import editar_bloque_operativo
+
+        version = self._version()
+        bloque = self._bloque(version, "Aprobación jefe")
+        editar_bloque_operativo(version, bloque, self.actor, nombre="Visto bueno del jefe")
+        bloque.refresh_from_db()
+        self.assertEqual((bloque.nombre, bloque.clave), ("Visto bueno del jefe", "aprobacion_jefe"))
+
+    def test_la_clave_se_cambia_explicitamente_solo_mientras_es_borrador(self):
+        from apps.catalogo.configuracion_ejecucion import (
+            activar_configuracion_ejecucion,
+            editar_bloque_operativo,
+        )
+
+        version = self._version()
+        bloque = self._bloque(version, "Aprobación jefe")
+        self._bloque(version, "Segunda", fase=self.fase_dos)
+        editar_bloque_operativo(version, bloque, self.actor, clave="aprobacion_directa")
+        bloque.refresh_from_db()
+        self.assertEqual(bloque.clave, "aprobacion_directa")
+        with self.assertRaises(ValidationError):
+            editar_bloque_operativo(version, bloque, self.actor, clave="Mala Clave")
+
+        activar_configuracion_ejecucion(self.servicio, version, self.actor)
+        version.refresh_from_db()
+        with self.assertRaises(ValidationError):
+            editar_bloque_operativo(version, bloque, self.actor, clave="otra")
+
+
+class AyudaDeVariablesStudioTests(_EscenarioBloquesClaveMixin, TestCase):
+    """Studio muestra al configurar una DECISION qué referencias existen."""
+
+    def setUp(self):
+        self._preparar_escenario_bloques()
+
+    def _servicio_con_formulario_y_aprobacion(self):
+        formulario = Formulario.objects.create(nombre="Entrada con variables")
+        version_formulario = crear_nueva_version(formulario, self.actor)
+        Campo.objects.create(version=version_formulario, tipo=Campo.TipoCampo.NUMERO, etiqueta="Valor estimado")
+        activar_version(formulario, version_formulario, self.actor)
+        self.servicio.formulario = formulario
+        self.servicio.save(update_fields=["formulario", "actualizado_en"])
+        version = self._version()
+        self._bloque(
+            version, "Aprobación jefe", tipo=BloqueOperativo.Tipo.APROBACION,
+        )
+        self._bloque(version, "Atender", fase=self.fase_dos)
+        return version
+
+    def test_las_referencias_disponibles_incluyen_ticket_formulario_y_aprobaciones(self):
+        from apps.catalogo import studio
+
+        version = self._servicio_con_formulario_y_aprobacion()
+        referencias = [r for r, _ in studio._variables_para_decisiones(self.servicio, version.bloques.all())]
+        self.assertIn("ticket.estado", referencias)
+        self.assertIn("formulario.valor_estimado", referencias)
+        self.assertIn("aprobaciones.aprobacion_jefe.resultado", referencias)
+        self.assertFalse(any(r.startswith("aprobaciones.atender") for r in referencias))
+
+    def test_servicio_sin_formulario_solo_ofrece_lo_que_existe(self):
+        from apps.catalogo import studio
+
+        referencias = [r for r, _ in studio._variables_para_decisiones(self.servicio)]
+        self.assertIn("ticket.estado", referencias)
+        self.assertFalse(any(r.startswith("formulario.") for r in referencias))
+
+    def test_el_parcial_muestra_los_ejemplos_y_se_oculta_sin_variables(self):
+        from django.template.loader import render_to_string
+
+        html = render_to_string(
+            "catalogo/_variables_decision.html",
+            {"variables_decision": [("formulario.valor_estimado", "Respuesta del campo «Valor estimado»")]},
+        )
+        self.assertIn("¿Qué variable puedo usar?", html)
+        self.assertIn("formulario.valor_estimado", html)
+        self.assertEqual(render_to_string("catalogo/_variables_decision.html", {}).strip(), "")
+
+
+class BackfillClavesTests(_EscenarioBloquesClaveMixin, TestCase):
+    """La migración 0016 asigna claves deterministas por versión (sin inferir
+    identidad entre versiones). Se prueba la función de datos de la migración
+    contra filas a las que se les borró la clave, como las previas a 4.B0."""
+
+    def setUp(self):
+        import importlib
+
+        from django.apps import apps as registro
+
+        self.asignar = importlib.import_module("apps.catalogo.migrations.0016_claves_estables").asignar_claves
+        self.registro = registro
+        self.actor = Usuario.objects.create_user(username="backfill_actor", password=CLAVE_PRUEBA)
+
+    def _formulario_historico(self, nombre, etiquetas):
+        formulario = Formulario.objects.create(nombre=nombre)
+        version = crear_nueva_version(formulario, self.actor)
+        for orden, etiqueta in enumerate(etiquetas):
+            Campo.objects.create(version=version, tipo=Campo.TipoCampo.TEXTO, etiqueta=etiqueta, orden=orden)
+        Campo.objects.filter(version=version).update(clave="")  # como antes de 4.B0
+        return formulario, version
+
+    def test_backfill_de_campos_resuelve_colisiones_en_orden(self):
+        _, version = self._formulario_historico("Hist", ["Tipo cliente", "Valor total", "Tipo cliente"])
+        self.asignar(self.registro, None)
+        claves = list(version.campos.order_by("orden").values_list("clave", flat=True))
+        self.assertEqual(claves, ["tipo_cliente", "valor_total", "tipo_cliente_2"])
+
+    def test_versiones_con_las_mismas_etiquetas_reciben_las_mismas_claves(self):
+        _, v1 = self._formulario_historico("Hist uno", ["Tipo cliente", "Tipo cliente"])
+        _, v2 = self._formulario_historico("Hist dos", ["Tipo cliente", "Tipo cliente"])
+        self.asignar(self.registro, None)
+        self.assertEqual(
+            list(v1.campos.order_by("orden").values_list("clave", flat=True)),
+            list(v2.campos.order_by("orden").values_list("clave", flat=True)),
+        )
+
+    def test_el_backfill_no_toca_claves_existentes_ni_actualizado_en(self):
+        _, version = self._formulario_historico("Hist", ["Uno", "Dos"])
+        uno = version.campos.get(etiqueta="Uno")
+        Campo.objects.filter(pk=uno.pk).update(clave="personalizada")
+        antes = {c.pk: c.actualizado_en for c in version.campos.all()}
+        self.asignar(self.registro, None)
+        self.assertEqual(version.campos.get(etiqueta="Uno").clave, "personalizada")
+        self.assertEqual(version.campos.get(etiqueta="Dos").clave, "dos")
+        self.assertEqual({c.pk: c.actualizado_en for c in version.campos.all()}, antes)
+
+    def test_backfill_de_bloques_usa_nombre_y_resuelve_colisiones(self):
+        self._preparar_escenario_bloques()
+        version = self._version()
+        self._bloque(version, "Revisar")
+        self._bloque(version, "Revisar")
+        self._bloque(version, "Aprobación jefe", fase=self.fase_dos)
+        BloqueOperativo.objects.filter(version=version).update(clave="")
+        self.asignar(self.registro, None)
+        claves = list(version.bloques.order_by("fase_id", "orden").values_list("clave", flat=True))
+        self.assertEqual(claves, ["revisar", "revisar_2", "aprobacion_jefe"])

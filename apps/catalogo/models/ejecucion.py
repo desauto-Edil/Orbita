@@ -2,6 +2,7 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q, UniqueConstraint
 
+from apps.catalogo import claves
 from apps.core.models import RegistroBase
 
 
@@ -79,6 +80,15 @@ class BloqueOperativo(RegistroBase):
     fase = models.ForeignKey("workflows.FaseWorkflow", on_delete=models.PROTECT, related_name="bloques_operativos")
     tipo = models.CharField(max_length=20, choices=Tipo.choices)
     nombre = models.CharField(max_length=150)
+    # Identidad estable (4.B0): referencia de los resultados del bloque
+    # (`aprobaciones.<clave>.resultado`). NO es el nombre ni el pk. Única DENTRO de
+    # su configuración (`version`), se genera una vez desde el nombre, se copia al
+    # clonar la configuración y solo cambia explícitamente mientras es BORRADOR.
+    clave = models.SlugField(
+        max_length=claves.LARGO_MAXIMO, blank=True, default="", db_index=False,
+        validators=[claves.validar_clave],
+        help_text="Identificador estable del bloque para referenciar sus resultados.",
+    )
     descripcion = models.TextField(blank=True)
     orden = models.PositiveIntegerField()
     configuracion = models.JSONField(default=dict, blank=True)
@@ -86,6 +96,9 @@ class BloqueOperativo(RegistroBase):
     class Meta:
         constraints = [
             UniqueConstraint(fields=["version", "fase", "orden"], name="uq_bloqueop_version_fase_orden"),
+            UniqueConstraint(
+                fields=["version", "clave"], condition=~Q(clave=""), name="uq_bloqueop_version_clave"
+            ),
         ]
         ordering = ["version_id", "fase_id", "orden", "id"]
 
@@ -94,10 +107,28 @@ class BloqueOperativo(RegistroBase):
             return
         if self.fase.version_id != self.version.workflow_version_id:
             raise ValidationError("El bloque debe pertenecer a una fase de la version de Workflow configurada.")
+        if self.clave:
+            repetida = BloqueOperativo.objects.filter(version_id=self.version_id, clave=self.clave).exclude(pk=self.pk)
+            if repetida.exists():
+                raise ValidationError({"clave": "Ya existe otro bloque con esa clave en esta configuracion."})
+
+    def _asegurar_clave(self):
+        """Genera la clave desde el nombre SOLO si no tiene. Renombrar el bloque no la cambia."""
+        if self.clave:
+            return False
+        existentes = (
+            BloqueOperativo.objects.filter(version_id=self.version_id).exclude(pk=self.pk).values_list("clave", flat=True)
+        )
+        base = claves.clave_desde_texto(self.nombre, por_defecto=self.tipo.lower() or "bloque")
+        self.clave = claves.clave_unica(base, existentes)
+        return True
 
     def save(self, *args, **kwargs):
         self.version.exigir_editable()
+        generada = self._asegurar_clave()
         self.clean()
+        if generada and kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = [*kwargs["update_fields"], "clave"]
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):

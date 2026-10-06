@@ -75,6 +75,7 @@
                   <span class="svc-field-row__order">0{{ forloop.counter }}</span>
                   <span class="svc-field-row__name">{{ campo.etiqueta }}</span>
                   <span class="svc-tag">{{ campo.get_tipo_display }}</span>
+                  {% if campo.clave %}<span class="svc-tag" title="Así se referencia en las decisiones de un flujo">formulario.{{ campo.clave }}</span>{% endif %}
                   {% if campo.obligatorio %}<span class="svc-tag svc-tag--accent">Obligatorio</span>{% endif %}
                 </div>
                 {% if editable_entrada %}
@@ -92,6 +93,7 @@
                       <div class="svc-form-grid svc-form-grid--two">
                         <div class="field">{{ campo.form_editar.tipo.label_tag }}{{ campo.form_editar.tipo }}</div>
                         <div class="field">{{ campo.form_editar.etiqueta.label_tag }}{{ campo.form_editar.etiqueta }}</div>
+                        <div class="field">{{ campo.form_editar.clave.label_tag }}{{ campo.form_editar.clave }}<small class="text-muted">{{ campo.form_editar.clave.help_text }}</small></div>
                         <div class="field">{{ campo.form_editar.ayuda.label_tag }}{{ campo.form_editar.ayuda }}</div>
                         <div class="field">{{ campo.form_editar.orden.label_tag }}{{ campo.form_editar.orden }}</div>
                       </div>
@@ -150,6 +152,7 @@
               <div class="svc-form-grid svc-form-grid--two">
                 <div class="field">{{ campo_form_nuevo.tipo.label_tag }}{{ campo_form_nuevo.tipo }}</div>
                 <div class="field">{{ campo_form_nuevo.etiqueta.label_tag }}{{ campo_form_nuevo.etiqueta }}</div>
+                <div class="field">{{ campo_form_nuevo.clave.label_tag }}{{ campo_form_nuevo.clave }}<small class="text-muted">{{ campo_form_nuevo.clave.help_text }}</small></div>
                 <div class="field">{{ campo_form_nuevo.ayuda.label_tag }}{{ campo_form_nuevo.ayuda }}</div>
                 <div class="field">{{ campo_form_nuevo.orden.label_tag }}{{ campo_form_nuevo.orden }}</div>
               </div>

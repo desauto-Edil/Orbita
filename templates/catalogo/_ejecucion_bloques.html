@@ -75,6 +75,7 @@
 
                 {% if fila.tipo_empresarial == "DECISION" %}
                   <h4>Condiciones</h4>
+                  {% include "catalogo/_variables_decision.html" %}
                   {% for item in fila.condicionales %}
                     <form method="post" action="{% url ancla.url_cond_editar ancla.pk fila.etapa.pk item.transicion.pk %}" class="form">
                       {% csrf_token %}

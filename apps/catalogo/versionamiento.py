@@ -46,6 +46,8 @@ def crear_nueva_version(formulario, actor, clonar_desde=None):
                 version=nueva,
                 tipo=campo.tipo,
                 etiqueta=campo.etiqueta,
+                # 4.B0: la clave es la identidad estable del campo entre versiones.
+                clave=campo.clave,
                 ayuda=campo.ayuda,
                 obligatorio=campo.obligatorio,
                 orden=campo.orden,

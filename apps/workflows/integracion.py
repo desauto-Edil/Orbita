@@ -84,9 +84,13 @@ def resolver_aprobacion_workflow(aprobacion, actor, *, decision, observacion="")
     ejecucion = vinculo.instancia_etapa
     definicion = ejecucion.etapa or ejecucion.bloque_operativo
     transicion = definicion.transiciones_salientes.get(resultado_aprobacion=esquema.resultado)
+    # 4.B0: además de elegir la ruta por `resultado_aprobacion` (sin cambios), el
+    # resultado queda publicado por la clave estable del bloque para que una
+    # DECISION posterior lo consulte (`aprobaciones.<clave>.resultado`).
     continuar_espera_externa(
         ejecucion,
         motivo_espera=InstanciaEtapa.MotivoEspera.APROBACION,
         transicion_seleccionada=transicion,
+        resultado_bloque=("aprobaciones", {"resultado": esquema.resultado}),
     )
     return aprobacion, esquema

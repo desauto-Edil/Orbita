@@ -55,6 +55,7 @@ from apps.core.models import RegistroAuditoria
 from apps.workflows.contexto import (
     aplicar_variables,
     construir_contexto_inicial,
+    publicar_resultado_bloque,
     registrar_resultado_etapa,
 )
 from apps.workflows.estrategias import ESTRATEGIAS_POR_TIPO, ResultadoEjecucion
@@ -604,7 +605,9 @@ def reanudar_instancia(instancia, *, actor=None):
 
 
 @transaction.atomic
-def continuar_espera_externa(instancia_etapa, *, motivo_espera, transicion_seleccionada=None):
+def continuar_espera_externa(
+    instancia_etapa, *, motivo_espera, transicion_seleccionada=None, resultado_bloque=None
+):
     """Núcleo genérico para liberar una espera EXTERNA (no temporal) —
     3.3, W.7 (corrección aprobada); 3.4 agrega `transicion_seleccionada`.
     La usa `apps.workflows.integracion.completar_tarea_workflow` (TAREA,
@@ -632,7 +635,15 @@ def continuar_espera_externa(instancia_etapa, *, motivo_espera, transicion_selec
     importar `apps.tareas`/`apps.aprobaciones` ni ningún otro dominio
     externo: recibe `instancia_etapa` (ya suya), una cadena
     (`motivo_espera`) y, opcionalmente, una `TransicionEtapa` ya resuelta
-    por el dominio que llama (RN-021: el motor nunca decide cuál)."""
+    por el dominio que llama (RN-021: el motor nunca decide cuál).
+
+    4.B0 — `resultado_bloque=(ambito, datos)`: además de continuar, publica en el
+    contexto el resultado de ESTE bloque por su clave estable
+    (`contexto.publicar_resultado_bloque`), bajo el mismo lock de la instancia y solo
+    mientras la ejecución sigue EN_ESPERA (una ejecución COMPLETADA no puede volver a
+    publicar). Es ADICIONAL: no cambia qué transición se toma. Solo aplica a bloques
+    de una configuración por fases (los de modo LEGACY no tienen clave) y se omite si
+    el bloque no tiene clave; nunca impide continuar."""
     instancia_etapa = InstanciaEtapa.objects.select_for_update().get(pk=instancia_etapa.pk)
     instancia = InstanciaWorkflow.objects.select_for_update().get(pk=instancia_etapa.instancia_workflow_id)
 
@@ -649,5 +660,12 @@ def continuar_espera_externa(instancia_etapa, *, motivo_espera, transicion_selec
         )
     if transicion_seleccionada is not None and getattr(transicion_seleccionada, "bloque_origen_id", getattr(transicion_seleccionada, "etapa_origen_id", None)) not in (instancia_etapa.etapa_id, instancia_etapa.bloque_operativo_id):
         raise ValueError("transicion_seleccionada no pertenece a la etapa de esta ejecución.")
+
+    if resultado_bloque is not None and instancia_etapa.bloque_operativo_id:
+        clave = instancia_etapa.bloque_operativo.clave
+        if clave:
+            ambito, datos = resultado_bloque
+            publicar_resultado_bloque(instancia.contexto, ambito, clave, datos)
+            instancia.save(update_fields=["contexto", "actualizado_en"])
 
     return _completar_ejecucion_en_espera(instancia, instancia_etapa, transicion_seleccionada=transicion_seleccionada)

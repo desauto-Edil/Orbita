@@ -198,8 +198,21 @@ class CampoForm(forms.ModelForm):
 
     class Meta:
         model = Campo
-        fields = ["tipo", "etiqueta", "ayuda", "obligatorio", "orden"]
+        fields = ["tipo", "etiqueta", "clave", "ayuda", "obligatorio", "orden"]
         widgets = {"ayuda": forms.Textarea(attrs={"rows": 2})}
+        labels = {"clave": "Clave (para flujos)"}
+        help_texts = {
+            "clave": "Identificador estable que usan las decisiones de un flujo "
+            "(formulario.<clave>). Vacío: se genera desde la etiqueta y no cambia al renombrarla."
+        }
+
+    def clean_clave(self):
+        """Vacío al crear = generarla desde la etiqueta (`Campo.save`); vacío al
+        editar = conservar la actual (nunca cambiar la identidad por omisión)."""
+        clave = (self.cleaned_data.get("clave") or "").strip().lower().replace("-", "_")
+        if not clave and self.instance.pk:
+            return self.instance.clave
+        return clave
 
     def configuracion_desde_tipo(self, tipo):
         """Arma el dict que la Strategy del tipo elegido realmente admite —

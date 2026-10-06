@@ -68,7 +68,8 @@ from datetime import date, datetime, time, timedelta
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-from apps.workflows.contexto import evaluar_operador, resolver_variable
+from apps.workflows.contexto import evaluar_operador
+from apps.workflows.variables import ResolutorVariables
 from apps.workflows.actores import resolver_actor
 
 
@@ -215,19 +216,24 @@ class EstrategiaCondicion(EstrategiaSinConfiguracion):
     """RQF-066/RN-021: la CONDICION —no el motor— decide qué transición
     sigue. Ordena por `prioridad` (orden ya garantizado por
     `TransicionEtapa.Meta.ordering`), evalúa cada transición no-fallback
-    contra `contexto["variables"]` y devuelve la primera que coincide; si
-    ninguna coincide, devuelve el fallback (estructuralmente garantizado
-    único por `validar_estructura`)."""
+    contra su variable y devuelve la primera que coincide; si ninguna coincide,
+    devuelve el fallback (estructuralmente garantizado único por
+    `validar_estructura`). 4.B0: la variable puede ser plana (`variables` del
+    contexto, como siempre) o una referencia punteada (`ticket.estado`,
+    `formulario.<clave>`, `aprobaciones.<clave>.resultado`) que resuelve
+    `apps.workflows.variables`; una variable inexistente nunca coincide. La
+    precedencia (prioridad → fallback) no cambia."""
 
     ejecutable = True
 
     def ejecutar(self, instancia_etapa, contexto):
         salientes = list(_definicion(instancia_etapa).transiciones_salientes.all())
         fallback = next((t for t in salientes if t.es_fallback), None)
+        resolutor = ResolutorVariables(getattr(instancia_etapa, "instancia_workflow", None), contexto)
         for transicion in salientes:
             if transicion.es_fallback:
                 continue
-            valor_actual = resolver_variable(contexto, transicion.variable)
+            valor_actual = resolutor.resolver(transicion.variable)
             if evaluar_operador(transicion.operador, valor_actual, transicion.valor):
                 return ResultadoEjecucionEtapa(
                     estado=ResultadoEjecucion.CONTINUAR, transicion_seleccionada=transicion

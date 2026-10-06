@@ -3879,3 +3879,276 @@ class ConcurrenciaActorTicketTests(_EscenarioActoresEjecucion, TransactionTestCa
         self.assertFalse(hilo.is_alive())
         self.assertEqual(resultados, ["completada"])
         self.assertEqual(self._tarea_vigente(ticket).usuario_responsable, self.nuevo)
+
+
+# ---------------------------------------------------------------------------
+# 4.B0 — variables y resultados del motor
+# ---------------------------------------------------------------------------
+
+
+class EvaluacionTipadaTests(TestCase):
+    """`contexto.evaluar_operador`: tipos lógicos e INEXISTENTE ≠ NULL."""
+
+    def _ev(self, operador, actual, valor="x"):
+        from apps.workflows.contexto import evaluar_operador
+
+        return evaluar_operador(operador, actual, valor)
+
+    def test_inexistente_es_un_singleton_falso_que_no_es_none(self):
+        from apps.workflows.contexto import INEXISTENTE, _Inexistente
+
+        self.assertIs(INEXISTENTE, _Inexistente())
+        self.assertFalse(INEXISTENTE)
+        self.assertIsNot(INEXISTENTE, None)
+
+    def test_ninguna_condicion_se_cumple_con_variable_inexistente(self):
+        from apps.workflows.contexto import INEXISTENTE, OPERADORES
+
+        for operador in OPERADORES:
+            self.assertFalse(self._ev(operador, INEXISTENTE, "x"), operador)
+            self.assertFalse(self._ev(operador, INEXISTENTE, "1"), operador)
+
+    def test_variable_existente_con_null_se_distingue_de_inexistente(self):
+        self.assertTrue(self._ev("ESTA_VACIO", None))
+        self.assertFalse(self._ev("NO_ESTA_VACIO", None))
+        self.assertFalse(self._ev("IGUAL_A", None, "x"))
+        self.assertTrue(self._ev("DISTINTO_DE", None, "x"))
+        self.assertTrue(self._ev("NO_CONTIENE", None, "x"))
+        self.assertFalse(self._ev("MAYOR_QUE", None, "1"))
+        self.assertFalse(self._ev("MENOR_QUE", None, "1"))
+
+    def test_numeros_se_comparan_como_numeros_no_como_texto(self):
+        from decimal import Decimal
+
+        self.assertTrue(self._ev("MAYOR_QUE", 10, "2"))
+        self.assertTrue(self._ev("MENOR_QUE", 2, "10"))
+        self.assertTrue(self._ev("MAYOR_QUE", Decimal("10.50"), "9"))
+        self.assertTrue(self._ev("IGUAL_A", 2.5, "2.5"))
+        self.assertTrue(self._ev("IGUAL_A", 5, "5.0"))
+        self.assertTrue(self._ev("IGUAL_A", Decimal("5.00"), "5"))
+        self.assertFalse(self._ev("MAYOR_QUE", Decimal("1.5"), "1.5"))
+
+    def test_texto_de_la_transicion_no_numerico_no_cumple_salvo_distinto(self):
+        self.assertFalse(self._ev("IGUAL_A", 5, "abc"))
+        self.assertFalse(self._ev("MAYOR_QUE", 5, "abc"))
+        self.assertTrue(self._ev("DISTINTO_DE", 5, "abc"))
+        self.assertFalse(self._ev("MAYOR_QUE", 5, ""))
+
+    def test_numeros_no_se_confunden_con_booleanos(self):
+        self.assertFalse(self._ev("IGUAL_A", 1, "true"))
+        self.assertTrue(self._ev("IGUAL_A", True, "1"))
+
+    def test_booleanos_se_interpretan_con_el_texto_de_la_transicion(self):
+        for texto in ("true", "True", "1", "sí", "Si", "verdadero"):
+            self.assertTrue(self._ev("IGUAL_A", True, texto), texto)
+            self.assertFalse(self._ev("IGUAL_A", False, texto), texto)
+        for texto in ("false", "False", "0", "no", "falso"):
+            self.assertTrue(self._ev("IGUAL_A", False, texto), texto)
+            self.assertFalse(self._ev("IGUAL_A", True, texto), texto)
+
+    def test_booleano_con_texto_ininterpretable_solo_cumple_distinto(self):
+        self.assertFalse(self._ev("IGUAL_A", False, "abc"))
+        self.assertTrue(self._ev("DISTINTO_DE", False, "abc"))
+
+    def test_false_y_cero_no_estan_vacios(self):
+        self.assertFalse(self._ev("ESTA_VACIO", False))
+        self.assertFalse(self._ev("ESTA_VACIO", 0))
+        self.assertTrue(self._ev("NO_ESTA_VACIO", 0))
+        self.assertTrue(self._ev("ESTA_VACIO", ""))
+        self.assertTrue(self._ev("ESTA_VACIO", []))
+
+    def test_texto_y_listas_conservan_su_semantica(self):
+        self.assertTrue(self._ev("IGUAL_A", "Alta", "Alta"))
+        self.assertFalse(self._ev("IGUAL_A", "Alta", "alta"))
+        self.assertTrue(self._ev("CONTIENE", "Prioridad alta", "alta"))
+        self.assertTrue(self._ev("CONTIENE", ["a", "b"], "a"))
+        self.assertTrue(self._ev("NO_CONTIENE", ["a", "b"], "c"))
+
+    def test_fechas_y_fechas_hora(self):
+        from datetime import date, datetime
+
+        from django.utils import timezone
+
+        dia = date(2026, 5, 1)
+        self.assertTrue(self._ev("IGUAL_A", dia, "2026-05-01"))
+        self.assertTrue(self._ev("MAYOR_QUE", dia, "2026-04-30"))
+        self.assertTrue(self._ev("MENOR_QUE", dia, "2026-12-31"))
+        self.assertFalse(self._ev("MAYOR_QUE", dia, "no es fecha"))
+        self.assertFalse(self._ev("MAYOR_QUE", dia, "2026-13-45"))
+
+        momento = timezone.make_aware(datetime(2026, 5, 1, 10, 30))
+        self.assertTrue(self._ev("MAYOR_QUE", momento, "2026-04-30"))
+        self.assertTrue(self._ev("MENOR_QUE", momento, "2026-05-02T00:00:00"))
+        self.assertFalse(self._ev("MAYOR_QUE", momento, "2026-05-02"))
+
+    def test_valores_incompatibles_no_son_un_error(self):
+        self.assertFalse(self._ev("CONTIENE", 5, "5"))
+        self.assertFalse(self._ev("NO_CONTIENE", 5, "5"))
+        self.assertFalse(self._ev("MAYOR_QUE", 5, "NaN"))
+
+
+class ContextoResultadosBloqueTests(TestCase):
+    def _contexto(self):
+        from apps.workflows.contexto import construir_contexto_inicial
+
+        return construir_contexto_inicial({"ticket_id": 7})
+
+    def test_el_contexto_inicial_incluye_resultados_de_bloques(self):
+        self.assertEqual(self._contexto()["resultados_bloques"], {})
+
+    def test_publicar_y_leer_un_resultado(self):
+        from apps.workflows.contexto import leer_resultado_bloque, publicar_resultado_bloque
+
+        contexto = self._contexto()
+        publicar_resultado_bloque(contexto, "aprobaciones", "aprobacion_jefe", {"resultado": "APROBADA"})
+        self.assertEqual(leer_resultado_bloque(contexto, "aprobaciones", "aprobacion_jefe", "resultado"), "APROBADA")
+
+    def test_publicar_no_pierde_otras_variables_ni_otros_bloques(self):
+        from apps.workflows.contexto import leer_resultado_bloque, publicar_resultado_bloque
+
+        contexto = self._contexto()
+        contexto["variables"]["monto"] = 5
+        publicar_resultado_bloque(contexto, "aprobaciones", "uno", {"resultado": "APROBADA"})
+        publicar_resultado_bloque(contexto, "aprobaciones", "dos", {"resultado": "RECHAZADA"})
+        self.assertEqual(contexto["variables"], {"monto": 5})
+        self.assertEqual(contexto["datos_iniciales"], {"ticket_id": 7})
+        self.assertEqual(leer_resultado_bloque(contexto, "aprobaciones", "uno", "resultado"), "APROBADA")
+        self.assertEqual(leer_resultado_bloque(contexto, "aprobaciones", "dos", "resultado"), "RECHAZADA")
+
+    def test_el_resultado_actual_reemplaza_al_anterior_del_mismo_bloque(self):
+        from apps.workflows.contexto import leer_resultado_bloque, publicar_resultado_bloque
+
+        contexto = self._contexto()
+        publicar_resultado_bloque(contexto, "aprobaciones", "uno", {"resultado": "DEVUELTA"})
+        publicar_resultado_bloque(contexto, "aprobaciones", "uno", {"resultado": "APROBADA"})
+        self.assertEqual(leer_resultado_bloque(contexto, "aprobaciones", "uno", "resultado"), "APROBADA")
+
+    def test_leer_lo_no_publicado_es_inexistente(self):
+        from apps.workflows.contexto import INEXISTENTE, leer_resultado_bloque
+
+        contexto = self._contexto()
+        self.assertIs(leer_resultado_bloque(contexto, "aprobaciones", "nadie", "resultado"), INEXISTENTE)
+        self.assertIs(leer_resultado_bloque({}, "aprobaciones", "nadie", "resultado"), INEXISTENTE)
+
+    def test_ambito_desconocido_o_bloque_sin_clave_no_se_publican(self):
+        from apps.workflows.contexto import publicar_resultado_bloque
+
+        contexto = self._contexto()
+        with self.assertRaises(ValueError):
+            publicar_resultado_bloque(contexto, "entregables", "uno", {"satisfecho": True})
+        with self.assertRaises(ValueError):
+            publicar_resultado_bloque(contexto, "aprobaciones", "", {"resultado": "APROBADA"})
+
+    def test_el_contexto_con_resultados_sigue_siendo_json_puro(self):
+        import json
+
+        from apps.workflows.contexto import publicar_resultado_bloque
+
+        contexto = self._contexto()
+        publicar_resultado_bloque(contexto, "aprobaciones", "uno", {"resultado": "APROBADA"})
+        json.dumps(contexto)
+
+    def test_variable_plana_existente_con_null_no_es_inexistente(self):
+        from apps.workflows.contexto import INEXISTENTE, resolver_variable
+
+        contexto = self._contexto()
+        contexto["variables"]["x"] = None
+        self.assertIsNone(resolver_variable(contexto, "x"))
+        self.assertIs(resolver_variable(contexto, "y"), INEXISTENTE)
+
+
+class ResolutorVariablesSinTicketTests(TestCase):
+    """Resolución de referencias que no necesitan un Ticket."""
+
+    def _resolutor(self, contexto):
+        from apps.workflows.variables import ResolutorVariables
+
+        return ResolutorVariables(None, contexto)
+
+    def test_variable_plana_legacy_sigue_resolviendose(self):
+        contexto = {"variables": {"monto": 100, "vacio": None}}
+        resolutor = self._resolutor(contexto)
+        self.assertEqual(resolutor.resolver("monto"), 100)
+        self.assertIsNone(resolutor.resolver("vacio"))
+
+    def test_variable_plana_inexistente(self):
+        from apps.workflows.contexto import INEXISTENTE
+
+        self.assertIs(self._resolutor({"variables": {}}).resolver("monto"), INEXISTENTE)
+        self.assertIs(self._resolutor({}).resolver("monto"), INEXISTENTE)
+
+    def test_resultado_de_aprobacion_por_clave_de_bloque(self):
+        contexto = {"resultados_bloques": {"aprobaciones": {"aprobacion_jefe": {"resultado": "APROBADA"}}}}
+        resolutor = self._resolutor(contexto)
+        self.assertEqual(resolutor.resolver("aprobaciones.aprobacion_jefe.resultado"), "APROBADA")
+
+    def test_referencias_mal_formadas_o_desconocidas_son_inexistentes(self):
+        from apps.workflows.contexto import INEXISTENTE
+
+        contexto = {"resultados_bloques": {"aprobaciones": {"uno": {"resultado": "APROBADA"}}}}
+        resolutor = self._resolutor(contexto)
+        for nombre in (
+            "aprobaciones.uno", "aprobaciones.uno.resultado.extra", "aprobaciones.otro.resultado",
+            "aprobaciones.uno.otro", "ultima.resultado", "entregables.uno.satisfecho", "", "ticket.estado",
+            "ticket.inexistente", "formulario.monto", "formulario", "ticket",
+        ):
+            self.assertIs(resolutor.resolver(nombre), INEXISTENTE, nombre)
+
+    def test_una_variable_plana_con_nombre_punteado_sigue_funcionando(self):
+        contexto = {"variables": {"a.b": 3}}
+        self.assertEqual(self._resolutor(contexto).resolver("a.b"), 3)
+
+    def test_referencias_disponibles_lista_ticket_formulario_y_aprobaciones(self):
+        from types import SimpleNamespace
+
+        from apps.workflows.variables import referencias_disponibles
+
+        campos = [SimpleNamespace(clave="valor_estimado", etiqueta="Valor estimado"), SimpleNamespace(clave="", etiqueta="Sin clave")]
+        bloques = [
+            SimpleNamespace(tipo="APROBACION", clave="aprobacion_jefe", nombre="Aprobación jefe"),
+            SimpleNamespace(tipo="ACTIVIDAD", clave="atender", nombre="Atender"),
+        ]
+        referencias = [r for r, _ in referencias_disponibles(campos=campos, bloques=bloques)]
+        self.assertIn("ticket.estado", referencias)
+        self.assertIn("formulario.valor_estimado", referencias)
+        self.assertIn("aprobaciones.aprobacion_jefe.resultado", referencias)
+        self.assertEqual(sum(1 for r in referencias if r.startswith("formulario.")), 1)
+        self.assertFalse(any("atender" in r for r in referencias))
+
+
+class VariablesLegacyEjecutableTests(TestCase):
+    """LEGACY_EJECUTABLE (Etapa) conserva su contrato con las variables planas."""
+
+    def setUp(self):
+        self.actor = get_user_model().objects.create_user("vars_legacy", password="Clave-Segura-123")
+
+    def test_variable_plana_numerica_alimenta_la_condicion(self):
+        workflow, etapas = _crear_workflow_activo_con_condicion(self.actor)
+        alta = iniciar_workflow(workflow, actor=self.actor, datos_iniciales={"monto": 2000000})
+        baja = iniciar_workflow(workflow, actor=self.actor, datos_iniciales={"monto": 99})
+        self.assertEqual(
+            alta.ejecuciones_etapa.get(etapa=etapas["condicion"]).transicion_tomada_id, etapas["condicional"].pk
+        )
+        self.assertEqual(
+            baja.ejecuciones_etapa.get(etapa=etapas["condicion"]).transicion_tomada_id, etapas["fallback"].pk
+        )
+
+    def test_el_orden_numerico_no_es_el_orden_del_texto(self):
+        """`"2000000" > "1000000"` y `"99" > "1000000"` como texto darían resultados
+        distintos de los numéricos: con 99 (menor) debe tomarse el fallback."""
+        workflow, etapas = _crear_workflow_activo_con_condicion(self.actor)
+        instancia = iniciar_workflow(workflow, actor=self.actor, datos_iniciales={"monto": 99})
+        self.assertEqual(
+            instancia.ejecuciones_etapa.get(etapa=etapas["condicion"]).transicion_tomada_id, etapas["fallback"].pk
+        )
+
+    def test_en_modo_legacy_las_referencias_de_ticket_y_formulario_son_inexistentes_sin_ticket(self):
+        workflow, etapas = _crear_workflow_activo_con_condicion(self.actor)
+        TransicionEtapa.objects.filter(pk=etapas["condicional"].pk).update(
+            variable="ticket.estado", operador=TransicionEtapa.Operador.DISTINTO_DE, valor="CERRADO"
+        )
+        instancia = iniciar_workflow(workflow, actor=self.actor)
+        # Sin Ticket vinculado la variable es inexistente: ni siquiera DISTINTO_DE coincide.
+        self.assertEqual(
+            instancia.ejecuciones_etapa.get(etapa=etapas["condicion"]).transicion_tomada_id, etapas["fallback"].pk
+        )

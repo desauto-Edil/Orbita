@@ -8313,3 +8313,409 @@ class TicketGeneralBuscadorTests(_EscenarioTicketGeneralMixin, TestCase):
         self.assertNotIn(self.servicio_g.pk, [s.pk for s in servicios_visibles_para(self.usuario_g)])
         with self.assertRaises(PermissionDenied):
             crear_borrador(self.usuario_g, self.servicio_g)
+
+
+class VariablesWorkflowTicketTests(TestCase):
+    """4.B0 — una DECISION de un flujo por fases (PLANTILLA_FASES) evalúa datos del
+    Ticket, respuestas del formulario congelado (por clave estable) y resultados de
+    aprobaciones (por clave de bloque), con ticket real y radicación real."""
+
+    def setUp(self):
+        from apps.workflows import fases as fases_ops
+        from apps.workflows.versionamiento import activar_version as activar_workflow
+
+        self.solicitante = Usuario.objects.create_user(username="var_solicitante", password=CLAVE_PRUEBA)
+        self.aprobador = Usuario.objects.create_user(username="var_aprobador", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user(username="var_admin", password=CLAVE_PRUEBA)
+        _otorgar_permiso(self.admin, "catalogo.administrar")
+        self.workflow = fases_ops.crear_plantilla_fases(self.admin, nombre="Plantilla con variables")
+        version = self.workflow.versiones.get(numero=1)
+        self.recepcion = fases_ops.agregar_fase(version, self.admin, nombre="Recepción")
+        self.revision = fases_ops.agregar_fase(version, self.admin, nombre="Revisión")
+        fases_ops.conectar_fases(self.recepcion, self.revision, self.admin)
+        activar_workflow(self.workflow, version, self.admin)
+
+    # --- construcción -----------------------------------------------------------
+
+    def _servicio(self, campos_spec=None):
+        T = Campo.TipoCampo
+        if campos_spec is None:
+            campos_spec = [
+                {"tipo": T.NUMERO, "etiqueta": "Valor estimado", "orden": 1},
+                {"tipo": T.BOOLEANO, "etiqueta": "Requiere aprobación especial", "orden": 2},
+                {"tipo": T.TEXTO, "etiqueta": "Tipo cliente", "orden": 3},
+                {"tipo": T.FECHA, "etiqueta": "Fecha límite", "orden": 4},
+                {"tipo": T.TEXTO, "etiqueta": "Comentario", "orden": 5},
+            ]
+        servicio, _, campos = _crear_servicio_con_formulario(self.solicitante, campos_spec)
+        servicio.workflow = self.workflow
+        servicio.save(update_fields=["workflow", "actualizado_en"])
+        return servicio, campos
+
+    def _agregar(self, config, fase, tipo, nombre, **configuracion):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo
+
+        return agregar_bloque_operativo(
+            config, self.admin, fase=fase, tipo=tipo, nombre=nombre, configuracion=configuracion or {}
+        )
+
+    def _actividad(self, config, nombre):
+        return self._agregar(config, self.revision, BloqueOperativo.Tipo.ACTIVIDAD, nombre, tipo_actor="SOLICITANTE")
+
+    def _aprobacion_bloque(self, config, nombre):
+        return self._agregar(
+            config, self.recepcion, BloqueOperativo.Tipo.APROBACION, nombre, modo="SECUENCIAL",
+            participantes=[{"tipo": "USUARIO", "usuario_id": self.aprobador.pk, "equipo_id": None}],
+        )
+
+    def _rutas(self, origen, destino, **por_resultado):
+        from apps.catalogo.configuracion_ejecucion import conectar_bloques_operativos
+
+        for resultado in ("APROBADA", "RECHAZADA", "DEVUELTA"):
+            conectar_bloques_operativos(
+                origen, por_resultado.get(resultado, destino), self.admin, resultado_aprobacion=resultado
+            )
+
+    def _decision(self, config, condiciones, *, alto, normal, nombre="Clasificar"):
+        """DECISION con `condiciones` = [(variable, operador, valor)] hacia `alto` y el
+        fallback hacia `normal`."""
+        from apps.catalogo.configuracion_ejecucion import conectar_bloques_operativos
+
+        decision = self._agregar(config, self.recepcion, BloqueOperativo.Tipo.DECISION, nombre)
+        for prioridad, (variable, operador, valor) in enumerate(condiciones):
+            conectar_bloques_operativos(
+                decision, alto, self.admin, variable=variable, operador=operador, valor=valor, prioridad=prioridad
+            )
+        conectar_bloques_operativos(decision, normal, self.admin, es_fallback=True)
+        return decision
+
+    def _activar(self, servicio, config):
+        from apps.catalogo.configuracion_ejecucion import activar_configuracion_ejecucion
+
+        activar_configuracion_ejecucion(servicio, config, self.admin)
+        servicio.refresh_from_db()
+
+    def _servicio_con_decision(self, condiciones, campos_spec=None):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        servicio, campos = self._servicio(campos_spec)
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        alto = self._actividad(config, "Camino alto")
+        normal = self._actividad(config, "Camino normal")
+        # La DECISION va primero en su fase para ser el bloque inicial.
+        self._decision(config, condiciones, alto=alto, normal=normal)
+        self._verificar_decision_inicial(config)
+        self._activar(servicio, config)
+        return servicio, campos
+
+    def _verificar_decision_inicial(self, config):
+        """Las actividades viven en Revisión; la decisión es el único bloque de Recepción
+        y por tanto el bloque inicial de la ejecución."""
+        self.assertEqual(config.bloques.filter(fase=self.recepcion).count(), 1)
+
+    def _radicar(self, servicio, campos, respuestas=None, usuario=None):
+        usuario = usuario or self.solicitante
+        ticket = crear_borrador(usuario, servicio)
+        crudas = {campos[etiqueta].id: valor for etiqueta, valor in (respuestas or {}).items()}
+        if crudas:
+            guardar_respuestas_borrador(ticket, usuario, crudas)
+        radicar_ticket(ticket, usuario)
+        ticket.refresh_from_db()
+        return ticket
+
+    def _camino(self, ticket):
+        ultimo = ticket.instancia_workflow.ejecuciones_etapa.order_by("-orden").first()
+        return ultimo.bloque_operativo.nombre
+
+    def _aprobacion(self, ticket, nombre_bloque):
+        from apps.workflows.models import EsquemaAprobacionWorkflow
+
+        vinculo = EsquemaAprobacionWorkflow.objects.get(
+            instancia_etapa__instancia_workflow=ticket.instancia_workflow,
+            instancia_etapa__bloque_operativo__nombre=nombre_bloque,
+        )
+        return vinculo.esquema.participaciones.get()
+
+    def _resolver(self, ticket, nombre_bloque, decision):
+        from apps.workflows.integracion import resolver_aprobacion_workflow
+
+        observacion = "" if decision == "APROBADA" else "Motivo de la decisión."
+        resolver_aprobacion_workflow(
+            self._aprobacion(ticket, nombre_bloque), self.aprobador, decision=decision, observacion=observacion
+        )
+        ticket.refresh_from_db()
+        ticket.instancia_workflow.refresh_from_db()
+
+    # --- respuestas del formulario -------------------------------------------------
+
+    def test_un_numero_del_formulario_se_compara_como_numero(self):
+        servicio, campos = self._servicio_con_decision([("formulario.valor_estimado", "MAYOR_QUE", "9")])
+        # Como texto, "10" < "9": comparado como número 10 > 9.
+        self.assertEqual(self._camino(self._radicar(servicio, campos, {"Valor estimado": 10})), "Camino alto")
+        self.assertEqual(self._camino(self._radicar(servicio, campos, {"Valor estimado": 2})), "Camino normal")
+
+    def test_un_booleano_del_formulario_conserva_su_tipo(self):
+        servicio, campos = self._servicio_con_decision(
+            [("formulario.requiere_aprobacion_especial", "IGUAL_A", "Sí")]
+        )
+        self.assertEqual(
+            self._camino(self._radicar(servicio, campos, {"Requiere aprobación especial": True})), "Camino alto"
+        )
+        self.assertEqual(
+            self._camino(self._radicar(servicio, campos, {"Requiere aprobación especial": False})), "Camino normal"
+        )
+
+    def test_un_texto_del_formulario(self):
+        servicio, campos = self._servicio_con_decision([("formulario.tipo_cliente", "IGUAL_A", "Premium")])
+        self.assertEqual(self._camino(self._radicar(servicio, campos, {"Tipo cliente": "Premium"})), "Camino alto")
+        self.assertEqual(self._camino(self._radicar(servicio, campos, {"Tipo cliente": "Basico"})), "Camino normal")
+
+    def test_una_fecha_del_formulario(self):
+        servicio, campos = self._servicio_con_decision([("formulario.fecha_limite", "MENOR_QUE", "2026-12-31")])
+        self.assertEqual(self._camino(self._radicar(servicio, campos, {"Fecha límite": "2026-06-30"})), "Camino alto")
+        self.assertEqual(self._camino(self._radicar(servicio, campos, {"Fecha límite": "2027-01-15"})), "Camino normal")
+
+    def test_un_campo_inexistente_nunca_coincide_y_cae_en_el_fallback(self):
+        for operador in ("IGUAL_A", "DISTINTO_DE", "NO_CONTIENE", "ESTA_VACIO", "MAYOR_QUE"):
+            servicio, campos = self._servicio_con_decision([("formulario.no_existe", operador, "x")])
+            ticket = self._radicar(servicio, campos)
+            self.assertEqual(self._camino(ticket), "Camino normal", operador)
+            self.assertNotEqual(ticket.instancia_workflow.estado, "ERROR", operador)
+
+    def test_campo_existente_sin_respuesta_es_null_y_no_inexistente(self):
+        servicio, campos = self._servicio_con_decision([("formulario.comentario", "ESTA_VACIO", "-")])
+        self.assertEqual(self._camino(self._radicar(servicio, campos)), "Camino alto")
+        self.assertEqual(self._camino(self._radicar(servicio, campos, {"Comentario": "hola"})), "Camino normal")
+
+    def test_varias_variables_en_una_misma_decision_respetan_la_prioridad(self):
+        servicio, campos = self._servicio_con_decision([
+            ("formulario.tipo_cliente", "IGUAL_A", "Premium"),
+            ("formulario.valor_estimado", "MAYOR_QUE", "100"),
+        ])
+        self.assertEqual(
+            self._camino(self._radicar(servicio, campos, {"Tipo cliente": "Basico", "Valor estimado": 500})),
+            "Camino alto",
+        )
+        self.assertEqual(
+            self._camino(self._radicar(servicio, campos, {"Tipo cliente": "Basico", "Valor estimado": 5})),
+            "Camino normal",
+        )
+
+    # --- datos del Ticket -----------------------------------------------------------
+
+    def test_datos_basicos_del_ticket(self):
+        casos = [
+            ("ticket.estado", "IGUAL_A", "BORRADOR"),  # la radicación aún no cambió el estado
+            ("ticket.tipo", "IGUAL_A", "SERVICIO"),
+            ("ticket.es_general", "IGUAL_A", "no"),
+            ("ticket.solicitante", "IGUAL_A", "var_solicitante"),
+            ("ticket.responsable", "ESTA_VACIO", "-"),
+        ]
+        for caso in casos:
+            servicio, campos = self._servicio_con_decision([caso])
+            self.assertEqual(self._camino(self._radicar(servicio, campos)), "Camino alto", caso)
+
+    def test_un_dato_del_ticket_inexistente_cae_en_el_fallback(self):
+        servicio, campos = self._servicio_con_decision([("ticket.no_existe", "DISTINTO_DE", "x")])
+        self.assertEqual(self._camino(self._radicar(servicio, campos)), "Camino normal")
+
+    def test_el_estado_del_ticket_se_lee_en_vivo_despues_de_la_radicacion(self):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        servicio, campos = self._servicio()
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        aprobacion = self._aprobacion_bloque(config, "Aprobación jefe")
+        alto = self._actividad(config, "Camino alto")
+        normal = self._actividad(config, "Camino normal")
+        decision = self._decision(config, [("ticket.estado", "IGUAL_A", "RADICADO")], alto=alto, normal=normal)
+        self._rutas(aprobacion, decision)
+        self._activar(servicio, config)
+
+        ticket = self._radicar(servicio, campos)
+        self._resolver(ticket, "Aprobación jefe", "APROBADA")
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+        self.assertEqual(self._camino(ticket), "Camino alto")
+
+    # --- Workflow compartido ---------------------------------------------------------------
+
+    def test_workflow_compartido_con_un_servicio_sin_el_campo_usa_el_fallback(self):
+        T = Campo.TipoCampo
+        servicio_a, campos_a = self._servicio_con_decision([("formulario.valor_estimado", "MAYOR_QUE", "9")])
+        servicio_b, campos_b = self._servicio_con_decision(
+            [("formulario.valor_estimado", "MAYOR_QUE", "9")],
+            campos_spec=[{"tipo": T.TEXTO, "etiqueta": "Asunto", "orden": 1}],
+        )
+        self.assertEqual(servicio_a.workflow_id, servicio_b.workflow_id)
+
+        ticket_a = self._radicar(servicio_a, campos_a, {"Valor estimado": 50})
+        ticket_b = self._radicar(servicio_b, campos_b, {"Asunto": "algo"})
+        self.assertEqual(self._camino(ticket_a), "Camino alto")
+        self.assertEqual(self._camino(ticket_b), "Camino normal")
+        self.assertNotEqual(ticket_b.instancia_workflow.estado, "ERROR")
+
+    # --- versionamiento del formulario ----------------------------------------------------------
+
+    def test_renombrar_la_etiqueta_en_una_version_nueva_no_rompe_la_referencia(self):
+        servicio, campos = self._servicio_con_decision([("formulario.valor_estimado", "MAYOR_QUE", "9")])
+        formulario = servicio.formulario
+        # Este ticket congela la versión 1 al crear su borrador.
+        ticket_v1 = crear_borrador(self.solicitante, servicio)
+
+        nueva = crear_nueva_version(formulario, self.admin)
+        campo_nuevo = nueva.campos.get(clave="valor_estimado")
+        campo_nuevo.etiqueta = "Valor total estimado"
+        campo_nuevo.save()
+        activar_version(formulario, nueva, self.admin)
+        self.assertEqual(campo_nuevo.clave, "valor_estimado")
+
+        # La ejecución del ticket congelado sigue resolviendo contra SU versión (v1).
+        guardar_respuestas_borrador(ticket_v1, self.solicitante, {campos["Valor estimado"].id: 20})
+        radicar_ticket(ticket_v1, self.solicitante)
+        ticket_v1.refresh_from_db()
+        self.assertEqual(ticket_v1.detalle_servicio.formulario_version_id, campos["Valor estimado"].version_id)
+        self.assertEqual(self._camino(ticket_v1), "Camino alto")
+
+        # Un ticket nuevo usa la versión 2 con la etiqueta cambiada y la misma clave.
+        ticket_v2 = crear_borrador(self.solicitante, servicio)
+        guardar_respuestas_borrador(ticket_v2, self.solicitante, {campo_nuevo.id: 20})
+        radicar_ticket(ticket_v2, self.solicitante)
+        ticket_v2.refresh_from_db()
+        self.assertEqual(ticket_v2.detalle_servicio.formulario_version_id, nueva.pk)
+        self.assertEqual(self._camino(ticket_v2), "Camino alto")
+
+    # --- resultados de aprobación ------------------------------------------------------------------
+
+    def _servicio_con_dos_aprobaciones(self):
+        """Aprobación jefe → Aprobación finanzas → DECISION sobre ambos resultados.
+        Cualquier resultado de cada aprobación continúa a la siguiente."""
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        servicio, campos = self._servicio()
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        jefe = self._aprobacion_bloque(config, "Aprobación jefe")
+        finanzas = self._aprobacion_bloque(config, "Aprobación finanzas")
+        a_finanzas = self._actividad(config, "Camino finanzas rechazó")
+        a_jefe = self._actividad(config, "Camino jefe aprobó")
+        a_fallback = self._actividad(config, "Camino fallback")
+        decision = self._agregar(config, self.recepcion, BloqueOperativo.Tipo.DECISION, "Clasificar")
+        from apps.catalogo.configuracion_ejecucion import conectar_bloques_operativos
+
+        conectar_bloques_operativos(
+            decision, a_finanzas, self.admin, variable="aprobaciones.aprobacion_finanzas.resultado",
+            operador="IGUAL_A", valor="RECHAZADA", prioridad=0,
+        )
+        conectar_bloques_operativos(
+            decision, a_jefe, self.admin, variable="aprobaciones.aprobacion_jefe.resultado",
+            operador="IGUAL_A", valor="APROBADA", prioridad=1,
+        )
+        conectar_bloques_operativos(decision, a_fallback, self.admin, es_fallback=True)
+        self._rutas(jefe, finanzas)
+        self._rutas(finanzas, decision)
+        self._activar(servicio, config)
+        return servicio, campos
+
+    def test_cada_aprobacion_queda_direccionable_por_su_propia_clave(self):
+        servicio, campos = self._servicio_con_dos_aprobaciones()
+        ticket = self._radicar(servicio, campos)
+        self._resolver(ticket, "Aprobación jefe", "APROBADA")
+        self._resolver(ticket, "Aprobación finanzas", "RECHAZADA")
+
+        resultados = ticket.instancia_workflow.contexto["resultados_bloques"]["aprobaciones"]
+        self.assertEqual(resultados["aprobacion_jefe"], {"resultado": "APROBADA"})
+        self.assertEqual(resultados["aprobacion_finanzas"], {"resultado": "RECHAZADA"})
+        # Cada decisión consulta SU bloque: gana la condición de prioridad 0 (finanzas).
+        self.assertEqual(self._camino(ticket), "Camino finanzas rechazó")
+
+    def test_la_decision_distingue_entre_dos_aprobaciones_con_resultados_distintos(self):
+        servicio, campos = self._servicio_con_dos_aprobaciones()
+        ticket = self._radicar(servicio, campos)
+        self._resolver(ticket, "Aprobación jefe", "APROBADA")
+        self._resolver(ticket, "Aprobación finanzas", "APROBADA")
+        self.assertEqual(self._camino(ticket), "Camino jefe aprobó")
+
+        otro = self._radicar(servicio, campos)
+        self._resolver(otro, "Aprobación jefe", "RECHAZADA")
+        self._resolver(otro, "Aprobación finanzas", "APROBADA")
+        self.assertEqual(self._camino(otro), "Camino fallback")
+
+    def test_publicar_un_resultado_conserva_el_resto_del_contexto(self):
+        servicio, campos = self._servicio_con_dos_aprobaciones()
+        ticket = self._radicar(servicio, campos)
+        antes = dict(ticket.instancia_workflow.contexto)
+        self._resolver(ticket, "Aprobación jefe", "DEVUELTA")
+        despues = ticket.instancia_workflow.contexto
+        self.assertEqual(despues["datos_iniciales"], antes["datos_iniciales"])
+        self.assertEqual(despues["resultados_bloques"]["aprobaciones"]["aprobacion_jefe"], {"resultado": "DEVUELTA"})
+
+    def test_resultado_aprobacion_sigue_eligiendo_la_ruta_y_ademas_se_publica(self):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        servicio, campos = self._servicio()
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        jefe = self._aprobacion_bloque(config, "Aprobación jefe")
+        aprobada = self._actividad(config, "Ruta aprobada")
+        rechazada = self._actividad(config, "Ruta rechazada")
+        devuelta = self._actividad(config, "Ruta devuelta")
+        self._rutas(jefe, aprobada, RECHAZADA=rechazada, DEVUELTA=devuelta)
+        self._activar(servicio, config)
+
+        for decision, ruta in (("APROBADA", "Ruta aprobada"), ("RECHAZADA", "Ruta rechazada"), ("DEVUELTA", "Ruta devuelta")):
+            ticket = self._radicar(servicio, campos)
+            self._resolver(ticket, "Aprobación jefe", decision)
+            self.assertEqual(self._camino(ticket), ruta)
+            publicado = ticket.instancia_workflow.contexto["resultados_bloques"]["aprobaciones"]["aprobacion_jefe"]
+            self.assertEqual(publicado["resultado"], decision)
+
+    def test_una_ejecucion_terminada_no_puede_volver_a_publicar(self):
+        from apps.workflows.models import EsquemaAprobacionWorkflow, InstanciaEtapa
+        from apps.workflows.motor import continuar_espera_externa
+
+        servicio, campos = self._servicio_con_dos_aprobaciones()
+        ticket = self._radicar(servicio, campos)
+        self._resolver(ticket, "Aprobación jefe", "APROBADA")
+        ejecucion = EsquemaAprobacionWorkflow.objects.get(
+            instancia_etapa__instancia_workflow=ticket.instancia_workflow,
+            instancia_etapa__bloque_operativo__nombre="Aprobación jefe",
+        ).instancia_etapa
+        with self.assertRaises(ValueError):
+            continuar_espera_externa(
+                ejecucion, motivo_espera=InstanciaEtapa.MotivoEspera.APROBACION,
+                resultado_bloque=("aprobaciones", {"resultado": "RECHAZADA"}),
+            )
+        ticket.instancia_workflow.refresh_from_db()
+        publicado = ticket.instancia_workflow.contexto["resultados_bloques"]["aprobaciones"]["aprobacion_jefe"]
+        self.assertEqual(publicado, {"resultado": "APROBADA"})
+
+    def test_renombrar_un_bloque_en_una_configuracion_nueva_no_rompe_la_referencia(self):
+        from apps.catalogo.configuracion_ejecucion import (
+            crear_nueva_version_configuracion,
+            editar_bloque_operativo,
+        )
+
+        servicio, campos = self._servicio_con_dos_aprobaciones()
+        nueva = crear_nueva_version_configuracion(servicio, self.admin, clonar_desde=servicio.configuracion_ejecucion_activa)
+        jefe = nueva.bloques.get(clave="aprobacion_jefe")
+        editar_bloque_operativo(nueva, jefe, self.admin, nombre="Visto bueno del jefe")
+        self._activar(servicio, nueva)
+
+        ticket = self._radicar(servicio, campos)
+        self._resolver(ticket, "Visto bueno del jefe", "APROBADA")
+        self._resolver(ticket, "Aprobación finanzas", "APROBADA")
+        resultados = ticket.instancia_workflow.contexto["resultados_bloques"]["aprobaciones"]
+        self.assertIn("aprobacion_jefe", resultados)
+        self.assertEqual(self._camino(ticket), "Camino jefe aprobó")
+
+
+class VariablesWorkflowRegresionTests(TestCase):
+    """4.B0 no altera la radicación de un Ticket sin Workflow."""
+
+    def test_ticket_sin_workflow_se_radica_igual(self):
+        usuario = Usuario.objects.create_user(username="var_sin_flujo", password=CLAVE_PRUEBA)
+        servicio, _, _ = _crear_servicio_con_formulario(
+            usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Asunto", "orden": 1}]
+        )
+        ticket = crear_borrador(usuario, servicio)
+        radicar_ticket(ticket, usuario)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+        self.assertIsNone(ticket.instancia_workflow_id)

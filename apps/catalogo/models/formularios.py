@@ -28,8 +28,9 @@ del proyecto (`CLAUDE.md`, sección Calidad).
 
 from django.core.exceptions import ValidationError
 from django.db import models
-from django.db.models import UniqueConstraint
+from django.db.models import Q, UniqueConstraint
 
+from apps.catalogo import claves
 from apps.catalogo.campos import ESTRATEGIAS_POR_TIPO
 from apps.catalogo.reglas import validar_composicion_reglas, validar_integridad_regla
 from apps.core.models import RegistroBase
@@ -97,6 +98,17 @@ class Campo(RegistroBase):
     version = models.ForeignKey(FormularioVersion, on_delete=models.CASCADE, related_name="campos")
     tipo = models.CharField(max_length=20, choices=TipoCampo.choices)
     etiqueta = models.CharField(max_length=200)
+    # Identidad estable (4.B0): es la referencia de los Workflows (`formulario.<clave>`).
+    # NO es la etiqueta (cambia) ni el pk (cambia al clonar la versión). Única DENTRO
+    # de su versión, se genera una sola vez desde la etiqueta, se copia siempre al
+    # versionar y solo se edita mientras la versión es BORRADOR (ver `claves.py`).
+    # `blank` solo para filas históricas que aún no la tienen: `save()` la completa.
+    clave = models.SlugField(
+        max_length=claves.LARGO_MAXIMO, blank=True, default="", db_index=False,
+        validators=[claves.validar_clave],
+        help_text="Identificador estable del campo para reglas y flujos (p. ej. valor_estimado). "
+        "No cambia al renombrar la etiqueta.",
+    )
     ayuda = models.TextField(blank=True)
     obligatorio = models.BooleanField(default=False)
     orden = models.PositiveIntegerField(default=0)
@@ -106,15 +118,35 @@ class Campo(RegistroBase):
 
     class Meta:
         ordering = ["orden", "id"]
+        constraints = [
+            UniqueConstraint(
+                fields=["version", "clave"], condition=~Q(clave=""), name="uq_campo_version_clave"
+            ),
+        ]
 
     def clean(self):
         estrategia = ESTRATEGIAS_POR_TIPO.get(self.tipo)
         if estrategia is None:
             raise ValidationError({"tipo": "Tipo de campo no soportado."})
         estrategia.validar_configuracion(self.configuracion or {})
+        if self.clave and self.version_id is not None:
+            repetida = Campo.objects.filter(version_id=self.version_id, clave=self.clave).exclude(pk=self.pk)
+            if repetida.exists():
+                raise ValidationError({"clave": "Ya existe otro campo con esa clave en este formulario."})
+
+    def _asegurar_clave(self):
+        """Genera la clave desde la etiqueta SOLO si no tiene (campo nuevo o fila
+        histórica). Nunca regenera una clave existente: renombrar no cambia la identidad."""
+        if self.clave:
+            return False
+        existentes = Campo.objects.filter(version_id=self.version_id).exclude(pk=self.pk).values_list("clave", flat=True)
+        self.clave = claves.generar_clave(self.etiqueta, existentes, por_defecto="campo")
+        return True
 
     def save(self, *args, **kwargs):
         self.version.exigir_editable()
+        if self._asegurar_clave() and kwargs.get("update_fields") is not None:
+            kwargs["update_fields"] = [*kwargs["update_fields"], "clave"]
         super().save(*args, **kwargs)
 
     def delete(self, *args, **kwargs):
