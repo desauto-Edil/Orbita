@@ -43,8 +43,9 @@ from apps.tickets.models import (
     SolicitudInformacion,
     Ticket,
 )
-from apps.tickets.operaciones import _auditar_cambio_estado, _transicionar_a_cerrado
-from apps.workflows.models import InstanciaWorkflow
+# `_trabajo_interno_en_curso` vive en `operaciones` (lo comparte `resolver_ticket`); se importa
+# aquí con el mismo nombre para que `entregar_ticket` lo siga resolviendo en este módulo.
+from apps.tickets.operaciones import _auditar_cambio_estado, _trabajo_interno_en_curso, _transicionar_a_cerrado
 
 CAUSA_ACEPTACION = "ACEPTACION_SOLICITANTE"
 CAUSA_VENCIMIENTO = "VENCIMIENTO_SIN_RESPUESTA"
@@ -57,19 +58,6 @@ def _auditar_entrega(entrega, actor, anterior, nuevo, accion):
         origen=RegistroAuditoria.Origen.USUARIO if actor is not None else RegistroAuditoria.Origen.SISTEMA,
         usuario=actor, datos_anteriores=anterior, datos_nuevos=nuevo,
     )
-
-
-def _trabajo_interno_en_curso(ticket):
-    """La entrega comienza DESPUÉS del trabajo interno: mientras la ejecución
-    (Workflow) del ticket siga en curso o en espera de una tarea/aprobación,
-    no se entrega. Solo se consulta su estado — nunca se modifica."""
-    instancia_id = ticket.instancia_workflow_id
-    if instancia_id is None:
-        return False
-    return InstanciaWorkflow.objects.filter(
-        pk=instancia_id,
-        estado__in=(InstanciaWorkflow.Estado.EN_EJECUCION, InstanciaWorkflow.Estado.EN_ESPERA),
-    ).exists()
 
 
 def _archivos_vigentes(entregable):

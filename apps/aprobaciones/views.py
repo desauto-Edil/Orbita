@@ -45,15 +45,21 @@ from django.http import HttpResponse, HttpResponseNotAllowed
 from django.template.loader import render_to_string
 from django.views.decorators.http import require_GET
 
-from apps.aprobaciones.autorizacion import puede_aprobar, puede_consultar_aprobacion, puede_reasignar_aprobacion
+from apps.aprobaciones.autorizacion import (
+    es_aprobador_directo,
+    puede_aprobar,
+    puede_consultar_aprobacion,
+    puede_reasignar_aprobacion,
+)
 from apps.aprobaciones.consultas import aprobaciones_pendientes_para, aprobaciones_visibles_para
 from apps.aprobaciones.forms import DecisionAprobacionForm, ReasignacionAprobacionForm
 from apps.aprobaciones.models import Aprobacion
 from apps.aprobaciones.operaciones import reasignar_aprobacion, resolver_aprobacion
 from apps.tickets.autorizacion import puede_consultar_ticket
+from apps.tickets.models import Ticket
 from apps.tickets.prorrogas import resolver_prorroga_por_aprobacion
 from apps.workflows.integracion import resolver_aprobacion_workflow
-from apps.workflows.models import EsquemaAprobacionWorkflow
+from apps.workflows.models import EsquemaAprobacionWorkflow, InstanciaEtapa
 
 
 def _mensaje_error(exc):
@@ -82,18 +88,98 @@ def _contexto_prorroga(usuario, esquema):
 
 
 def _contexto_workflow_por_esquema(esquema_ids):
-    """Resuelve, en una sola consulta, el contexto Workflow/versión/etapa
-    de los esquemas indicados que estén vinculados — sin N+1 por fila de
-    bandeja. Los esquemas sin vínculo simplemente no aparecen en el dict
-    resultante; el llamador trata su ausencia como "sin Workflow"."""
+    """Resuelve, en una sola consulta, el contexto Workflow de los esquemas indicados que estén
+    vinculados — sin N+1 por fila de bandeja. Los esquemas sin vínculo simplemente no aparecen en
+    el dict resultante; el llamador trata su ausencia como "sin Workflow".
+
+    Dos formas (4.E2): LEGACY (`Etapa`: flujo / versión / etapa) y POR FASES (`BloqueOperativo`: la
+    ejecución no tiene `etapa`, sino fase y bloque). `nombre` es siempre lo que se está haciendo
+    (etapa o bloque) y `por_fases` dice cuál de las dos formas es."""
     vinculos = EsquemaAprobacionWorkflow.objects.filter(esquema_id__in=esquema_ids).select_related(
-        "instancia_etapa__etapa__version__workflow"
+        "instancia_etapa__etapa__version__workflow",
+        "instancia_etapa__bloque_operativo",
+        "instancia_etapa__fase_workflow",
+        "instancia_etapa__instancia_workflow__workflow_version__workflow",
     )
     contexto = {}
     for vinculo in vinculos:
-        etapa = vinculo.instancia_etapa.etapa
-        contexto[vinculo.esquema_id] = {"workflow": etapa.version.workflow, "version": etapa.version, "etapa": etapa}
+        ejecucion = vinculo.instancia_etapa
+        if ejecucion.bloque_operativo_id:
+            version = ejecucion.instancia_workflow.workflow_version
+            contexto[vinculo.esquema_id] = {
+                "workflow": version.workflow,
+                "version": version,
+                "etapa": None,
+                "fase": ejecucion.fase_workflow,
+                "bloque": ejecucion.bloque_operativo,
+                "nombre": ejecucion.bloque_operativo.nombre,
+                "por_fases": True,
+            }
+        else:
+            etapa = ejecucion.etapa
+            contexto[vinculo.esquema_id] = {
+                "workflow": etapa.version.workflow,
+                "version": etapa.version,
+                "etapa": etapa,
+                "fase": None,
+                "bloque": None,
+                "nombre": etapa.nombre,
+                "por_fases": False,
+            }
     return contexto
+
+
+def _contexto_entregable_revisado(usuario, aprobacion):
+    """4.E2 — si esta aprobación REVISA un entregable (`BloqueOperativo.entregable_revisado`),
+    qué entregable es y en qué estado está según el dominio; `None` para una aprobación general.
+    El contenido NO se copia: se lee del `EntregableTicket` del Ticket. El aprobador (o quien
+    pueda consultar el ticket) ve el valor y descarga los archivos por la vista de adjuntos del
+    Ticket; el resto solo ve el nombre y el estado."""
+    vinculo = (
+        EsquemaAprobacionWorkflow.objects.filter(esquema_id=aprobacion.esquema_id)
+        .select_related("instancia_etapa__bloque_operativo__entregable_revisado__definicion_entregable")
+        .first()
+    )
+    if vinculo is None:
+        return None
+    ejecucion = vinculo.instancia_etapa
+    bloque = ejecucion.bloque_operativo
+    if bloque is None or bloque.entregable_revisado_id is None:
+        return None
+    definicion = bloque.entregable_revisado.definicion_entregable
+    ticket = (
+        Ticket.objects.filter(instancia_workflow_id=ejecucion.instancia_workflow_id)
+        .select_related("detalle_servicio__servicio")
+        .first()
+    )
+    entregable = (
+        ticket.entregables.filter(definicion_id=definicion.pk).first() if ticket is not None else None
+    )
+    if entregable is None:
+        return None
+    puede_ver_ticket = puede_consultar_ticket(usuario, ticket)
+    es_revisor = any(es_aprobador_directo(usuario, p) for p in aprobacion.esquema.participaciones.all())
+    ver_contenido = puede_ver_ticket or es_revisor
+    revision = InstanciaEtapa.objects.filter(
+        instancia_workflow_id=ejecucion.instancia_workflow_id, bloque_operativo_id=bloque.pk
+    ).count()
+    return {
+        "nombre": entregable.nombre,
+        "tipo": entregable.get_tipo_display(),
+        "entregado": entregable.satisfecho,
+        "ticket": ticket,
+        "servicio": ticket.detalle_servicio.servicio,
+        "puede_ver_ticket": puede_ver_ticket,
+        "ver_contenido": ver_contenido,
+        "texto": entregable.texto if ver_contenido else "",
+        "enlace": entregable.enlace if ver_contenido else "",
+        "archivos": (
+            list(entregable.archivos.filter(retirado_en__isnull=True).order_by("creado_en"))
+            if ver_contenido
+            else []
+        ),
+        "revision": revision,
+    }
 
 
 @login_required
@@ -142,6 +228,7 @@ def vista_previa_view(request, pk):
         "decididas": sum(1 for p in participaciones if p.decidida_en is not None),
         "puede_decidir": puede_aprobar(request.user, aprobacion),
         "contexto_prorroga": _contexto_prorroga(request.user, aprobacion.esquema),
+        "entregable_revisado": _contexto_entregable_revisado(request.user, aprobacion),
     }
     return HttpResponse(render_to_string("aprobaciones/_vista_previa.html", contexto))
 
@@ -165,6 +252,7 @@ def detalle_view(request, pk):
         "esquema": aprobacion.esquema,
         "contexto_workflow": contexto_workflow,
         "contexto_prorroga": contexto_prorroga,
+        "entregable_revisado": _contexto_entregable_revisado(request.user, aprobacion),
         "participaciones": aprobacion.esquema.participaciones.select_related(
             "aprobador_usuario", "aprobador_equipo", "decidido_por"
         ).all(),

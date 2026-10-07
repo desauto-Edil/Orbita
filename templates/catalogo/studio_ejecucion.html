@@ -303,7 +303,11 @@
                               <div class="field">{{ fila.form_configurar.equipo.label_tag }}{{ fila.form_configurar.equipo }}</div>
                             </div>
                             <label class="choice">{{ fila.form_configurar.permite_subtareas }} {{ fila.form_configurar.permite_subtareas.label_tag }}</label>
+                          {% elif fila.tipo_empresarial == "ENTREGABLE" %}
+                            <div class="field">{{ fila.form_configurar.definicion.label_tag }}{{ fila.form_configurar.definicion }}</div>
+                            <p class="svc-note">El flujo continuará cuando este entregable del ticket esté completado.</p>
                           {% elif fila.tipo_empresarial == "ESPERA" %}
+                            <p class="svc-note">Espera configurada anteriormente. Ya no se pueden crear esperas nuevas.</p>
                             <div class="svc-form-grid svc-form-grid--three">
                               <div class="field">{{ fila.form_configurar.modo.label_tag }}{{ fila.form_configurar.modo }}</div>
                               <div class="field">{{ fila.form_configurar.duracion_valor.label_tag }}{{ fila.form_configurar.duracion_valor }} {{ fila.form_configurar.duracion_unidad }}</div>
@@ -314,6 +318,8 @@
                               <div class="field">{{ fila.form_configurar.modo.label_tag }}{{ fila.form_configurar.modo }}</div>
                               <div class="field">{{ fila.form_configurar.politica.label_tag }}{{ fila.form_configurar.politica }}</div>
                             </div>
+                            <div class="field">{{ fila.form_configurar.revisa.label_tag }}{{ fila.form_configurar.revisa }}</div>
+                            <p class="svc-note">Opcional. Si eliges un entregable, quien aprueba verá qué está revisando. Solo aparecen los bloques de entregable ya agregados al flujo.</p>
                             {{ fila.formset_participantes.management_form }}
                             {% for pform in fila.formset_participantes %}
                               <div class="field">{{ pform.tipo }} {{ pform.usuario }} {{ pform.equipo }}{% if pform.DELETE %} {{ pform.DELETE }} eliminar{% endif %}</div>
@@ -390,19 +396,24 @@
                             <div class="field">{{ form_actividad_nuevo.usuario.label_tag }}{{ form_actividad_nuevo.usuario }}</div>
                             <div class="field">{{ form_actividad_nuevo.equipo.label_tag }}{{ form_actividad_nuevo.equipo }}</div>
                             <label class="choice">{{ form_actividad_nuevo.permite_subtareas }} {{ form_actividad_nuevo.permite_subtareas.label_tag }}</label>
-                          {% elif codigo == "ESPERA" %}
-                            <div class="field">{{ form_espera_nuevo.modo.label_tag }}{{ form_espera_nuevo.modo }}</div>
-                            <div class="field">{{ form_espera_nuevo.duracion_valor.label_tag }}{{ form_espera_nuevo.duracion_valor }} {{ form_espera_nuevo.duracion_unidad }}</div>
-                            <div class="field">{{ form_espera_nuevo.fecha_objetivo.label_tag }}{{ form_espera_nuevo.fecha_objetivo }}</div>
+                          {% elif codigo == "ENTREGABLE" %}
+                            {% if servicio_sin_entregables %}
+                              <p class="svc-note">Este servicio todavía no tiene entregables configurados. Defínelos primero en la pestaña Salida.</p>
+                            {% else %}
+                              <div class="field">{{ form_entregable_nuevo.definicion.label_tag }}{{ form_entregable_nuevo.definicion }}</div>
+                              <p class="svc-note">El flujo continuará cuando este entregable del ticket esté completado.</p>
+                            {% endif %}
                           {% elif codigo == "APROBACION" %}
                             <div class="field">{{ form_aprobacion_nuevo.modo.label_tag }}{{ form_aprobacion_nuevo.modo }}</div>
                             <div class="field">{{ form_aprobacion_nuevo.politica.label_tag }}{{ form_aprobacion_nuevo.politica }}</div>
+                            <div class="field">{{ form_aprobacion_nuevo.revisa.label_tag }}{{ form_aprobacion_nuevo.revisa }}</div>
+                            <p class="svc-note">Opcional. Si eliges un entregable, quien aprueba verá qué está revisando. Solo aparecen los bloques de entregable ya agregados al flujo.</p>
                             {{ formset_participantes_nuevo.management_form }}
                             {% for pform in formset_participantes_nuevo %}
                               <div class="field">{{ pform.tipo }} {{ pform.usuario }} {{ pform.equipo }}</div>
                             {% endfor %}
                           {% endif %}
-                          <button type="submit" class="btn btn--primary">Agregar</button>
+                          <button type="submit" class="btn btn--primary"{% if codigo == "ENTREGABLE" and servicio_sin_entregables %} disabled{% endif %}>Agregar</button>
                         </form>
                       </div>
                     </article>

@@ -32,6 +32,25 @@ def _validar_plantilla(servicio, workflow_version):
         raise ValidationError("La configuracion operativa solo puede usar una plantilla de fases.")
 
 
+def _errores_entregable_revisado(bloque, version):
+    """4.E2 — la referencia opcional de una APROBACION a un bloque ENTREGABLE se revalida al
+    publicar (el modelo ya la valida al guardar; esto cubre datos escritos sin pasar por él)."""
+    revisado = bloque.entregable_revisado
+    if revisado is None:
+        return []
+    prefijo = f"La aprobacion {bloque.nombre} revisa «{revisado.nombre}»"
+    if revisado.tipo != BloqueOperativo.Tipo.ENTREGABLE:
+        return [f"{prefijo}, que no es un bloque de entregable."]
+    if revisado.version_id != version.pk:
+        return [f"{prefijo}, que pertenece a otra configuracion."]
+    definicion = revisado.definicion_entregable
+    if definicion is None or definicion.servicio_id != version.servicio_id:
+        return [f"{prefijo}, que no tiene un entregable valido de este servicio."]
+    if definicion.tipo not in BloqueOperativo.TIPOS_ENTREGABLE_REVISABLES:
+        return [f"{prefijo}: solo se puede revisar un entregable de texto, enlace o archivo."]
+    return []
+
+
 def validar_configuracion_ejecucion(version):
     errores = []
     if version.workflow_version_id != version.servicio.workflow.version_activa_id:
@@ -39,7 +58,9 @@ def validar_configuracion_ejecucion(version):
     if not version.bloques.exists():
         errores.append("La configuracion no tiene bloques operativos.")
     fases_validas = set(version.workflow_version.fases.values_list("pk", flat=True))
-    for bloque in version.bloques.select_related("fase").prefetch_related("transiciones_salientes").order_by("orden", "pk"):
+    for bloque in version.bloques.select_related(
+        "fase", "definicion_entregable", "entregable_revisado__definicion_entregable"
+    ).prefetch_related("transiciones_salientes").order_by("orden", "pk"):
         if bloque.fase_id not in fases_validas:
             errores.append(f"El bloque {bloque.nombre} pertenece a una fase que no es de la plantilla activa.")
         cfg = bloque.configuracion or {}
@@ -81,7 +102,21 @@ def validar_configuracion_ejecucion(version):
             for esperado in {"APROBADA", "RECHAZADA", "DEVUELTA"}:
                 if resultados.count(esperado) != 1:
                     errores.append(f"La aprobacion {bloque.nombre} debe tener exactamente una ruta {esperado}.")
+            errores.extend(_errores_entregable_revisado(bloque, version))
+        elif bloque.tipo == BloqueOperativo.Tipo.ENTREGABLE:
+            definicion = bloque.definicion_entregable
+            if definicion is None:
+                errores.append(f"El entregable {bloque.nombre} no tiene un entregable seleccionado.")
+            elif definicion.servicio_id != version.servicio_id:
+                errores.append(f"El entregable {bloque.nombre} usa un entregable de otro servicio.")
+            elif not definicion.activo:
+                errores.append(
+                    f"El entregable {bloque.nombre} usa «{definicion.nombre}», que fue retirado: "
+                    "los tickets nuevos ya no lo reciben."
+                )
         elif bloque.tipo == BloqueOperativo.Tipo.ESPERA:
+            # Histórico: una ESPERA ya configurada se sigue validando y ejecutando, pero no
+            # puede crearse una nueva (ver `agregar_bloque_operativo`).
             if cfg.get("modo") == "DURACION":
                 if not cfg.get("duracion_valor") or not cfg.get("duracion_unidad"):
                     errores.append(f"La espera {bloque.nombre} no tiene duracion completa.")
@@ -126,17 +161,28 @@ def crear_nueva_version_configuracion(servicio, actor, *, workflow_version=None,
                 nombre=bloque.nombre,
                 # 4.B0: la clave es la identidad estable del bloque entre versiones.
                 clave=bloque.clave,
+                # 4.B1: el bloque ENTREGABLE conserva su referencia a la definición.
+                definicion_entregable=bloque.definicion_entregable,
                 descripcion=bloque.descripcion,
                 orden=bloque.orden,
                 configuracion=bloque.configuracion,
             )
             bloques_clonados[bloque.pk] = nuevo_bloque
+        # 4.E2: la aprobación conserva QUÉ entregable revisa, ahora apuntando al bloque
+        # clonado equivalente (por eso se hace en una segunda pasada, con todos creados).
+        for bloque in clonar_desde.bloques.exclude(entregable_revisado__isnull=True):
+            nuevo_bloque = bloques_clonados[bloque.pk]
+            nuevo_bloque.entregable_revisado = bloques_clonados[bloque.entregable_revisado_id]
+            nuevo_bloque.save(update_fields=["entregable_revisado", "actualizado_en"])
         for transicion in TransicionBloqueOperativo.objects.filter(bloque_origen__version=clonar_desde).order_by(
             "bloque_origen_id", "prioridad", "pk"
         ):
             TransicionBloqueOperativo.objects.create(
                 bloque_origen=bloques_clonados[transicion.bloque_origen_id],
-                bloque_destino=bloques_clonados[transicion.bloque_destino_id],
+                bloque_destino=(
+                    bloques_clonados[transicion.bloque_destino_id] if transicion.bloque_destino_id else None
+                ),
+                finaliza=transicion.finaliza,
                 nombre=transicion.nombre,
                 prioridad=transicion.prioridad,
                 variable=transicion.variable,
@@ -170,9 +216,13 @@ def preparar_configuracion_ejecucion(servicio, actor):
 
 @transaction.atomic
 def agregar_bloque_operativo(
-    version, actor, *, fase, tipo, nombre, descripcion="", orden=None, configuracion=None, clave=""
+    version, actor, *, fase, tipo, nombre, descripcion="", orden=None, configuracion=None, clave="",
+    definicion_entregable=None, entregable_revisado=None,
 ):
     _exigir_administracion(actor)
+    if tipo not in BloqueOperativo.TIPOS_CONFIGURABLES:
+        # V1 (4.B1): ESPERA ya no es un bloque que un administrador pueda crear.
+        raise ValidationError("Este tipo de bloque ya no se puede configurar.")
     version = ConfiguracionEjecucionVersion.objects.select_for_update().get(pk=version.pk)
     version.exigir_editable()
     if fase.version_id != version.workflow_version_id:
@@ -186,6 +236,8 @@ def agregar_bloque_operativo(
         tipo=tipo,
         nombre=nombre,
         clave=clave,
+        definicion_entregable=definicion_entregable,
+        entregable_revisado=entregable_revisado,
         descripcion=descripcion,
         orden=orden,
         configuracion=configuracion or {},
@@ -205,6 +257,8 @@ def agregar_bloque_operativo(
 
 @transaction.atomic
 def conectar_bloques_operativos(origen, destino, actor, **reglas):
+    """Crea una ruta de `origen`. `destino` es un bloque, o `None` junto con
+    `finaliza=True` (4.E2) para FINALIZAR el flujo por esa ruta."""
     _exigir_administracion(actor)
     origen.version.exigir_editable()
     transicion = TransicionBloqueOperativo(bloque_origen=origen, bloque_destino=destino, **reglas)
@@ -227,8 +281,15 @@ def editar_transicion_bloque_operativo(transicion, actor, *, destino=None, **reg
     transicion = TransicionBloqueOperativo.objects.select_related("bloque_origen__version").get(pk=transicion.pk)
     transicion.bloque_origen.version.exigir_editable()
     anterior = serializar(transicion)
-    if destino is not None:
+    # 4.E2: `finaliza=True` convierte la ruta en un fin de flujo (sin destino); un `destino`
+    # concreto la vuelve a apuntar a un bloque. Ambos son excluyentes (lo impone la BD).
+    finaliza = reglas.pop("finaliza", None)
+    if finaliza:
+        transicion.bloque_destino = None
+        transicion.finaliza = True
+    elif destino is not None:
         transicion.bloque_destino = destino
+        transicion.finaliza = False
     for campo, valor in reglas.items():
         setattr(transicion, campo, valor)
     transicion.full_clean()
@@ -250,7 +311,9 @@ def eliminar_transicion_bloque_operativo(transicion, actor):
     transicion = TransicionBloqueOperativo.objects.select_related("bloque_origen__version").get(pk=transicion.pk)
     transicion.bloque_origen.version.exigir_editable()
     anterior = serializar(transicion)
+    pk_original = transicion.pk
     transicion.delete()
+    transicion.pk = pk_original  # `delete()` lo anula y la auditoría necesita el `object_id`
     registrar_evento(
         accion=RegistroAuditoria.Accion.ELIMINAR,
         instancia=transicion,
@@ -261,9 +324,13 @@ def eliminar_transicion_bloque_operativo(transicion, actor):
     )
 
 
+_SIN_CAMBIO = object()
+
+
 @transaction.atomic
 def editar_bloque_operativo(
-    version, bloque, actor, *, nombre=None, descripcion=None, orden=None, configuracion=None, clave=None
+    version, bloque, actor, *, nombre=None, descripcion=None, orden=None, configuracion=None, clave=None,
+    definicion_entregable=None, entregable_revisado=_SIN_CAMBIO,
 ):
     _exigir_administracion(actor)
     version = ConfiguracionEjecucionVersion.objects.select_for_update().get(pk=version.pk)
@@ -281,6 +348,14 @@ def editar_bloque_operativo(
         # Cambio explícito de identidad, solo posible mientras la configuración es BORRADOR.
         bloque.clave = clave
         campos.append("clave")
+    if definicion_entregable is not None:
+        # Solo válido para un bloque ENTREGABLE (lo comprueba `BloqueOperativo.clean`).
+        bloque.definicion_entregable = definicion_entregable
+        campos.append("definicion_entregable")
+    if entregable_revisado is not _SIN_CAMBIO:
+        # `None` quita la relación (aprobación general). Solo válido para una APROBACION.
+        bloque.entregable_revisado = entregable_revisado
+        campos.append("entregable_revisado")
     if descripcion is not None:
         bloque.descripcion = descripcion
         campos.append("descripcion")
@@ -311,8 +386,17 @@ def eliminar_bloque_operativo(version, bloque, actor):
     version = ConfiguracionEjecucionVersion.objects.select_for_update().get(pk=version.pk)
     version.exigir_editable()
     bloque = BloqueOperativo.objects.get(pk=bloque.pk, version=version)
+    revisoras = list(bloque.aprobaciones_que_lo_revisan.values_list("nombre", flat=True))
+    if revisoras:
+        # 4.E2: no se elimina un entregable que una aprobación revisa (sería dejarla sin objeto).
+        raise ValidationError(
+            f"El bloque «{bloque.nombre}» es revisado por: {', '.join(revisoras)}. "
+            "Cambia primero la aprobación para eliminarlo."
+        )
     anterior = serializar(bloque)
+    pk_original = bloque.pk
     bloque.delete()
+    bloque.pk = pk_original  # `delete()` lo anula y la auditoría necesita el `object_id`
     registrar_evento(
         accion=RegistroAuditoria.Accion.ELIMINAR,
         instancia=bloque,

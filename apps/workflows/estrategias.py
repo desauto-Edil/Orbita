@@ -100,6 +100,7 @@ class MotivoEspera:
     TEMPORAL = "TEMPORAL"
     TAREA = "TAREA"
     APROBACION = "APROBACION"
+    ENTREGABLE = "ENTREGABLE"
 
 
 @dataclass
@@ -127,6 +128,10 @@ class ResultadoEjecucionEtapa:
     transicion_seleccionada: object = None
     motivo_espera: str | None = None
     mensaje_error: str | None = None
+    # 4.B1: `(ámbito, datos)` que el MOTOR publica en el contexto por la clave estable del
+    # bloque (`contexto.publicar_resultado_bloque`) cuando la etapa se completa. La
+    # Strategy nunca escribe el contexto: solo declara qué resultado produjo.
+    resultado_bloque: tuple | None = None
 
 
 class EstrategiaEtapa(ABC):
@@ -414,10 +419,65 @@ class EstrategiaAprobacion(EstrategiaSinConfiguracion):
         )
 
 
+class EstrategiaEntregable(EstrategiaSinConfiguracion):
+    """4.B1 — el bloque ENTREGABLE exige que un entregable DEFINIDO del Servicio esté
+    satisfecho antes de continuar. No almacena nada, no es una Tarea y no entrega
+    formalmente el Ticket: solo consulta el `EntregableTicket` congelado del Ticket
+    (`apps.tickets.entregables.entregable_esta_satisfecho`, única regla de "satisfecho").
+
+    - Ya satisfecho → `CONTINUAR` y el motor publica `entregables.<clave>.satisfecho`.
+      4.E2: «satisfecho» se evalúa sobre la versión VIGENTE: si una aprobación que revisa este
+      entregable ya observó (devolvió/rechazó) exactamente esa versión, el bloque espera una
+      nueva (`apps.tickets.entregables.entregable_vigente_para_flujo`).
+    - Pendiente → `ESPERAR` con `motivo_espera=ENTREGABLE`: estado técnico EN_ESPERA, sin
+      Tarea ni temporizador. Lo libera `apps.workflows.integracion.continuar_por_entregable`
+      desde el dominio del entregable (mismo patrón de espera externa que APROBACION).
+    - Sin Ticket vinculado, sin definición o sin el `EntregableTicket` congelado → `ERROR`
+      funcional controlado: nunca se inventa un entregable en plena ejecución.
+
+    Imports locales: `apps.tickets` importa el motor, no al revés a nivel de módulo."""
+
+    ejecutable = True
+
+    def ejecutar(self, instancia_etapa, contexto):
+        from apps.tickets.entregables import entregable_vigente_para_flujo
+        from apps.tickets.models import EntregableTicket
+
+        etapa = _definicion(instancia_etapa)
+        definicion_id = getattr(etapa, "definicion_entregable_id", None)
+        if definicion_id is None:
+            return ResultadoEjecucionEtapa(
+                estado=ResultadoEjecucion.ERROR, mensaje_error="El bloque de entregable no tiene un entregable seleccionado."
+            )
+        ticket = ResolutorVariables(getattr(instancia_etapa, "instancia_workflow", None), contexto).ticket
+        if ticket is None:
+            return ResultadoEjecucionEtapa(
+                estado=ResultadoEjecucion.ERROR, mensaje_error="Este bloque necesita una ejecución vinculada a un Ticket."
+            )
+        entregable = EntregableTicket.objects.filter(ticket=ticket, definicion_id=definicion_id).first()
+        if entregable is None:
+            return ResultadoEjecucionEtapa(
+                estado=ResultadoEjecucion.ERROR,
+                mensaje_error="El ticket no tiene el entregable de este bloque (no se congeló al crearlo).",
+            )
+        if entregable_vigente_para_flujo(entregable):
+            return ResultadoEjecucionEtapa(
+                estado=ResultadoEjecucion.CONTINUAR,
+                datos={"entregable_id": entregable.pk},
+                resultado_bloque=("entregables", {"satisfecho": True}),
+            )
+        return ResultadoEjecucionEtapa(
+            estado=ResultadoEjecucion.ESPERAR,
+            motivo_espera=MotivoEspera.ENTREGABLE,
+            datos={"entregable_id": entregable.pk},
+        )
+
+
 ESTRATEGIAS_POR_TIPO = {
     "INICIO": EstrategiaInicio(),
     "TAREA": EstrategiaTarea(),
     "APROBACION": EstrategiaAprobacion(),
+    "ENTREGABLE": EstrategiaEntregable(),
     "CONDICION": EstrategiaCondicion(),
     "ESPERA": EstrategiaEspera(),
     "TICKET": EstrategiaSinConfiguracion(),

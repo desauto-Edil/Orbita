@@ -80,6 +80,7 @@ from apps.catalogo.forms import (
     CampoForm,
     CondicionalForm,
     DefinicionEntregableForm,
+    EntregableConfigForm,
     EsperaConfigForm,
     FallbackForm,
     FormularioForm,
@@ -93,6 +94,7 @@ from apps.catalogo.forms import (
     ServicioCreacionForm,
     ServicioGeneralForm,
     TIPOS_BLOQUE_CHOICES,
+    TIPOS_BLOQUE_LEGACY_CHOICES,
     TIPOS_BLOQUE_DESCRIPCION,
     TerminoServicioForm,
     TiempoObjetivoForm,
@@ -133,7 +135,9 @@ from apps.workflows.autorizacion import puede_administrar_workflows, puede_vincu
 from apps.workflows.models import Etapa, FaseWorkflow, TransicionEtapa, Workflow, WorkflowVersion
 from apps.workflows.variables import referencias_disponibles
 
-TABS = ("general", "entrada", "ejecucion", "salida", "publicacion")
+# Orden de la dependencia natural (4.E2): el formulario, luego lo que el servicio ENTREGA (los
+# bloques ENTREGABLE del flujo eligen entre esas definiciones) y por último el flujo.
+TABS = ("general", "entrada", "salida", "ejecucion", "publicacion")
 TAB_LABELS = {
     "general": "Basico",
     "entrada": "Formulario",
@@ -143,7 +147,10 @@ TAB_LABELS = {
 }
 
 ETIQUETAS_BLOQUE = {v: k for k, v in TIPOS_BLOQUE.items()}
-ETIQUETAS_BLOQUE_DISPLAY = {"ACTIVIDAD": "Actividad", "APROBACION": "Aprobación", "ESPERA": "Espera", "DECISION": "Decisión"}
+ETIQUETAS_BLOQUE_DISPLAY = {
+    "ACTIVIDAD": "Actividad", "ENTREGABLE": "Entregable", "APROBACION": "Aprobación", "ESPERA": "Espera",
+    "DECISION": "Decisión",
+}
 
 
 def _puede_catalogo(usuario):
@@ -636,8 +643,16 @@ def _conectar_bloque_nuevo(ancla, version, nuevo_bloque, actor, tipo_empresarial
         ancla.conectar(version, nuevo_bloque, destino, actor, **_reglas_salida_nueva(nuevo_bloque))
 
 
-def _parsear_configuracion_bloque(request, tipo, *, bloque_id=None):
+def _parsear_configuracion_bloque(request, tipo, *, bloque_id=None, servicio=None, incluir_pk=None, version=None):
     prefix = f"bloque-{bloque_id}-config" if bloque_id else "nuevo-config"
+    if tipo == "ENTREGABLE":
+        # Solo un bloque de configuración por fases tiene un Servicio del cual elegir entregables.
+        if servicio is None:
+            return {}, False
+        form = EntregableConfigForm(request.POST, servicio=servicio, incluir_pk=incluir_pk, prefix=prefix)
+        if not form.is_valid():
+            return {}, False
+        return {"definicion": form.cleaned_data["definicion"]}, True
     if tipo == "ACTIVIDAD":
         form = ActividadConfigForm(request.POST, prefix=prefix)
         if not form.is_valid():
@@ -663,7 +678,8 @@ def _parsear_configuracion_bloque(request, tipo, *, bloque_id=None):
         return kwargs, True
     if tipo == "APROBACION":
         prefix_participantes = f"bloque-{bloque_id}-participantes" if bloque_id else "nuevo-participantes"
-        form = AprobacionConfigForm(request.POST, prefix=prefix)
+        revisables = _bloques_entregable_revisables(version)
+        form = AprobacionConfigForm(request.POST, prefix=prefix, bloques_entregable=revisables)
         formset = ParticipanteAprobacionFormSet(request.POST, prefix=prefix_participantes)
         if not (form.is_valid() and formset.is_valid()):
             return {}, False
@@ -676,7 +692,14 @@ def _parsear_configuracion_bloque(request, tipo, *, bloque_id=None):
             participantes.append((tipo_p, referencia))
         if not participantes:
             return {}, False
-        return {"modo": form.cleaned_data["modo"], "politica": form.cleaned_data.get("politica") or None, "participantes": participantes}, True
+        revisa = form.cleaned_data.get("revisa")
+        return {
+            "modo": form.cleaned_data["modo"],
+            "politica": form.cleaned_data.get("politica") or None,
+            "participantes": participantes,
+            # `None` = aprobación general; solo la configuración por fases (con `version`) lo usa.
+            "entregable_revisado": next((b for b in revisables if str(b.pk) == str(revisa)), None) if revisa else None,
+        }, True
     if tipo == "DECISION":
         return {}, True
     return {}, False
@@ -793,11 +816,10 @@ def _contexto_bloques(version_borrador, version_mostrada, despues=None):
         "despues_de": despues_de,
         "aviso_agregar": aviso_agregar,
         "bloques_disponibles": [
-            (codigo, etiqueta, TIPOS_BLOQUE_DESCRIPCION[codigo]) for codigo, etiqueta in TIPOS_BLOQUE_CHOICES
+            (codigo, etiqueta, TIPOS_BLOQUE_DESCRIPCION[codigo]) for codigo, etiqueta in TIPOS_BLOQUE_LEGACY_CHOICES
         ],
         "bloque_general_form": BloqueGeneralForm(prefix="nuevo") if version_borrador is not None else None,
         "form_actividad_nuevo": ActividadConfigForm(prefix="nuevo-config"),
-        "form_espera_nuevo": EsperaConfigForm(prefix="nuevo-config"),
         "form_aprobacion_nuevo": AprobacionConfigForm(prefix="nuevo-config"),
         "formset_participantes_nuevo": ParticipanteAprobacionFormSet(prefix="nuevo-participantes"),
     }
@@ -821,6 +843,8 @@ def _serializar_configuracion_bloque_operativo(tipo, config_kwargs):
         }
     if tipo == "ESPERA":
         return dict(config_kwargs)
+    if tipo == "ENTREGABLE":
+        return {}  # la referencia vive en `BloqueOperativo.definicion_entregable`, no en el JSON
     if tipo == "APROBACION":
         participantes = []
         for tipo_p, referencia in config_kwargs.get("participantes", []):
@@ -866,11 +890,43 @@ def _participantes_iniciales_operativos(bloque):
     return participantes or None
 
 
+DESTINO_FINALIZAR = "FIN"
+
+
 def _destinos_bloque_choices(version_config, *, excluir_pk=None):
+    """Bloques a los que puede ir una ruta, más «Finalizar el flujo» (4.E2): un destino especial,
+    no un bloque (el vocabulario V1 no incluye un tipo FIN)."""
     bloques = version_config.bloques.select_related("fase").order_by("fase__orden", "orden", "pk")
     if excluir_pk is not None:
         bloques = bloques.exclude(pk=excluir_pk)
-    return [(bloque.pk, f"{bloque.fase.nombre} - {bloque.nombre}") for bloque in bloques]
+    opciones = [(bloque.pk, f"{bloque.fase.nombre} - {bloque.nombre}") for bloque in bloques]
+    return opciones + [(DESTINO_FINALIZAR, "Finalizar el flujo")]
+
+
+def _destino_inicial(transicion):
+    return DESTINO_FINALIZAR if transicion.finaliza else transicion.bloque_destino_id
+
+
+def _resolver_destino_operativo(version, valor):
+    """`(bloque | None, finaliza)` a partir de lo elegido en un selector de destino."""
+    if valor == DESTINO_FINALIZAR:
+        return None, True
+    return get_object_or_404(BloqueOperativo, pk=valor, version=version), False
+
+
+def _bloques_entregable_revisables(version_config):
+    """Bloques ENTREGABLE de la configuración que una aprobación puede revisar: con una
+    definición de contenido revisable (texto, enlace o archivo)."""
+    if version_config is None:
+        return []
+    return list(
+        version_config.bloques.filter(
+            tipo=BloqueOperativo.Tipo.ENTREGABLE,
+            definicion_entregable__tipo__in=BloqueOperativo.TIPOS_ENTREGABLE_REVISABLES,
+        )
+        .select_related("fase", "definicion_entregable")
+        .order_by("fase__orden", "orden", "pk")
+    )
 
 
 def _resumen_bloque_operativo(bloque):
@@ -878,18 +934,24 @@ def _resumen_bloque_operativo(bloque):
     if bloque.tipo == BloqueOperativo.Tipo.ACTIVIDAD:
         return _resumen_actor(cfg.get("tipo_actor"), None, None)
     if bloque.tipo == BloqueOperativo.Tipo.APROBACION:
-        return f"{len(cfg.get('participantes') or [])} aprobador(es)"
+        resumen = f"{len(cfg.get('participantes') or [])} aprobador(es)"
+        if bloque.entregable_revisado_id:
+            resumen += f" · revisa «{bloque.entregable_revisado.nombre}»"
+        return resumen
     if bloque.tipo == BloqueOperativo.Tipo.ESPERA:
         if cfg.get("modo") == "DURACION":
             return f"{cfg.get('duracion_valor')} {(cfg.get('duracion_unidad') or '').lower()}"
         if cfg.get("modo") == "FECHA":
             return f"Hasta {cfg.get('fecha_objetivo')}"
+    if bloque.tipo == BloqueOperativo.Tipo.ENTREGABLE:
+        definicion = bloque.definicion_entregable
+        return f"Entregable: {definicion.nombre}" if definicion is not None else "Sin entregable"
     if bloque.tipo == BloqueOperativo.Tipo.DECISION:
         return "Rutas condicionales"
     return "Sin configurar"
 
 
-def _bloque_operativo_para_presentacion(bloque, editable):
+def _bloque_operativo_para_presentacion(bloque, editable, bloques_entregable=()):
     fila = {
         "bloque": bloque,
         "tipo_empresarial": bloque.tipo,
@@ -906,13 +968,21 @@ def _bloque_operativo_para_presentacion(bloque, editable):
         fila["form_configurar"] = ActividadConfigForm(
             initial=_config_inicial_para_formulario(bloque), prefix=f"bloque-{bloque.pk}-config"
         )
+    elif bloque.tipo == BloqueOperativo.Tipo.ENTREGABLE:
+        fila["form_configurar"] = EntregableConfigForm(
+            initial={"definicion": bloque.definicion_entregable_id},
+            servicio=bloque.version.servicio, incluir_pk=bloque.definicion_entregable_id,
+            prefix=f"bloque-{bloque.pk}-config",
+        )
     elif bloque.tipo == BloqueOperativo.Tipo.ESPERA:
         fila["form_configurar"] = EsperaConfigForm(
             initial=_config_inicial_para_formulario(bloque), prefix=f"bloque-{bloque.pk}-config"
         )
     elif bloque.tipo == BloqueOperativo.Tipo.APROBACION:
         fila["form_configurar"] = AprobacionConfigForm(
-            initial=_config_inicial_para_formulario(bloque), prefix=f"bloque-{bloque.pk}-config"
+            initial={**_config_inicial_para_formulario(bloque), "revisa": bloque.entregable_revisado_id or ""},
+            prefix=f"bloque-{bloque.pk}-config",
+            bloques_entregable=bloques_entregable,
         )
         fila["formset_participantes"] = ParticipanteAprobacionFormSet(
             initial=_participantes_iniciales_operativos(bloque), prefix=f"bloque-{bloque.pk}-participantes"
@@ -922,9 +992,9 @@ def _bloque_operativo_para_presentacion(bloque, editable):
         fila["rutas"] = rutas
         fila["form_ruta"] = RutaAprobacionForm(
             initial={
-                "destino_aprobada": rutas["APROBADA"].bloque_destino_id if "APROBADA" in rutas else None,
-                "destino_devuelta": rutas["DEVUELTA"].bloque_destino_id if "DEVUELTA" in rutas else "",
-                "destino_rechazada": rutas["RECHAZADA"].bloque_destino_id if "RECHAZADA" in rutas else None,
+                "destino_aprobada": _destino_inicial(rutas["APROBADA"]) if "APROBADA" in rutas else None,
+                "destino_devuelta": _destino_inicial(rutas["DEVUELTA"]) if "DEVUELTA" in rutas else "",
+                "destino_rechazada": _destino_inicial(rutas["RECHAZADA"]) if "RECHAZADA" in rutas else None,
             },
             destinos=destinos,
             prefix=f"bloque-{bloque.pk}-ruta",
@@ -943,7 +1013,7 @@ def _bloque_operativo_para_presentacion(bloque, editable):
                         "operador": transicion.operador,
                         "valor": transicion.valor,
                         "prioridad": transicion.prioridad,
-                        "destino": transicion.bloque_destino_id,
+                        "destino": _destino_inicial(transicion),
                     },
                     destinos=destinos,
                     prefix=f"bloque-{bloque.pk}-cond-{transicion.pk}",
@@ -956,7 +1026,7 @@ def _bloque_operativo_para_presentacion(bloque, editable):
         )
         fila["fallback"] = fallback
         fila["form_fallback"] = FallbackForm(
-            initial={"destino": fallback.bloque_destino_id} if fallback is not None else {},
+            initial={"destino": _destino_inicial(fallback)} if fallback is not None else {},
             destinos=destinos,
             prefix=f"bloque-{bloque.pk}-fallback",
         )
@@ -971,13 +1041,16 @@ def _contexto_configuracion_operativa(servicio):
     config_mostrada = config_borrador or config_activa
     editable = config_borrador is not None
     errores_configuracion = validar_configuracion_ejecucion(config_borrador) if config_borrador is not None else []
+    bloques_entregable = _bloques_entregable_revisables(config_mostrada)
     fases = []
     for fase in _fases_para_resumen(version_activa):
         bloques = []
         if config_mostrada is not None:
             bloques = [
-                _bloque_operativo_para_presentacion(bloque, editable)
-                for bloque in config_mostrada.bloques.filter(fase=fase).order_by("orden", "pk")
+                _bloque_operativo_para_presentacion(bloque, editable, bloques_entregable)
+                for bloque in config_mostrada.bloques.filter(fase=fase)
+                .select_related("entregable_revisado")
+                .order_by("orden", "pk")
             ]
         fases.append({"fase": fase, "bloques": bloques})
     return {
@@ -1000,8 +1073,9 @@ def _contexto_configuracion_operativa(servicio):
         ),
         "bloque_general_form": BloqueGeneralForm(prefix="nuevo") if editable else None,
         "form_actividad_nuevo": ActividadConfigForm(prefix="nuevo-config"),
-        "form_espera_nuevo": EsperaConfigForm(prefix="nuevo-config"),
-        "form_aprobacion_nuevo": AprobacionConfigForm(prefix="nuevo-config"),
+        "form_entregable_nuevo": EntregableConfigForm(servicio=servicio, prefix="nuevo-config"),
+        "servicio_sin_entregables": not servicio.definiciones_entregables.filter(activo=True).exists(),
+        "form_aprobacion_nuevo": AprobacionConfigForm(prefix="nuevo-config", bloques_entregable=bloques_entregable),
         "formset_participantes_nuevo": ParticipanteAprobacionFormSet(prefix="nuevo-participantes"),
     }
 
@@ -1222,13 +1296,13 @@ def _estado_secciones(servicio):
             "estado": "complete" if formulario_ok else "attention",
             "texto": f"v{version_form.numero} activa" if formulario_ok else "Requiere version activa",
         },
-        {"clave": "ejecucion", "etiqueta": TAB_LABELS["ejecucion"], "estado": flujo_estado, "texto": flujo_texto},
         {
             "clave": "salida",
             "etiqueta": TAB_LABELS["salida"],
             "estado": "complete" if tiene_salida else "optional",
             "texto": "Configurada" if tiene_salida else "Opcional segun dominio",
         },
+        {"clave": "ejecucion", "etiqueta": TAB_LABELS["ejecucion"], "estado": flujo_estado, "texto": flujo_texto},
         {
             "clave": "publicacion",
             "etiqueta": TAB_LABELS["publicacion"],
@@ -1906,7 +1980,7 @@ def _h_bloque_operativo_guardar(request, servicio, bloque_id=None):
             messages.error(request, "Seleccione una fase valida.")
             return redirect(_volver(servicio.pk, "ejecucion"))
         tipo = general_form.cleaned_data["tipo"]
-        config_kwargs, config_valido = _parsear_configuracion_bloque(request, tipo)
+        config_kwargs, config_valido = _parsear_configuracion_bloque(request, tipo, servicio=servicio, version=version)
         if not config_valido:
             messages.error(request, "Revise la configuracion del bloque.")
             return redirect(_volver(servicio.pk, "ejecucion"))
@@ -1919,6 +1993,8 @@ def _h_bloque_operativo_guardar(request, servicio, bloque_id=None):
                 nombre=general_form.cleaned_data["nombre"],
                 descripcion=general_form.cleaned_data.get("descripcion", ""),
                 configuracion=_serializar_configuracion_bloque_operativo(tipo, config_kwargs),
+                definicion_entregable=config_kwargs.get("definicion"),
+                entregable_revisado=config_kwargs.get("entregable_revisado"),
             )
         except ValidationError as exc:
             messages.error(request, _mensaje_error(exc))
@@ -1931,10 +2007,16 @@ def _h_bloque_operativo_guardar(request, servicio, bloque_id=None):
     if not editar_form.is_valid():
         messages.error(request, "Revise el nombre del bloque.")
         return redirect(_volver(servicio.pk, "ejecucion"))
-    config_kwargs, config_valido = _parsear_configuracion_bloque(request, bloque.tipo, bloque_id=bloque_id)
+    config_kwargs, config_valido = _parsear_configuracion_bloque(
+        request, bloque.tipo, bloque_id=bloque_id, servicio=servicio, incluir_pk=bloque.definicion_entregable_id,
+        version=version,
+    )
     if not config_valido:
         messages.error(request, "Revise la configuracion del bloque.")
         return redirect(_volver(servicio.pk, "ejecucion"))
+    extra = {}
+    if bloque.tipo == BloqueOperativo.Tipo.APROBACION:
+        extra["entregable_revisado"] = config_kwargs.get("entregable_revisado")  # None = aprobación general
     try:
         editar_bloque_operativo(
             version,
@@ -1943,6 +2025,8 @@ def _h_bloque_operativo_guardar(request, servicio, bloque_id=None):
             nombre=editar_form.cleaned_data["nombre"],
             descripcion=editar_form.cleaned_data.get("descripcion", ""),
             configuracion=_serializar_configuracion_bloque_operativo(bloque.tipo, config_kwargs),
+            definicion_entregable=config_kwargs.get("definicion"),
+            **extra,
         )
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
@@ -1985,12 +2069,14 @@ def _h_ruta_aprobacion_operativa(request, servicio, bloque_id):
                 if existente is not None:
                     eliminar_transicion_bloque_operativo(existente, request.user)
                 continue
-            destino = get_object_or_404(BloqueOperativo, pk=destino_pk, version=version)
+            destino, finaliza = _resolver_destino_operativo(version, destino_pk)
             if existente is None:
-                conectar_bloques_operativos(bloque, destino, request.user, resultado_aprobacion=resultado)
+                conectar_bloques_operativos(
+                    bloque, destino, request.user, resultado_aprobacion=resultado, finaliza=finaliza
+                )
             else:
                 editar_transicion_bloque_operativo(
-                    existente, request.user, destino=destino, resultado_aprobacion=resultado
+                    existente, request.user, destino=destino, resultado_aprobacion=resultado, finaliza=finaliza
                 )
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
@@ -2009,7 +2095,7 @@ def _h_condicional_operativa(request, servicio, bloque_id, condicional_id=None):
         messages.error(request, "Revise la condicion.")
         return redirect(_volver(servicio.pk, "ejecucion"))
     datos = form.cleaned_data
-    destino = get_object_or_404(BloqueOperativo, pk=datos["destino"], version=version)
+    destino, finaliza = _resolver_destino_operativo(version, datos["destino"])
     try:
         if condicional_id is None:
             conectar_bloques_operativos(
@@ -2020,6 +2106,7 @@ def _h_condicional_operativa(request, servicio, bloque_id, condicional_id=None):
                 operador=datos["operador"],
                 valor=datos["valor"],
                 prioridad=datos["prioridad"],
+                finaliza=finaliza,
             )
         else:
             transicion = get_object_or_404(
@@ -2035,6 +2122,7 @@ def _h_condicional_operativa(request, servicio, bloque_id, condicional_id=None):
                 prioridad=datos["prioridad"],
                 es_fallback=False,
                 resultado_aprobacion="",
+                finaliza=finaliza,
             )
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
@@ -2066,11 +2154,11 @@ def _h_fallback_operativo(request, servicio, bloque_id):
     if not form.is_valid():
         messages.error(request, "Revise la ruta alternativa.")
         return redirect(_volver(servicio.pk, "ejecucion"))
-    destino = get_object_or_404(BloqueOperativo, pk=form.cleaned_data["destino"], version=version)
+    destino, finaliza = _resolver_destino_operativo(version, form.cleaned_data["destino"])
     existente = bloque.transiciones_salientes.filter(es_fallback=True).first()
     try:
         if existente is None:
-            conectar_bloques_operativos(bloque, destino, request.user, es_fallback=True)
+            conectar_bloques_operativos(bloque, destino, request.user, es_fallback=True, finaliza=finaliza)
         else:
             editar_transicion_bloque_operativo(
                 existente,
@@ -2081,6 +2169,7 @@ def _h_fallback_operativo(request, servicio, bloque_id):
                 valor="",
                 es_fallback=True,
                 resultado_aprobacion="",
+                finaliza=finaliza,
             )
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
@@ -2198,8 +2287,12 @@ def studio_entregable_retirar_view(request, pk, definicion_id):
         raise PermissionDenied
     servicio = get_object_or_404(Servicio, pk=pk)
     definicion = get_object_or_404(DefinicionEntregable, pk=definicion_id, servicio=servicio)
-    retirar_definicion_entregable(definicion, request.user)
-    messages.success(request, "Entregable retirado.")
+    try:
+        retirar_definicion_entregable(definicion, request.user)
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Entregable retirado.")
     return redirect(_volver(pk, "salida"))
 
 

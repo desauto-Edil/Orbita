@@ -465,6 +465,7 @@ class InstanciaEtapa(RegistroBase):
         TEMPORAL = "TEMPORAL", "Espera temporal"
         TAREA = "TAREA", "Tarea"
         APROBACION = "APROBACION", "Aprobación"
+        ENTREGABLE = "ENTREGABLE", "Entregable"
 
     instancia_workflow = models.ForeignKey(
         InstanciaWorkflow, on_delete=models.CASCADE, related_name="ejecuciones_etapa"

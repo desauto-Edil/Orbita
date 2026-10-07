@@ -70,7 +70,7 @@ definen en términos de `puede_consultar_ticket`:
 
 from django.db.models import Q
 
-from apps.aprobaciones.autorizacion import puede_aprobar
+from apps.aprobaciones.autorizacion import es_aprobador_directo, puede_aprobar
 from apps.catalogo.models import Servicio, ServicioResponsable
 from apps.core.autorizacion import alcances_autorizados
 from apps.core.models import MiembroEquipo
@@ -407,3 +407,29 @@ def puede_consultar_prorrogas(usuario, ticket):
     """El historial de prórrogas es parte del detalle del ticket: lo ve
     exactamente quien puede consultarlo."""
     return puede_consultar_ticket(usuario, ticket)
+
+
+# --- 4.E2 — Revisión de un entregable por un aprobador ---------------------------------
+#
+# Una aprobación que REVISA un entregable (`BloqueOperativo.entregable_revisado`) solo sirve si
+# el aprobador puede ver lo que revisa. Consultar el ticket completo (cola de atención) es una
+# población distinta, así que se concede una lectura MÍNIMA y acotada: el contenido de ESE
+# entregable (y la descarga de sus archivos) a quien es aprobador directo de una aprobación del
+# flujo del ticket que lo revisa — nunca el resto del ticket.
+
+
+def puede_revisar_entregable(usuario, entregable):
+    if not getattr(usuario, "is_authenticated", False):
+        return False
+    instancia_id = entregable.ticket.instancia_workflow_id
+    if instancia_id is None:
+        return False
+    from apps.aprobaciones.models import Aprobacion
+
+    aprobaciones = Aprobacion.objects.filter(
+        esquema__vinculo_workflow__instancia_etapa__instancia_workflow_id=instancia_id,
+        esquema__vinculo_workflow__instancia_etapa__bloque_operativo__entregable_revisado__definicion_entregable_id=(
+            entregable.definicion_id
+        ),
+    )
+    return any(es_aprobador_directo(usuario, aprobacion) for aprobacion in aprobaciones)

@@ -21,7 +21,7 @@
         {% for fila in filas %}
           <li class="list-row">
             <a class="list-row__title" href="{% url 'aprobaciones:detalle' fila.aprobacion.pk %}">
-              {% if fila.contexto_workflow %}{{ fila.contexto_workflow.etapa.nombre }}{% else %}Esquema de aprobación #{{ fila.aprobacion.esquema_id }}{% endif %}
+              {% if fila.contexto_workflow %}{{ fila.contexto_workflow.nombre }}{% else %}Esquema de aprobación #{{ fila.aprobacion.esquema_id }}{% endif %}
             </a>
             <span class="badge
               {% if fila.aprobacion.estado == 'APROBADA' %}badge--success
@@ -38,7 +38,7 @@
               <span class="text-muted">Orden {{ fila.aprobacion.orden }}</span>
             {% endif %}
             {% if fila.contexto_workflow %}
-              <span class="text-muted">{{ fila.contexto_workflow.workflow.nombre }} · v{{ fila.contexto_workflow.version.numero }}</span>
+              <span class="text-muted">{{ fila.contexto_workflow.workflow.nombre }}{% if fila.contexto_workflow.por_fases %}{% if fila.contexto_workflow.fase %} · {{ fila.contexto_workflow.fase.nombre }}{% endif %}{% else %} · v{{ fila.contexto_workflow.version.numero }}{% endif %}</span>
             {% endif %}
           </li>
         {% endfor %}

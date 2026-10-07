@@ -37,6 +37,11 @@ TIPOS_BLOQUE = {
 }
 
 
+# V1 (4.B1): ESPERA ya no se crea; sigue en `TIPOS_BLOQUE` para poder leer, editar y ejecutar
+# una Etapa ESPERA histórica. ENTREGABLE solo existe en la configuración por fases.
+TIPOS_BLOQUE_CONFIGURABLES = ("ACTIVIDAD", "APROBACION", "DECISION")
+
+
 def _exigir_configuracion(actor):
     _exigir_administracion(actor)
     # Servicio.workflow puede ser compartido con otros Servicios y con el
@@ -283,9 +288,11 @@ _CONFIGURAR = {
 
 
 def _agregar_bloque(version, actor, *, tipo, nombre, descripcion="", **configuracion):
-    """ACTIVIDAD/APROBACION/ESPERA/DECISION; alta y configuración indivisibles."""
+    """ACTIVIDAD/APROBACION/DECISION; alta y configuración indivisibles."""
     if tipo not in TIPOS_BLOQUE:
         raise ValidationError("Tipo de bloque empresarial no soportado.")
+    if tipo not in TIPOS_BLOQUE_CONFIGURABLES:
+        raise ValidationError("Este tipo de bloque ya no se puede configurar.")
     etapa = editor.crear_etapa(version, actor, tipo=TIPOS_BLOQUE[tipo], nombre=nombre, descripcion=descripcion)
     _CONFIGURAR[etapa.tipo](etapa, actor, **configuracion)
     return etapa

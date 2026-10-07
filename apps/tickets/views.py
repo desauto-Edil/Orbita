@@ -42,6 +42,7 @@ from apps.tickets.autorizacion import (
     puede_resolver_prorroga,
     puede_resolver_ticket,
     puede_responder_entrega,
+    puede_revisar_entregable,
     puede_solicitar_informacion,
     puede_solicitar_prorroga,
     puede_tomar,
@@ -554,7 +555,80 @@ def detalle_view(request, pk):
     }
     contexto.update(_contexto_entrega(request.user, ticket))
     contexto.update(_contexto_prorrogas(request.user, ticket))
+    contexto.update(_contexto_trabajo_actual(request.user, ticket))
     return render(request, "tickets/detalle.html", contexto)
+
+
+_TIPOS_BLOQUE_PRESENTACION = {
+    "ACTIVIDAD": "Actividad", "ENTREGABLE": "Entregable", "APROBACION": "Aprobación", "DECISION": "Decisión",
+    "ESPERA": "Espera",
+}
+
+
+def _contexto_trabajo_actual(usuario, ticket):
+    """4.E2 — OPERABILIDAD mínima del flujo: qué trabajo tiene el Ticket ahora y dónde actuar.
+    No es una línea de tiempo ni un diagrama: solo el bloque vigente de su ejecución, su
+    situación y los enlaces a la Tarea / Aprobación que corresponda (solo a quien puede
+    consultarlas). `trabajo_interno_en_curso` es la misma regla que protege resolver/entregar."""
+    if ticket.instancia_workflow_id is None:
+        return {"trabajo_actual": None, "trabajo_interno_en_curso": False}
+    from apps.aprobaciones.autorizacion import puede_aprobar, puede_consultar_aprobacion
+    from apps.tareas.autorizacion import puede_consultar_tarea
+    from apps.workflows.models import EsquemaAprobacionWorkflow, InstanciaEtapa, InstanciaWorkflow, TareaWorkflow
+
+    instancia = ticket.instancia_workflow
+    ultima = (
+        instancia.ejecuciones_etapa.select_related("bloque_operativo", "etapa", "fase_workflow")
+        .order_by("-orden")
+        .first()
+    )
+    en_curso = instancia.estado in (InstanciaWorkflow.Estado.EN_EJECUCION, InstanciaWorkflow.Estado.EN_ESPERA)
+    if ultima is None:
+        return {"trabajo_actual": None, "trabajo_interno_en_curso": en_curso}
+
+    bloque = ultima.bloque_operativo
+    definicion = bloque if bloque is not None else ultima.etapa
+    trabajo = {
+        "fase": ultima.fase_workflow.nombre if ultima.fase_workflow_id else "",
+        "nombre": definicion.nombre,
+        "tipo": _TIPOS_BLOQUE_PRESENTACION.get(bloque.tipo, bloque.get_tipo_display())
+        if bloque is not None
+        else definicion.get_tipo_display(),
+        "terminado": instancia.estado == InstanciaWorkflow.Estado.COMPLETADA,
+        "con_error": instancia.estado == InstanciaWorkflow.Estado.ERROR,
+        "pendiente": "",
+        "tarea": None,
+        "aprobacion": None,
+        "entregable": None,
+    }
+    if ultima.estado == InstanciaEtapa.Estado.EN_ESPERA:
+        motivo = ultima.motivo_espera
+        if motivo == InstanciaEtapa.MotivoEspera.TAREA:
+            trabajo["pendiente"] = "Hay una actividad por completar."
+            vinculo = TareaWorkflow.objects.filter(instancia_etapa=ultima).select_related("tarea").first()
+            if vinculo is not None and puede_consultar_tarea(usuario, vinculo.tarea):
+                trabajo["tarea"] = vinculo.tarea
+        elif motivo == InstanciaEtapa.MotivoEspera.APROBACION:
+            trabajo["pendiente"] = "Está pendiente de aprobación."
+            vinculo = (
+                EsquemaAprobacionWorkflow.objects.filter(instancia_etapa=ultima).select_related("esquema").first()
+            )
+            if vinculo is not None:
+                propias = [
+                    a for a in vinculo.esquema.participaciones.all() if puede_consultar_aprobacion(usuario, a)
+                ]
+                propias.sort(key=lambda a: (not puede_aprobar(usuario, a), a.orden))
+                trabajo["aprobacion"] = propias[0] if propias else None
+        elif motivo == InstanciaEtapa.MotivoEspera.ENTREGABLE:
+            entregable_id = (ultima.resultado or {}).get("entregable_id")
+            entregable = ticket.entregables.filter(pk=entregable_id).first() if entregable_id else None
+            trabajo["entregable"] = entregable
+            trabajo["pendiente"] = (
+                f"Falta entregar «{entregable.nombre}»." if entregable is not None else "Falta un entregable."
+            )
+        else:
+            trabajo["pendiente"] = "En espera programada."
+    return {"trabajo_actual": trabajo, "trabajo_interno_en_curso": en_curso}
 
 
 def _contexto_prorrogas(usuario, ticket):
@@ -918,7 +992,13 @@ def descargar_adjunto_view(request, adjunto_id):
     )
     ticket = adjunto.ticket_relacionado
     if not puede_consultar_ticket(request.user, ticket):
-        raise PermissionDenied
+        # 4.E2: el aprobador que REVISA un entregable puede descargar sus archivos.
+        revisa = (
+            adjunto.tipo_relacion == Adjunto.TipoRelacion.ENTREGABLE
+            and puede_revisar_entregable(request.user, adjunto.entregable)
+        )
+        if not revisa:
+            raise PermissionDenied
     return FileResponse(adjunto.archivo.open("rb"), as_attachment=True, filename=adjunto.nombre_original)
 
 

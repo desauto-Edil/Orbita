@@ -136,10 +136,6 @@
                     <div class="field">{{ form_actividad_nuevo.usuario.label_tag }}{{ form_actividad_nuevo.usuario }}</div>
                     <div class="field">{{ form_actividad_nuevo.equipo.label_tag }}{{ form_actividad_nuevo.equipo }}</div>
                     <div class="field">{{ form_actividad_nuevo.permite_subtareas }} {{ form_actividad_nuevo.permite_subtareas.label_tag }}</div>
-                  {% elif codigo == "ESPERA" %}
-                    <div class="field">{{ form_espera_nuevo.modo.label_tag }}{{ form_espera_nuevo.modo }}</div>
-                    <div class="field">{{ form_espera_nuevo.duracion_valor.label_tag }}{{ form_espera_nuevo.duracion_valor }} {{ form_espera_nuevo.duracion_unidad }}</div>
-                    <div class="field">{{ form_espera_nuevo.fecha_objetivo.label_tag }}{{ form_espera_nuevo.fecha_objetivo }}</div>
                   {% elif codigo == "APROBACION" %}
                     <div class="field">{{ form_aprobacion_nuevo.modo.label_tag }}{{ form_aprobacion_nuevo.modo }}</div>
                     <div class="field">{{ form_aprobacion_nuevo.politica.label_tag }}{{ form_aprobacion_nuevo.politica }}</div>

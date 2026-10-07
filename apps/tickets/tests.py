@@ -98,6 +98,7 @@ from apps.tickets.models import (
     Adjunto,
     ArchivoRespuestaCampo,
     ComentarioTicket,
+    EntregableTicket,
     EntregaTicket,
     ProrrogaTicket,
     ResultadoEntregaTicket,
@@ -8315,12 +8316,11 @@ class TicketGeneralBuscadorTests(_EscenarioTicketGeneralMixin, TestCase):
             crear_borrador(self.usuario_g, self.servicio_g)
 
 
-class VariablesWorkflowTicketTests(TestCase):
-    """4.B0 — una DECISION de un flujo por fases (PLANTILLA_FASES) evalúa datos del
-    Ticket, respuestas del formulario congelado (por clave estable) y resultados de
-    aprobaciones (por clave de bloque), con ticket real y radicación real."""
+class _EscenarioFlujoFasesMixin:
+    """Plantilla de fases publicada (Recepción → Revisión) + usuarios + helpers para
+    configurar bloques y radicar tickets reales sobre ella (4.B0/4.B1)."""
 
-    def setUp(self):
+    def _preparar_flujo(self):
         from apps.workflows import fases as fases_ops
         from apps.workflows.versionamiento import activar_version as activar_workflow
 
@@ -8445,6 +8445,15 @@ class VariablesWorkflowTicketTests(TestCase):
         )
         ticket.refresh_from_db()
         ticket.instancia_workflow.refresh_from_db()
+
+
+class VariablesWorkflowTicketTests(_EscenarioFlujoFasesMixin, TestCase):
+    """4.B0 — una DECISION de un flujo por fases (PLANTILLA_FASES) evalúa datos del
+    Ticket, respuestas del formulario congelado (por clave estable) y resultados de
+    aprobaciones (por clave de bloque), con ticket real y radicación real."""
+
+    def setUp(self):
+        self._preparar_flujo()
 
     # --- respuestas del formulario -------------------------------------------------
 
@@ -8719,3 +8728,1069 @@ class VariablesWorkflowRegresionTests(TestCase):
         ticket.refresh_from_db()
         self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
         self.assertIsNone(ticket.instancia_workflow_id)
+
+
+class _EscenarioBloqueEntregableMixin(_EscenarioFlujoFasesMixin):
+    """4.B1 — flujos por fases con bloques ENTREGABLE sobre tickets reales. Los
+    entregables de un Servicio se definen ANTES de crear el borrador (el snapshot se
+    congela al crearlo)."""
+
+    def _preparar_entregables_flujo(self):
+        self._preparar_flujo()
+        self.responsable = Usuario.objects.create_user(username="ent_responsable", password=CLAVE_PRUEBA)
+        self.equipo = Equipo.objects.create(nombre="Equipo de entregables 4B1")
+        MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.responsable)
+        _otorgar_tickets_atender(self.responsable)
+
+    def _servicio_entregables(self, *definiciones):
+        """`definiciones`: `(nombre, tipo, obligatorio)`. Devuelve `(servicio, {nombre: definicion})`."""
+        from apps.catalogo.models import DefinicionEntregable
+
+        servicio, _, _ = _crear_servicio_con_formulario(self.solicitante, [])
+        servicio.workflow = self.workflow
+        servicio.save(update_fields=["workflow", "actualizado_en"])
+        definidas = {}
+        for orden, (nombre, tipo, obligatorio) in enumerate(definiciones):
+            definidas[nombre] = DefinicionEntregable.objects.create(
+                servicio=servicio, nombre=nombre, tipo=tipo, obligatorio=obligatorio, orden=orden
+            )
+        return servicio, definidas
+
+    def _flujo(self, servicio, *pasos):
+        """Configura y activa: `("ENT", nombre, definicion)` / `("ACT", nombre)` en Recepción,
+        en ese orden, más una actividad final «Cierre» en Revisión."""
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo, crear_nueva_version_configuracion
+
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        for paso in pasos:
+            if paso[0] == "ENT":
+                agregar_bloque_operativo(
+                    config, self.admin, fase=self.recepcion, tipo=BloqueOperativo.Tipo.ENTREGABLE,
+                    nombre=paso[1], definicion_entregable=paso[2],
+                )
+            else:
+                self._agregar(config, self.recepcion, BloqueOperativo.Tipo.ACTIVIDAD, paso[1], tipo_actor="SOLICITANTE")
+        self._actividad(config, "Cierre")
+        self._activar(servicio, config)
+        return config
+
+    def _atender(self, ticket):
+        ticket = asignar_ticket(ticket, self.responsable, equipo=self.equipo)
+        ticket = tomar_ticket(ticket, self.responsable)
+        ticket.refresh_from_db()
+        return ticket
+
+    def _instancia(self, ticket):
+        ticket.refresh_from_db()
+        instancia = ticket.instancia_workflow
+        instancia.refresh_from_db()
+        return instancia
+
+    def _ejecucion(self, ticket, nombre):
+        return self._instancia(ticket).ejecuciones_etapa.get(bloque_operativo__nombre=nombre)
+
+    def _ultima(self, ticket):
+        return self._instancia(ticket).ejecuciones_etapa.order_by("-orden").first()
+
+    def _satisfacer(self, ticket, definicion, texto="Documento listo"):
+        entregable = ticket.entregables.get(definicion=definicion)
+        return registrar_resultado_entregable(entregable, self.responsable, texto)
+
+
+class BloqueEntregableEjecucionTests(_MediaAisladaMixin, _EscenarioBloqueEntregableMixin, TestCase):
+    """4.B1 — ejecución del bloque ENTREGABLE: espera externa, reanudación desde el dominio,
+    resultado publicado y separación respecto de la entrega formal."""
+
+    def setUp(self):
+        self._preparar_entregables_flujo()
+
+    def test_entregable_pendiente_deja_la_ejecucion_en_espera_sin_tarea(self):
+        from apps.tareas.models import Tarea
+
+        servicio, defs = self._servicio_entregables(("Propuesta", "TEXTO", True))
+        self._flujo(servicio, ("ENT", "Entrega propuesta", defs["Propuesta"]))
+        ticket = self._radicar(servicio, {})
+
+        instancia = self._instancia(ticket)
+        ultima = self._ultima(ticket)
+        self.assertEqual(instancia.estado, "EN_ESPERA")  # estado técnico del motor
+        self.assertEqual((ultima.bloque_operativo.nombre, ultima.estado, ultima.motivo_espera),
+                         ("Entrega propuesta", "EN_ESPERA", "ENTREGABLE"))
+        self.assertEqual(Tarea.objects.count(), 0)
+        self.assertEqual(ticket.entregables.count(), 1)
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+        self.assertNotIn("entregables", instancia.contexto["resultados_bloques"])
+
+    def test_completar_el_entregable_reanuda_publica_y_no_entrega_formalmente(self):
+        from apps.tareas.models import Tarea
+
+        servicio, defs = self._servicio_entregables(("Propuesta", "TEXTO", True))
+        self._flujo(servicio, ("ENT", "Entrega propuesta", defs["Propuesta"]))
+        ticket = self._atender(self._radicar(servicio, {}))
+        entregables_antes = ticket.entregables.count()
+
+        self._satisfacer(ticket, defs["Propuesta"])
+
+        instancia = self._instancia(ticket)
+        self.assertEqual(self._ejecucion(ticket, "Entrega propuesta").estado, "COMPLETADA")
+        ultima = self._ultima(ticket)
+        self.assertEqual((ultima.bloque_operativo.nombre, ultima.estado, ultima.motivo_espera),
+                         ("Cierre", "EN_ESPERA", "TAREA"))
+        self.assertEqual(
+            instancia.contexto["resultados_bloques"]["entregables"]["entrega_propuesta"], {"satisfecho": True}
+        )
+        # Solo la Tarea de «Cierre»: el bloque ENTREGABLE no creó ninguna.
+        self.assertEqual(Tarea.objects.count(), 1)
+        self.assertEqual(ticket.entregables.count(), entregables_antes)
+        # Satisfecho ≠ entrega formal ni resolución/cierre.
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+        self.assertFalse(EntregaTicket.objects.filter(ticket=ticket).exists())
+        self.assertFalse(ResolucionTicket.objects.filter(ticket=ticket).exists())
+
+    def test_entregable_ya_satisfecho_al_entrar_continua_de_inmediato(self):
+        from apps.tareas.models import Tarea
+        from apps.workflows.integracion import completar_tarea_workflow
+        from apps.workflows.models import TareaWorkflow
+
+        servicio, defs = self._servicio_entregables(("Propuesta", "TEXTO", True))
+        self._flujo(servicio, ("ACT", "Preparar"), ("ENT", "Entrega propuesta", defs["Propuesta"]))
+        ticket = self._atender(self._radicar(servicio, {}))
+        self._satisfacer(ticket, defs["Propuesta"])  # antes de llegar al bloque
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Preparar")
+
+        tarea = TareaWorkflow.objects.get(instancia_etapa=self._ejecucion(ticket, "Preparar")).tarea
+        completar_tarea_workflow(tarea, self.solicitante)
+
+        self.assertEqual(self._ejecucion(ticket, "Entrega propuesta").estado, "COMPLETADA")
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Cierre")
+        self.assertEqual(Tarea.objects.count(), 2)  # Preparar + Cierre; ninguna del entregable
+        publicado = self._instancia(ticket).contexto["resultados_bloques"]["entregables"]
+        self.assertEqual(publicado["entrega_propuesta"], {"satisfecho": True})
+
+    def test_el_mismo_entregable_en_dos_bloques_no_se_copia_y_el_segundo_continua_solo(self):
+        servicio, defs = self._servicio_entregables(("Documento X", "TEXTO", True))
+        self._flujo(
+            servicio, ("ENT", "Primera vez", defs["Documento X"]), ("ENT", "Segunda vez", defs["Documento X"])
+        )
+        ticket = self._atender(self._radicar(servicio, {}))
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Primera vez")
+
+        self._satisfacer(ticket, defs["Documento X"])
+
+        self.assertEqual(self._ejecucion(ticket, "Primera vez").estado, "COMPLETADA")
+        self.assertEqual(self._ejecucion(ticket, "Segunda vez").estado, "COMPLETADA")
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Cierre")
+        self.assertEqual(ticket.entregables.count(), 1)
+        publicado = self._instancia(ticket).contexto["resultados_bloques"]["entregables"]
+        self.assertEqual(set(publicado), {"primera_vez", "segunda_vez"})
+
+    def test_dos_entregables_distintos_publican_resultados_separados(self):
+        servicio, defs = self._servicio_entregables(("Propuesta", "TEXTO", True), ("Informe", "TEXTO", True))
+        self._flujo(servicio, ("ENT", "Entrega propuesta", defs["Propuesta"]), ("ENT", "Entrega informe", defs["Informe"]))
+        ticket = self._atender(self._radicar(servicio, {}))
+
+        self._satisfacer(ticket, defs["Propuesta"])
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Entrega informe")
+        publicado = self._instancia(ticket).contexto["resultados_bloques"]["entregables"]
+        self.assertEqual(set(publicado), {"entrega_propuesta"})
+
+        self._satisfacer(ticket, defs["Informe"])
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Cierre")
+        publicado = self._instancia(ticket).contexto["resultados_bloques"]["entregables"]
+        self.assertEqual(set(publicado), {"entrega_propuesta", "entrega_informe"})
+
+    def test_escribir_otro_entregable_no_reanuda_el_bloque(self):
+        servicio, defs = self._servicio_entregables(("Propuesta", "TEXTO", True), ("Otro", "TEXTO", True))
+        self._flujo(servicio, ("ENT", "Entrega propuesta", defs["Propuesta"]))
+        ticket = self._atender(self._radicar(servicio, {}))
+
+        self._satisfacer(ticket, defs["Otro"])
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Entrega propuesta")
+        self.assertEqual(self._ultima(ticket).estado, "EN_ESPERA")
+
+        self._satisfacer(ticket, defs["Propuesta"])
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Cierre")
+
+    def test_una_definicion_opcional_referenciada_por_un_bloque_sigue_exigiendo_satisfaccion(self):
+        servicio, defs = self._servicio_entregables(("Opcional", "TEXTO", False))
+        self._flujo(servicio, ("ENT", "Entrega opcional", defs["Opcional"]))
+        ticket = self._radicar(servicio, {})
+        self.assertEqual(self._ultima(ticket).motivo_espera, "ENTREGABLE")
+        ticket = self._atender(ticket)
+        self._satisfacer(ticket, defs["Opcional"])
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Cierre")
+
+    def test_el_bloque_no_decide_quien_sube_el_entregable(self):
+        servicio, defs = self._servicio_entregables(("Propuesta", "TEXTO", True))
+        self._flujo(servicio, ("ENT", "Entrega propuesta", defs["Propuesta"]))
+        ticket = self._atender(self._radicar(servicio, {}))
+        entregable = ticket.entregables.get(definicion=defs["Propuesta"])
+        with self.assertRaises(PermissionDenied):
+            registrar_resultado_entregable(entregable, self.solicitante, "No soy el responsable")
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Entrega propuesta")
+        self.assertEqual(self._ultima(ticket).estado, "EN_ESPERA")
+
+    def test_todos_los_tipos_de_entregable_reanudan_el_flujo(self):
+        from apps.tickets.entregables import adjuntar_archivo_entregable, confirmar_entregable
+
+        casos = {"TEXTO": "Texto", "ENLACE": "Enlace", "CONFIRMACION": "Confirmación", "ARCHIVO": "Archivo"}
+        for tipo, nombre in casos.items():
+            servicio, defs = self._servicio_entregables((nombre, tipo, True))
+            self._flujo(servicio, ("ENT", f"Entrega {nombre}", defs[nombre]))
+            ticket = self._atender(self._radicar(servicio, {}))
+            entregable = ticket.entregables.get(definicion=defs[nombre])
+            self.assertEqual(self._ultima(ticket).estado, "EN_ESPERA", tipo)
+            if tipo == "TEXTO":
+                registrar_resultado_entregable(entregable, self.responsable, "Listo")
+            elif tipo == "ENLACE":
+                registrar_resultado_entregable(entregable, self.responsable, "https://ejemplo.com/doc")
+            elif tipo == "CONFIRMACION":
+                confirmar_entregable(entregable, self.responsable)
+            else:
+                adjuntar_archivo_entregable(
+                    entregable, self.responsable, SimpleUploadedFile("propuesta.txt", b"contenido")
+                )
+            self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Cierre", tipo)
+
+    def test_el_resultado_publicado_alimenta_una_decision_posterior(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo, crear_nueva_version_configuracion
+
+        servicio, defs = self._servicio_entregables(("Propuesta", "TEXTO", True))
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        agregar_bloque_operativo(
+            config, self.admin, fase=self.recepcion, tipo=BloqueOperativo.Tipo.ENTREGABLE,
+            nombre="Propuesta comercial", definicion_entregable=defs["Propuesta"],
+        )
+        alto = self._actividad(config, "Camino alto")
+        normal = self._actividad(config, "Camino normal")
+        self._decision(config, [("entregables.propuesta_comercial.satisfecho", "IGUAL_A", "true")], alto=alto, normal=normal)
+        self._activar(servicio, config)
+
+        ticket = self._atender(self._radicar(servicio, {}))
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Propuesta comercial")
+        self._satisfacer(ticket, defs["Propuesta"])
+        self.assertEqual(self._camino(ticket), "Camino alto")
+
+    # --- idempotencia -----------------------------------------------------------
+
+    def test_un_segundo_evento_de_reanudacion_no_avanza_otra_vez(self):
+        from apps.tareas.models import Tarea
+        from apps.workflows.integracion import continuar_por_entregable
+
+        servicio, defs = self._servicio_entregables(("Propuesta", "TEXTO", True))
+        self._flujo(servicio, ("ENT", "Entrega propuesta", defs["Propuesta"]))
+        ticket = self._atender(self._radicar(servicio, {}))
+        entregable = self._satisfacer(ticket, defs["Propuesta"])
+        ejecuciones = self._instancia(ticket).ejecuciones_etapa.count()
+
+        self.assertFalse(continuar_por_entregable(entregable))
+        # Escribir otra vez el mismo valor vuelve a avisar al Workflow: tampoco avanza.
+        registrar_resultado_entregable(entregable, self.responsable, "Documento listo")
+
+        self.assertEqual(self._instancia(ticket).ejecuciones_etapa.count(), ejecuciones)
+        self.assertEqual(Tarea.objects.count(), 1)
+
+    def test_un_entregable_sin_workflow_no_hace_nada(self):
+        from apps.catalogo.models import DefinicionEntregable
+        from apps.workflows.integracion import continuar_por_entregable
+
+        servicio, _, _ = _crear_servicio_con_formulario(self.solicitante, [])
+        definicion = DefinicionEntregable.objects.create(servicio=servicio, nombre="Suelto", tipo="TEXTO")
+        ticket = crear_borrador(self.solicitante, servicio)
+        radicar_ticket(ticket, self.solicitante)
+        self.assertFalse(continuar_por_entregable(ticket.entregables.get(definicion=definicion)))
+
+    # --- consistencia ---------------------------------------------------------------
+
+    def test_sin_el_entregable_congelado_no_se_radica_ni_se_inventa_otro(self):
+        servicio, defs = self._servicio_entregables(("Propuesta", "TEXTO", True))
+        self._flujo(servicio, ("ENT", "Entrega propuesta", defs["Propuesta"]))
+        ticket = crear_borrador(self.solicitante, servicio)
+        EntregableTicket.objects.filter(ticket=ticket).delete()  # inconsistencia simulada
+
+        with self.assertRaises(ValidationError):
+            radicar_ticket(ticket, self.solicitante)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.BORRADOR)
+        self.assertEqual(EntregableTicket.objects.filter(ticket=ticket).count(), 0)
+
+    # --- versionamiento y Workflow compartido --------------------------------------------
+
+    def test_una_ejecucion_en_curso_conserva_su_configuracion_aunque_se_publique_otra(self):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion, editar_bloque_operativo
+
+        servicio, defs = self._servicio_entregables(("Propuesta A", "TEXTO", True), ("Propuesta B", "TEXTO", True))
+        config1 = self._flujo(servicio, ("ENT", "Entrega", defs["Propuesta A"]))
+        ticket = self._atender(self._radicar(servicio, {}))
+        self.assertEqual(self._instancia(ticket).configuracion_ejecucion_version_id, config1.pk)
+
+        config2 = crear_nueva_version_configuracion(servicio, self.admin, clonar_desde=config1)
+        bloque2 = config2.bloques.get(tipo="ENTREGABLE")
+        self.assertEqual(bloque2.clave, "entrega")
+        self.assertEqual(bloque2.definicion_entregable_id, defs["Propuesta A"].pk)
+        editar_bloque_operativo(config2, bloque2, self.admin, definicion_entregable=defs["Propuesta B"])
+        self._activar(servicio, config2)
+
+        # El ticket histórico sigue esperando lo de SU configuración (A), no lo de la vigente (B).
+        self._satisfacer(ticket, defs["Propuesta B"])
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Entrega")
+        self._satisfacer(ticket, defs["Propuesta A"])
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Cierre")
+
+    def test_workflow_compartido_cada_servicio_usa_su_propia_definicion(self):
+        servicio_a, defs_a = self._servicio_entregables(("Propuesta A", "TEXTO", True))
+        servicio_b, defs_b = self._servicio_entregables(("Informe B", "TEXTO", True))
+        self.assertEqual(servicio_a.workflow_id, servicio_b.workflow_id)
+        self._flujo(servicio_a, ("ENT", "Entrega", defs_a["Propuesta A"]))
+        self._flujo(servicio_b, ("ENT", "Entrega", defs_b["Informe B"]))
+        ticket_a = self._atender(self._radicar(servicio_a, {}))
+        ticket_b = self._atender(self._radicar(servicio_b, {}))
+
+        self._satisfacer(ticket_b, defs_b["Informe B"])
+        self.assertEqual(self._ultima(ticket_b).bloque_operativo.nombre, "Cierre")
+        self.assertEqual(self._ultima(ticket_a).bloque_operativo.nombre, "Entrega")  # A sigue esperando
+
+        self._satisfacer(ticket_a, defs_a["Propuesta A"])
+        self.assertEqual(self._ultima(ticket_a).bloque_operativo.nombre, "Cierre")
+
+    # --- compatibilidad histórica de ESPERA ------------------------------------------------------
+
+    def test_una_espera_historica_en_una_configuracion_sigue_ejecutandose(self):
+        from datetime import timedelta
+        from unittest.mock import patch
+
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+        from apps.workflows.motor import reanudar_instancia
+
+        servicio, _, _ = _crear_servicio_con_formulario(self.solicitante, [])
+        servicio.workflow = self.workflow
+        servicio.save(update_fields=["workflow", "actualizado_en"])
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        # Registro histórico creado fuera de la operación normal (que ya la rechaza).
+        BloqueOperativo.objects.create(
+            version=config, fase=self.recepcion, tipo="ESPERA", nombre="Espera histórica", orden=1,
+            configuracion={"modo": "DURACION", "duracion_valor": 1, "duracion_unidad": "HORAS"},
+        )
+        self._actividad(config, "Cierre")
+        self._activar(servicio, config)
+
+        ticket = self._radicar(servicio, {})
+        ultima = self._ultima(ticket)
+        self.assertEqual((ultima.bloque_operativo.nombre, ultima.estado, ultima.motivo_espera),
+                         ("Espera histórica", "EN_ESPERA", "TEMPORAL"))
+        with patch("apps.workflows.motor.timezone.now", return_value=timezone.now() + timedelta(hours=2)):
+            reanudar_instancia(self._instancia(ticket))
+        self.assertEqual(self._ultima(ticket).bloque_operativo.nombre, "Cierre")
+
+
+class ConcurrenciaBloqueEntregableTests(_EscenarioBloqueEntregableMixin, TransactionTestCase):
+    def setUp(self):
+        self._preparar_entregables_flujo()
+
+    def test_dos_reanudaciones_simultaneas_continuan_el_flujo_una_sola_vez(self):
+        from apps.tareas.models import Tarea
+        from apps.workflows.integracion import continuar_por_entregable
+
+        servicio, defs = self._servicio_entregables(("Propuesta", "TEXTO", True))
+        self._flujo(servicio, ("ENT", "Entrega propuesta", defs["Propuesta"]))
+        ticket = self._atender(self._radicar(servicio, {}))
+        entregable = ticket.entregables.get(definicion=defs["Propuesta"])
+        # Satisfacer sin pasar por el dominio: así ninguna escritura reanuda antes de los hilos.
+        EntregableTicket.objects.filter(pk=entregable.pk).update(texto="Listo")
+        barrera = threading.Barrier(2)
+        resultados = []
+
+        def reanudar():
+            try:
+                barrera.wait(timeout=10)
+                resultados.append(
+                    continuar_por_entregable(EntregableTicket.objects.select_related("ticket").get(pk=entregable.pk))
+                )
+            except Exception as exc:
+                resultados.append(exc)
+            finally:
+                connection.close()
+
+        hilos = [threading.Thread(target=reanudar, daemon=True) for _ in range(2)]
+        for hilo in hilos:
+            hilo.start()
+        for hilo in hilos:
+            hilo.join(timeout=30)
+        self.assertFalse(any(hilo.is_alive() for hilo in hilos))
+        self.assertEqual(sorted(resultados, key=str), [False, True])
+        instancia = self._instancia(ticket)
+        self.assertEqual(instancia.ejecuciones_etapa.filter(bloque_operativo__nombre="Cierre").count(), 1)
+        self.assertEqual(instancia.ejecuciones_etapa.filter(bloque_operativo__nombre="Entrega propuesta").count(), 1)
+        self.assertEqual(Tarea.objects.count(), 1)
+
+
+# ---------------------------------------------------------------------------
+# 4.E2 — recorridos operables: cierre del Workflow, aprobación que revisa un entregable,
+# ciclo de ajustes con nueva versión, finalizar desde aprobación/decisión y protección de
+# la resolución prematura.
+# ---------------------------------------------------------------------------
+
+
+class _EscenarioE2Mixin(_EscenarioBloqueEntregableMixin):
+    """Plantilla de cinco fases (Recepción → Producción → Revisión → Entrega, y el ciclo
+    Revisión ⇄ Ajustes) sobre tickets reales. La actividad la hace `self.responsable`; la
+    aprobación, `self.aprobador`."""
+
+    ENTREGABLE = "Presentación comercial"
+
+    def _preparar_e2(self):
+        from apps.workflows import fases as fases_ops
+        from apps.workflows.versionamiento import activar_version as activar_workflow
+
+        self._preparar_entregables_flujo()
+        self.workflow_e2 = fases_ops.crear_plantilla_fases(self.admin, nombre="Plantilla E2")
+        version = self.workflow_e2.versiones.get(numero=1)
+        self.f_recepcion = fases_ops.agregar_fase(version, self.admin, nombre="Recepción")
+        self.f_produccion = fases_ops.agregar_fase(version, self.admin, nombre="Producción")
+        self.f_revision = fases_ops.agregar_fase(version, self.admin, nombre="Revisión")
+        self.f_ajustes = fases_ops.agregar_fase(version, self.admin, nombre="Ajustes")
+        self.f_entrega = fases_ops.agregar_fase(version, self.admin, nombre="Entrega")
+        fases_ops.conectar_fases(self.f_recepcion, self.f_produccion, self.admin)
+        fases_ops.conectar_fases(self.f_produccion, self.f_revision, self.admin)
+        fases_ops.conectar_fases(self.f_revision, self.f_entrega, self.admin, prioridad=0)
+        fases_ops.conectar_fases(self.f_revision, self.f_ajustes, self.admin, prioridad=1)
+        fases_ops.conectar_fases(self.f_ajustes, self.f_revision, self.admin)
+        activar_workflow(self.workflow_e2, version, self.admin)
+
+    def _servicio_e2(self, tipo="TEXTO", politica=None):
+        """Servicio con un formulario (`requiere_revision`) y el entregable «Presentación comercial».
+        Devuelve `(servicio, campos, definicion)`."""
+        from apps.catalogo.models import DefinicionEntregable
+
+        servicio, _, campos = _crear_servicio_con_formulario(
+            self.solicitante, [{"tipo": Campo.TipoCampo.BOOLEANO, "etiqueta": "Requiere revision", "orden": 1}]
+        )
+        servicio.workflow = self.workflow_e2
+        servicio.save(update_fields=["workflow", "actualizado_en"])
+        if politica:
+            Servicio.objects.filter(pk=servicio.pk).update(politica_entrega=politica, dias_observacion=None)
+        definicion = DefinicionEntregable.objects.create(
+            servicio=servicio, nombre=self.ENTREGABLE, tipo=tipo, obligatorio=True, orden=0
+        )
+        return servicio, campos, definicion
+
+    def _act(self, config, fase, nombre):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo
+
+        return agregar_bloque_operativo(
+            config, self.admin, fase=fase, tipo=BloqueOperativo.Tipo.ACTIVIDAD, nombre=nombre,
+            configuracion={"tipo_actor": "USUARIO", "usuario_id": self.responsable.pk},
+        )
+
+    def _apr(self, config, fase, nombre, revisa=None):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo
+
+        return agregar_bloque_operativo(
+            config, self.admin, fase=fase, tipo=BloqueOperativo.Tipo.APROBACION, nombre=nombre,
+            configuracion={
+                "modo": "SECUENCIAL", "politica": "",
+                "participantes": [{"tipo": "USUARIO", "usuario_id": self.aprobador.pk, "equipo_id": None}],
+            },
+            entregable_revisado=revisa,
+        )
+
+    def _ruta(self, origen, destino, **reglas):
+        from apps.catalogo.configuracion_ejecucion import conectar_bloques_operativos
+
+        conectar_bloques_operativos(origen, destino, self.admin, finaliza=destino is None, **reglas)
+
+    def _configurar_e2(self, servicio, definicion, *, rechazada_finaliza=True):
+        """Recepción: Analizar · Producción: Preparar + Entregable · Revisión: Aprobación (revisa
+        el entregable) · Ajustes: Corregir + Entregable · Entrega: Entregar. APROBADA → Entrega,
+        DEVUELTA → Ajustes, RECHAZADA → finalizar."""
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo, crear_nueva_version_configuracion
+
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        analizar = self._act(config, self.f_recepcion, "Analizar solicitud")
+        self._act(config, self.f_produccion, "Preparar presentación")
+        entrega1 = agregar_bloque_operativo(
+            config, self.admin, fase=self.f_produccion, tipo=BloqueOperativo.Tipo.ENTREGABLE,
+            nombre=self.ENTREGABLE, definicion_entregable=definicion,
+        )
+        aprobacion = self._apr(config, self.f_revision, "Revisar presentación", revisa=entrega1)
+        corregir = self._act(config, self.f_ajustes, "Corregir presentación")
+        agregar_bloque_operativo(
+            config, self.admin, fase=self.f_ajustes, tipo=BloqueOperativo.Tipo.ENTREGABLE,
+            nombre="Presentación corregida", definicion_entregable=definicion,
+        )
+        entregar = self._act(config, self.f_entrega, "Entregar resultado")
+        self._ruta(aprobacion, entregar, resultado_aprobacion="APROBADA")
+        self._ruta(aprobacion, corregir, resultado_aprobacion="DEVUELTA")
+        self._ruta(aprobacion, None if rechazada_finaliza else corregir, resultado_aprobacion="RECHAZADA")
+        self._activar(servicio, config)
+        return config, analizar
+
+    def _configurar_minimo(self, servicio):
+        """Recepción: Analizar · Revisión: aprobación GENERAL (sin entregable) · Ajustes: Corregir.
+        APROBADA y RECHAZADA finalizan; DEVUELTA va a Corregir. Entrega queda vacía."""
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        self._act(config, self.f_recepcion, "Analizar solicitud")
+        aprobacion = self._apr(config, self.f_revision, "Aprobar contratación")
+        corregir = self._act(config, self.f_ajustes, "Corregir presentación")
+        self._ruta(aprobacion, None, resultado_aprobacion="APROBADA")
+        self._ruta(aprobacion, corregir, resultado_aprobacion="DEVUELTA")
+        self._ruta(aprobacion, None, resultado_aprobacion="RECHAZADA")
+        self._activar(servicio, config)
+        return config
+
+    def _configurar_decision(self, servicio):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        decision = self._agregar(config, self.f_recepcion, BloqueOperativo.Tipo.DECISION, "¿Requiere trabajo?")
+        trabajar = self._act(config, self.f_revision, "Trabajar")
+        self._ruta(decision, trabajar, variable="formulario.requiere_revision", operador="IGUAL_A", valor="Sí", prioridad=0)
+        self._ruta(decision, None, es_fallback=True)
+        self._activar(servicio, config)
+
+    def _radicar_e2(self, servicio, campos, requiere=True):
+        return self._radicar(servicio, campos, {"Requiere revision": requiere})
+
+    # --- acciones de las personas ------------------------------------------------------
+
+    def _nombre_ultima(self, ticket):
+        return self._ultima(ticket).bloque_operativo.nombre
+
+    def _completar(self, ticket, nombre):
+        from apps.workflows.integracion import completar_tarea_workflow
+        from apps.workflows.models import TareaWorkflow
+
+        ejecucion = (
+            self._instancia(ticket).ejecuciones_etapa.filter(bloque_operativo__nombre=nombre).order_by("-orden").first()
+        )
+        completar_tarea_workflow(TareaWorkflow.objects.get(instancia_etapa=ejecucion).tarea, self.responsable)
+
+    def _aprobacion_vigente(self, ticket, nombre="Revisar presentación"):
+        from apps.workflows.models import EsquemaAprobacionWorkflow
+
+        vinculo = (
+            EsquemaAprobacionWorkflow.objects.filter(
+                instancia_etapa__instancia_workflow=self._instancia(ticket),
+                instancia_etapa__bloque_operativo__nombre=nombre,
+            )
+            .order_by("-instancia_etapa__orden")
+            .first()
+        )
+        return vinculo.esquema.participaciones.get()
+
+    def _revisar(self, ticket, decision, nombre="Revisar presentación"):
+        from apps.workflows.integracion import resolver_aprobacion_workflow
+
+        resolver_aprobacion_workflow(
+            self._aprobacion_vigente(ticket, nombre), self.aprobador, decision=decision,
+            observacion="" if decision == "APROBADA" else "Ajustar la presentación.",
+        )
+
+    def _hasta_la_primera_revision(self, ticket, definicion, valor="Versión 1"):
+        """Analizar → Preparar → Entregable (V1) → la aprobación queda pendiente."""
+        self._completar(ticket, "Analizar solicitud")
+        self._completar(ticket, "Preparar presentación")
+        self.assertEqual((self._nombre_ultima(ticket), self._ultima(ticket).motivo_espera), (self.ENTREGABLE, "ENTREGABLE"))
+        self._satisfacer(ticket, definicion, valor)
+        self.assertEqual((self._nombre_ultima(ticket), self._ultima(ticket).motivo_espera), ("Revisar presentación", "APROBACION"))
+
+    def _pasadas(self, ticket, nombre):
+        return self._instancia(ticket).ejecuciones_etapa.filter(bloque_operativo__nombre=nombre).count()
+
+
+class RecorridoE2Tests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
+    def setUp(self):
+        self._preparar_e2()
+
+    # --- recorrido 1: aprobado a la primera -----------------------------------------------
+
+    def test_aprobado_en_la_primera_revision_completa_el_workflow_y_el_ticket_sigue_su_ciclo(self):
+        servicio, campos, definicion = self._servicio_e2(politica=DIRECTO)
+        self._configurar_e2(servicio, definicion)
+        ticket = self._radicar_e2(servicio, campos)
+        self.assertEqual((ticket.estado, self._nombre_ultima(ticket)), (Ticket.Estado.RADICADO, "Analizar solicitud"))
+
+        ticket = self._atender(ticket)
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+        self._hasta_la_primera_revision(ticket, definicion)
+        self._revisar(ticket, "APROBADA")
+        self.assertEqual((self._nombre_ultima(ticket), self._ultima(ticket).motivo_espera), ("Entregar resultado", "TAREA"))
+        self.assertEqual(self._instancia(ticket).estado, "EN_ESPERA")
+
+        self._completar(ticket, "Entregar resultado")  # el último bloque: nadie «finaliza» el flujo
+        instancia = self._instancia(ticket)
+        self.assertEqual(instancia.estado, "COMPLETADA")
+        self.assertIsNotNone(instancia.finalizada_en)
+        self.assertEqual(self._ultima(ticket).estado, "COMPLETADA")
+        # Workflow y Ticket son ciclos separados: completar el flujo no resuelve ni entrega.
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+        self.assertFalse(EntregaTicket.objects.filter(ticket=ticket).exists())
+        self.assertFalse(ResolucionTicket.objects.filter(ticket=ticket).exists())
+
+        entregar_ticket(ticket, self.responsable)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.CERRADO)  # política de cierre directo
+
+    def test_sin_politica_de_entrega_el_ticket_se_resuelve_y_se_cierra_con_el_workflow_completado(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion)
+        self._revisar(ticket, "APROBADA")
+        self._completar(ticket, "Entregar resultado")
+        resolver_ticket(ticket, self.responsable, "Presentación entregada.")
+        cerrar_ticket(Ticket.objects.get(pk=ticket.pk), self.solicitante)
+        self.assertEqual(Ticket.objects.get(pk=ticket.pk).estado, Ticket.Estado.CERRADO)
+
+    def test_cada_bloque_y_cada_fase_avanzan_solos_en_su_orden(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion)
+        self._revisar(ticket, "APROBADA")
+        self._completar(ticket, "Entregar resultado")
+        recorrido = [
+            (e.fase_workflow.nombre, e.bloque_operativo.nombre)
+            for e in self._instancia(ticket).ejecuciones_etapa.select_related("fase_workflow", "bloque_operativo")
+        ]
+        self.assertEqual(recorrido, [
+            ("Recepción", "Analizar solicitud"), ("Producción", "Preparar presentación"),
+            ("Producción", self.ENTREGABLE), ("Revisión", "Revisar presentación"), ("Entrega", "Entregar resultado"),
+        ])
+
+    # --- recorrido 2: requiere ajustes -----------------------------------------------------
+
+    def test_requiere_ajustes_exige_una_nueva_version_del_entregable(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion, "Versión 1")
+
+        self._revisar(ticket, "DEVUELTA")
+        self.assertEqual((self._nombre_ultima(ticket), self._ultima(ticket).motivo_espera), ("Corregir presentación", "TAREA"))
+        self._completar(ticket, "Corregir presentación")
+        # V1 sigue «satisfecha», pero ya fue observada: el bloque espera la versión corregida.
+        self.assertEqual(
+            (self._nombre_ultima(ticket), self._ultima(ticket).estado, self._ultima(ticket).motivo_espera),
+            ("Presentación corregida", "EN_ESPERA", "ENTREGABLE"),
+        )
+        self.assertTrue(ticket.entregables.get(definicion=definicion).satisfecho)
+
+        self._satisfacer(ticket, definicion, "Versión 2")
+        self.assertEqual((self._nombre_ultima(ticket), self._ultima(ticket).motivo_espera), ("Revisar presentación", "APROBACION"))
+        self.assertEqual(self._pasadas(ticket, "Revisar presentación"), 2)  # una instancia NUEVA, no la anterior
+        self._revisar(ticket, "APROBADA")
+        self._completar(ticket, "Entregar resultado")
+        self.assertEqual(self._instancia(ticket).estado, "COMPLETADA")
+
+    def test_volver_a_guardar_la_misma_version_no_reanuda_el_flujo(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion, "Versión 1")
+        self._revisar(ticket, "DEVUELTA")
+        self._completar(ticket, "Corregir presentación")
+
+        self._satisfacer(ticket, definicion, "Versión 1")  # mismo valor: no es una versión nueva
+        self.assertEqual((self._nombre_ultima(ticket), self._ultima(ticket).estado), ("Presentación corregida", "EN_ESPERA"))
+        self.assertEqual(self._pasadas(ticket, "Revisar presentación"), 1)
+
+    def test_una_aprobacion_aprobada_no_exige_otra_version(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion)
+        self._revisar(ticket, "APROBADA")
+        from apps.tickets.entregables import entregable_vigente_para_flujo
+
+        self.assertTrue(entregable_vigente_para_flujo(ticket.entregables.get(definicion=definicion)))
+
+    def test_con_archivos_la_version_anterior_conserva_su_trazabilidad(self):
+        servicio, campos, definicion = self._servicio_e2("ARCHIVO")
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        entregable = ticket.entregables.get(definicion=definicion)
+        self._completar(ticket, "Analizar solicitud")
+        self._completar(ticket, "Preparar presentación")
+        v1 = adjuntar_archivo_entregable(entregable, self.responsable, SimpleUploadedFile("v1.txt", b"version 1"))
+        self.assertEqual(self._nombre_ultima(ticket), "Revisar presentación")
+
+        self._revisar(ticket, "DEVUELTA")
+        self._completar(ticket, "Corregir presentación")
+        self.assertEqual((self._nombre_ultima(ticket), self._ultima(ticket).estado), ("Presentación corregida", "EN_ESPERA"))
+
+        # Retirar V1 (sin subir nada) no la «corrige»: el bloque sigue esperando.
+        retirar_archivo_entregable(v1, self.responsable)
+        self.assertEqual((self._nombre_ultima(ticket), self._ultima(ticket).estado), ("Presentación corregida", "EN_ESPERA"))
+        v2 = adjuntar_archivo_entregable(entregable, self.responsable, SimpleUploadedFile("v2.txt", b"version 2"))
+        self.assertEqual(self._nombre_ultima(ticket), "Revisar presentación")
+        self.assertEqual(self._pasadas(ticket, "Revisar presentación"), 2)
+
+        # V1 sigue ahí (retirada, no borrada) y lo que cada revisión vio quedó en su historial.
+        v1.refresh_from_db()
+        self.assertIsNotNone(v1.retirado_en)
+        self.assertTrue(Adjunto.objects.filter(pk=v1.pk).exists())
+        self.assertIsNone(Adjunto.objects.get(pk=v2.pk).retirado_en)
+        primera, segunda = self._instancia(ticket).ejecuciones_etapa.filter(
+            bloque_operativo__nombre="Revisar presentación"
+        ).order_by("orden")
+        self.assertEqual(primera.resultado["revision"]["version"]["adjuntos"], [v1.pk])
+        self.assertEqual(primera.transicion_bloque_tomada.resultado_aprobacion, "DEVUELTA")
+        self.assertEqual(primera.resultado["revision"]["entregable_id"], entregable.pk)
+
+    def test_una_segunda_version_sin_retirar_la_primera_tambien_cuenta(self):
+        servicio, campos, definicion = self._servicio_e2("ARCHIVO")
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        entregable = ticket.entregables.get(definicion=definicion)
+        self._completar(ticket, "Analizar solicitud")
+        self._completar(ticket, "Preparar presentación")
+        adjuntar_archivo_entregable(entregable, self.responsable, SimpleUploadedFile("v1.txt", b"version 1"))
+        self._revisar(ticket, "DEVUELTA")
+        self._completar(ticket, "Corregir presentación")
+        self.assertEqual(self._ultima(ticket).estado, "EN_ESPERA")
+        adjuntar_archivo_entregable(entregable, self.responsable, SimpleUploadedFile("v2.txt", b"version 2"))
+        self.assertEqual(self._nombre_ultima(ticket), "Revisar presentación")
+
+    # --- recorrido 3: varios ajustes --------------------------------------------------------
+
+    def test_varias_devoluciones_repiten_el_ciclo_sin_reutilizar_instancias_ni_perder_versiones(self):
+        from apps.tickets.entregables import _huella
+
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion, "Versión 1")
+
+        for numero, siguiente in ((1, "Versión 2"), (2, "Versión 3")):
+            self._revisar(ticket, "DEVUELTA")
+            publicado = self._instancia(ticket).contexto["resultados_bloques"]["aprobaciones"]["revisar_presentacion"]
+            self.assertEqual(publicado, {"resultado": "DEVUELTA"})
+            self.assertEqual(self._nombre_ultima(ticket), "Corregir presentación")
+            self._completar(ticket, "Corregir presentación")
+            self.assertEqual(
+                (self._nombre_ultima(ticket), self._ultima(ticket).estado), ("Presentación corregida", "EN_ESPERA"), numero
+            )
+            self._satisfacer(ticket, definicion, siguiente)
+            self.assertEqual(self._nombre_ultima(ticket), "Revisar presentación")
+            self.assertEqual(self._pasadas(ticket, "Revisar presentación"), numero + 1)
+
+        self._revisar(ticket, "APROBADA")
+        publicado = self._instancia(ticket).contexto["resultados_bloques"]["aprobaciones"]["revisar_presentacion"]
+        self.assertEqual(publicado, {"resultado": "APROBADA"})
+        self._completar(ticket, "Entregar resultado")
+
+        self.assertEqual(self._instancia(ticket).estado, "COMPLETADA")
+        self.assertEqual(self._pasadas(ticket, "Corregir presentación"), 2)
+        self.assertEqual(self._pasadas(ticket, "Presentación corregida"), 2)
+        revisiones = self._instancia(ticket).ejecuciones_etapa.filter(
+            bloque_operativo__nombre="Revisar presentación"
+        ).order_by("orden")
+        self.assertEqual(len({e.pk for e in revisiones}), 3)
+        self.assertTrue(all(e.estado == "COMPLETADA" for e in revisiones))
+        # Cada pasada revisó una versión distinta (V1, V2, V3), y todas quedan en su historial.
+        self.assertEqual(
+            [e.resultado["revision"]["version"]["huella"] for e in revisiones],
+            [_huella("Versión 1"), _huella("Versión 2"), _huella("Versión 3")],
+        )
+
+    def test_rechazada_finaliza_el_flujo_por_su_ruta(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion)
+        self._revisar(ticket, "RECHAZADA")
+        instancia = self._instancia(ticket)
+        self.assertEqual(instancia.estado, "COMPLETADA")
+        self.assertIsNotNone(instancia.finalizada_en)
+        self.assertEqual(self._nombre_ultima(ticket), "Revisar presentación")
+
+    # --- recorrido 4: finalizar desde aprobación / decisión ----------------------------------------
+
+    def test_aprobada_finaliza_el_workflow_sin_una_actividad_artificial(self):
+        from apps.tareas.models import Tarea
+
+        servicio, campos, _ = self._servicio_e2()
+        self._configurar_minimo(servicio)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._completar(ticket, "Analizar solicitud")
+        self.assertEqual((self._nombre_ultima(ticket), self._ultima(ticket).motivo_espera), ("Aprobar contratación", "APROBACION"))
+        ejecuciones = self._instancia(ticket).ejecuciones_etapa.count()
+
+        self._revisar(ticket, "APROBADA", nombre="Aprobar contratación")
+
+        instancia = self._instancia(ticket)
+        self.assertEqual(instancia.estado, "COMPLETADA")
+        self.assertIsNotNone(instancia.finalizada_en)
+        self.assertEqual(instancia.ejecuciones_etapa.count(), ejecuciones)  # nada se creó después
+        self.assertEqual(Tarea.objects.count(), 1)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)  # finalizar no resuelve ni cierra
+        self.assertFalse(EntregaTicket.objects.filter(ticket=ticket).exists())
+        self.assertFalse(ResolucionTicket.objects.filter(ticket=ticket).exists())
+
+    def test_devuelta_sigue_su_ruta_aunque_otras_rutas_finalicen(self):
+        servicio, campos, _ = self._servicio_e2()
+        self._configurar_minimo(servicio)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._completar(ticket, "Analizar solicitud")
+        self._revisar(ticket, "DEVUELTA", nombre="Aprobar contratación")
+        self.assertEqual(self._instancia(ticket).estado, "EN_ESPERA")
+        self.assertEqual(self._nombre_ultima(ticket), "Corregir presentación")
+
+    def test_una_decision_puede_finalizar_el_workflow_al_radicar(self):
+        from apps.tareas.models import Tarea
+
+        servicio, campos, _ = self._servicio_e2()
+        self._configurar_decision(servicio)
+
+        sin_trabajo = self._radicar_e2(servicio, campos, requiere=False)
+        instancia = self._instancia(sin_trabajo)
+        self.assertEqual(instancia.estado, "COMPLETADA")
+        self.assertIsNotNone(instancia.finalizada_en)
+        self.assertEqual(sin_trabajo.estado, Ticket.Estado.RADICADO)
+        self.assertEqual(Tarea.objects.count(), 0)  # una DECISION nunca crea Tarea
+
+        con_trabajo = self._radicar_e2(servicio, campos, requiere=True)
+        self.assertEqual(self._instancia(con_trabajo).estado, "EN_ESPERA")
+        self.assertEqual(self._nombre_ultima(con_trabajo), "Trabajar")
+        self.assertEqual(Tarea.objects.count(), 1)
+
+    def test_una_fase_final_vacia_no_deja_el_flujo_detenido(self):
+        servicio, campos, _ = self._servicio_e2()
+        self._configurar_decision(servicio)
+        ticket = self._atender(self._radicar_e2(servicio, campos, requiere=True))
+        self._completar(ticket, "Trabajar")  # tras «Trabajar» solo quedan fases sin bloques
+        self.assertEqual(self._instancia(ticket).estado, "COMPLETADA")
+
+    # --- recorrido 5: resolución prematura -------------------------------------------------------------
+
+    def test_un_ticket_con_workflow_en_espera_no_puede_resolverse(self):
+        from apps.workflows.models import InstanciaWorkflow
+
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self.assertEqual(self._instancia(ticket).estado, "EN_ESPERA")
+
+        with self.assertRaises(ValidationError) as ctx:
+            resolver_ticket(ticket, self.responsable, "Intento prematuro.")
+        self.assertIn("El trabajo interno de este ticket todavía no ha terminado.", ctx.exception.messages)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+        self.assertFalse(ResolucionTicket.objects.filter(ticket=ticket).exists())
+
+        InstanciaWorkflow.objects.filter(pk=ticket.instancia_workflow_id).update(estado="EN_EJECUCION")
+        with self.assertRaises(ValidationError):
+            resolver_ticket(Ticket.objects.get(pk=ticket.pk), self.responsable, "Intento prematuro.")
+
+    def test_con_el_workflow_completado_el_ticket_puede_resolverse(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion)
+        with self.assertRaises(ValidationError):
+            resolver_ticket(Ticket.objects.get(pk=ticket.pk), self.responsable, "Todavía no.")
+        self._revisar(ticket, "APROBADA")
+        self._completar(ticket, "Entregar resultado")
+        resolucion = resolver_ticket(Ticket.objects.get(pk=ticket.pk), self.responsable, "Presentación entregada.")
+        self.assertEqual(resolucion.ticket_id, ticket.pk)
+        self.assertEqual(Ticket.objects.get(pk=ticket.pk).estado, Ticket.Estado.RESUELTO)
+
+    def test_la_entrega_formal_tambien_espera_al_trabajo_interno(self):
+        servicio, campos, definicion = self._servicio_e2(politica=DIRECTO)
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion)
+        with self.assertRaises(ValidationError) as ctx:
+            entregar_ticket(Ticket.objects.get(pk=ticket.pk), self.responsable)
+        self.assertIn("El trabajo interno de este ticket todavía no ha terminado.", ctx.exception.messages)
+        self.assertFalse(EntregaTicket.objects.filter(ticket=ticket).exists())
+
+    def test_un_ticket_sin_workflow_se_resuelve_como_siempre(self):
+        servicio, _, _ = _crear_servicio_con_formulario(self.solicitante, [])
+        ticket = crear_borrador(self.solicitante, servicio)
+        radicar_ticket(ticket, self.solicitante)
+        ticket = self._atender(Ticket.objects.get(pk=ticket.pk))
+        resolver_ticket(ticket, self.responsable, "Resuelto sin workflow.")
+        self.assertEqual(Ticket.objects.get(pk=ticket.pk).estado, Ticket.Estado.RESUELTO)
+
+
+class OperabilidadE2Tests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
+    """Lo que quien atiende y quien aprueba ven y pueden hacer desde la interfaz."""
+
+    def setUp(self):
+        self._preparar_e2()
+        self.ajeno = Usuario.objects.create_user(username="e2_ajeno", password=CLAVE_PRUEBA)
+
+    def _entrar(self, usuario):
+        self.client.logout()
+        self.assertTrue(self.client.login(username=usuario.get_username(), password=CLAVE_PRUEBA))
+
+    def _detalle(self, ticket):
+        return self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+
+    # --- quien atiende ------------------------------------------------------------------------------
+
+    def test_el_detalle_del_ticket_indica_el_trabajo_actual_y_donde_actuar(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._entrar(self.responsable)
+
+        pagina = self._detalle(ticket)
+        self.assertContains(pagina, "Trabajo actual")
+        self.assertContains(pagina, "Analizar solicitud")
+        self.assertContains(pagina, "Hay una actividad por completar.")
+        self.assertContains(pagina, "Abrir la actividad")
+
+        self._completar(ticket, "Analizar solicitud")
+        self._completar(ticket, "Preparar presentación")
+        pagina = self._detalle(ticket)
+        self.assertContains(pagina, f"Falta entregar «{self.ENTREGABLE}».")
+        self.assertNotContains(pagina, "Abrir la actividad")
+
+        self._satisfacer(ticket, definicion)
+        pagina = self._detalle(ticket)
+        self.assertContains(pagina, "Revisar presentación")
+        self.assertContains(pagina, "Está pendiente de aprobación.")
+
+    def test_el_detalle_avisa_que_aun_no_se_puede_resolver_y_luego_lo_permite(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._entrar(self.responsable)
+        self.assertContains(self._detalle(ticket), "Todavía no puedes resolver.")
+        self.assertNotContains(self._detalle(ticket), 'id="id_descripcion_resolucion"')
+
+        self._hasta_la_primera_revision(ticket, definicion)
+        self._revisar(ticket, "APROBADA")
+        self._completar(ticket, "Entregar resultado")
+        pagina = self._detalle(ticket)
+        self.assertContains(pagina, "El trabajo interno de este ticket ya terminó.")
+        self.assertNotContains(pagina, "Todavía no puedes resolver.")
+        self.assertContains(pagina, 'id="id_descripcion_resolucion"')
+
+    def test_un_ticket_sin_workflow_no_muestra_trabajo_actual(self):
+        servicio, _, _ = _crear_servicio_con_formulario(self.solicitante, [])
+        ticket = crear_borrador(self.solicitante, servicio)
+        radicar_ticket(ticket, self.solicitante)
+        self._entrar(self.solicitante)
+        self.assertNotContains(self._detalle(ticket), "Trabajo actual")
+
+    # --- quien aprueba ---------------------------------------------------------------------------------
+
+    def test_el_aprobador_abre_la_bandeja_la_vista_previa_y_el_detalle_de_una_aprobacion_por_fases(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion, "Texto de la primera versión")
+        aprobacion = self._aprobacion_vigente(ticket)
+        self._entrar(self.aprobador)
+
+        lista = self.client.get(reverse("aprobaciones:lista"))
+        self.assertEqual(lista.status_code, 200)
+        self.assertContains(lista, "Revisar presentación")
+        self.assertContains(lista, "Revisión")  # la fase
+
+        previa = self.client.get(reverse("aprobaciones:vista_previa", args=[aprobacion.pk]))
+        self.assertEqual(previa.status_code, 200)
+        self.assertContains(previa, "Revisar presentación")
+        self.assertContains(previa, self.ENTREGABLE)
+
+        detalle = self.client.get(reverse("aprobaciones:detalle", args=[aprobacion.pk]))
+        self.assertEqual(detalle.status_code, 200)
+        self.assertContains(detalle, "Fase")
+        self.assertContains(detalle, "Bloque")
+        self.assertContains(detalle, "Entregable que se revisa")
+        self.assertContains(detalle, self.ENTREGABLE)
+        self.assertContains(detalle, "Entregado")
+        self.assertContains(detalle, "Texto de la primera versión")
+        self.assertNotContains(detalle, "Revisión</dt><dd>N.º")  # primera pasada: sin número de ronda
+
+    def test_el_aprobador_decide_desde_la_interfaz_y_el_flujo_continua_solo(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion)
+        aprobacion = self._aprobacion_vigente(ticket)
+        self._entrar(self.aprobador)
+
+        respuesta = self.client.post(
+            reverse("aprobaciones:decidir", args=[aprobacion.pk]), {"decision": "APROBADA", "observacion": ""}
+        )
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertEqual(self._nombre_ultima(ticket), "Entregar resultado")
+
+    def test_en_la_segunda_pasada_el_aprobador_ve_que_es_la_revision_numero_dos(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion, "Versión 1")
+        self._revisar(ticket, "DEVUELTA")
+        self._completar(ticket, "Corregir presentación")
+        self._satisfacer(ticket, definicion, "Versión corregida")
+        self._entrar(self.aprobador)
+        detalle = self.client.get(reverse("aprobaciones:detalle", args=[self._aprobacion_vigente(ticket).pk]))
+        self.assertContains(detalle, "N.º 2 de este entregable")
+        self.assertContains(detalle, "Versión corregida")
+        self.assertNotContains(detalle, "Versión 1")  # el contenido mostrado es la versión vigente
+
+    def test_una_aprobacion_general_no_muestra_la_seccion_del_entregable(self):
+        servicio, campos, _ = self._servicio_e2()
+        self._configurar_minimo(servicio)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._completar(ticket, "Analizar solicitud")
+        aprobacion = self._aprobacion_vigente(ticket, "Aprobar contratación")
+        self._entrar(self.aprobador)
+        detalle = self.client.get(reverse("aprobaciones:detalle", args=[aprobacion.pk]))
+        self.assertEqual(detalle.status_code, 200)
+        self.assertContains(detalle, "Bloque")
+        self.assertContains(detalle, "Aprobar contratación")
+        self.assertNotContains(detalle, "Entregable que se revisa")
+
+    def test_el_aprobador_descarga_el_archivo_que_revisa_y_un_ajeno_no(self):
+        servicio, campos, definicion = self._servicio_e2("ARCHIVO")
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._completar(ticket, "Analizar solicitud")
+        self._completar(ticket, "Preparar presentación")
+        archivo = adjuntar_archivo_entregable(
+            ticket.entregables.get(definicion=definicion), self.responsable, SimpleUploadedFile("propuesta.txt", b"contenido")
+        )
+        url = reverse("tickets:descargar_adjunto", args=[archivo.pk])
+
+        self._entrar(self.aprobador)
+        detalle = self.client.get(reverse("aprobaciones:detalle", args=[self._aprobacion_vigente(ticket).pk]))
+        self.assertContains(detalle, "propuesta.txt")
+        self.assertContains(detalle, url)
+        self.assertEqual(self.client.get(url).status_code, 200)
+
+        self._entrar(self.ajeno)
+        self.assertEqual(self.client.get(url).status_code, 403)
+
+    def test_el_aprobador_no_gana_acceso_al_resto_del_ticket(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion)
+        self._entrar(self.aprobador)
+        self.assertEqual(self._detalle(ticket).status_code, 403)
+
+    def test_el_contexto_de_una_aprobacion_por_fases_trae_fase_y_bloque(self):
+        from apps.aprobaciones.views import _contexto_workflow_por_esquema
+        from apps.workflows.models import EsquemaAprobacionWorkflow
+
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion)
+        vinculo = EsquemaAprobacionWorkflow.objects.get(instancia_etapa__instancia_workflow=self._instancia(ticket))
+        contexto = _contexto_workflow_por_esquema([vinculo.esquema_id])[vinculo.esquema_id]
+        self.assertTrue(contexto["por_fases"])
+        self.assertIsNone(contexto["etapa"])
+        self.assertEqual((contexto["fase"].nombre, contexto["bloque"].nombre), ("Revisión", "Revisar presentación"))

@@ -33,9 +33,9 @@ publicado por bloques concretos:
 
 Se identifica por la CLAVE ESTABLE del bloque (`BloqueOperativo.clave`), nunca
 por pk ni por nombre. Se escribe SOLO con `publicar_resultado_bloque` y lo
-consulta `apps.workflows.variables` (`aprobaciones.<clave>.resultado`); 4.B1
-agrega su propio ámbito (`entregables`) sumándolo a `AMBITOS_BLOQUE`. Las
-instancias creadas antes de 4.B0 no tienen la clave: se tolera su ausencia.
+consulta `apps.workflows.variables` (`aprobaciones.<clave>.resultado`,
+`entregables.<clave>.satisfecho`). Las instancias creadas antes de 4.B0 no tienen
+la clave: se tolera su ausencia.
 
 Variable INEXISTENTE ≠ valor NULL (4.B0). `INEXISTENTE` es un centinela interno
 que nunca se guarda en JSON: ninguna condición se cumple frente a una variable
@@ -77,9 +77,9 @@ class _Inexistente:
 
 INEXISTENTE = _Inexistente()
 
-# Ámbitos con resultados publicados por bloques (`resultados_bloques`). 4.B1
-# agregará "entregables" aquí; el resolutor y la API no necesitan otro cambio.
-AMBITOS_BLOQUE = frozenset({"aprobaciones"})
+# Ámbitos con resultados publicados por bloques (`resultados_bloques`). Sumar un
+# ámbito aquí basta: el resolutor y la API de publicación no necesitan otro cambio.
+AMBITOS_BLOQUE = frozenset({"aprobaciones", "entregables"})
 
 
 def construir_contexto_inicial(datos_iniciales):

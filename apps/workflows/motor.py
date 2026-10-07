@@ -89,6 +89,7 @@ TIPO_ETAPA_POR_BLOQUE = {
     "APROBACION": "APROBACION",
     "ESPERA": "ESPERA",
     "DECISION": "CONDICION",
+    "ENTREGABLE": "ENTREGABLE",
 }
 
 
@@ -118,6 +119,9 @@ class _EtapaDesdeBloque:
         self.configuracion = bloque.configuracion or {}
         self.transiciones_salientes = _TransicionesBloque(bloque)
         self.permite_responsable_pendiente = True
+        # 4.B1: identidad estable (resultados publicados) y referencia del ENTREGABLE.
+        self.clave = bloque.clave
+        self.definicion_entregable_id = bloque.definicion_entregable_id
         if self.tipo == "TAREA":
             self.configuracion_tarea = self._config_tarea()
         if self.tipo == "APROBACION":
@@ -191,6 +195,9 @@ def _localizar_punto_continuacion(instancia):
       `LIMITE_AVANCES_AUTOMATICOS_POR_INVOCACION`.
     - Si está COMPLETADA sin `transicion_tomada` (FIN alcanzado), no hay
       nada que continuar.
+    - 4.E2 (modo por fases): si está COMPLETADA y su ruta es `finaliza`, o no quedan
+      bloques ni fases tras ella, tampoco hay nada que continuar (`TERMINADO`); el bucle
+      de `_avanzar_automaticamente` cierra entonces la instancia.
     """
     ultima = instancia.ejecuciones_etapa.order_by("-orden").first()
     if ultima is None:
@@ -204,11 +211,11 @@ def _localizar_punto_continuacion(instancia):
         return _PuntoContinuacion(tipo="RETOMAR", instancia_etapa=ultima)
 
     if ultima.estado == InstanciaEtapa.Estado.COMPLETADA and ultima.transicion_bloque_tomada_id:
-        return _PuntoContinuacion(
-            tipo="CREAR",
-            etapa_destino=ultima.transicion_bloque_tomada.bloque_destino,
-            orden=ultima.orden + 1,
-        )
+        transicion = ultima.transicion_bloque_tomada
+        if transicion.finaliza:
+            # 4.E2: la ruta elegida FINALIZA el flujo (no hay bloque destino que crear).
+            return _PuntoContinuacion(tipo="TERMINADO")
+        return _PuntoContinuacion(tipo="CREAR", etapa_destino=transicion.bloque_destino, orden=ultima.orden + 1)
 
     if ultima.estado == InstanciaEtapa.Estado.COMPLETADA and ultima.bloque_operativo_id:
         siguiente = _siguiente_bloque_lineal(ultima.bloque_operativo)
@@ -346,6 +353,9 @@ def _ejecutar_etapa(instancia, instancia_etapa):
 
     registrar_resultado_etapa(instancia.contexto, etapa.pk, resultado.datos)
     aplicar_variables(instancia.contexto, resultado.variables_actualizadas)
+    if resultado.resultado_bloque is not None and getattr(etapa, "clave", ""):
+        ambito, datos = resultado.resultado_bloque
+        publicar_resultado_bloque(instancia.contexto, ambito, etapa.clave, datos)
     instancia_etapa.estado = InstanciaEtapa.Estado.COMPLETADA
     instancia_etapa.resultado = resultado.datos
     instancia_etapa.finalizada_en = timezone.now()
@@ -369,6 +379,22 @@ def _ejecutar_etapa(instancia, instancia_etapa):
     return True
 
 
+def _cerrar_instancia_por_fases(instancia):
+    """4.E2 — en una configuración POR FASES no existe un bloque FIN: el flujo termina cuando
+    no quedan bloques/fases o cuando una ruta `finaliza`. Entonces la instancia queda
+    COMPLETADA con `finalizada_en`, automáticamente y bajo el lock que ya tomó quien llama.
+
+    El modo LEGACY no cambia: su FIN ya dejó la instancia COMPLETADA. No toca el Ticket (el
+    Workflow y el Ticket son ciclos separados)."""
+    if instancia.configuracion_ejecucion_version_id is None:
+        return
+    if instancia.estado != InstanciaWorkflow.Estado.EN_EJECUCION:
+        return
+    instancia.estado = InstanciaWorkflow.Estado.COMPLETADA
+    instancia.finalizada_en = timezone.now()
+    instancia.save(update_fields=["estado", "contexto", "finalizada_en", "actualizado_en"])
+
+
 def _avanzar_automaticamente(instancia):
     """Bucle interno compartido por las 3 funciones públicas — nunca se
     llama directamente desde fuera de este módulo, y siempre bajo la
@@ -386,6 +412,7 @@ def _avanzar_automaticamente(instancia):
     while True:
         punto = _localizar_punto_continuacion(instancia)
         if punto.tipo == "TERMINADO":
+            _cerrar_instancia_por_fases(instancia)
             return instancia
 
         if pasos >= LIMITE_AVANCES_AUTOMATICOS_POR_INVOCACION:
@@ -606,7 +633,8 @@ def reanudar_instancia(instancia, *, actor=None):
 
 @transaction.atomic
 def continuar_espera_externa(
-    instancia_etapa, *, motivo_espera, transicion_seleccionada=None, resultado_bloque=None
+    instancia_etapa, *, motivo_espera, transicion_seleccionada=None, resultado_bloque=None,
+    resultado_ejecucion=None,
 ):
     """Núcleo genérico para liberar una espera EXTERNA (no temporal) —
     3.3, W.7 (corrección aprobada); 3.4 agrega `transicion_seleccionada`.
@@ -643,7 +671,12 @@ def continuar_espera_externa(
     mientras la ejecución sigue EN_ESPERA (una ejecución COMPLETADA no puede volver a
     publicar). Es ADICIONAL: no cambia qué transición se toma. Solo aplica a bloques
     de una configuración por fases (los de modo LEGACY no tienen clave) y se omite si
-    el bloque no tiene clave; nunca impide continuar."""
+    el bloque no tiene clave; nunca impide continuar.
+
+    4.E2 — `resultado_ejecucion` (dict opcional, o función que lo devuelve y se evalúa ya con la
+    instancia bloqueada): se FUSIONA en `InstanciaEtapa.resultado` de esta ejecución bajo el mismo
+    lock, antes de completarla. Es la evidencia propia de esa
+    pasada (p. ej. qué versión de un entregable revisó una aprobación); no afecta la ruta."""
     instancia_etapa = InstanciaEtapa.objects.select_for_update().get(pk=instancia_etapa.pk)
     instancia = InstanciaWorkflow.objects.select_for_update().get(pk=instancia_etapa.instancia_workflow_id)
 
@@ -660,6 +693,14 @@ def continuar_espera_externa(
         )
     if transicion_seleccionada is not None and getattr(transicion_seleccionada, "bloque_origen_id", getattr(transicion_seleccionada, "etapa_origen_id", None)) not in (instancia_etapa.etapa_id, instancia_etapa.bloque_operativo_id):
         raise ValueError("transicion_seleccionada no pertenece a la etapa de esta ejecución.")
+
+    if callable(resultado_ejecucion):
+        # Se evalúa YA, con la instancia bloqueada: lo que lea (p. ej. la versión de un
+        # entregable) no puede cambiar entre leerlo y completar la ejecución.
+        resultado_ejecucion = resultado_ejecucion()
+    if resultado_ejecucion:
+        instancia_etapa.resultado = {**(instancia_etapa.resultado or {}), **resultado_ejecucion}
+        instancia_etapa.save(update_fields=["resultado", "actualizado_en"])
 
     if resultado_bloque is not None and instancia_etapa.bloque_operativo_id:
         clave = instancia_etapa.bloque_operativo.clave

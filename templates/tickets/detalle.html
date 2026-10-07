@@ -73,6 +73,27 @@
     {% endif %}
   </section>
 
+  {% if trabajo_actual %}
+    <section class="card" id="trabajo-actual">
+      <h3>Trabajo actual</h3>
+      <p>
+        {% if trabajo_actual.fase %}<strong>{{ trabajo_actual.fase }}</strong> — {% endif %}{{ trabajo_actual.nombre }}
+        <span class="badge badge--info">{{ trabajo_actual.tipo }}</span>
+      </p>
+      {% if trabajo_actual.terminado %}
+        <p class="text-muted">El trabajo interno de este ticket ya terminó.</p>
+      {% elif trabajo_actual.con_error %}
+        <p class="text-muted">El flujo de este ticket se detuvo por un problema. Avisa a quien administra el servicio.</p>
+      {% elif trabajo_actual.pendiente %}
+        <p class="text-muted">{{ trabajo_actual.pendiente }}</p>
+      {% else %}
+        <p class="text-muted">En curso.</p>
+      {% endif %}
+      {% if trabajo_actual.tarea %}<p><a href="{% url 'tareas:detalle' trabajo_actual.tarea.pk %}">Abrir la actividad</a></p>{% endif %}
+      {% if trabajo_actual.aprobacion %}<p><a href="{% url 'aprobaciones:detalle' trabajo_actual.aprobacion.pk %}">Abrir la aprobación</a></p>{% endif %}
+    </section>
+  {% endif %}
+
   {% include "tickets/_prorroga.html" %}
 
   {% if entregables %}
@@ -152,7 +173,11 @@
       <h3>Entrega al solicitante</h3>
 
       {% if puede_entregar %}
-        {% if entregables_pendientes %}
+        {% if trabajo_interno_en_curso %}
+          <div class="alert alert--warning">
+            <div class="alert__text"><strong>Todavía no puedes entregar.</strong> El trabajo interno de este ticket todavía no ha terminado.</div>
+          </div>
+        {% elif entregables_pendientes %}
           <div class="alert alert--warning">
             <div class="alert__text">
               <strong>Todavía no puedes entregar.</strong> Faltan entregables obligatorios:
@@ -279,7 +304,11 @@
         </ul>
       {% endif %}
 
-      {% if puede_resolver %}
+      {% if puede_resolver and trabajo_interno_en_curso %}
+        <div class="alert alert--warning">
+          <div class="alert__text"><strong>Todavía no puedes resolver.</strong> El trabajo interno de este ticket todavía no ha terminado.</div>
+        </div>
+      {% elif puede_resolver %}
         <form method="post" action="{% url 'tickets:resolver' ticket.pk %}" enctype="multipart/form-data" class="form">
           {% csrf_token %}
           <div class="field">

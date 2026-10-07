@@ -73,8 +73,19 @@ class BloqueOperativo(RegistroBase):
     class Tipo(models.TextChoices):
         ACTIVIDAD = "ACTIVIDAD", "Actividad"
         APROBACION = "APROBACION", "Aprobacion"
+        # Histórico (4.B1): ya NO es configurable en V1 (ver `TIPOS_CONFIGURABLES`), pero
+        # el valor se conserva para leer y ejecutar configuraciones ya guardadas.
         ESPERA = "ESPERA", "Espera"
         DECISION = "DECISION", "Decision"
+        ENTREGABLE = "ENTREGABLE", "Entregable"
+
+    # Vocabulario V1 que un administrador puede crear: ESPERA queda fuera. Es una regla
+    # de dominio (`configuracion_ejecucion.agregar_bloque_operativo`), no una restricción
+    # de `choices`, para no impedir cargar registros históricos.
+    TIPOS_CONFIGURABLES = ("ACTIVIDAD", "ENTREGABLE", "APROBACION", "DECISION")
+    # Entregables que una aprobación puede REVISAR (4.E2): los que tienen un contenido que
+    # revisar y volver a entregar corregido. Una CONFIRMACION no tiene nada que revisar.
+    TIPOS_ENTREGABLE_REVISABLES = ("TEXTO", "ENLACE", "ARCHIVO")
 
     version = models.ForeignKey(ConfiguracionEjecucionVersion, on_delete=models.CASCADE, related_name="bloques")
     fase = models.ForeignKey("workflows.FaseWorkflow", on_delete=models.PROTECT, related_name="bloques_operativos")
@@ -88,6 +99,24 @@ class BloqueOperativo(RegistroBase):
         max_length=claves.LARGO_MAXIMO, blank=True, default="", db_index=False,
         validators=[claves.validar_clave],
         help_text="Identificador estable del bloque para referenciar sus resultados.",
+    )
+    # ENTREGABLE (4.B1): qué entregable del Servicio exige este punto del flujo. Solo
+    # REFERENCIA la definición; el contenido vive en el `EntregableTicket` congelado del
+    # Ticket. PROTECT: una definición referenciada no se elimina. Es la referencia
+    # estable (el pk de una definición no cambia; retirarla es lógico) y es específica de
+    # la configuración del Servicio, nunca del Workflow compartido.
+    definicion_entregable = models.ForeignKey(
+        "catalogo.DefinicionEntregable", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="bloques_operativos",
+    )
+    # APROBACION (4.E2): qué bloque ENTREGABLE revisa, de forma EXPLÍCITA (nunca por ser el
+    # bloque anterior). Opcional: vacío = aprobación general. Solo referencia un bloque de la
+    # MISMA configuración; el contenido sigue viviendo en el `EntregableTicket` del Ticket
+    # (bloque → `definicion_entregable` → entregable congelado). RESTRICT: un entregable
+    # revisado no se elimina mientras alguna aprobación lo referencia (salvo que se borre la
+    # configuración completa).
+    entregable_revisado = models.ForeignKey(
+        "self", on_delete=models.RESTRICT, null=True, blank=True, related_name="aprobaciones_que_lo_revisan",
     )
     descripcion = models.TextField(blank=True)
     orden = models.PositiveIntegerField()
@@ -107,10 +136,47 @@ class BloqueOperativo(RegistroBase):
             return
         if self.fase.version_id != self.version.workflow_version_id:
             raise ValidationError("El bloque debe pertenecer a una fase de la version de Workflow configurada.")
+        self._validar_definicion_entregable()
+        self._validar_entregable_revisado()
         if self.clave:
             repetida = BloqueOperativo.objects.filter(version_id=self.version_id, clave=self.clave).exclude(pk=self.pk)
             if repetida.exists():
                 raise ValidationError({"clave": "Ya existe otro bloque con esa clave en esta configuracion."})
+
+    def _validar_definicion_entregable(self):
+        if self.tipo == self.Tipo.ENTREGABLE:
+            if self.definicion_entregable_id is None:
+                raise ValidationError({"definicion_entregable": "Seleccione el entregable que requiere este bloque."})
+            if self.definicion_entregable.servicio_id != self.version.servicio_id:
+                raise ValidationError({"definicion_entregable": "El entregable no pertenece a este servicio."})
+        elif self.definicion_entregable_id is not None:
+            raise ValidationError({"definicion_entregable": "Solo un bloque de tipo entregable referencia un entregable."})
+
+    def _validar_entregable_revisado(self):
+        """4.E2 — la relación Aprobación → Entregable es opcional y, si existe, inequívoca:
+        un bloque ENTREGABLE de ESTA configuración, con una definición válida del Servicio."""
+        if self.tipo != self.Tipo.APROBACION:
+            if self.entregable_revisado_id is not None:
+                raise ValidationError({"entregable_revisado": "Solo una aprobación puede revisar un entregable."})
+            return
+        if self.entregable_revisado_id is None:
+            return
+        revisado = self.entregable_revisado
+        if revisado.tipo != self.Tipo.ENTREGABLE:
+            raise ValidationError({"entregable_revisado": "Una aprobación solo puede revisar un bloque de entregable."})
+        if revisado.version_id != self.version_id:
+            raise ValidationError(
+                {"entregable_revisado": "El entregable revisado debe pertenecer a la misma configuración."}
+            )
+        definicion = revisado.definicion_entregable
+        if definicion is None or definicion.servicio_id != self.version.servicio_id:
+            raise ValidationError(
+                {"entregable_revisado": "El bloque de entregable no tiene un entregable válido de este servicio."}
+            )
+        if definicion.tipo not in self.TIPOS_ENTREGABLE_REVISABLES:
+            raise ValidationError(
+                {"entregable_revisado": "Solo se puede revisar un entregable de texto, enlace o archivo."}
+            )
 
     def _asegurar_clave(self):
         """Genera la clave desde el nombre SOLO si no tiene. Renombrar el bloque no la cambia."""
@@ -159,7 +225,13 @@ class TransicionBloqueOperativo(RegistroBase):
         NO_ESTA_VACIO = "NO_ESTA_VACIO", "No esta vacio"
 
     bloque_origen = models.ForeignKey(BloqueOperativo, on_delete=models.CASCADE, related_name="transiciones_salientes")
-    bloque_destino = models.ForeignKey(BloqueOperativo, on_delete=models.CASCADE, related_name="transiciones_entrantes")
+    # 4.E2: una ruta termina en un bloque (`bloque_destino`) O finaliza el flujo
+    # (`finaliza=True`, sin destino). Son excluyentes y la restricción de BD lo impone: un
+    # destino vacío SIN `finaliza` es un error de configuración, nunca un fin implícito.
+    bloque_destino = models.ForeignKey(
+        BloqueOperativo, on_delete=models.CASCADE, null=True, blank=True, related_name="transiciones_entrantes"
+    )
+    finaliza = models.BooleanField(default=False)
     nombre = models.CharField(max_length=150, blank=True)
     prioridad = models.PositiveIntegerField(default=0)
     variable = models.CharField(max_length=150, blank=True)
@@ -174,12 +246,27 @@ class TransicionBloqueOperativo(RegistroBase):
 
     class Meta:
         ordering = ["bloque_origen_id", "prioridad", "id"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(finaliza=True, bloque_destino__isnull=True)
+                    | Q(finaliza=False, bloque_destino__isnull=False)
+                ),
+                name="ck_transbloque_destino_o_finaliza",
+            ),
+        ]
 
     def clean(self):
-        if self.bloque_origen_id is None or self.bloque_destino_id is None:
+        if self.bloque_origen_id is None:
             return
-        if self.bloque_origen.version_id != self.bloque_destino.version_id:
-            raise ValidationError("Los bloques conectados deben pertenecer a la misma configuracion.")
+        if self.finaliza:
+            if self.bloque_destino_id is not None:
+                raise ValidationError("Una ruta que finaliza el flujo no tiene bloque destino.")
+        else:
+            if self.bloque_destino_id is None:
+                raise ValidationError("Indique el bloque destino de la ruta o finalice el flujo.")
+            if self.bloque_origen.version_id != self.bloque_destino.version_id:
+                raise ValidationError("Los bloques conectados deben pertenecer a la misma configuracion.")
         tipo = self.bloque_origen.tipo
         if tipo == BloqueOperativo.Tipo.DECISION:
             if self.es_fallback:
@@ -217,4 +304,5 @@ class TransicionBloqueOperativo(RegistroBase):
 
     def __str__(self):
         etiqueta = f" [{self.nombre}]" if self.nombre else ""
-        return f"{self.bloque_origen} -> {self.bloque_destino}{etiqueta}"
+        destino = "Finalizar flujo" if self.finaliza else self.bloque_destino
+        return f"{self.bloque_origen} -> {destino}{etiqueta}"

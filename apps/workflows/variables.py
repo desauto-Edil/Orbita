@@ -15,6 +15,7 @@ Referencias admitidas (`variable` de una transición):
     ticket.radicado_en | ticket.fecha_objetivo | ticket.fecha_objetivo_original
     formulario.<clave del campo>
     aprobaciones.<clave del bloque>.resultado
+    entregables.<clave del bloque>.satisfecho
     <nombre plano>                     (contrato anterior: `variables` del contexto)
 
 - `ticket.*` se lee en vivo del Ticket vinculado (solo datos estables, sin volcar el
@@ -34,9 +35,13 @@ Referencias admitidas (`variable` de una transición):
   referencias son INEXISTENTES allí. `ticket.*`, `formulario.*` y las variables
   planas funcionan igual en ambos modos.
 
-Un ámbito nuevo (4.B1: `entregables.<clave>.satisfecho`) se agrega sumándolo a
-`contexto.AMBITOS_BLOQUE` (resultados publicados por bloques) o registrando una
-función en `_AMBITOS`; nada más cambia.
+- `entregables.<clave>.satisfecho` (4.B1) es `True` cuando el bloque ENTREGABLE con esa
+  clave quedó satisfecho; mientras el bloque no se haya completado es INEXISTENTE. Solo
+  contiene ese indicador: el contenido (archivo, texto, enlace) vive en el
+  `EntregableTicket` y nunca se copia al contexto.
+
+Un ámbito nuevo se agrega sumándolo a `contexto.AMBITOS_BLOQUE` (resultados publicados
+por bloques); el resolutor no cambia.
 
 Los valores resueltos (Decimal, fechas, objetos) viven solo en memoria durante la
 evaluación: nunca se escriben en el JSON del contexto.
@@ -211,5 +216,9 @@ def referencias_disponibles(*, campos=(), bloques=()):
         if bloque.tipo == "APROBACION" and bloque.clave:
             lista.append(
                 (f"aprobaciones.{bloque.clave}.resultado", f"Resultado de «{bloque.nombre}» (APROBADA, RECHAZADA o DEVUELTA)")
+            )
+        if bloque.tipo == "ENTREGABLE" and bloque.clave:
+            lista.append(
+                (f"entregables.{bloque.clave}.satisfecho", f"Verdadero cuando se completó el entregable «{bloque.nombre}»")
             )
     return lista

@@ -8,6 +8,7 @@ forms.py`) — aquí solo se valida forma/UX, nunca la regla de negocio final.
 """
 
 from django import forms
+from django.db.models import Q
 
 from apps.catalogo.models import (
     Campo,
@@ -266,17 +267,23 @@ class ReglaCondicionalForm(forms.ModelForm):
 
 # --- EJECUCIÓN (bloques empresariales) -----------------------------------
 
+# Vocabulario V1 (4.B1): ESPERA ya no es un bloque que un administrador pueda crear
+# (el estado técnico EN_ESPERA del motor sigue existiendo: lo usan APROBACION y ENTREGABLE).
 TIPOS_BLOQUE_CHOICES = [
     ("ACTIVIDAD", "Actividad"),
+    ("ENTREGABLE", "Entregable"),
     ("APROBACION", "Aprobación"),
-    ("ESPERA", "Espera"),
     ("DECISION", "Decisión"),
 ]
 
+# El flujo clásico (Etapas: Flujos reutilizables y servicios legacy) no tiene bloque
+# ENTREGABLE: un Flujo no pertenece a un Servicio y no tiene entregables que elegir.
+TIPOS_BLOQUE_LEGACY_CHOICES = [opcion for opcion in TIPOS_BLOQUE_CHOICES if opcion[0] != "ENTREGABLE"]
+
 TIPOS_BLOQUE_DESCRIPCION = {
     "ACTIVIDAD": "Trabajo que debe realizar una persona o equipo.",
+    "ENTREGABLE": "Un resultado definido del ticket debe estar completo para continuar.",
     "APROBACION": "Una persona o equipo debe revisar y tomar una decisión.",
-    "ESPERA": "El flujo se detiene temporalmente.",
     "DECISION": "El camino depende de una condición.",
 }
 
@@ -326,7 +333,25 @@ class ActividadConfigForm(forms.Form):
         return datos
 
 
-class EsperaConfigForm(forms.Form):
+class EntregableConfigForm(forms.Form):
+    """Configuración de un bloque ENTREGABLE: qué entregable DEFINIDO del Servicio exige.
+    Solo ofrece las definiciones activas de ese Servicio (más la que el bloque ya usa, para
+    poder mostrarla aunque haya sido retirada)."""
+
+    definicion = forms.ModelChoiceField(
+        queryset=DefinicionEntregable.objects.none(), label="Entregable requerido",
+        empty_label="— Elige un entregable —",
+    )
+
+    def __init__(self, *args, servicio=None, incluir_pk=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        if servicio is not None:
+            consulta = servicio.definiciones_entregables.all()
+            filtro = Q(activo=True) | Q(pk=incluir_pk) if incluir_pk else Q(activo=True)
+            self.fields["definicion"].queryset = consulta.filter(filtro)
+
+
+class EsperaConfigForm(forms.Form):  # histórico (4.B1): solo edita una ESPERA ya configurada
     modo = forms.ChoiceField(choices=[("DURACION", "Duración"), ("FECHA", "Fecha específica")])
     duracion_valor = forms.IntegerField(required=False, min_value=1, label="Cantidad")
     duracion_unidad = forms.ChoiceField(
@@ -356,6 +381,17 @@ class AprobacionConfigForm(forms.Form):
         required=False,
         label="¿Cuándo se considera aprobado?",
     )
+    # 4.E2 — solo la configuración por fases la usa (un Flujo no tiene entregables de Servicio):
+    # qué bloque ENTREGABLE revisa esta aprobación. Vacío = aprobación general.
+    revisa = forms.ChoiceField(
+        choices=[("", "— Ninguno: aprobación general —")], required=False, label="Revisa el entregable",
+    )
+
+    def __init__(self, *args, bloques_entregable=(), **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["revisa"].choices = [("", "— Ninguno: aprobación general —")] + [
+            (bloque.pk, f"{bloque.fase.nombre} - {bloque.nombre}") for bloque in bloques_entregable
+        ]
 
     def clean(self):
         datos = super().clean()

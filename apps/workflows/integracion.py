@@ -21,7 +21,7 @@ from django.db import transaction
 
 from apps.aprobaciones.operaciones import resolver_aprobacion
 from apps.tareas.operaciones import completar_tarea
-from apps.workflows.models import EsquemaAprobacionWorkflow, InstanciaEtapa, TareaWorkflow
+from apps.workflows.models import EsquemaAprobacionWorkflow, InstanciaEtapa, InstanciaWorkflow, TareaWorkflow
 from apps.workflows.motor import continuar_espera_externa
 
 
@@ -84,6 +84,17 @@ def resolver_aprobacion_workflow(aprobacion, actor, *, decision, observacion="")
     ejecucion = vinculo.instancia_etapa
     definicion = ejecucion.etapa or ejecucion.bloque_operativo
     transicion = definicion.transiciones_salientes.get(resultado_aprobacion=esquema.resultado)
+    # 4.E2: si la aprobación REVISA un entregable, esta pasada deja constancia de qué versión
+    # vio al decidir (en el historial de ESTA ejecución). Es lo que permite exigir una nueva
+    # versión cuando el resultado fue devolver/rechazar. No altera la ruta.
+    from apps.tickets.entregables import foto_de_revision
+
+    def _evidencia_de_revision():
+        # Se evalúa bajo el lock de la instancia (ver `continuar_espera_externa`): los entregables
+        # toman ese mismo lock para escribir, así que la versión que se registra es la que se vio.
+        foto = foto_de_revision(ejecucion)
+        return {"revision": foto} if foto is not None else None
+
     # 4.B0: además de elegir la ruta por `resultado_aprobacion` (sin cambios), el
     # resultado queda publicado por la clave estable del bloque para que una
     # DECISION posterior lo consulte (`aprobaciones.<clave>.resultado`).
@@ -92,5 +103,48 @@ def resolver_aprobacion_workflow(aprobacion, actor, *, decision, observacion="")
         motivo_espera=InstanciaEtapa.MotivoEspera.APROBACION,
         transicion_seleccionada=transicion,
         resultado_bloque=("aprobaciones", {"resultado": esquema.resultado}),
+        resultado_ejecucion=_evidencia_de_revision,
     )
     return aprobacion, esquema
+
+
+@transaction.atomic
+def continuar_por_entregable(entregable):
+    """4.B1 — libera un bloque ENTREGABLE que esperaba su entregable. Lo invoca el
+    DOMINIO del entregable (`apps.tickets.entregables`) cada vez que se escribe uno, no una
+    vista: completar por otra vista, API o automatización reanuda igual.
+
+    Devuelve `True` si continuó el Workflow y `False` si no había nada que continuar. Es
+    IDEMPOTENTE: bajo el lock de la instancia solo continúa si la ejecución vigente sigue
+    EN_ESPERA por ENTREGABLE, es el bloque de ESTE entregable y este sigue satisfecho; un
+    segundo evento (doble clic, reintento, otra escritura) ya no encuentra esa espera.
+
+    Orden de locks: instancia → ticket, el mismo que usa el motor al resolver actores (los
+    entregables toman el lock de la instancia ANTES del de su ticket para no cruzarlo).
+    Publica `entregables.<clave>.satisfecho` y sigue por `TransicionBloqueOperativo`; no
+    entrega formalmente, no resuelve ni cierra el Ticket."""
+    from apps.tickets.entregables import entregable_vigente_para_flujo
+
+    instancia_id = entregable.ticket.instancia_workflow_id
+    if instancia_id is None:
+        return False
+    instancia = InstanciaWorkflow.objects.select_for_update().get(pk=instancia_id)
+    if instancia.estado != InstanciaWorkflow.Estado.EN_ESPERA:
+        return False
+    ejecucion = instancia.ejecuciones_etapa.select_related("bloque_operativo").order_by("-orden").first()
+    if (
+        ejecucion is None
+        or ejecucion.estado != InstanciaEtapa.Estado.EN_ESPERA
+        or ejecucion.motivo_espera != InstanciaEtapa.MotivoEspera.ENTREGABLE
+        or ejecucion.bloque_operativo is None
+        or ejecucion.bloque_operativo.definicion_entregable_id != entregable.definicion_id
+    ):
+        return False
+    if not entregable_vigente_para_flujo(entregable):
+        return False
+    continuar_espera_externa(
+        ejecucion,
+        motivo_espera=InstanciaEtapa.MotivoEspera.ENTREGABLE,
+        resultado_bloque=("entregables", {"satisfecho": True}),
+    )
+    return True

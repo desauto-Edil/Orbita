@@ -1803,7 +1803,6 @@ class EjecucionConfigurableTests(TestCase):
         casos = [
             ("ACTIVIDAD", {"tipo_actor": "SOLICITANTE"}, "TAREA"),
             ("APROBACION", {"modo": "SECUENCIAL", "participantes": [("RESPONSABLE_TICKET", None)]}, "APROBACION"),
-            ("ESPERA", {"modo": "DURACION", "duracion_valor": 2, "duracion_unidad": "HORAS"}, "ESPERA"),
             ("DECISION", {}, "CONDICION"),
         ]
         for tipo, configuracion, tipo_motor in casos:
@@ -1942,8 +1941,14 @@ class EjecucionConfigurableTests(TestCase):
         from apps.workflows.models import InstanciaEtapa
         from apps.workflows.motor import iniciar_workflow, reanudar_instancia
 
+        from apps.workflows import editor
+        from apps.workflows.models import Etapa
+
         programaciones = PeriodicTask.objects.count()
-        espera = self._agregar("ESPERA", modo="DURACION", duracion_valor=2, duracion_unidad="HORAS")
+        # 4.B1: una ESPERA ya no se crea desde las operaciones de Studio; se simula una
+        # configuración HISTÓRICA con la herramienta técnica, que sigue existiendo.
+        espera = editor.crear_etapa(self.version, self.actor, tipo=Etapa.Tipo.ESPERA, nombre="Esperar")
+        editor.configurar_etapa_espera(espera, self.actor, modo="DURACION", duracion_valor=2, duracion_unidad="HORAS")
         decision = self._agregar("DECISION")
         self.ejecucion.conectar_bloques(self.servicio, self.version, self.inicio, espera, self.actor, conexion=self.conexion)
         self.ejecucion.conectar_bloques(self.servicio, self.version, espera, decision, self.actor)
@@ -2221,26 +2226,22 @@ class StudioTests(TestCase):
         self.assertEqual(inicio.transiciones_salientes.get().etapa_destino_id, bloque.pk)
         self.assertEqual(bloque.transiciones_salientes.get().etapa_destino.tipo, "FIN")
 
-    def test_ejecucion_agrega_espera(self):
+    def test_ejecucion_ya_no_permite_crear_espera(self):
+        """4.B1: ESPERA salió del vocabulario configurable de V1."""
         self._login_admin()
         version = self._preparar_ejecucion_http()
         from apps.workflows.models import Etapa
 
-        self.client.post(
+        respuesta = self.client.post(
             reverse("catalogo:studio_bloque_crear", args=[self.servicio.pk]),
             {
                 "nuevo-tipo": "ESPERA", "nuevo-nombre": "Esperar publicación", "nuevo-descripcion": "",
                 "nuevo-config-modo": "DURACION", "nuevo-config-duracion_valor": "2", "nuevo-config-duracion_unidad": "DIAS",
             },
         )
-        bloque = Etapa.objects.get(version=version, tipo="ESPERA")
-        self.assertEqual(bloque.configuracion["duracion_valor"], 2)
-        # Cableado real de la cadena (no solo configuración) — regresión
-        # directa del bug de inserción detectado: sin esta aserción, un
-        # bloque desconectado o con un autociclo pasaría inadvertido.
-        inicio = version.etapas.get(tipo="INICIO")
-        self.assertEqual(inicio.transiciones_salientes.get().etapa_destino_id, bloque.pk)
-        self.assertEqual(bloque.transiciones_salientes.get().etapa_destino.tipo, "FIN")
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertFalse(Etapa.objects.filter(version=version, tipo="ESPERA").exists())
+        self.assertEqual(version.etapas.count(), 2)  # solo INICIO y FIN
 
     def test_ejecucion_agrega_aprobacion_con_equipo_y_configura_rutas_incluida_devolucion(self):
         self._login_admin()
@@ -2955,8 +2956,10 @@ class StudioEdicionContinuaTests(TestCase):
 
     def _assert_formularios_de_alta_visibles(self):
         respuesta = self._pagina_ejecucion()
-        for codigo in ("ACTIVIDAD", "APROBACION", "ESPERA", "DECISION"):
+        for codigo in ("ACTIVIDAD", "APROBACION", "DECISION"):
             self.assertContains(respuesta, f'id="panel-nuevo-{codigo}"')
+        self.assertNotContains(respuesta, 'id="panel-nuevo-ESPERA"')
+        self.assertNotContains(respuesta, 'id="panel-nuevo-ENTREGABLE"')
         self.assertNotContains(respuesta, "Configure las rutas del último bloque")
 
     # --- Edición continua ---
@@ -2986,8 +2989,8 @@ class StudioEdicionContinuaTests(TestCase):
         self._crear_bloque("ACTIVIDAD", "A")
         self.assertEqual(validar_estructura(self.version), [])  # válido y completo
         self._assert_formularios_de_alta_visibles()
-        self._crear_bloque("ESPERA", "Esperar")
-        self.assertEqual(self._cadena(), ["A", "Esperar", "FIN"])
+        self._crear_bloque("ACTIVIDAD", "B")
+        self.assertEqual(self._cadena(), ["A", "B", "FIN"])
 
     def test_aprobacion_recien_agregada_no_cierra_el_flujo(self):
         from apps.workflows.models import TransicionEtapa
@@ -5592,3 +5595,815 @@ class BackfillClavesTests(_EscenarioBloquesClaveMixin, TestCase):
         self.asignar(self.registro, None)
         claves = list(version.bloques.order_by("fase_id", "orden").values_list("clave", flat=True))
         self.assertEqual(claves, ["revisar", "revisar_2", "aprobacion_jefe"])
+
+
+# ---------------------------------------------------------------------------
+# 4.B1 — bloque ENTREGABLE y retiro de ESPERA como bloque configurable
+# ---------------------------------------------------------------------------
+
+
+class _EscenarioBloqueEntregableCatalogoMixin(_EscenarioBloquesClaveMixin):
+    """Mismo escenario que las claves de bloque + definiciones de entregable del Servicio."""
+
+    def _preparar_escenario_entregable(self):
+        from apps.catalogo.entregables import configurar_definicion_entregable
+
+        self._preparar_escenario_bloques()
+        self.propuesta = configurar_definicion_entregable(
+            self.servicio, self.actor, nombre="Presentación comercial", tipo="ARCHIVO"
+        )
+        self.informe = configurar_definicion_entregable(self.servicio, self.actor, nombre="Informe", tipo="TEXTO")
+        self.ajena = configurar_definicion_entregable(
+            self.otro_servicio, self.actor, nombre="Definición de otro servicio", tipo="TEXTO"
+        )
+
+    def _entregable(self, version, nombre="Entregable propuesta", definicion=None, fase=None, **extra):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo
+
+        return agregar_bloque_operativo(
+            version, self.actor, fase=fase or self.fase, tipo=BloqueOperativo.Tipo.ENTREGABLE, nombre=nombre,
+            definicion_entregable=definicion or self.propuesta, **extra,
+        )
+
+
+class BloqueEntregableModeloTests(_EscenarioBloqueEntregableCatalogoMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario_entregable()
+
+    def test_entregable_es_un_tipo_valido_con_su_definicion_y_clave(self):
+        bloque = self._entregable(self._version(), "Presentación comercial")
+        bloque.refresh_from_db()
+        self.assertEqual(bloque.tipo, "ENTREGABLE")
+        self.assertEqual(bloque.definicion_entregable_id, self.propuesta.pk)
+        self.assertEqual(bloque.clave, "presentacion_comercial")
+        self.assertEqual(bloque.configuracion, {})
+
+    def test_un_bloque_entregable_exige_definicion(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo
+
+        with self.assertRaises(ValidationError):
+            agregar_bloque_operativo(
+                self._version(), self.actor, fase=self.fase, tipo=BloqueOperativo.Tipo.ENTREGABLE, nombre="Sin definición"
+            )
+
+    def test_una_definicion_de_otro_servicio_se_rechaza(self):
+        with self.assertRaises(ValidationError) as ctx:
+            self._entregable(self._version(), definicion=self.ajena)
+        self.assertIn("definicion_entregable", ctx.exception.message_dict)
+
+    def test_solo_un_bloque_entregable_referencia_una_definicion(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo
+
+        with self.assertRaises(ValidationError):
+            agregar_bloque_operativo(
+                self._version(), self.actor, fase=self.fase, tipo=BloqueOperativo.Tipo.ACTIVIDAD, nombre="Actividad",
+                configuracion={"tipo_actor": "SOLICITANTE"}, definicion_entregable=self.propuesta,
+            )
+
+    def test_publicar_rechaza_un_bloque_sin_definicion(self):
+        from apps.catalogo.configuracion_ejecucion import (
+            activar_configuracion_ejecucion,
+            validar_configuracion_ejecucion,
+        )
+
+        version = self._version()
+        bloque = self._entregable(version)
+        BloqueOperativo.objects.filter(pk=bloque.pk).update(definicion_entregable=None)  # inconsistencia simulada
+        errores = validar_configuracion_ejecucion(version)
+        self.assertTrue(any("no tiene un entregable seleccionado" in e for e in errores), errores)
+        with self.assertRaises(ValidationError):
+            activar_configuracion_ejecucion(self.servicio, version, self.actor)
+        version.refresh_from_db()
+        self.assertEqual(version.estado, "BORRADOR")
+
+    def test_publicar_rechaza_una_definicion_de_otro_servicio_o_retirada(self):
+        from apps.catalogo.configuracion_ejecucion import validar_configuracion_ejecucion
+
+        version = self._version()
+        bloque = self._entregable(version)
+        BloqueOperativo.objects.filter(pk=bloque.pk).update(definicion_entregable=self.ajena)
+        self.assertTrue(any("otro servicio" in e for e in validar_configuracion_ejecucion(version)))
+
+        BloqueOperativo.objects.filter(pk=bloque.pk).update(definicion_entregable=self.propuesta)
+        DefinicionEntregable.objects.filter(pk=self.propuesta.pk).update(activo=False)
+        self.assertTrue(any("retirado" in e for e in validar_configuracion_ejecucion(version)))
+
+    def test_una_configuracion_valida_con_entregable_se_publica(self):
+        from apps.catalogo.configuracion_ejecucion import activar_configuracion_ejecucion
+
+        version = self._version()
+        self._entregable(version)
+        self._bloque(version, "Cierre", fase=self.fase_dos)
+        activar_configuracion_ejecucion(self.servicio, version, self.actor)
+        version.refresh_from_db()
+        self.assertEqual(version.estado, "ACTIVA")
+
+    def test_una_definicion_referenciada_esta_protegida_contra_borrado(self):
+        from django.db.models import ProtectedError
+
+        self._entregable(self._version())
+        with self.assertRaises(ProtectedError):
+            with transaction.atomic():
+                self.propuesta.delete()
+
+    def test_no_se_puede_retirar_una_definicion_que_requiere_una_configuracion_vigente(self):
+        from apps.catalogo.entregables import retirar_definicion_entregable
+
+        self._entregable(self._version())  # configuración en borrador
+        with self.assertRaises(ValidationError):
+            retirar_definicion_entregable(self.propuesta, self.actor)
+        self.propuesta.refresh_from_db()
+        self.assertTrue(self.propuesta.activo)
+
+    def test_retirar_una_definicion_solo_usada_por_configuraciones_historicas_es_posible(self):
+        from apps.catalogo.configuracion_ejecucion import activar_configuracion_ejecucion
+        from apps.catalogo.entregables import retirar_definicion_entregable
+
+        v1 = self._version()
+        self._entregable(v1)
+        activar_configuracion_ejecucion(self.servicio, v1, self.actor)
+        v2 = self._version()
+        self._bloque(v2, "Otra cosa")
+        activar_configuracion_ejecucion(self.servicio, v2, self.actor)  # v1 pasa a histórica
+
+        retirar_definicion_entregable(self.propuesta, self.actor)
+        self.propuesta.refresh_from_db()
+        self.assertFalse(self.propuesta.activo)
+
+    def test_las_definiciones_sin_bloques_se_retiran_como_siempre(self):
+        from apps.catalogo.entregables import retirar_definicion_entregable
+
+        retirar_definicion_entregable(self.informe, self.actor)
+        self.informe.refresh_from_db()
+        self.assertFalse(self.informe.activo)
+
+    def test_clonar_conserva_la_clave_y_la_referencia_al_entregable(self):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        version = self._version()
+        original = self._entregable(version, "Presentación comercial")
+        clon = crear_nueva_version_configuracion(self.servicio, self.actor, clonar_desde=version).bloques.get(
+            tipo="ENTREGABLE"
+        )
+        self.assertNotEqual(clon.pk, original.pk)
+        self.assertEqual(clon.clave, original.clave)
+        self.assertEqual(clon.definicion_entregable_id, original.definicion_entregable_id)
+
+    def test_renombrar_el_bloque_entregable_no_cambia_su_clave(self):
+        from apps.catalogo.configuracion_ejecucion import editar_bloque_operativo
+
+        version = self._version()
+        bloque = self._entregable(version, "Presentación comercial")
+        editar_bloque_operativo(version, bloque, self.actor, nombre="Deck final")
+        bloque.refresh_from_db()
+        self.assertEqual((bloque.nombre, bloque.clave), ("Deck final", "presentacion_comercial"))
+
+    def test_cambiar_la_definicion_de_un_bloque_en_borrador(self):
+        from apps.catalogo.configuracion_ejecucion import editar_bloque_operativo
+
+        version = self._version()
+        bloque = self._entregable(version)
+        editar_bloque_operativo(version, bloque, self.actor, definicion_entregable=self.informe)
+        bloque.refresh_from_db()
+        self.assertEqual(bloque.definicion_entregable_id, self.informe.pk)
+        with self.assertRaises(ValidationError):
+            editar_bloque_operativo(version, bloque, self.actor, definicion_entregable=self.ajena)
+
+    def test_el_resumen_y_las_referencias_incluyen_el_entregable(self):
+        from apps.catalogo import studio
+
+        version = self._version()
+        self._entregable(version, "Presentación comercial")
+        referencias = [r for r, _ in studio._variables_para_decisiones(self.servicio, version.bloques.all())]
+        self.assertIn("entregables.presentacion_comercial.satisfecho", referencias)
+        self.assertEqual(
+            studio._resumen_bloque_operativo(version.bloques.get(tipo="ENTREGABLE")),
+            "Entregable: Presentación comercial",
+        )
+
+
+class VocabularioV1ConfigurableTests(_EscenarioBloqueEntregableCatalogoMixin, TestCase):
+    """ESPERA sale del vocabulario configurable; se conserva para lo histórico."""
+
+    def setUp(self):
+        self._preparar_escenario_entregable()
+
+    def test_el_vocabulario_configurable_es_actividad_entregable_aprobacion_decision(self):
+        from apps.catalogo.forms import TIPOS_BLOQUE_CHOICES, TIPOS_BLOQUE_LEGACY_CHOICES
+
+        self.assertEqual(
+            [codigo for codigo, _ in TIPOS_BLOQUE_CHOICES], ["ACTIVIDAD", "ENTREGABLE", "APROBACION", "DECISION"]
+        )
+        self.assertNotIn("ESPERA", BloqueOperativo.TIPOS_CONFIGURABLES)
+        self.assertEqual(
+            [codigo for codigo, _ in TIPOS_BLOQUE_LEGACY_CHOICES], ["ACTIVIDAD", "APROBACION", "DECISION"]
+        )
+
+    def test_una_espera_nueva_no_se_puede_crear_por_la_operacion_normal(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo
+
+        version = self._version()
+        with self.assertRaises(ValidationError):
+            agregar_bloque_operativo(
+                version, self.actor, fase=self.fase, tipo=BloqueOperativo.Tipo.ESPERA, nombre="Esperar",
+                configuracion={"modo": "DURACION", "duracion_valor": 1, "duracion_unidad": "DIAS"},
+            )
+        self.assertFalse(version.bloques.exists())
+
+    def test_la_operacion_normal_no_permite_convertir_un_bloque_en_espera(self):
+        from apps.catalogo.configuracion_ejecucion import editar_bloque_operativo
+
+        version = self._version()
+        bloque = self._bloque(version, "Actividad")
+        import inspect
+
+        self.assertNotIn("tipo", inspect.signature(editar_bloque_operativo).parameters)
+        editar_bloque_operativo(version, bloque, self.actor, nombre="Sigue siendo actividad")
+        bloque.refresh_from_db()
+        self.assertEqual(bloque.tipo, "ACTIVIDAD")
+
+    def test_un_registro_historico_de_espera_se_carga_valida_edita_y_clona(self):
+        from apps.catalogo.configuracion_ejecucion import (
+            crear_nueva_version_configuracion,
+            editar_bloque_operativo,
+            validar_configuracion_ejecucion,
+        )
+
+        version = self._version()
+        espera = BloqueOperativo.objects.create(
+            version=version, fase=self.fase, tipo="ESPERA", nombre="Espera histórica", orden=1,
+            configuracion={"modo": "DURACION", "duracion_valor": 2, "duracion_unidad": "DIAS"},
+        )
+        espera.refresh_from_db()
+        self.assertEqual(espera.get_tipo_display(), "Espera")
+        self.assertEqual(validar_configuracion_ejecucion(version), [])
+        editar_bloque_operativo(version, espera, self.actor, nombre="Espera renombrada")
+        clon = crear_nueva_version_configuracion(self.servicio, self.actor, clonar_desde=version).bloques.get()
+        self.assertEqual((clon.tipo, clon.clave), ("ESPERA", espera.clave))
+
+    def test_una_espera_historica_incompleta_se_sigue_validando(self):
+        from apps.catalogo.configuracion_ejecucion import validar_configuracion_ejecucion
+
+        version = self._version()
+        BloqueOperativo.objects.create(
+            version=version, fase=self.fase, tipo="ESPERA", nombre="Espera rota", orden=1, configuracion={}
+        )
+        self.assertTrue(any("espera" in e.lower() for e in validar_configuracion_ejecucion(version)))
+
+
+class StudioBloqueEntregableTests(_EscenarioBloqueEntregableCatalogoMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario_entregable()
+        _otorgar_permiso(self.actor, "workflows.administrar")
+        formulario = Formulario.objects.create(nombre="Entrada Studio 4B1")
+        entrada = crear_nueva_version(formulario, self.actor)
+        activar_version(formulario, entrada, self.actor)
+        self.servicio.formulario = formulario
+        self.servicio.activo = False
+        self.servicio.save(update_fields=["formulario", "activo", "actualizado_en"])
+        self.version = self._version()
+        self.client.login(username="bloque_clave", password=CLAVE_PRUEBA)
+
+    def _pagina(self):
+        return self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "ejecucion"})
+
+    def _crear(self, tipo, nombre="Nuevo bloque", **extra):
+        datos = {"fase_id": self.fase.pk, "nuevo-tipo": tipo, "nuevo-nombre": nombre, "nuevo-descripcion": ""}
+        datos.update(extra)
+        return self.client.post(reverse("catalogo:studio_bloque_crear", args=[self.servicio.pk]), datos)
+
+    def test_studio_ofrece_el_vocabulario_v1_y_no_espera(self):
+        respuesta = self._pagina()
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(
+            [codigo for codigo, _, _ in respuesta.context["bloques_disponibles"]],
+            ["ACTIVIDAD", "ENTREGABLE", "APROBACION", "DECISION"],
+        )
+        for fase in (self.fase, self.fase_dos):
+            for codigo in ("ACTIVIDAD", "ENTREGABLE", "APROBACION", "DECISION"):
+                self.assertContains(respuesta, f'id="panel-nuevo-{fase.pk}-{codigo}"')
+            self.assertNotContains(respuesta, f'id="panel-nuevo-{fase.pk}-ESPERA"')
+
+    def test_el_selector_solo_ofrece_los_entregables_activos_del_servicio(self):
+        from apps.catalogo.entregables import retirar_definicion_entregable
+
+        retirar_definicion_entregable(self.informe, self.actor)
+        respuesta = self._pagina()
+        queryset = respuesta.context["form_entregable_nuevo"].fields["definicion"].queryset
+        self.assertEqual(set(queryset.values_list("pk", flat=True)), {self.propuesta.pk})
+        self.assertFalse(respuesta.context["servicio_sin_entregables"])
+        self.assertContains(respuesta, "El flujo continuará cuando este entregable del ticket esté completado.")
+        self.assertContains(respuesta, "Entregable requerido")
+
+    def test_sin_entregables_definidos_muestra_ayuda_y_no_permite_agregar(self):
+        DefinicionEntregable.objects.filter(servicio=self.servicio).update(activo=False)
+        respuesta = self._pagina()
+        self.assertTrue(respuesta.context["servicio_sin_entregables"])
+        self.assertContains(respuesta, "todavía no tiene entregables configurados")
+        self.assertFalse(DefinicionEntregable.objects.filter(servicio=self.servicio, activo=True).exists())  # no crea ninguno
+
+    def test_se_guarda_un_bloque_entregable_con_su_definicion(self):
+        respuesta = self._crear("ENTREGABLE", "Presentación comercial", **{"nuevo-config-definicion": self.propuesta.pk})
+        self.assertEqual(respuesta.status_code, 302)
+        bloque = BloqueOperativo.objects.get(version=self.version, tipo="ENTREGABLE")
+        self.assertEqual(bloque.definicion_entregable_id, self.propuesta.pk)
+        self.assertEqual(bloque.configuracion, {})
+        self.assertEqual(bloque.clave, "presentacion_comercial")
+
+    def test_no_se_guarda_un_entregable_de_otro_servicio_ni_sin_seleccion(self):
+        self._crear("ENTREGABLE", "Ajeno", **{"nuevo-config-definicion": self.ajena.pk})
+        self._crear("ENTREGABLE", "Vacío", **{"nuevo-config-definicion": ""})
+        self.assertFalse(BloqueOperativo.objects.filter(version=self.version, tipo="ENTREGABLE").exists())
+
+    def test_los_otros_tipos_no_se_ven_afectados_por_el_selector_de_entregable(self):
+        self._crear("ACTIVIDAD", "Trabajo", **{"nuevo-config-tipo_actor": "SOLICITANTE"})
+        bloque = BloqueOperativo.objects.get(version=self.version, tipo="ACTIVIDAD")
+        self.assertIsNone(bloque.definicion_entregable_id)
+
+    def test_studio_rechaza_crear_una_espera(self):
+        respuesta = self._crear(
+            "ESPERA", "Esperar", **{
+                "nuevo-config-modo": "DURACION", "nuevo-config-duracion_valor": "1", "nuevo-config-duracion_unidad": "DIAS",
+            },
+        )
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertFalse(BloqueOperativo.objects.filter(version=self.version, tipo="ESPERA").exists())
+
+    def test_studio_edita_la_definicion_de_un_bloque_entregable(self):
+        self._crear("ENTREGABLE", "Entrega", **{"nuevo-config-definicion": self.propuesta.pk})
+        bloque = BloqueOperativo.objects.get(version=self.version, tipo="ENTREGABLE")
+        pagina = self._pagina()
+        self.assertContains(pagina, f'name="bloque-{bloque.pk}-config-definicion"')
+        self.client.post(
+            reverse("catalogo:studio_bloque_editar", args=[self.servicio.pk, bloque.pk]),
+            {
+                f"bloque-{bloque.pk}-editar-nombre": "Entrega renombrada", f"bloque-{bloque.pk}-editar-descripcion": "",
+                f"bloque-{bloque.pk}-config-definicion": self.informe.pk,
+            },
+        )
+        bloque.refresh_from_db()
+        self.assertEqual(bloque.definicion_entregable_id, self.informe.pk)
+        self.assertEqual((bloque.nombre, bloque.clave), ("Entrega renombrada", "entrega"))
+
+    def test_studio_sigue_mostrando_una_espera_historica(self):
+        BloqueOperativo.objects.create(
+            version=self.version, fase=self.fase, tipo="ESPERA", nombre="Espera histórica", orden=1,
+            configuracion={"modo": "DURACION", "duracion_valor": 3, "duracion_unidad": "DIAS"},
+        )
+        respuesta = self._pagina()
+        self.assertContains(respuesta, "Espera histórica")
+        self.assertContains(respuesta, "Espera configurada anteriormente")
+
+    def test_retirar_un_entregable_referenciado_desde_studio_muestra_un_error(self):
+        self._entregable(self.version)
+        from django.contrib.messages import get_messages
+
+        respuesta = self.client.post(
+            reverse("catalogo:studio_entregable_retirar", args=[self.servicio.pk, self.propuesta.pk])
+        )
+        self.assertEqual(respuesta.status_code, 302)
+        mensajes = [str(m) for m in get_messages(respuesta.wsgi_request)]
+        self.assertTrue(any("No se puede retirar" in m for m in mensajes), mensajes)
+        self.propuesta.refresh_from_db()
+        self.assertTrue(self.propuesta.activo)
+
+
+# ---------------------------------------------------------------------------
+# 4.E2 — Aprobación que revisa un entregable, finalizar el flujo y orden del Studio
+# ---------------------------------------------------------------------------
+
+
+class _EscenarioE2CatalogoMixin(_EscenarioBloqueEntregableCatalogoMixin):
+    def _preparar_escenario_e2(self):
+        from apps.catalogo.entregables import configurar_definicion_entregable
+
+        self._preparar_escenario_entregable()
+        self.confirmacion = configurar_definicion_entregable(
+            self.servicio, self.actor, nombre="Confirmo el envío", tipo="CONFIRMACION"
+        )
+
+    def _aprobacion(self, version, nombre="Revisión comercial", fase=None, revisa=None):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo
+
+        return agregar_bloque_operativo(
+            version, self.actor, fase=fase or self.fase_dos, tipo=BloqueOperativo.Tipo.APROBACION, nombre=nombre,
+            configuracion={
+                "modo": "SECUENCIAL", "politica": "",
+                "participantes": [{"tipo": "USUARIO", "usuario_id": self.actor.pk, "equipo_id": None}],
+            },
+            entregable_revisado=revisa,
+        )
+
+    def _rutas(self, aprobacion, aprobada, devuelta, rechazada):
+        """Cada argumento es un bloque destino o `None` (= finalizar el flujo)."""
+        from apps.catalogo.configuracion_ejecucion import conectar_bloques_operativos
+
+        for resultado, destino in (("APROBADA", aprobada), ("DEVUELTA", devuelta), ("RECHAZADA", rechazada)):
+            conectar_bloques_operativos(
+                aprobacion, destino, self.actor, resultado_aprobacion=resultado, finaliza=destino is None
+            )
+
+
+class AprobacionRevisaEntregableTests(_EscenarioE2CatalogoMixin, TestCase):
+    """GAP 3 (4.E2): la aprobación referencia, de forma explícita y opcional, el bloque ENTREGABLE
+    que revisa. Nunca por ser consecutivo; nunca de otra configuración ni otro Servicio."""
+
+    def setUp(self):
+        self._preparar_escenario_e2()
+        self.version = self._version()
+        self.entrega = self._entregable(self.version, "Presentación comercial")
+
+    def test_una_aprobacion_general_sigue_siendo_valida(self):
+        aprobacion = self._aprobacion(self.version, "Aprobar contratación")
+        aprobacion.refresh_from_db()
+        self.assertIsNone(aprobacion.entregable_revisado_id)
+
+    def test_una_aprobacion_puede_revisar_un_entregable_de_su_configuracion(self):
+        aprobacion = self._aprobacion(self.version, revisa=self.entrega)
+        aprobacion.refresh_from_db()
+        self.assertEqual(aprobacion.entregable_revisado_id, self.entrega.pk)
+        self.assertEqual(self.entrega.aprobaciones_que_lo_revisan.get().pk, aprobacion.pk)
+
+    def test_la_relacion_no_se_infiere_de_que_los_bloques_sean_consecutivos(self):
+        otro = self._entregable(self.version, "Informe", definicion=self.informe)
+        aprobacion = self._aprobacion(self.version, "Revisar informe", revisa=otro)
+        # Hay dos entregables antes de la aprobación: revisa exactamente el que se eligió.
+        self.assertEqual(aprobacion.entregable_revisado_id, otro.pk)
+        self.assertNotEqual(aprobacion.entregable_revisado_id, self.entrega.pk)
+
+    def test_solo_se_puede_revisar_un_bloque_de_tipo_entregable(self):
+        actividad = self._bloque(self.version, "Preparar")
+        with self.assertRaises(ValidationError) as ctx:
+            self._aprobacion(self.version, revisa=actividad)
+        self.assertIn("entregable_revisado", ctx.exception.message_dict)
+
+    def test_no_se_puede_revisar_un_entregable_de_otra_configuracion(self):
+        otra = self._version(self.otro_servicio)
+        ajeno = self._entregable(otra, "Del otro servicio", definicion=self.ajena)
+        with self.assertRaises(ValidationError) as ctx:
+            self._aprobacion(self.version, revisa=ajeno)
+        self.assertIn("entregable_revisado", ctx.exception.message_dict)
+
+    def test_no_se_puede_revisar_un_entregable_de_otra_version_del_mismo_servicio(self):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        anterior = self.version
+        self._aprobacion(anterior, "Cierre previo")
+        nueva = crear_nueva_version_configuracion(self.servicio, self.actor, clonar_desde=anterior)
+        with self.assertRaises(ValidationError):
+            self._aprobacion(nueva, "Revisión cruzada", revisa=self.entrega)  # `entrega` es de `anterior`
+
+    def test_una_confirmacion_no_es_revisable(self):
+        confirmacion = self._entregable(self.version, "Confirmación", definicion=self.confirmacion)
+        with self.assertRaises(ValidationError) as ctx:
+            self._aprobacion(self.version, revisa=confirmacion)
+        self.assertIn("entregable_revisado", ctx.exception.message_dict)
+
+    def test_solo_una_aprobacion_puede_revisar(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo
+
+        with self.assertRaises(ValidationError):
+            agregar_bloque_operativo(
+                self.version, self.actor, fase=self.fase, tipo=BloqueOperativo.Tipo.ACTIVIDAD, nombre="Actividad",
+                configuracion={"tipo_actor": "SOLICITANTE"}, entregable_revisado=self.entrega,
+            )
+
+    def test_publicar_revalida_la_referencia(self):
+        from apps.catalogo.configuracion_ejecucion import validar_configuracion_ejecucion
+
+        aprobacion = self._aprobacion(self.version, revisa=self.entrega)
+        otra = self._version(self.otro_servicio)
+        ajeno = self._entregable(otra, "Ajeno", definicion=self.ajena)
+        BloqueOperativo.objects.filter(pk=aprobacion.pk).update(entregable_revisado=ajeno)  # inconsistencia simulada
+        self.assertTrue(any("otra configuracion" in e for e in validar_configuracion_ejecucion(self.version)))
+
+        actividad = self._bloque(self.version, "Preparar")
+        BloqueOperativo.objects.filter(pk=aprobacion.pk).update(entregable_revisado=actividad)
+        self.assertTrue(any("no es un bloque de entregable" in e for e in validar_configuracion_ejecucion(self.version)))
+
+    def test_una_configuracion_con_aprobacion_que_revisa_se_publica(self):
+        from apps.catalogo.configuracion_ejecucion import activar_configuracion_ejecucion
+
+        aprobacion = self._aprobacion(self.version, revisa=self.entrega)
+        siguiente = self._bloque(self.version, "Entregar", fase=self.fase_dos)
+        self._rutas(aprobacion, siguiente, self.entrega, None)
+        activar_configuracion_ejecucion(self.servicio, self.version, self.actor)
+        self.version.refresh_from_db()
+        self.assertEqual(self.version.estado, "ACTIVA")
+
+    def test_clonar_conserva_la_relacion_apuntando_al_bloque_clonado(self):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        aprobacion = self._aprobacion(self.version, revisa=self.entrega)
+        siguiente = self._bloque(self.version, "Entregar", fase=self.fase_dos)
+        self._rutas(aprobacion, siguiente, self.entrega, None)
+        nueva = crear_nueva_version_configuracion(self.servicio, self.actor, clonar_desde=self.version)
+
+        clon = nueva.bloques.get(clave=aprobacion.clave)
+        clon_entregable = nueva.bloques.get(clave=self.entrega.clave)
+        self.assertEqual(clon.entregable_revisado_id, clon_entregable.pk)
+        self.assertNotEqual(clon.entregable_revisado_id, self.entrega.pk)
+        self.assertEqual(clon_entregable.definicion_entregable_id, self.propuesta.pk)
+        # Las rutas, incluida la que finaliza, también se clonan.
+        rutas = {t.resultado_aprobacion: t for t in clon.transiciones_salientes.all()}
+        self.assertTrue(rutas["RECHAZADA"].finaliza)
+        self.assertIsNone(rutas["RECHAZADA"].bloque_destino_id)
+        self.assertEqual(rutas["DEVUELTA"].bloque_destino_id, clon_entregable.pk)
+
+    def test_no_se_elimina_un_entregable_que_una_aprobacion_revisa(self):
+        from apps.catalogo.configuracion_ejecucion import editar_bloque_operativo, eliminar_bloque_operativo
+
+        aprobacion = self._aprobacion(self.version, revisa=self.entrega)
+        with self.assertRaises(ValidationError) as ctx:
+            eliminar_bloque_operativo(self.version, self.entrega, self.actor)
+        self.assertIn("Revisión comercial", " ".join(ctx.exception.messages))
+        self.assertTrue(BloqueOperativo.objects.filter(pk=self.entrega.pk).exists())
+
+        editar_bloque_operativo(self.version, aprobacion, self.actor, entregable_revisado=None)
+        eliminar_bloque_operativo(self.version, self.entrega, self.actor)
+        self.assertFalse(BloqueOperativo.objects.filter(pk=self.entrega.pk).exists())
+
+    def test_editar_sin_indicar_la_relacion_no_la_toca(self):
+        from apps.catalogo.configuracion_ejecucion import editar_bloque_operativo
+
+        aprobacion = self._aprobacion(self.version, revisa=self.entrega)
+        editar_bloque_operativo(self.version, aprobacion, self.actor, nombre="Revisión renombrada")
+        aprobacion.refresh_from_db()
+        self.assertEqual((aprobacion.nombre, aprobacion.entregable_revisado_id), ("Revisión renombrada", self.entrega.pk))
+        self.assertEqual(aprobacion.clave, "revision_comercial")
+
+
+class FinalizarFlujoRutaTests(_EscenarioE2CatalogoMixin, TestCase):
+    """GAP 5 (4.E2): una ruta puede FINALIZAR el flujo sin un bloque artificial. El destino vacío
+    solo es válido con `finaliza=True`; sin eso sigue siendo un error de configuración."""
+
+    def setUp(self):
+        self._preparar_escenario_e2()
+        self.version = self._version()
+        self.aprobacion = self._aprobacion(self.version)
+        self.otro = self._bloque(self.version, "Corregir", fase=self.fase_dos)
+
+    def test_una_ruta_puede_finalizar_el_flujo(self):
+        from apps.catalogo.configuracion_ejecucion import conectar_bloques_operativos
+
+        ruta = conectar_bloques_operativos(
+            self.aprobacion, None, self.actor, resultado_aprobacion="APROBADA", finaliza=True
+        )
+        ruta.refresh_from_db()
+        self.assertTrue(ruta.finaliza)
+        self.assertIsNone(ruta.bloque_destino_id)
+        self.assertIn("Finalizar flujo", str(ruta))
+
+    def test_un_destino_vacio_sin_finalizar_es_un_error_de_configuracion(self):
+        from apps.catalogo.configuracion_ejecucion import conectar_bloques_operativos
+
+        with self.assertRaises(ValidationError):
+            conectar_bloques_operativos(self.aprobacion, None, self.actor, resultado_aprobacion="APROBADA")
+        self.assertFalse(TransicionBloqueOperativo.objects.filter(bloque_origen=self.aprobacion).exists())
+
+    def test_finalizar_y_tener_destino_a_la_vez_se_rechaza(self):
+        from apps.catalogo.configuracion_ejecucion import conectar_bloques_operativos
+
+        with self.assertRaises(ValidationError):
+            conectar_bloques_operativos(
+                self.aprobacion, self.otro, self.actor, resultado_aprobacion="APROBADA", finaliza=True
+            )
+
+    def test_la_base_de_datos_impide_un_destino_vacio_sin_finalizar(self):
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                TransicionBloqueOperativo.objects.bulk_create([
+                    TransicionBloqueOperativo(bloque_origen=self.aprobacion, resultado_aprobacion="APROBADA")
+                ])
+        with self.assertRaises(IntegrityError):
+            with transaction.atomic():
+                TransicionBloqueOperativo.objects.bulk_create([
+                    TransicionBloqueOperativo(
+                        bloque_origen=self.aprobacion, bloque_destino=self.otro, finaliza=True,
+                        resultado_aprobacion="APROBADA",
+                    )
+                ])
+
+    def test_una_ruta_cambia_entre_destino_y_finalizar(self):
+        from apps.catalogo.configuracion_ejecucion import conectar_bloques_operativos, editar_transicion_bloque_operativo
+
+        ruta = conectar_bloques_operativos(
+            self.aprobacion, self.otro, self.actor, resultado_aprobacion="APROBADA"
+        )
+        editar_transicion_bloque_operativo(ruta, self.actor, destino=None, resultado_aprobacion="APROBADA", finaliza=True)
+        ruta.refresh_from_db()
+        self.assertEqual((ruta.finaliza, ruta.bloque_destino_id), (True, None))
+
+        editar_transicion_bloque_operativo(
+            ruta, self.actor, destino=self.otro, resultado_aprobacion="APROBADA", finaliza=False
+        )
+        ruta.refresh_from_db()
+        self.assertEqual((ruta.finaliza, ruta.bloque_destino_id), (False, self.otro.pk))
+
+    def test_la_aprobacion_con_rutas_que_finalizan_es_publicable(self):
+        from apps.catalogo.configuracion_ejecucion import validar_configuracion_ejecucion
+
+        self._rutas(self.aprobacion, None, self.otro, None)
+        self.assertEqual(validar_configuracion_ejecucion(self.version), [])
+
+    def test_una_decision_puede_finalizar_por_una_condicion_y_por_la_ruta_alternativa(self):
+        from apps.catalogo.configuracion_ejecucion import (
+            conectar_bloques_operativos,
+            validar_configuracion_ejecucion,
+        )
+
+        decision = self._bloque(self.version, "¿Continúa?", tipo=BloqueOperativo.Tipo.DECISION)
+        conectar_bloques_operativos(
+            decision, None, self.actor, variable="formulario.valor", operador="IGUAL_A", valor="1", finaliza=True
+        )
+        conectar_bloques_operativos(decision, self.otro, self.actor, es_fallback=True)
+        self._rutas(self.aprobacion, None, self.otro, None)
+        self.assertEqual(validar_configuracion_ejecucion(self.version), [])
+        self.assertEqual(decision.transiciones_salientes.filter(finaliza=True).count(), 1)
+
+
+class StudioOrdenYRevisionTests(_EscenarioE2CatalogoMixin, TestCase):
+    """4.E2 — Studio: FORMULARIO → SALIDA → FLUJO, y las rutas/aprobaciones nuevas desde la UI."""
+
+    def setUp(self):
+        self._preparar_escenario_e2()
+        _otorgar_permiso(self.actor, "workflows.administrar")
+        formulario = Formulario.objects.create(nombre="Entrada Studio E2")
+        entrada = crear_nueva_version(formulario, self.actor)
+        activar_version(formulario, entrada, self.actor)
+        self.servicio.formulario = formulario
+        self.servicio.activo = False
+        self.servicio.save(update_fields=["formulario", "activo", "actualizado_en"])
+        self.version = self._version()
+        self.client.login(username="bloque_clave", password=CLAVE_PRUEBA)
+
+    def _pagina(self, tab="ejecucion"):
+        return self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": tab})
+
+    def _crear(self, tipo, nombre, **extra):
+        datos = {"fase_id": self.fase.pk, "nuevo-tipo": tipo, "nuevo-nombre": nombre, "nuevo-descripcion": ""}
+        datos.update(extra)
+        return self.client.post(reverse("catalogo:studio_bloque_crear", args=[self.servicio.pk]), datos)
+
+    def _participantes(self):
+        return {
+            "nuevo-participantes-TOTAL_FORMS": "1", "nuevo-participantes-INITIAL_FORMS": "0",
+            "nuevo-participantes-MIN_NUM_FORMS": "1", "nuevo-participantes-MAX_NUM_FORMS": "1000",
+            "nuevo-participantes-0-tipo": "USUARIO", "nuevo-participantes-0-usuario": self.actor.pk,
+        }
+
+    # --- orden -------------------------------------------------------------------
+
+    def test_formulario_va_antes_que_salida_y_salida_antes_que_el_flujo(self):
+        respuesta = self._pagina("general")
+        self.assertEqual(
+            [seccion["clave"] for seccion in respuesta.context["secciones"]],
+            ["general", "entrada", "salida", "ejecucion", "publicacion"],
+        )
+        html = respuesta.content.decode()
+        posiciones = [html.index(f"?tab={clave}") for clave in ("entrada", "salida", "ejecucion")]
+        self.assertEqual(posiciones, sorted(posiciones))
+
+    def test_las_urls_y_el_contenido_de_cada_seccion_se_conservan(self):
+        for tab in ("general", "entrada", "salida", "ejecucion", "publicacion"):
+            self.assertEqual(self._pagina(tab).status_code, 200, tab)
+        self.assertContains(self._pagina("salida"), "Presentación comercial")
+
+    def test_un_entregable_creado_en_salida_aparece_en_el_selector_del_flujo(self):
+        self.client.post(
+            reverse("catalogo:studio_entregable_crear", args=[self.servicio.pk]),
+            {
+                "entregable-nuevo-nombre": "Entregable nuevo desde Salida", "entregable-nuevo-tipo": "TEXTO",
+                "entregable-nuevo-obligatorio": "on", "entregable-nuevo-orden": "5",
+            },
+        )
+        nuevo = DefinicionEntregable.objects.get(servicio=self.servicio, nombre="Entregable nuevo desde Salida")
+        respuesta = self._pagina()
+        queryset = respuesta.context["form_entregable_nuevo"].fields["definicion"].queryset
+        self.assertIn(nuevo.pk, set(queryset.values_list("pk", flat=True)))
+
+    # --- aprobación que revisa -------------------------------------------------------
+
+    def test_el_selector_de_revision_ofrece_solo_entregables_revisables_del_flujo(self):
+        entrega = self._entregable(self.version, "Presentación comercial")
+        self._entregable(self.version, "Confirmación", definicion=self.confirmacion)
+        self._bloque(self.version, "Preparar")
+        opciones = dict(self._pagina().context["form_aprobacion_nuevo"].fields["revisa"].choices)
+        self.assertIn(entrega.pk, opciones)
+        self.assertEqual(len(opciones), 2)  # «ninguno» + el único revisable
+        self.assertContains(self._pagina(), "Revisa el entregable")
+
+    def test_se_crea_una_aprobacion_que_revisa_un_entregable_desde_studio(self):
+        entrega = self._entregable(self.version, "Presentación comercial")
+        respuesta = self._crear(
+            "APROBACION", "Revisión comercial",
+            **{"nuevo-config-modo": "SECUENCIAL", "nuevo-config-revisa": entrega.pk, **self._participantes()},
+        )
+        self.assertEqual(respuesta.status_code, 302)
+        aprobacion = BloqueOperativo.objects.get(version=self.version, tipo="APROBACION")
+        self.assertEqual(aprobacion.entregable_revisado_id, entrega.pk)
+        self.assertContains(self._pagina(), "revisa «Presentación comercial»")
+
+    def test_una_aprobacion_general_se_crea_sin_entregable(self):
+        self._entregable(self.version, "Presentación comercial")
+        self._crear("APROBACION", "Aprobar contratación", **{"nuevo-config-modo": "SECUENCIAL", **self._participantes()})
+        aprobacion = BloqueOperativo.objects.get(version=self.version, tipo="APROBACION")
+        self.assertIsNone(aprobacion.entregable_revisado_id)
+
+    def test_studio_rechaza_revisar_un_bloque_que_no_es_ofrecido(self):
+        actividad = self._bloque(self.version, "Preparar")
+        self._crear(
+            "APROBACION", "Revisión inválida",
+            **{"nuevo-config-modo": "SECUENCIAL", "nuevo-config-revisa": actividad.pk, **self._participantes()},
+        )
+        aprobacion = BloqueOperativo.objects.filter(version=self.version, tipo="APROBACION").first()
+        self.assertTrue(aprobacion is None or aprobacion.entregable_revisado_id is None)
+
+    def test_studio_cambia_y_quita_el_entregable_revisado(self):
+        entrega = self._entregable(self.version, "Presentación comercial")
+        aprobacion = self._aprobacion(self.version, revisa=entrega)
+        url = reverse("catalogo:studio_bloque_editar", args=[self.servicio.pk, aprobacion.pk])
+        base = {
+            f"bloque-{aprobacion.pk}-editar-nombre": "Revisión comercial", f"bloque-{aprobacion.pk}-editar-descripcion": "",
+            f"bloque-{aprobacion.pk}-config-modo": "SECUENCIAL",
+            f"bloque-{aprobacion.pk}-participantes-TOTAL_FORMS": "1",
+            f"bloque-{aprobacion.pk}-participantes-INITIAL_FORMS": "0",
+            f"bloque-{aprobacion.pk}-participantes-MIN_NUM_FORMS": "1",
+            f"bloque-{aprobacion.pk}-participantes-MAX_NUM_FORMS": "1000",
+            f"bloque-{aprobacion.pk}-participantes-0-tipo": "USUARIO",
+            f"bloque-{aprobacion.pk}-participantes-0-usuario": self.actor.pk,
+        }
+        self.client.post(url, {**base, f"bloque-{aprobacion.pk}-config-revisa": entrega.pk})
+        aprobacion.refresh_from_db()
+        self.assertEqual(aprobacion.entregable_revisado_id, entrega.pk)
+
+        self.client.post(url, {**base, f"bloque-{aprobacion.pk}-config-revisa": ""})
+        aprobacion.refresh_from_db()
+        self.assertIsNone(aprobacion.entregable_revisado_id)
+
+    # --- finalizar desde la UI -----------------------------------------------------------
+
+    def test_los_selectores_de_ruta_ofrecen_finalizar_el_flujo(self):
+        aprobacion = self._aprobacion(self.version)
+        decision = self._bloque(self.version, "¿Continúa?", tipo=BloqueOperativo.Tipo.DECISION)
+        respuesta = self._pagina()
+        self.assertContains(respuesta, "Finalizar el flujo")
+        opciones = dict(
+            next(
+                fila for item in respuesta.context["fases_configuracion"] for fila in item["bloques"]
+                if fila["bloque"].pk == aprobacion.pk
+            )["form_ruta"].fields["destino_aprobada"].choices
+        )
+        self.assertEqual(opciones["FIN"], "Finalizar el flujo")
+        self.assertIn(decision.pk, opciones)
+
+    def test_se_guardan_rutas_de_aprobacion_que_finalizan(self):
+        aprobacion = self._aprobacion(self.version)
+        corregir = self._bloque(self.version, "Corregir", fase=self.fase_dos)
+        self.client.post(
+            reverse("catalogo:studio_ruta_aprobacion_guardar", args=[self.servicio.pk, aprobacion.pk]),
+            {
+                f"bloque-{aprobacion.pk}-ruta-destino_aprobada": "FIN",
+                f"bloque-{aprobacion.pk}-ruta-destino_devuelta": corregir.pk,
+                f"bloque-{aprobacion.pk}-ruta-destino_rechazada": "FIN",
+            },
+        )
+        rutas = {t.resultado_aprobacion: t for t in aprobacion.transiciones_salientes.all()}
+        self.assertTrue(rutas["APROBADA"].finaliza and rutas["RECHAZADA"].finaliza)
+        self.assertEqual(rutas["DEVUELTA"].bloque_destino_id, corregir.pk)
+        # Volver a abrir muestra la selección «Finalizar» y permite pasar de nuevo a un bloque.
+        pagina = self._pagina()
+        fila = next(
+            f for item in pagina.context["fases_configuracion"] for f in item["bloques"] if f["bloque"].pk == aprobacion.pk
+        )
+        self.assertEqual(fila["form_ruta"].initial["destino_aprobada"], "FIN")
+        self.client.post(
+            reverse("catalogo:studio_ruta_aprobacion_guardar", args=[self.servicio.pk, aprobacion.pk]),
+            {
+                f"bloque-{aprobacion.pk}-ruta-destino_aprobada": corregir.pk,
+                f"bloque-{aprobacion.pk}-ruta-destino_devuelta": corregir.pk,
+                f"bloque-{aprobacion.pk}-ruta-destino_rechazada": "FIN",
+            },
+        )
+        aprobada = aprobacion.transiciones_salientes.get(resultado_aprobacion="APROBADA")
+        self.assertEqual((aprobada.finaliza, aprobada.bloque_destino_id), (False, corregir.pk))
+
+    def test_la_decision_guarda_condicion_y_ruta_alternativa_que_finalizan(self):
+        decision = self._bloque(self.version, "¿Continúa?", tipo=BloqueOperativo.Tipo.DECISION)
+        self.client.post(
+            reverse("catalogo:studio_condicional_crear", args=[self.servicio.pk, decision.pk]),
+            {
+                f"bloque-{decision.pk}-cond-nuevo-variable": "formulario.valor",
+                f"bloque-{decision.pk}-cond-nuevo-operador": "IGUAL_A",
+                f"bloque-{decision.pk}-cond-nuevo-valor": "1",
+                f"bloque-{decision.pk}-cond-nuevo-prioridad": "0",
+                f"bloque-{decision.pk}-cond-nuevo-destino": "FIN",
+            },
+        )
+        self.client.post(
+            reverse("catalogo:studio_fallback_guardar", args=[self.servicio.pk, decision.pk]),
+            {f"bloque-{decision.pk}-fallback-destino": "FIN"},
+        )
+        salientes = list(decision.transiciones_salientes.all())
+        self.assertEqual(len(salientes), 2)
+        self.assertTrue(all(t.finaliza and t.bloque_destino_id is None for t in salientes))

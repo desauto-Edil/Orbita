@@ -1,7 +1,7 @@
 {% comment %}Vista previa de una Aprobación en Mi trabajo (fragmento, solo lectura).{% endcomment %}
 <header class="work-preview__head">
   <p class="work-preview__eyebrow">Aprobación</p>
-  <h2 class="work-preview__title">{% if contexto_workflow %}{{ contexto_workflow.etapa.nombre }}{% else %}Aprobación #{{ aprobacion.pk }}{% endif %}</h2>
+  <h2 class="work-preview__title">{% if contexto_workflow %}{{ contexto_workflow.nombre }}{% else %}Aprobación #{{ aprobacion.pk }}{% endif %}</h2>
   <p class="work-preview__badges">
     <span class="badge badge--dot {% if aprobacion.estado == 'APROBADA' %}badge--success{% elif aprobacion.estado == 'RECHAZADA' %}badge--danger{% elif aprobacion.estado == 'PENDIENTE' %}badge--warning{% else %}badge--info{% endif %}">{{ aprobacion.get_estado_display }}</span>
     {% if puede_decidir %}<span class="badge">Espera tu decisión</span>{% endif %}
@@ -11,6 +11,8 @@
 <dl class="work-facts">
   {% if contexto_prorroga %}<div><dt>Qué se aprueba</dt><dd>Prórroga de la fecha objetivo · {{ contexto_prorroga.servicio.nombre }}</dd></div>{% endif %}
   {% if contexto_workflow %}<div><dt>Flujo</dt><dd>{{ contexto_workflow.workflow.nombre }}</dd></div>{% endif %}
+  {% if contexto_workflow.fase %}<div><dt>Fase</dt><dd>{{ contexto_workflow.fase.nombre }}</dd></div>{% endif %}
+  {% if entregable_revisado %}<div><dt>Revisa</dt><dd>{{ entregable_revisado.nombre }} · {% if entregable_revisado.entregado %}Entregado{% else %}Pendiente de entregar{% endif %}</dd></div>{% endif %}
   <div><dt>Referencia</dt><dd>Aprobación #{{ aprobacion.pk }}</dd></div>
   <div><dt>Cómo se decide</dt><dd>{{ esquema.get_modo_display }}{% if esquema.politica %} · {{ esquema.get_politica_display }}{% endif %}</dd></div>
   <div><dt>Avance</dt><dd>{{ decididas }} de {{ participaciones|length }} ya decidieron</dd></div>

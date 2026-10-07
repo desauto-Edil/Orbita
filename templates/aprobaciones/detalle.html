@@ -48,16 +48,43 @@
           {% if contexto_prorroga.puede_ver_ticket %}
             <p><a href="{% url 'tickets:detalle' contexto_prorroga.ticket.pk %}">Ver el ticket</a></p>
           {% endif %}
+        {% elif contexto_workflow.por_fases %}
+          <dl class="work-facts">
+            <div><dt>Flujo</dt><dd>{{ contexto_workflow.workflow.nombre }}</dd></div>
+            {% if contexto_workflow.fase %}<div><dt>Fase</dt><dd>{{ contexto_workflow.fase.nombre }}</dd></div>{% endif %}
+            <div><dt>Bloque</dt><dd>{{ contexto_workflow.nombre }}</dd></div>
+          </dl>
         {% elif contexto_workflow %}
           <dl class="work-facts">
             <div><dt>Flujo</dt><dd>{{ contexto_workflow.workflow.nombre }}</dd></div>
             <div><dt>Versión</dt><dd>v{{ contexto_workflow.version.numero }}</dd></div>
-            <div><dt>Etapa</dt><dd>{{ contexto_workflow.etapa.nombre }}</dd></div>
+            <div><dt>Etapa</dt><dd>{{ contexto_workflow.nombre }}</dd></div>
           </dl>
         {% else %}
           <p class="text-muted">Esquema de aprobación #{{ aprobacion.esquema_id }}, sin vínculo a un flujo.</p>
         {% endif %}
       </section>
+
+      {% if entregable_revisado %}
+        <section class="card" id="entregable-revisado">
+          <h2>Entregable que se revisa</h2>
+          <dl class="work-facts">
+            <div><dt>Entregable</dt><dd>{{ entregable_revisado.nombre }} <span class="text-muted">({{ entregable_revisado.tipo }})</span></dd></div>
+            <div><dt>Estado</dt><dd>{% if entregable_revisado.entregado %}Entregado{% else %}Pendiente de entregar{% endif %}</dd></div>
+            {% if entregable_revisado.revision > 1 %}<div><dt>Revisión</dt><dd>N.º {{ entregable_revisado.revision }} de este entregable</dd></div>{% endif %}
+          </dl>
+          {% if entregable_revisado.ver_contenido %}
+            {% if entregable_revisado.texto %}<p>{{ entregable_revisado.texto }}</p>{% endif %}
+            {% if entregable_revisado.enlace %}<p><a href="{{ entregable_revisado.enlace }}" rel="noopener noreferrer" target="_blank">{{ entregable_revisado.enlace }}</a></p>{% endif %}
+            {% for archivo in entregable_revisado.archivos %}
+              <p><a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a> <span class="text-muted">{{ archivo.creado_en|date:"d/m/Y H:i" }}</span></p>
+            {% endfor %}
+          {% endif %}
+          {% if entregable_revisado.puede_ver_ticket %}
+            <p><a href="{% url 'tickets:detalle' entregable_revisado.ticket.pk %}">Ver el ticket</a></p>
+          {% endif %}
+        </section>
+      {% endif %}
 
       {% if puede_decidir %}
         <section class="card">

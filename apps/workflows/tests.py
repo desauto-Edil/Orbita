@@ -4035,7 +4035,7 @@ class ContextoResultadosBloqueTests(TestCase):
 
         contexto = self._contexto()
         with self.assertRaises(ValueError):
-            publicar_resultado_bloque(contexto, "entregables", "uno", {"satisfecho": True})
+            publicar_resultado_bloque(contexto, "inventado", "uno", {"satisfecho": True})
         with self.assertRaises(ValueError):
             publicar_resultado_bloque(contexto, "aprobaciones", "", {"resultado": "APROBADA"})
 
@@ -4089,7 +4089,7 @@ class ResolutorVariablesSinTicketTests(TestCase):
         resolutor = self._resolutor(contexto)
         for nombre in (
             "aprobaciones.uno", "aprobaciones.uno.resultado.extra", "aprobaciones.otro.resultado",
-            "aprobaciones.uno.otro", "ultima.resultado", "entregables.uno.satisfecho", "", "ticket.estado",
+            "aprobaciones.uno.otro", "ultima.resultado", "entregables.uno.satisfecho", "inventado.uno.x", "", "ticket.estado",
             "ticket.inexistente", "formulario.monto", "formulario", "ticket",
         ):
             self.assertIs(resolutor.resolver(nombre), INEXISTENTE, nombre)
@@ -4152,3 +4152,27 @@ class VariablesLegacyEjecutableTests(TestCase):
         self.assertEqual(
             instancia.ejecuciones_etapa.get(etapa=etapas["condicion"]).transicion_tomada_id, etapas["fallback"].pk
         )
+
+
+class CierreDeInstanciaPorFasesTests(TestCase):
+    """4.E2 — el cierre automático solo aplica a una ejecución POR FASES; el modo LEGACY termina
+    con su etapa FIN y no se toca."""
+
+    def test_una_instancia_legacy_no_se_cierra_por_este_camino(self):
+        from types import SimpleNamespace
+
+        from apps.workflows.motor import _cerrar_instancia_por_fases
+
+        legacy = SimpleNamespace(configuracion_ejecucion_version_id=None, estado=InstanciaWorkflow.Estado.EN_EJECUCION)
+        _cerrar_instancia_por_fases(legacy)
+        self.assertEqual(legacy.estado, InstanciaWorkflow.Estado.EN_EJECUCION)  # y ni siquiera intentó guardar
+
+    def test_solo_se_cierra_una_instancia_por_fases_que_sigue_en_ejecucion(self):
+        from types import SimpleNamespace
+
+        from apps.workflows.motor import _cerrar_instancia_por_fases
+
+        for estado in (InstanciaWorkflow.Estado.EN_ESPERA, InstanciaWorkflow.Estado.ERROR, InstanciaWorkflow.Estado.COMPLETADA):
+            instancia = SimpleNamespace(configuracion_ejecucion_version_id=1, estado=estado)
+            _cerrar_instancia_por_fases(instancia)
+            self.assertEqual(instancia.estado, estado)

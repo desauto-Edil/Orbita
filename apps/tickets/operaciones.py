@@ -292,6 +292,21 @@ def eliminar_borrador(ticket, actor):
     ticket.delete()
 
 
+def _trabajo_interno_en_curso(ticket):
+    """4.E2 — el trabajo interno de un Ticket (su `InstanciaWorkflow`) sigue en curso o a la
+    espera de una tarea, aprobación o entregable. Solo consulta su estado, nunca lo modifica.
+    Un Ticket sin Workflow, o con el Workflow COMPLETADO (o en ERROR), no tiene trabajo en
+    curso. Lo usan `resolver_ticket` y `entregas.entregar_ticket`: una resolución o entrega
+    comienza DESPUÉS del trabajo interno."""
+    instancia_id = ticket.instancia_workflow_id
+    if instancia_id is None:
+        return False
+    return InstanciaWorkflow.objects.filter(
+        pk=instancia_id,
+        estado__in=(InstanciaWorkflow.Estado.EN_EJECUCION, InstanciaWorkflow.Estado.EN_ESPERA),
+    ).exists()
+
+
 @transaction.atomic
 def radicar_ticket(ticket, actor):
     """CU-014/RQF-053/RQF-054, RN-014/RN-016 — incremento 2.2.
@@ -745,6 +760,8 @@ def resolver_ticket(ticket, actor, descripcion, archivos=None):
         raise ValidationError("Solo un ticket EN_ATENCION puede resolverse.")
     if ticket.entrega_politica:
         raise ValidationError("Este ticket se completa con una entrega formal al solicitante.")
+    if _trabajo_interno_en_curso(ticket):
+        raise ValidationError("El trabajo interno de este ticket todavía no ha terminado.")
     if ticket.solicitudes_informacion.filter(estado=SolicitudInformacion.Estado.PENDIENTE).exists():
         raise ValidationError(
             "No es posible resolver mientras existan solicitudes de información pendientes."

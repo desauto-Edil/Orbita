@@ -64,6 +64,17 @@ def retirar_definicion_entregable(definicion, actor):
     definicion = DefinicionEntregable.objects.get(pk=definicion.pk)
     if not definicion.activo:
         return definicion
+    # 4.B1: un bloque ENTREGABLE de una configuración vigente o en borrador necesita
+    # esta definición activa (los tickets nuevos solo congelan las activas); retirarla
+    # dejaría la configuración inválida. Las históricas no cuentan.
+    usada_por = definicion.bloques_operativos.filter(
+        version__estado__in=("BORRADOR", "ACTIVA")
+    ).select_related("version__servicio").first()
+    if usada_por is not None:
+        raise ValidationError(
+            f"No se puede retirar «{definicion.nombre}»: el bloque «{usada_por.nombre}» "
+            "de la configuración del flujo la requiere. Quita o cambia ese bloque primero."
+        )
     anterior = _datos(definicion)
     definicion.activo = False
     definicion.save(update_fields=["activo", "actualizado_en"])
