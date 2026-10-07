@@ -1,6 +1,6 @@
 {% comment %}
-  Pertenencias de una persona a Áreas o a Unidades (misma forma). Parámetros:
-  tipo ("area" | "unidad"), titulo, filas, form (o vacío si no puede editar),
+  Pertenencias de una persona a Áreas, Unidades o Equipos (misma forma). Parámetros:
+  tipo ("area" | "unidad" | "equipo"), titulo, filas, form (o vacío si no puede editar),
   vacio (texto del estado vacío).
 {% endcomment %}
 <section class="card" aria-labelledby="cfg-{{ tipo }}">
@@ -9,13 +9,13 @@
     <ul class="list-row-group">
       {% for fila in filas %}
         <li class="list-row">
-          <span class="list-row__title">{% if tipo == "area" %}{{ fila.area.nombre }}{% else %}{{ fila.unidad_negocio.nombre }}{% endif %}</span>
+          <span class="list-row__title">{% if tipo == "area" %}{{ fila.area.nombre }}{% elif tipo == "equipo" %}{{ fila.equipo.nombre }}{% else %}{{ fila.unidad_negocio.nombre }}{% endif %}</span>
           {% if fila.es_principal %}<span class="badge badge--accent">Principal</span>{% endif %}
           {% if form %}
             <form method="post" class="config-row-actions">
               {% csrf_token %}
               <input type="hidden" name="membresia" value="{{ fila.pk }}">
-              {% if not fila.es_principal %}<button type="submit" name="accion" value="{{ tipo }}_principal" class="btn btn--ghost btn--sm">Hacer principal</button>{% endif %}
+              {% if tipo != "equipo" and not fila.es_principal %}<button type="submit" name="accion" value="{{ tipo }}_principal" class="btn btn--ghost btn--sm">Hacer principal</button>{% endif %}
               <button type="submit" name="accion" value="{{ tipo }}_quitar" class="btn btn--ghost btn--sm">Quitar</button>
             </form>
           {% endif %}
@@ -34,7 +34,7 @@
           {% csrf_token %}
           {% include "configuracion/_errores.html" %}
           {% include "configuracion/_campo.html" with campo=form.destino %}
-          {% include "configuracion/_campo.html" with campo=form.es_principal %}
+          {% if tipo != "equipo" %}{% include "configuracion/_campo.html" with campo=form.es_principal %}{% endif %}
           <div class="form-actions"><button type="submit" name="accion" value="{{ tipo }}_agregar" class="btn btn--primary btn--sm">Añadir</button></div>
         </form>
       </details>

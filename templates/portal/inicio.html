@@ -3,7 +3,7 @@
 
 {% block title %}Inicio — {{ sistema.nombre }}{% endblock %}
 
-{% block extra_head %}<link rel="stylesheet" href="{% static 'css/inicio.css' %}">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/inicio.css' %}"><link rel="stylesheet" href="{% static 'css/trabajo.css' %}">{% endblock %}
 
 {% block content_modifier %}content-area--portal{% endblock %}
 
@@ -156,6 +156,22 @@
         {% if trabajo.aprobaciones %}<li class="work-pill"><strong>{{ trabajo.aprobaciones }}</strong> aprobaci{{ trabajo.aprobaciones|pluralize:"ón,ones" }}</li>{% endif %}
         {% if trabajo.acceso_cola %}<li class="work-pill work-pill--cola">{% include "components/icon.html" with name="inbox" size="sm" %}Cola de atención</li>{% endif %}
       </ul>
+      {% if trabajo.tickets %}
+        <ul class="ticket-cards__grid portal-trabajo__cards">
+          {% for tarjeta in trabajo.tickets %}
+            <li class="ticket-card">
+              <p class="ticket-card__code">{{ tarjeta.ticket.codigo|default:"Sin código" }}</p>
+              <h3 class="ticket-card__title">{{ tarjeta.servicio.nombre }}</h3>
+              {% if tarjeta.ticket.etiqueta %}<p class="ticket-etiqueta text-muted">{{ tarjeta.ticket.etiqueta }}</p>{% endif %}
+              <p class="ticket-card__now">
+                {% if tarjeta.fase %}{{ tarjeta.fase }}{% endif %}{% if tarjeta.bloque %} · <strong>{{ tarjeta.bloque }}</strong>{% endif %}
+                {% if tarjeta.ticket.fecha_objetivo_vigente %}<br><span class="text-muted">Objetivo {{ tarjeta.ticket.fecha_objetivo_vigente|date:"d M Y" }}</span>{% endif %}
+              </p>
+              <a class="btn btn--secondary btn--sm" href="{% url 'tickets:trabajo' tarjeta.ticket.pk %}">Continuar</a>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
       <a class="btn btn--primary btn--sm" href="{{ trabajo.url }}">Ir a Trabajo {% include "components/icon.html" with name="arrow-right" size="sm" %}</a>
     </section>
   {% endif %}
@@ -175,7 +191,7 @@
               <span class="ticket-row__main">
                 <span class="ticket-row__name">{{ ticket.detalle_servicio.servicio.nombre }}</span>
                 <span class="ticket-row__meta">
-                  {% if ticket.radicado %}Radicado {{ ticket.radicado|stringformat:"s"|slice:":8"|upper }}{% else %}Sin radicar{% endif %}
+                  {% if ticket.codigo %}{{ ticket.codigo }}{% elif ticket.radicado %}Radicado{% else %}Sin radicar{% endif %}
                   · actualizado hace {{ ticket.actualizado_en|timesince }}
                 </span>
               </span>

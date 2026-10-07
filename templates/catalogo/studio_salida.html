@@ -3,7 +3,7 @@
     <div>
       <p class="svc-kicker">Salida</p>
       <h2>Entregables</h2>
-      <p>Define qué recibirá el solicitante al finalizar.</p>
+      <p>{% if proceso_programado %}Define qué produce cada ejecución de este proceso.{% else %}Define qué recibirá el solicitante al finalizar.{% endif %}</p>
     </div>
     <button type="button" class="btn btn--primary" data-action="toggle-panel" data-target="panel-entregable-nuevo">Añadir entregable</button>
   </header>
@@ -71,6 +71,17 @@
     </form>
   </article>
 
+  {% if proceso_programado %}
+  <section class="svc-panel svc-panel--delivery">
+    <div class="svc-panel__head">
+      <div>
+        <h3>Entrega formal</h3>
+        <p>Un proceso programado no tiene solicitante, así que no admite entrega formal: sus tickets se resuelven y cierran manualmente.</p>
+      </div>
+      <span class="svc-pill">No aplica</span>
+    </div>
+  </section>
+  {% else %}
   <section class="svc-panel svc-panel--delivery">
     <div class="svc-panel__head">
       <div>
@@ -95,4 +106,5 @@
       <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar política</button></div>
     </form>
   </section>
+  {% endif %}
 </section>

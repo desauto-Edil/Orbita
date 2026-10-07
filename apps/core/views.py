@@ -48,6 +48,7 @@ from apps.aprobaciones.consultas import aprobaciones_pendientes_para
 from apps.aprobaciones.models import Aprobacion
 from apps.catalogo import busqueda
 from apps.core import disenador, inicio
+from apps.tickets import trabajo as trabajo_ops
 from apps.tareas.consultas import tareas_asignadas_a, tareas_disponibles_para_tomar
 from apps.tareas.models import Tarea
 
@@ -266,6 +267,7 @@ def _fila_aprobacion(aprobacion):
 
 
 MI_TRABAJO_POR_PAGINA = 30
+MI_TRABAJO_TICKETS = 24
 
 
 @login_required
@@ -310,6 +312,10 @@ def mi_trabajo_view(request):
         .order_by("-creado_en")
     )
 
+    # 4.F3: «Mi trabajo» empieza por los TICKETS que la persona atiende (no los que solicitó): cada
+    # tarjeta lleva a la experiencia operativa. Tareas y aprobaciones sueltas siguen debajo.
+    tarjetas = [trabajo_ops.tarjeta(usuario, ticket) for ticket in trabajo_ops.tickets_a_cargo(usuario)[:MI_TRABAJO_TICKETS]]
+
     ahora = timezone.now()
     filas_tareas = [_fila_tarea(tarea, ahora) for tarea in tareas_qs]
     filas_aprobaciones = [_fila_aprobacion(aprobacion) for aprobacion in aprobaciones_qs]
@@ -328,6 +334,7 @@ def mi_trabajo_view(request):
         "tab": tab,
         "filas": pagina.object_list,
         "pagina": pagina,
+        "tarjetas": tarjetas,
         "total": len(filas_tareas) + len(filas_aprobaciones),
         # Directo de las listas ya construidas — ninguna consulta adicional
         # solo para contar (punto 11).

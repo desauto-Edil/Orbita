@@ -16,6 +16,7 @@ from apps.catalogo.models import (
     DefinicionEntregable,
     Formulario,
     OpcionCampo,
+    ProgramacionProceso,
     ReglaCondicional,
     Servicio,
     ServicioResponsable,
@@ -78,6 +79,82 @@ class PoliticaProrrogaForm(forms.Form):
         if datos.get("politica") == Servicio.PoliticaProrroga.CON_APROBACION:
             if bool(datos.get("aprobador_usuario")) == bool(datos.get("aprobador_equipo")):
                 raise forms.ValidationError("Con aprobación, indique un aprobador: un usuario o un equipo, no ambos.")
+        return datos
+
+
+class InicioProcesoForm(forms.Form):
+    """4.G1 — «¿Cómo inicia este proceso?». Vive dentro del formulario de crear y del de Básico de
+    un Proceso (no es una pantalla aparte). Solo valida forma/UX: la regla final (compatibilidad,
+    responsable activo, calendario) está en `apps.catalogo.programacion.configurar_programacion`.
+
+    El responsable inicial se elige entre personas y equipos activos (al crear un Proceso todavía
+    no hay responsables configurados). Al guardar, `programacion.asegurar_responsable_inicial` lo
+    deja como responsable del proceso si aún no lo era. `cleaned_data["responsable_inicial"]` es la
+    pareja `(tipo_responsable, usuario | equipo)`."""
+
+    MANUAL = "MANUAL"
+    PROGRAMADO = "PROGRAMADO"
+
+    modo = forms.ChoiceField(
+        choices=[(MANUAL, "Manual"), (PROGRAMADO, "Programado")],
+        widget=forms.RadioSelect, label="¿Cómo inicia este proceso?", required=False,
+    )
+    frecuencia = forms.ChoiceField(
+        choices=ProgramacionProceso.Frecuencia.choices, required=False, label="Frecuencia"
+    )
+    dia_creacion = forms.IntegerField(
+        required=False, min_value=1, max_value=28, label="Crear ejecución el día"
+    )
+    periodo = forms.ChoiceField(
+        choices=[("", "— Seleccione —")] + list(ProgramacionProceso.Periodo.choices), required=False, label="Periodo"
+    )
+    responsable_inicial = forms.ChoiceField(required=False, label="Responsable inicial")
+
+    def __init__(self, *args, **kwargs):
+        kwargs.pop("servicio", None)  # compatibilidad: ya no depende del proceso
+        super().__init__(*args, **kwargs)
+        personas = [
+            (f"U:{u.pk}", u.get_full_name() or u.get_username())
+            for u in Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "username")
+        ]
+        equipos = [(f"E:{e.pk}", e.nombre) for e in Equipo.objects.filter(activo=True).order_by("nombre")]
+        self.fields["responsable_inicial"].choices = [
+            ("", "— Seleccione —"), ("Personas", personas), ("Equipos", equipos),
+        ]
+
+    @staticmethod
+    def valor_responsable(responsable):
+        """El valor del selector para un `ServicioResponsable` (o `""`)."""
+        if responsable is None:
+            return ""
+        if responsable.tipo_responsable == ServicioResponsable.TipoResponsable.USUARIO:
+            return f"U:{responsable.usuario_id}"
+        return f"E:{responsable.equipo_id}"
+
+    def clean_modo(self):
+        return self.cleaned_data.get("modo") or self.MANUAL
+
+    def clean(self):
+        datos = super().clean()
+        if datos.get("modo") != self.PROGRAMADO:
+            return datos
+        if not datos.get("dia_creacion"):
+            self.add_error("dia_creacion", "Indique el día del mes (1 a 28) en que se crea la ejecución.")
+        if not datos.get("periodo"):
+            self.add_error("periodo", "Seleccione si la ejecución cubre el mes actual o el siguiente.")
+        valor = datos.get("responsable_inicial") or ""
+        tipo, _, pk = valor.partition(":")
+        Tipo = ServicioResponsable.TipoResponsable
+        responsable = None
+        if tipo == "U" and pk.isdigit():
+            usuario = Usuario.objects.filter(pk=int(pk), is_active=True).first()
+            responsable = (Tipo.USUARIO, usuario) if usuario else None
+        elif tipo == "E" and pk.isdigit():
+            equipo = Equipo.objects.filter(pk=int(pk), activo=True).first()
+            responsable = (Tipo.EQUIPO, equipo) if equipo else None
+        if responsable is None:
+            self.add_error("responsable_inicial", "Seleccione quién recibe cada ejecución (una persona o un equipo).")
+        datos["responsable_inicial"] = responsable
         return datos
 
 
@@ -199,9 +276,9 @@ class CampoForm(forms.ModelForm):
 
     class Meta:
         model = Campo
-        fields = ["tipo", "etiqueta", "clave", "ayuda", "obligatorio", "orden"]
+        fields = ["tipo", "etiqueta", "clave", "ayuda", "obligatorio", "orden", "es_fecha_requerida"]
         widgets = {"ayuda": forms.Textarea(attrs={"rows": 2})}
-        labels = {"clave": "Clave (para flujos)"}
+        labels = {"clave": "Clave (para flujos)", "es_fecha_requerida": "Usar como fecha requerida por el solicitante"}
         help_texts = {
             "clave": "Identificador estable que usan las decisiones de un flujo "
             "(formulario.<clave>). Vacío: se genera desde la etiqueta y no cambia al renombrarla."
@@ -369,12 +446,27 @@ class EsperaConfigForm(forms.Form):  # histórico (4.B1): solo edita una ESPERA 
         return datos
 
 
+MAX_APROBADORES = 10
+
+
 class AprobacionConfigForm(forms.Form):
+    # 4.F1 — configuración PROGRESIVA: primero cuántos aprobadores participan; el modo solo se
+    # pregunta con más de uno (con uno no cambia nada). `cantidad` NO se persiste: guía la
+    # construcción del formulario y se valida contra los aprobadores recibidos; lo guardado
+    # (y la única fuente de verdad) son los participantes. Sin `cantidad` en el envío (flujos
+    # del lienzo y clientes anteriores) el formulario se comporta como siempre: modo obligatorio.
+    cantidad = forms.IntegerField(
+        required=False, min_value=1, max_value=MAX_APROBADORES, initial=1,
+        label="¿Cuántos aprobadores participan?",
+        widget=forms.NumberInput(attrs={"data-aprobacion-cantidad": "", "min": 1, "max": MAX_APROBADORES}),
+    )
     modo = forms.ChoiceField(
         choices=[
             (ConfiguracionEtapaAprobacion.Modo.SECUENCIAL, "Secuencial — uno a la vez, en orden"),
             (ConfiguracionEtapaAprobacion.Modo.PARALELA, "Paralela — todos al mismo tiempo"),
-        ]
+        ],
+        required=False,
+        label="Modo de aprobación",
     )
     politica = forms.ChoiceField(
         choices=[("", "—")] + list(ConfiguracionEtapaAprobacion.Politica.choices),
@@ -395,7 +487,16 @@ class AprobacionConfigForm(forms.Form):
 
     def clean(self):
         datos = super().clean()
-        if datos.get("modo") == ConfiguracionEtapaAprobacion.Modo.PARALELA and not datos.get("politica"):
+        cantidad = datos.get("cantidad")
+        if cantidad is not None and cantidad <= 1:
+            # Un solo aprobador: no hay orden ni política que decidir. Se usa el comportamiento
+            # secuencial, que con un participante es idéntico al de siempre.
+            datos["modo"] = ConfiguracionEtapaAprobacion.Modo.SECUENCIAL
+            datos["politica"] = ""
+            return datos
+        if not datos.get("modo"):
+            self.add_error("modo", "Seleccione el modo de aprobación.")
+        elif datos["modo"] == ConfiguracionEtapaAprobacion.Modo.PARALELA and not datos.get("politica"):
             raise forms.ValidationError("Seleccione la política de aprobación paralela.")
         return datos
 
@@ -444,6 +545,9 @@ class CondicionalForm(forms.Form):
     def __init__(self, *args, destinos, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["destino"].choices = destinos
+        # Sugerencias (<datalist id="variables-decision"> de Studio): se puede elegir una
+        # referencia sin escribir su clave; el campo sigue siendo texto libre.
+        self.fields["variable"].widget.attrs["list"] = "variables-decision"
 
 
 class FallbackForm(forms.Form):

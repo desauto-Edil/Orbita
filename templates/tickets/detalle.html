@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Ticket {{ ticket.radicado }} — {{ sistema.nombre }}{% endblock %}
+{% block title %}Ticket {{ ticket.codigo|default:'' }} — {{ sistema.nombre }}{% endblock %}
 
 {% block content %}
   <nav class="breadcrumb" aria-label="Ruta de navegación">
@@ -11,14 +11,26 @@
 
   <section class="card">
     <h1>{{ servicio.nombre }}</h1>
+    {% if ticket.etiqueta %}<p class="ticket-etiqueta text-muted">{{ ticket.etiqueta }}</p>{% endif %}
     <span class="badge
       {% if ticket.estado == 'RESUELTO' %}badge--success
       {% elif ticket.estado == 'CANCELADO' %}badge--danger
       {% elif ticket.estado == 'BORRADOR' %}badge--warning
       {% else %}badge--info{% endif %}">{{ ticket.get_estado_display }}</span>
-    <p class="text-muted">Radicado: {{ ticket.radicado }}</p>
+    <p class="text-muted">Ticket: <strong>{{ ticket.codigo|default:"Sin código" }}</strong></p>
     <p class="text-muted">Radicado el {{ ticket.radicado_en|date:"d/m/Y H:i" }}</p>
+    {% if es_solicitante %}<p><a href="{% url 'tickets:seguimiento' ticket.pk %}">Ver el seguimiento de mi solicitud</a></p>{% endif %}
   </section>
+
+  {% if plazo_solicitado and plazo_solicitado.anticipada %}
+    <div class="alert alert--warning" role="status" id="plazo-solicitado">
+      <div class="alert__text">
+        <strong>Fecha solicitada anterior al tiempo objetivo</strong><br>
+        Solicitada: {% if plazo_solicitado.con_hora %}{{ plazo_solicitado.valor|date:"d M Y, H:i" }}{% else %}{{ plazo_solicitado.valor|date:"d M Y" }}{% endif %}<br>
+        Objetivo del servicio: {{ plazo_solicitado.objetivo|date:"d M Y" }}{% if plazo_solicitado.tiempo %} ({{ plazo_solicitado.tiempo }}){% endif %}
+      </div>
+    </div>
+  {% endif %}
 
   <section class="card">
     <h3>Atención</h3>
@@ -102,67 +114,7 @@
       <p class="text-muted">Resultados que debes producir para este ticket.{% if tiene_entrega_formal %} Se entregan formalmente al solicitante cuando estén listos.{% endif %}</p>
       <ul class="list-row-group">
         {% for entregable in entregables %}
-          <li class="list-row" style="flex-direction: column; align-items: stretch;">
-            <div class="list-row" style="border-bottom: none; padding: 0;">
-              <span class="list-row__title">{{ entregable.nombre }}</span>
-              <span class="badge">{{ entregable.get_tipo_display }}</span>
-              {% if entregable.obligatorio %}<span class="badge badge--warning">Obligatorio</span>{% endif %}
-              {% if entregable.satisfecho %}<span class="badge badge--success">Listo</span>{% else %}<span class="badge">Pendiente</span>{% endif %}
-            </div>
-            {% if entregable.descripcion %}<p class="text-muted">{{ entregable.descripcion }}</p>{% endif %}
-
-            {% if entregable.tipo == "TEXTO" or entregable.tipo == "ENLACE" %}
-              {% if puede_escribir_entregables %}
-                <form method="post" action="{% url 'tickets:entregable_resultado' ticket.pk entregable.pk %}" class="form">
-                  {% csrf_token %}
-                  <div class="field">
-                    {% if entregable.tipo == "TEXTO" %}
-                      <textarea name="valor" aria-label="Resultado">{{ entregable.texto }}</textarea>
-                    {% else %}
-                      <input type="url" name="valor" value="{{ entregable.enlace }}" placeholder="https://" aria-label="Enlace">
-                    {% endif %}
-                  </div>
-                  <button type="submit" class="btn btn--secondary">Guardar</button>
-                </form>
-              {% elif entregable.tipo == "TEXTO" %}
-                {% if entregable.texto %}<p>{{ entregable.texto }}</p>{% endif %}
-              {% elif entregable.enlace %}
-                <p><a href="{{ entregable.enlace }}" rel="noopener noreferrer">{{ entregable.enlace }}</a></p>
-              {% endif %}
-            {% elif entregable.tipo == "ARCHIVO" %}
-              <ul class="plain-list">
-                {% for archivo in entregable.archivos_vigentes %}
-                  <li>
-                    <a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a>
-                    {% if puede_escribir_entregables %}
-                      <form method="post" action="{% url 'tickets:entregable_retirar_archivo' ticket.pk archivo.pk %}" style="display:inline;">
-                        {% csrf_token %}
-                        <button type="submit" class="btn btn--ghost">Retirar</button>
-                      </form>
-                    {% endif %}
-                  </li>
-                {% empty %}
-                  <li class="text-muted">Sin archivos.</li>
-                {% endfor %}
-              </ul>
-              {% if puede_escribir_entregables %}
-                <form method="post" action="{% url 'tickets:entregable_adjuntar' ticket.pk entregable.pk %}" enctype="multipart/form-data" class="form">
-                  {% csrf_token %}
-                  <div class="field"><input type="file" name="archivo" required aria-label="Archivo"></div>
-                  <button type="submit" class="btn btn--secondary">Adjuntar archivo</button>
-                </form>
-              {% endif %}
-            {% elif entregable.tipo == "CONFIRMACION" %}
-              {% if entregable.confirmado_en %}
-                <p class="text-muted">Confirmado por {{ entregable.confirmado_por }} — {{ entregable.confirmado_en|date:"d/m/Y H:i" }}</p>
-              {% elif puede_escribir_entregables %}
-                <form method="post" action="{% url 'tickets:entregable_confirmar' ticket.pk entregable.pk %}">
-                  {% csrf_token %}
-                  <button type="submit" class="btn btn--secondary">Confirmar</button>
-                </form>
-              {% endif %}
-            {% endif %}
-          </li>
+          {% include "tickets/_entregable_item.html" %}
         {% endfor %}
       </ul>
     </section>
@@ -226,53 +178,7 @@
         {% endif %}
       {% endif %}
 
-      {% if entregas %}
-        <h4 style="margin-top: var(--space-5);">Entregas</h4>
-        <ul class="list-row-group">
-          {% for entrega in entregas %}
-            <li class="list-row" style="flex-direction: column; align-items: stretch;">
-              <div class="list-row" style="border-bottom: none; padding: 0;">
-                <span class="list-row__title">Entrega {{ entrega.numero }}</span>
-                <span class="badge {% if entrega.estado == 'ACEPTADA' %}badge--success{% elif entrega.estado == 'OBSERVADA' %}badge--warning{% elif entrega.estado == 'PENDIENTE' %}badge--info{% endif %}">{{ entrega.get_estado_display }}</span>
-                <span class="text-muted">{{ entrega.entregada_por }} — {{ entrega.entregada_en|date:"d/m/Y H:i" }}</span>
-              </div>
-              {% if entrega.vence_en and entrega.estado == 'PENDIENTE' %}
-                <p class="text-muted">Plazo de observaciones: hasta el {{ entrega.vence_en|date:"d/m/Y H:i" }}</p>
-              {% endif %}
-              <ul class="plain-list">
-                {% for resultado in entrega.resultados.all %}
-                  <li>
-                    <strong>{{ resultado.nombre }}</strong>
-                    {% if resultado.tipo == "TEXTO" %}
-                      <p>{{ resultado.texto }}</p>
-                    {% elif resultado.tipo == "ENLACE" %}
-                      <p><a href="{{ resultado.enlace }}" rel="noopener noreferrer">{{ resultado.enlace }}</a></p>
-                    {% elif resultado.tipo == "ARCHIVO" %}
-                      {% for archivo in resultado.adjuntos.all %}
-                        <p><a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a></p>
-                      {% endfor %}
-                    {% elif resultado.tipo == "CONFIRMACION" %}
-                      <p class="text-muted">Confirmado por {{ resultado.confirmado_por }} — {{ resultado.confirmado_en|date:"d/m/Y H:i" }}</p>
-                    {% endif %}
-                  </li>
-                {% empty %}
-                  <li class="text-muted">Esta entrega no incluyó resultados específicos.</li>
-                {% endfor %}
-              </ul>
-              {% if entrega.estado == 'OBSERVADA' %}
-                <p><strong>Observaciones de {{ entrega.resuelta_por }}</strong> <span class="text-muted">{{ entrega.resuelta_en|date:"d/m/Y H:i" }}</span></p>
-                <p>{{ entrega.observaciones }}</p>
-              {% elif entrega.estado == 'ACEPTADA' %}
-                <p class="text-muted">Aceptada por {{ entrega.resuelta_por }} el {{ entrega.resuelta_en|date:"d/m/Y H:i" }}.</p>
-              {% elif entrega.estado == 'CERRADA_POR_VENCIMIENTO' %}
-                <p class="text-muted">Cerrada automáticamente el {{ entrega.resuelta_en|date:"d/m/Y H:i" }}: el plazo terminó sin respuesta.</p>
-              {% elif entrega.estado == 'CERRADA_SIN_RESPUESTA' %}
-                <p class="text-muted">Cerrada al entregar, sin esperar respuesta.</p>
-              {% endif %}
-            </li>
-          {% endfor %}
-        </ul>
-      {% endif %}
+      {% include "tickets/_entregas_lista.html" %}
     </section>
   {% endif %}
 
@@ -408,7 +314,7 @@
     {% endif %}
   </section>
 
-  <section class="card">
+  <section class="card" id="solicitudes">
     <h3>Solicitudes de información</h3>
     <ul>
       {% for solicitud in solicitudes %}
@@ -467,64 +373,7 @@
     {% endif %}
   </section>
 
-  <section class="card">
-    <h3>Línea de tiempo</h3>
-    <ul class="plain-list">
-      {% for evento in historial %}
-        <li>
-          <span class="badge badge--info">{{ evento.get_tipo_evento_display }}</span>
-          <span>{% if evento.actor %}{{ evento.actor }}{% else %}Sistema{% endif %}</span>
-          {% if evento.datos.causa == "ACEPTACION_SOLICITANTE" %}<span class="text-muted">(aceptado por el solicitante)</span>
-          {% elif evento.datos.causa == "VENCIMIENTO_SIN_RESPUESTA" %}<span class="text-muted">(plazo vencido sin respuesta)</span>
-          {% elif evento.datos.causa == "CIERRE_DIRECTO" %}<span class="text-muted">(al entregar)</span>
-          {% elif evento.datos.causa == "POLITICA_SIN_APROBACION" %}<span class="text-muted">(automática, sin aprobación)</span>{% endif %}
-          {% if evento.tipo_evento == "DIRECCIONADO" %}<span class="text-muted">Destino: {{ evento.datos.destino_etiqueta }} · Responsable: {{ evento.datos.responsable_etiqueta }}{% if evento.datos.es_predeterminado %} (destino de reserva){% endif %}</span>{% endif %}
-          {% if evento.datos.nueva_fecha %}<span class="text-muted">→ {{ evento.datos.nueva_fecha|slice:":10" }}</span>{% endif %}
-          <span class="text-muted">{{ evento.creado_en|date:"d/m/Y H:i" }}</span>
-        </li>
-      {% empty %}
-        <li class="text-muted">Sin eventos.</li>
-      {% endfor %}
-    </ul>
-  </section>
+  {% include "tickets/_historial.html" %}
 
-  <section class="card">
-    <h3>Respuestas</h3>
-    {% for item in campos_formulario %}
-      <div class="field">
-        <label>{{ item.campo.etiqueta }}</label>
-        {% if item.campo.tipo == "ARCHIVO" %}
-          {% if item.respuesta and item.respuesta.archivo %}
-            <p><a href="{% url 'tickets:descargar_archivo' item.respuesta.archivo.pk %}">{{ item.respuesta.archivo.nombre_original }}</a></p>
-          {% else %}
-            <p class="text-muted">Sin archivo.</p>
-          {% endif %}
-        {% elif item.campo.tipo == "USUARIO" %}
-          <p>{% if item.respuesta %}{{ item.respuesta.valor_usuario }}{% else %}—{% endif %}</p>
-        {% elif item.campo.tipo == "AREA" %}
-          <p>{% if item.respuesta %}{{ item.respuesta.valor_area }}{% else %}—{% endif %}</p>
-        {% elif item.campo.tipo == "UNIDAD" %}
-          <p>{% if item.respuesta %}{{ item.respuesta.valor_unidad }}{% else %}—{% endif %}</p>
-        {% elif item.campo.tipo == "BOOLEANO" %}
-          <p>{% if item.respuesta and item.respuesta.valor %}Sí{% else %}No{% endif %}</p>
-        {% elif item.campo.tipo == "MULTILISTA" %}
-          <p>
-            {% for opcion in item.opciones %}{% if item.respuesta and opcion.valor in item.respuesta.valor %}{{ opcion.etiqueta }}{% if not forloop.last %}, {% endif %}{% endif %}{% endfor %}
-            {% if not item.respuesta %}—{% endif %}
-          </p>
-        {% elif item.campo.tipo == "LISTA" %}
-          <p>
-            {% for opcion in item.opciones %}{% if item.respuesta and opcion.valor == item.respuesta.valor %}{{ opcion.etiqueta }}{% endif %}{% endfor %}
-            {% if not item.respuesta %}—{% endif %}
-          </p>
-        {% else %}
-          <p>{% if item.respuesta %}{{ item.respuesta.valor|default_if_none:"—" }}{% else %}—{% endif %}</p>
-        {% endif %}
-      </div>
-    {% empty %}
-      <div class="empty-state">
-        <p>Este formulario no tiene campos.</p>
-      </div>
-    {% endfor %}
-  </section>
+  {% include "tickets/_respuestas.html" %}
 {% endblock %}

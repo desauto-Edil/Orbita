@@ -1,0 +1,152 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ titulo_pagina }} — {{ sistema.nombre }}{% endblock %}
+
+{% block content_modifier %}content-area--wide{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/trabajo.css' %}">{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'core:mi_trabajo' %}">Mi trabajo</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">{{ ticket.codigo|default:servicio.nombre }}</span>
+  </nav>
+
+  {# --- Encabezado --- #}
+  <section class="card ws-head" id="ws-cabecera">
+    <div class="ws-head__main">
+      <p class="ws-head__code">{{ ticket.codigo|default:"Sin código" }}</p>
+      <h1 class="ws-head__title">{{ servicio.nombre }}</h1>
+      {% if ticket.etiqueta %}<p class="ticket-etiqueta text-muted">{{ ticket.etiqueta }}</p>{% endif %}
+      <p class="ws-head__meta">
+        <span class="badge badge--info badge--dot">{{ ticket.get_estado_display }}</span>
+        {% if ticket.solicitante %}Solicita {{ ticket.solicitante.get_full_name|default:ticket.solicitante.get_username }}{% else %}Generado por programación{% endif %}
+        {% if ticket.fecha_objetivo_vigente %}· objetivo {{ ticket.fecha_objetivo_vigente|date:"d M Y" }}{% endif %}
+        · lo tiene {% if responsable.persona %}{{ responsable.persona }}{% elif responsable.equipo %}{{ responsable.equipo }}{% else %}nadie aún{% endif %}
+      </p>
+      {% if plazo_corto %}
+        <p class="alert alert--warning" role="status" id="plazo-solicitado">
+          <strong>Fecha solicitada anterior al tiempo objetivo</strong> ·
+          Solicitada {{ plazo_corto.valor|date:"d M Y" }}; objetivo del servicio {{ plazo_corto.objetivo|date:"d M Y" }}.
+        </p>
+      {% endif %}
+    </div>
+    <div class="ws-head__actions">
+      {% if puede_tomar %}
+        <form method="post" action="{% url 'tickets:tomar' ticket.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{% url 'tickets:trabajo' ticket.pk %}"><button type="submit" class="btn btn--primary">Tomar ticket</button></form>
+      {% elif puede_iniciar_atencion %}
+        <form method="post" action="{% url 'tickets:iniciar_atencion' ticket.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{% url 'tickets:trabajo' ticket.pk %}"><button type="submit" class="btn btn--primary">Iniciar atención</button></form>
+      {% endif %}
+      <a class="btn btn--ghost" href="{% url 'tickets:detalle' ticket.pk %}">Detalle completo</a>
+    </div>
+  </section>
+
+  {% if not hay_flujo %}
+    <section class="card"><p class="text-muted">Este ticket no tiene un flujo de trabajo asociado. Gestiónalo desde el <a href="{% url 'tickets:detalle' ticket.pk %}">detalle del ticket</a>.</p></section>
+  {% else %}
+
+    {# --- Fases --- #}
+    {% if progreso %}
+      <section class="card" id="ws-fases" aria-labelledby="ws-fases-t">
+        <h2 id="ws-fases-t" class="ws-sub">Recorrido</h2>
+        <ol class="ws-fases">
+          {% for paso in progreso.fases %}
+            <li class="ws-fase ws-fase--{{ paso.situacion }}"{% if paso.situacion == "actual" %} aria-current="step"{% endif %}>
+              <span class="ws-fase__marca" aria-hidden="true">{% if paso.situacion == "completada" %}✓{% elif paso.situacion == "actual" %}●{% else %}○{% endif %}</span>
+              <span class="ws-fase__nombre">{{ paso.nombre }}</span>
+              <span class="ws-fase__estado">{% if paso.situacion == "completada" %}Completada{% elif paso.situacion == "actual" %}En curso{% elif paso.situacion == "no_aplico" %}No fue necesaria{% else %}Pendiente{% endif %}</span>
+            </li>
+          {% endfor %}
+        </ol>
+        {% if progreso.hay_pendientes %}<p class="ws-nota">Las fases pendientes se habilitan solas cuando el flujo llega a ellas; no todas se recorren siempre.</p>{% endif %}
+      </section>
+    {% endif %}
+
+    <div class="ws-cols">
+      {# --- Bloques de la fase actual --- #}
+      <section class="card ws-bloques" id="ws-bloques" aria-labelledby="ws-bloques-t">
+        <h2 id="ws-bloques-t" class="ws-sub">{% if progreso and progreso.actual %}{{ progreso.actual }}{% elif trabajo_actual and trabajo_actual.fase %}{{ trabajo_actual.fase }}{% else %}Fase{% endif %}</h2>
+        {% if bloques %}
+          <ol class="ws-lista">
+            {% for fila in bloques %}
+              <li class="ws-bloque ws-bloque--{{ fila.situacion }}">
+                <span class="ws-bloque__marca" aria-hidden="true">{% if fila.situacion == "completado" %}✓{% elif fila.situacion == "actual" %}●{% elif fila.situacion == "con_error" %}!{% else %}○{% endif %}</span>
+                <span class="ws-bloque__nombre">{{ fila.nombre }}</span>
+                <span class="badge ws-tipo ws-tipo--{{ fila.tipo_codigo|lower }}">{{ fila.tipo }}</span>
+                {% if fila.detalle %}<span class="ws-bloque__detalle">{{ fila.detalle }}</span>{% endif %}
+              </li>
+            {% endfor %}
+          </ol>
+        {% else %}
+          <p class="text-muted">Sin bloques en esta fase.</p>
+        {% endif %}
+      </section>
+
+      {# --- Qué hacer ahora --- #}
+      <section class="card ws-ahora" id="ws-ahora" aria-labelledby="ws-ahora-t">
+        <h2 id="ws-ahora-t" class="ws-sub">Ahora</h2>
+        {% if flujo_con_error %}
+          <p class="alert alert--danger">El flujo tuvo un error técnico. Avisa a quien administra la plataforma.</p>
+        {% elif flujo_terminado %}
+          <p class="ws-listo">El flujo de trabajo terminó. El ticket sigue su ciclo normal (resolver y entregar) desde el <a href="{% url 'tickets:detalle' ticket.pk %}">detalle</a>.</p>
+        {% elif panel %}
+          <h3 class="ws-ahora__titulo">{{ panel.nombre }}</h3>
+          {% if panel.descripcion %}<p class="text-muted">{{ panel.descripcion }}</p>{% endif %}
+
+          {% if panel.tipo == "ACTIVIDAD" %}
+            {% if panel.tarea %}
+              <p class="ws-ahora__dato">Responsable: <strong>{% if panel.tarea_responsable %}{{ panel.tarea_responsable }}{% else %}sin asignar{% endif %}</strong> · {{ panel.tarea.get_estado_display }}</p>
+              <div class="ws-acciones">
+                {% if panel.puede_tomar_tarea %}
+                  <form method="post" action="{% url 'tareas:tomar' panel.tarea.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{% url 'tickets:trabajo' ticket.pk %}"><button type="submit" class="btn btn--secondary">Tomar actividad</button></form>
+                {% endif %}
+                {% if panel.puede_iniciar_tarea %}
+                  <form method="post" action="{% url 'tareas:iniciar' panel.tarea.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{% url 'tickets:trabajo' ticket.pk %}"><button type="submit" class="btn btn--secondary">Iniciar actividad</button></form>
+                {% endif %}
+                {% if panel.puede_completar_tarea %}
+                  <form method="post" action="{% url 'tareas:completar' panel.tarea.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{% url 'tickets:trabajo' ticket.pk %}"><button type="submit" class="btn btn--primary">Completar actividad</button></form>
+                {% endif %}
+                {% if not panel.puede_tomar_tarea and not panel.puede_iniciar_tarea and not panel.puede_completar_tarea %}
+                  <p class="text-muted">{% if panel.es_mia %}Esta actividad ya está en marcha.{% else %}Esta actividad la atiende otra persona o equipo.{% endif %}</p>
+                {% endif %}
+                <a class="btn btn--ghost" href="{% url 'tareas:detalle' panel.tarea.pk %}">Ver la tarea</a>
+              </div>
+            {% else %}
+              <p class="text-muted">La actividad se está preparando.</p>
+            {% endif %}
+
+          {% elif panel.tipo == "ENTREGABLE" %}
+            {% if panel.entregable %}
+              <ul class="list-row-group">
+                {% with entregable=panel.entregable puede_escribir_entregables=panel.puede_escribir next_url=ws_next %}
+                  {% include "tickets/_entregable_item.html" %}
+                {% endwith %}
+              </ul>
+              <p class="ws-nota">Cuando quede completo, el flujo continúa solo.</p>
+            {% endif %}
+
+          {% elif panel.tipo == "APROBACION" %}
+            <p class="ws-ahora__dato"><strong>Enviado a revisión.</strong> {{ trabajo_actual.pendiente }}</p>
+            {% if panel.participaciones %}
+              <ul class="plain-list">
+                {% for aprobacion in panel.participaciones %}
+                  <li>
+                    {% if aprobacion.aprobador_usuario %}{{ aprobacion.aprobador_usuario.get_full_name|default:aprobacion.aprobador_usuario.get_username }}{% elif aprobacion.aprobador_equipo %}{{ aprobacion.aprobador_equipo }}{% else %}Aprobador{% endif %}
+                    <span class="badge">{{ aprobacion.get_estado_display }}</span>
+                  </li>
+                {% endfor %}
+              </ul>
+            {% endif %}
+            {% if panel.aprobacion %}<p><a class="btn btn--secondary" href="{% url 'aprobaciones:detalle' panel.aprobacion.pk %}">Abrir la aprobación</a></p>{% endif %}
+          {% endif %}
+        {% elif trabajo_actual %}
+          <p>{{ trabajo_actual.nombre }}</p>
+        {% else %}
+          <p class="text-muted">El flujo todavía no ha comenzado.</p>
+        {% endif %}
+      </section>
+    </div>
+  {% endif %}
+{% endblock %}

@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ titulo_pagina }} — {{ sistema.nombre }}{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/trabajo.css' %}">{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'tickets:cola' %}">Cola</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">{{ ticket.codigo|default:servicio.nombre }}</span>
+  </nav>
+  <section class="card">
+    {% include "tickets/_resumen_ticket.html" %}
+  </section>
+{% endblock %}

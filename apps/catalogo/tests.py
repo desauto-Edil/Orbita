@@ -6407,3 +6407,592 @@ class StudioOrdenYRevisionTests(_EscenarioE2CatalogoMixin, TestCase):
         salientes = list(decision.transiciones_salientes.all())
         self.assertEqual(len(salientes), 2)
         self.assertTrue(all(t.finaliza and t.bloque_destino_id is None for t in salientes))
+
+
+# ---------------------------------------------------------------------------
+# 4.F1 — Studio: aprobación progresiva y decisión configurada al crearla
+# 4.F2 — fecha requerida del formulario
+# ---------------------------------------------------------------------------
+
+
+class _EscenarioStudioF1Mixin(_EscenarioE2CatalogoMixin):
+    """Servicio con plantilla de fases, configuración en borrador y sesión con permisos de Studio."""
+
+    def _preparar_studio_f1(self):
+        self._preparar_escenario_e2()
+        _otorgar_permiso(self.actor, "workflows.administrar")
+        formulario = Formulario.objects.create(nombre="Entrada Studio F1")
+        entrada = crear_nueva_version(formulario, self.actor)
+        activar_version(formulario, entrada, self.actor)
+        self.servicio.formulario = formulario
+        self.servicio.activo = False
+        self.servicio.save(update_fields=["formulario", "activo", "actualizado_en"])
+        self.version = self._version()
+        self.otro_usuario = Usuario.objects.create_user(username="f1_otro", password=CLAVE_PRUEBA)
+        self.equipo = Equipo.objects.create(nombre="Equipo comercial F1")
+        self.client.login(username="bloque_clave", password=CLAVE_PRUEBA)
+
+    def _pagina(self, tab="ejecucion"):
+        return self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": tab})
+
+    def _crear(self, tipo, nombre, **extra):
+        datos = {"fase_id": self.fase.pk, "nuevo-tipo": tipo, "nuevo-nombre": nombre, "nuevo-descripcion": ""}
+        datos.update(extra)
+        return self.client.post(reverse("catalogo:studio_bloque_crear", args=[self.servicio.pk]), datos)
+
+    def _fila(self, bloque):
+        pagina = self._pagina()
+        return next(
+            f for item in pagina.context["fases_configuracion"] for f in item["bloques"] if f["bloque"].pk == bloque.pk
+        )
+
+    def _aprobadores(self, prefijo, *aprobadores):
+        """`aprobadores`: `("USUARIO", id)` / `("EQUIPO", id)` / `("SOLICITANTE", None)`."""
+        datos = {}
+        for indice, (tipo, ref) in enumerate(aprobadores):
+            datos[f"{prefijo}-{indice}-tipo"] = tipo
+            if tipo == "USUARIO":
+                datos[f"{prefijo}-{indice}-usuario"] = ref
+            elif tipo == "EQUIPO":
+                datos[f"{prefijo}-{indice}-equipo"] = ref
+        return datos
+
+    def _mensajes(self, respuesta):
+        return " | ".join(str(m) for m in get_messages_de(respuesta))
+
+
+class StudioAprobacionProgresivaTests(_EscenarioStudioF1Mixin, TestCase):
+    """4.F1 — «¿Cuántos aprobadores?» primero; el modo solo existe con más de uno; lo único que se
+    guarda son los aprobadores."""
+
+    def setUp(self):
+        self._preparar_studio_f1()
+
+    def _post_nuevo(self, nombre, cantidad, aprobadores, **extra):
+        datos = {"nuevo-config-cantidad": cantidad, **self._aprobadores("nuevo-participantes", *aprobadores), **extra}
+        return self._crear("APROBACION", nombre, **datos)
+
+    def _bloque_aprobacion(self, nombre):
+        return BloqueOperativo.objects.get(version=self.version, tipo="APROBACION", nombre=nombre)
+
+    # --- la pantalla ------------------------------------------------------------------------
+
+    def test_la_creacion_pregunta_primero_cuantos_aprobadores_y_no_muestra_el_modo(self):
+        pagina = self._pagina()
+        self.assertContains(pagina, "¿Cuántos aprobadores participan?")
+        self.assertContains(pagina, "data-aprobacion-cantidad")
+        self.assertContains(pagina, "data-aprobacion-modo hidden")  # con 1 aprobador no se pregunta
+        self.assertContains(pagina, "Aprobador 1")
+        self.assertIn("cantidad", pagina.context["form_aprobacion_nuevo"].fields)
+        self.assertEqual(pagina.context["form_aprobacion_nuevo"].fields["cantidad"].initial, 1)
+
+    def test_el_modo_solo_ofrece_los_modos_reales_del_dominio(self):
+        pagina = self._pagina()
+        modos = [valor for valor, _etiqueta in pagina.context["form_aprobacion_nuevo"].fields["modo"].choices]
+        self.assertEqual(modos, ["SECUENCIAL", "PARALELA"])
+        politicas = [v for v, _ in pagina.context["form_aprobacion_nuevo"].fields["politica"].choices if v]
+        self.assertEqual(set(politicas), {"TODOS", "CUALQUIERA"})
+
+    # --- un aprobador --------------------------------------------------------------------------
+
+    def test_un_aprobador_se_guarda_sin_preguntar_modo(self):
+        respuesta = self._post_nuevo("Aprobar contratación", 1, [("USUARIO", self.actor.pk)])
+        self.assertEqual(respuesta.status_code, 302)
+        bloque = self._bloque_aprobacion("Aprobar contratación")
+        self.assertEqual(bloque.configuracion["modo"], "SECUENCIAL")
+        self.assertEqual(bloque.configuracion["politica"], "")
+        self.assertEqual(
+            bloque.configuracion["participantes"], [{"tipo": "USUARIO", "usuario_id": self.actor.pk, "equipo_id": None}]
+        )
+
+    def test_con_un_aprobador_se_ignora_un_modo_o_filas_sobrantes(self):
+        self._post_nuevo(
+            "Aprobar gasto", 1, [("USUARIO", self.actor.pk), ("USUARIO", self.otro_usuario.pk)],
+            **{"nuevo-config-modo": "PARALELA", "nuevo-config-politica": "TODOS"},
+        )
+        bloque = self._bloque_aprobacion("Aprobar gasto")
+        self.assertEqual((bloque.configuracion["modo"], bloque.configuracion["politica"]), ("SECUENCIAL", ""))
+        self.assertEqual(len(bloque.configuracion["participantes"]), 1)
+
+    def test_un_aprobador_puede_ser_un_equipo(self):
+        self._post_nuevo("Aprobar con equipo", 1, [("EQUIPO", self.equipo.pk)])
+        participante = self._bloque_aprobacion("Aprobar con equipo").configuracion["participantes"][0]
+        self.assertEqual((participante["tipo"], participante["equipo_id"]), ("EQUIPO", self.equipo.pk))
+
+    # --- varios aprobadores --------------------------------------------------------------------
+
+    def test_varios_aprobadores_exigen_el_modo(self):
+        respuesta = self._post_nuevo("Doble firma", 2, [("USUARIO", self.actor.pk), ("USUARIO", self.otro_usuario.pk)])
+        self.assertFalse(BloqueOperativo.objects.filter(version=self.version, nombre="Doble firma").exists())
+        self.assertIn("modo", self._mensajes(respuesta).lower())
+
+    def test_varios_aprobadores_en_paralelo_exigen_la_politica(self):
+        self._post_nuevo(
+            "Doble firma", 2, [("USUARIO", self.actor.pk), ("USUARIO", self.otro_usuario.pk)],
+            **{"nuevo-config-modo": "PARALELA"},
+        )
+        self.assertFalse(BloqueOperativo.objects.filter(version=self.version, nombre="Doble firma").exists())
+
+    def test_varios_aprobadores_con_modo_se_guardan_en_orden(self):
+        self._post_nuevo(
+            "Doble firma", 2, [("USUARIO", self.actor.pk), ("EQUIPO", self.equipo.pk)],
+            **{"nuevo-config-modo": "SECUENCIAL"},
+        )
+        configuracion = self._bloque_aprobacion("Doble firma").configuracion
+        self.assertEqual(configuracion["modo"], "SECUENCIAL")
+        self.assertEqual([p["tipo"] for p in configuracion["participantes"]], ["USUARIO", "EQUIPO"])
+
+    def test_aprobacion_paralela_con_politica(self):
+        self._post_nuevo(
+            "Comité", 3, [("USUARIO", self.actor.pk), ("USUARIO", self.otro_usuario.pk), ("EQUIPO", self.equipo.pk)],
+            **{"nuevo-config-modo": "PARALELA", "nuevo-config-politica": "TODOS"},
+        )
+        configuracion = self._bloque_aprobacion("Comité").configuracion
+        self.assertEqual((configuracion["modo"], configuracion["politica"]), ("PARALELA", "TODOS"))
+        self.assertEqual(len(configuracion["participantes"]), 3)
+
+    # --- cantidad y participantes coherentes --------------------------------------------------------
+
+    def test_la_cantidad_no_se_guarda_y_se_deriva_de_los_participantes(self):
+        self._post_nuevo("Doble firma", 2, [("USUARIO", self.actor.pk), ("USUARIO", self.otro_usuario.pk)],
+                         **{"nuevo-config-modo": "SECUENCIAL"})
+        bloque = self._bloque_aprobacion("Doble firma")
+        self.assertNotIn("cantidad", bloque.configuracion)
+        self.assertEqual(self._fila(bloque)["cantidad_aprobadores"], 2)
+
+    def test_no_se_guarda_cantidad_3_con_solo_2_aprobadores(self):
+        respuesta = self._post_nuevo(
+            "Incoherente", 3, [("USUARIO", self.actor.pk), ("USUARIO", self.otro_usuario.pk)],
+            **{"nuevo-config-modo": "SECUENCIAL"},
+        )
+        self.assertFalse(BloqueOperativo.objects.filter(version=self.version, nombre="Incoherente").exists())
+        self.assertIn("Aprobador 3", self._mensajes(respuesta))
+
+    def test_un_aprobador_incompleto_indica_cual_falta(self):
+        respuesta = self._post_nuevo("Incompleto", 1, [("USUARIO", "")])
+        self.assertFalse(BloqueOperativo.objects.filter(version=self.version, nombre="Incompleto").exists())
+        self.assertIn("Aprobador 1", self._mensajes(respuesta))
+
+    def test_la_cantidad_fuera_de_rango_se_rechaza(self):
+        for cantidad in (0, 11, -1):
+            with self.subTest(cantidad=cantidad):
+                self._post_nuevo("Fuera de rango", cantidad, [("USUARIO", self.actor.pk)],
+                                 **{"nuevo-config-modo": "SECUENCIAL"})
+                self.assertFalse(BloqueOperativo.objects.filter(version=self.version, nombre="Fuera de rango").exists())
+
+    # --- general / entregable ------------------------------------------------------------------
+
+    def test_una_aprobacion_general_sigue_sin_entregable(self):
+        self._entregable(self.version, "Presentación comercial")
+        self._post_nuevo("Aprobar contratación", 1, [("USUARIO", self.actor.pk)])
+        self.assertIsNone(self._bloque_aprobacion("Aprobar contratación").entregable_revisado_id)
+
+    def test_una_aprobacion_que_revisa_un_entregable_conserva_la_relacion(self):
+        entrega = self._entregable(self.version, "Presentación comercial")
+        self._post_nuevo("Revisión comercial", 1, [("EQUIPO", self.equipo.pk)], **{"nuevo-config-revisa": entrega.pk})
+        bloque = self._bloque_aprobacion("Revisión comercial")
+        self.assertEqual(bloque.entregable_revisado_id, entrega.pk)
+        self.assertContains(self._pagina(), "revisa «Presentación comercial»")
+
+    # --- edición de una configuración existente ----------------------------------------------------
+
+    def _editar(self, bloque, cantidad, aprobadores, **extra):
+        prefijo = f"bloque-{bloque.pk}"
+        datos = {
+            f"{prefijo}-editar-nombre": bloque.nombre, f"{prefijo}-editar-descripcion": "",
+            f"{prefijo}-config-cantidad": cantidad, f"{prefijo}-config-revisa": "",
+            **self._aprobadores(f"{prefijo}-participantes", *aprobadores), **extra,
+        }
+        return self.client.post(reverse("catalogo:studio_bloque_editar", args=[self.servicio.pk, bloque.pk]), datos)
+
+    def test_la_edicion_precarga_cantidad_y_aprobadores_y_muestra_el_modo_solo_si_hay_varios(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo
+
+        dos = agregar_bloque_operativo(
+            self.version, self.actor, fase=self.fase, tipo=BloqueOperativo.Tipo.APROBACION, nombre="Con dos",
+            configuracion={
+                "modo": "PARALELA", "politica": "TODOS",
+                "participantes": [
+                    {"tipo": "USUARIO", "usuario_id": self.actor.pk, "equipo_id": None},
+                    {"tipo": "EQUIPO", "usuario_id": None, "equipo_id": self.equipo.pk},
+                ],
+            },
+        )
+        uno = self._aprobacion_dominio("Con uno")
+        fila_dos, fila_uno = self._fila(dos), self._fila(uno)
+        self.assertEqual((fila_dos["cantidad_aprobadores"], fila_uno["cantidad_aprobadores"]), (2, 1))
+        self.assertEqual(fila_dos["form_configurar"].initial["cantidad"], 2)
+        self.assertEqual(fila_dos["form_configurar"].initial["modo"], "PARALELA")
+        self.assertEqual(fila_dos["filas_aprobadores"][1].initial["equipo"], self.equipo.pk)
+        self.assertEqual(fila_dos["filas_aprobadores"][0].initial["usuario"], self.actor.pk)
+
+    def _aprobacion_dominio(self, nombre):
+        return self._aprobacion(self.version, nombre=nombre, fase=self.fase)
+
+    def test_editar_pasando_de_dos_a_un_aprobador_conserva_solo_el_primero(self):
+        self._post_nuevo(
+            "Doble firma", 2, [("USUARIO", self.actor.pk), ("USUARIO", self.otro_usuario.pk)],
+            **{"nuevo-config-modo": "PARALELA", "nuevo-config-politica": "TODOS"},
+        )
+        bloque = self._bloque_aprobacion("Doble firma")
+        self._editar(bloque, 1, [("USUARIO", self.actor.pk), ("USUARIO", self.otro_usuario.pk)])
+        bloque.refresh_from_db()
+        self.assertEqual((bloque.configuracion["modo"], bloque.configuracion["politica"]), ("SECUENCIAL", ""))
+        self.assertEqual(len(bloque.configuracion["participantes"]), 1)
+
+    def test_editar_pasando_de_uno_a_tres_aprobadores(self):
+        bloque = self._aprobacion_dominio("Crece")
+        self._editar(
+            bloque, 3, [("USUARIO", self.actor.pk), ("USUARIO", self.otro_usuario.pk), ("EQUIPO", self.equipo.pk)],
+            **{f"bloque-{bloque.pk}-config-modo": "SECUENCIAL"},
+        )
+        bloque.refresh_from_db()
+        self.assertEqual(len(bloque.configuracion["participantes"]), 3)
+
+    def test_editar_un_cambio_ajeno_no_altera_una_aprobacion_paralela_existente(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo
+
+        bloque = agregar_bloque_operativo(
+            self.version, self.actor, fase=self.fase, tipo=BloqueOperativo.Tipo.APROBACION, nombre="Comité previo",
+            configuracion={
+                "modo": "PARALELA", "politica": "CUALQUIERA",
+                "participantes": [
+                    {"tipo": "USUARIO", "usuario_id": self.actor.pk, "equipo_id": None},
+                    {"tipo": "USUARIO", "usuario_id": self.otro_usuario.pk, "equipo_id": None},
+                ],
+            },
+        )
+        self._editar(
+            bloque, 2, [("USUARIO", self.actor.pk), ("USUARIO", self.otro_usuario.pk)],
+            **{f"bloque-{bloque.pk}-config-modo": "PARALELA", f"bloque-{bloque.pk}-config-politica": "CUALQUIERA"},
+        )
+        bloque.refresh_from_db()
+        self.assertEqual((bloque.configuracion["modo"], bloque.configuracion["politica"]), ("PARALELA", "CUALQUIERA"))
+
+    def test_el_clon_conserva_las_aprobaciones_ya_configuradas(self):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        self._post_nuevo("Doble firma", 2, [("USUARIO", self.actor.pk), ("EQUIPO", self.equipo.pk)],
+                         **{"nuevo-config-modo": "SECUENCIAL"})
+        nueva = crear_nueva_version_configuracion(self.servicio, self.actor, clonar_desde=self.version)
+        clon = nueva.bloques.get(nombre="Doble firma")
+        self.assertEqual(len(clon.configuracion["participantes"]), 2)
+
+    def test_el_envio_anterior_sin_cantidad_sigue_funcionando(self):
+        # Contrato previo (lienzo de flujos y clientes anteriores): formset + modo obligatorio.
+        respuesta = self._crear(
+            "APROBACION", "Contrato previo",
+            **{
+                "nuevo-config-modo": "SECUENCIAL",
+                "nuevo-participantes-TOTAL_FORMS": "1", "nuevo-participantes-INITIAL_FORMS": "0",
+                "nuevo-participantes-MIN_NUM_FORMS": "1", "nuevo-participantes-MAX_NUM_FORMS": "1000",
+                "nuevo-participantes-0-tipo": "USUARIO", "nuevo-participantes-0-usuario": self.actor.pk,
+            },
+        )
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertEqual(self._bloque_aprobacion("Contrato previo").configuracion["modo"], "SECUENCIAL")
+
+
+class StudioDecisionInmediataTests(_EscenarioStudioF1Mixin, TestCase):
+    """4.F1 — una DECISION se crea ya configurada (condición + rutas), de forma atómica."""
+
+    def setUp(self):
+        self._preparar_studio_f1()
+        self.destino = self._bloque(self.version, "Revisión comercial", fase=self.fase_dos)
+
+    def _datos(self, **cambios):
+        datos = {
+            "nuevo-cond-variable": "formulario.requiere_revision", "nuevo-cond-operador": "IGUAL_A",
+            "nuevo-cond-valor": "true", "nuevo-cond-prioridad": "0", "nuevo-cond-destino": self.destino.pk,
+            "nuevo-fallback-destino": "FIN",
+        }
+        datos.update(cambios)
+        return datos
+
+    def _decision(self, nombre="¿Requiere revisión comercial?"):
+        return BloqueOperativo.objects.filter(version=self.version, tipo="DECISION", nombre=nombre)
+
+    def test_el_panel_de_creacion_trae_la_configuracion_sin_guardar_antes(self):
+        pagina = self._pagina()
+        self.assertContains(pagina, "Si se cumple, ir a")
+        self.assertContains(pagina, "Si no se cumple, ir a")
+        self.assertContains(pagina, 'name="nuevo-cond-variable"')
+        self.assertContains(pagina, 'name="nuevo-cond-operador"')
+        self.assertContains(pagina, 'name="nuevo-cond-valor"')
+        self.assertContains(pagina, 'name="nuevo-fallback-destino"')
+        self.assertIsNotNone(pagina.context["form_decision_condicion_nuevo"])
+
+    def test_ofrece_las_variables_disponibles_sin_escribir_la_clave(self):
+        pagina = self._pagina()
+        self.assertContains(pagina, '<datalist id="variables-decision">')
+        self.assertContains(pagina, 'list="variables-decision"')
+        self.assertContains(pagina, "ticket.estado")
+        self.assertContains(pagina, "¿Qué variable puedo usar?")
+
+    def test_los_destinos_ofrecen_bloques_y_finalizar_el_flujo(self):
+        form = self._pagina().context["form_decision_condicion_nuevo"]
+        opciones = dict(form.fields["destino"].choices)
+        self.assertEqual(opciones["FIN"], "Finalizar el flujo")
+        self.assertIn(self.destino.pk, opciones)
+
+    def test_se_crea_la_decision_con_su_condicion_y_su_ruta_alternativa_de_una_vez(self):
+        respuesta = self._crear("DECISION", "¿Requiere revisión comercial?", **self._datos())
+        self.assertEqual(respuesta.status_code, 302)
+        decision = self._decision().get()
+        condicion = decision.transiciones_salientes.get(es_fallback=False)
+        fallback = decision.transiciones_salientes.get(es_fallback=True)
+        self.assertEqual(
+            (condicion.variable, condicion.operador, condicion.valor, condicion.bloque_destino_id),
+            ("formulario.requiere_revision", "IGUAL_A", "true", self.destino.pk),
+        )
+        self.assertTrue(fallback.finaliza)
+        self.assertIsNone(fallback.bloque_destino_id)
+        self.assertIn("configurada", self._mensajes(respuesta))
+
+    def test_finalizar_funciona_en_la_condicion_y_en_la_ruta_alternativa(self):
+        self._crear("DECISION", "¿Requiere revisión comercial?", **self._datos(**{"nuevo-cond-destino": "FIN"}))
+        for ruta in self._decision().get().transiciones_salientes.all():
+            self.assertTrue(ruta.finaliza)
+            self.assertIsNone(ruta.bloque_destino_id)
+
+    def test_la_decision_creada_no_aparece_incompleta_en_la_validacion_de_publicacion(self):
+        from apps.catalogo.configuracion_ejecucion import validar_configuracion_ejecucion
+
+        self._crear("DECISION", "¿Requiere revisión comercial?", **self._datos())
+        errores = " ".join(validar_configuracion_ejecucion(self.version))
+        self.assertNotIn("Requiere revisión comercial", errores)
+
+    def test_si_falta_una_parte_no_se_crea_nada(self):
+        for faltante in ("nuevo-cond-variable", "nuevo-cond-valor", "nuevo-cond-destino", "nuevo-fallback-destino"):
+            with self.subTest(faltante=faltante):
+                datos = self._datos(**{faltante: ""})
+                respuesta = self._crear("DECISION", "¿Requiere revisión comercial?", **datos)
+                self.assertFalse(self._decision().exists(), faltante)
+                self.assertIn("Completa la decisión", self._mensajes(respuesta))
+        self.assertEqual(TransicionBloqueOperativo.objects.filter(bloque_origen__tipo="DECISION").count(), 0)
+
+    def test_un_operador_invalido_no_deja_una_decision_aparentemente_lista(self):
+        self._crear("DECISION", "¿Requiere revisión comercial?", **self._datos(**{"nuevo-cond-operador": "INVENTADO"}))
+        self.assertFalse(self._decision().exists())
+
+    def test_un_destino_de_otra_configuracion_se_rechaza(self):
+        ajeno = self._bloque(self._version(self.otro_servicio), "Bloque ajeno", fase=self.fase_dos)
+        self._crear("DECISION", "¿Requiere revisión comercial?", **self._datos(**{"nuevo-cond-destino": ajeno.pk}))
+        self.assertFalse(self._decision().exists())
+
+    def test_es_atomico_si_la_segunda_ruta_falla_se_revierte_el_bloque(self):
+        from unittest.mock import patch
+
+        from apps.catalogo import studio
+
+        original = studio.conectar_bloques_operativos
+        llamadas = []
+
+        def falla_en_la_segunda(*args, **kwargs):
+            llamadas.append(1)
+            if len(llamadas) == 2:
+                raise ValidationError("fallo simulado")
+            return original(*args, **kwargs)
+
+        with patch.object(studio, "conectar_bloques_operativos", side_effect=falla_en_la_segunda):
+            respuesta = self._crear("DECISION", "¿Requiere revisión comercial?", **self._datos())
+        self.assertEqual(len(llamadas), 2)
+        self.assertFalse(self._decision().exists())
+        self.assertEqual(TransicionBloqueOperativo.objects.filter(bloque_origen__tipo="DECISION").count(), 0)
+        self.assertIn("fallo simulado", self._mensajes(respuesta))
+
+    def test_crear_una_decision_sin_enviar_su_configuracion_sigue_siendo_posible(self):
+        self._crear("DECISION", "Pendiente de configurar")
+        decision = self._decision("Pendiente de configurar").get()
+        self.assertEqual(decision.transiciones_salientes.count(), 0)
+
+    def test_se_puede_editar_la_decision_despues_con_las_pantallas_existentes(self):
+        self._crear("DECISION", "¿Requiere revisión comercial?", **self._datos())
+        decision = self._decision().get()
+        condicion = decision.transiciones_salientes.get(es_fallback=False)
+        prefijo = f"bloque-{decision.pk}-cond-{condicion.pk}"
+        self.client.post(
+            reverse("catalogo:studio_condicional_editar", args=[self.servicio.pk, decision.pk, condicion.pk]),
+            {
+                f"{prefijo}-variable": "formulario.otra", f"{prefijo}-operador": "DISTINTO_DE", f"{prefijo}-valor": "no",
+                f"{prefijo}-prioridad": "0", f"{prefijo}-destino": "FIN",
+            },
+        )
+        condicion.refresh_from_db()
+        self.assertEqual((condicion.variable, condicion.operador, condicion.valor), ("formulario.otra", "DISTINTO_DE", "no"))
+        self.assertTrue(condicion.finaliza)
+        # y se pueden agregar más condiciones
+        self.client.post(
+            reverse("catalogo:studio_condicional_crear", args=[self.servicio.pk, decision.pk]),
+            {
+                f"bloque-{decision.pk}-cond-nuevo-variable": "ticket.estado",
+                f"bloque-{decision.pk}-cond-nuevo-operador": "IGUAL_A",
+                f"bloque-{decision.pk}-cond-nuevo-valor": "RADICADO", f"bloque-{decision.pk}-cond-nuevo-prioridad": "1",
+                f"bloque-{decision.pk}-cond-nuevo-destino": self.destino.pk,
+            },
+        )
+        self.assertEqual(decision.transiciones_salientes.filter(es_fallback=False).count(), 2)
+
+    def test_las_demas_variables_de_4b0_siguen_en_la_ayuda(self):
+        borrador = crear_nueva_version(self.servicio.formulario, self.actor)
+        Campo.objects.create(version=borrador, tipo=Campo.TipoCampo.BOOLEANO, etiqueta="Requiere revision")
+        self._entregable(self.version, "Presentación comercial")
+        self._aprobacion(self.version, "Revisión previa", fase=self.fase)
+        pagina = self._pagina()
+        self.assertContains(pagina, "formulario.requiere_revision")
+        self.assertContains(pagina, "entregables.presentacion_comercial.satisfecho")
+        self.assertContains(pagina, "aprobaciones.revision_previa.resultado")
+
+
+class FechaRequeridaFormularioTests(TestCase):
+    """4.F2 — marca semántica del campo que representa el plazo que pide el solicitante."""
+
+    def setUp(self):
+        self.actor = Usuario.objects.create_user(username="fecha_req_admin", password=CLAVE_PRUEBA)
+        _otorgar_permiso(self.actor, "catalogo.administrar", nombre_rol="Catalogo fecha requerida")
+        _otorgar_permiso(self.actor, "formulario.administrar", nombre_rol="Formularios fecha requerida")
+        self.formulario = Formulario.objects.create(nombre="Formulario con fecha")
+        self.version = crear_nueva_version(self.formulario, self.actor)
+
+    def _campo(self, tipo=Campo.TipoCampo.FECHA, etiqueta="Para cuándo", requerida=True, version=None, **extra):
+        campo = Campo(version=version or self.version, tipo=tipo, etiqueta=etiqueta, es_fecha_requerida=requerida, **extra)
+        campo.full_clean()
+        campo.save()
+        return campo
+
+    def test_por_defecto_ningun_campo_es_fecha_requerida(self):
+        campo = self._campo(requerida=False)
+        self.assertFalse(Campo.objects.get(pk=campo.pk).es_fecha_requerida)
+
+    def test_solo_fecha_y_fecha_hora_pueden_marcarse(self):
+        for tipo in (Campo.TipoCampo.FECHA, Campo.TipoCampo.FECHA_HORA):
+            with self.subTest(tipo=tipo):
+                version = crear_nueva_version(Formulario.objects.create(nombre=f"F {tipo}"), self.actor)
+                self.assertTrue(self._campo(tipo=tipo, version=version).es_fecha_requerida)
+        for tipo in (Campo.TipoCampo.TEXTO, Campo.TipoCampo.NUMERO, Campo.TipoCampo.BOOLEANO, Campo.TipoCampo.LISTA):
+            with self.subTest(tipo=tipo), self.assertRaises(ValidationError) as ctx:
+                self._campo(tipo=tipo, etiqueta=f"No es fecha {tipo}")
+            self.assertIn("es_fecha_requerida", ctx.exception.message_dict)
+
+    def test_como_maximo_una_por_version(self):
+        self._campo(etiqueta="Primera")
+        with self.assertRaises(ValidationError) as ctx:
+            self._campo(etiqueta="Segunda")
+        self.assertIn("Primera", " ".join(ctx.exception.message_dict["es_fecha_requerida"]))
+        self.assertEqual(Campo.objects.filter(version=self.version, es_fecha_requerida=True).count(), 1)
+
+    def test_editar_la_misma_campo_no_choca_con_si_misma(self):
+        campo = self._campo()
+        campo.etiqueta = "Fecha límite pedida"
+        campo.full_clean()
+        campo.save()
+        self.assertTrue(Campo.objects.get(pk=campo.pk).es_fecha_requerida)
+
+    def test_la_base_de_datos_tambien_lo_impone(self):
+        self._campo(etiqueta="Primera")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Campo.objects.bulk_create(
+                [Campo(version=self.version, tipo="FECHA", etiqueta="Duplicada", clave="duplicada", es_fecha_requerida=True)]
+            )
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Campo.objects.bulk_create(
+                [Campo(version=self.version, tipo="TEXTO", etiqueta="Texto", clave="texto", es_fecha_requerida=True)]
+            )
+
+    def test_varias_versiones_pueden_tener_cada_una_la_suya(self):
+        self._campo()
+        activar_version(self.formulario, self.version, self.actor)
+        siguiente = crear_nueva_version(self.formulario, self.actor)
+        self.assertEqual(Campo.objects.filter(version=siguiente, es_fecha_requerida=True).count(), 1)
+
+    def test_se_conserva_al_versionar(self):
+        original = self._campo(etiqueta="Para cuándo")
+        activar_version(self.formulario, self.version, self.actor)
+        nueva = crear_nueva_version(self.formulario, self.actor)
+        clon = nueva.campos.get(clave=original.clave)
+        self.assertTrue(clon.es_fecha_requerida)
+        self.assertNotEqual(clon.pk, original.pk)
+
+    def test_cambiar_la_etiqueta_no_rompe_la_semantica(self):
+        original = self._campo(etiqueta="Para cuándo")
+        activar_version(self.formulario, self.version, self.actor)
+        nueva = crear_nueva_version(self.formulario, self.actor)
+        clon = nueva.campos.get(clave=original.clave)
+        clon.etiqueta = "Fecha en que lo necesitas"
+        clon.full_clean()
+        clon.save()
+        self.assertEqual(nueva.campos.get(es_fecha_requerida=True).pk, clon.pk)
+
+    def test_un_formulario_sin_la_marca_funciona_igual(self):
+        self._campo(tipo=Campo.TipoCampo.FECHA, etiqueta="Fecha de nacimiento", requerida=False)
+        self._campo(tipo=Campo.TipoCampo.FECHA, etiqueta="Fecha del evento", requerida=False)
+        self.assertFalse(self.version.campos.filter(es_fecha_requerida=True).exists())
+
+    def test_cambiar_el_tipo_a_uno_no_fecha_exige_quitar_la_marca(self):
+        campo = self._campo()
+        campo.tipo = Campo.TipoCampo.TEXTO
+        with self.assertRaises(ValidationError):
+            campo.full_clean()
+
+
+class StudioFechaRequeridaTests(TestCase):
+    """4.F2 — la casilla «Usar como fecha requerida» en el Studio del formulario."""
+
+    def setUp(self):
+        self.actor = Usuario.objects.create_user(username="studio_fecha", password=CLAVE_PRUEBA)
+        for codigo in ("catalogo.administrar", "formulario.administrar"):
+            _otorgar_permiso(self.actor, codigo, nombre_rol=f"Rol {codigo} fecha studio")
+        categoria = Categoria.objects.create(nombre="Fecha studio")
+        self.servicio = Servicio.objects.create(nombre="Servicio fecha", categoria=categoria)
+        self.formulario = Formulario.objects.create(nombre="Entrada fecha")
+        self.servicio.formulario = self.formulario
+        self.servicio.save(update_fields=["formulario", "actualizado_en"])
+        self.version = crear_nueva_version(self.formulario, self.actor)
+        self.client.login(username="studio_fecha", password=CLAVE_PRUEBA)
+
+    def _guardar(self, **campos):
+        datos = {"campo-nuevo-orden": "0", "campo-nuevo-tipo": "FECHA", "campo-nuevo-etiqueta": "Para cuándo", **campos}
+        return self.client.post(reverse("catalogo:studio_campo_crear", args=[self.servicio.pk]), datos)
+
+    def test_el_formulario_de_campo_ofrece_la_opcion_con_su_ayuda(self):
+        pagina = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "entrada"})
+        self.assertContains(pagina, "Usar como fecha requerida por el solicitante")
+        self.assertContains(pagina, "avisará al solicitante si pide un plazo menor")
+        self.assertContains(pagina, 'data-solo-tipos="FECHA,FECHA_HORA"')
+
+    def test_se_marca_un_campo_fecha(self):
+        self._guardar(**{"campo-nuevo-es_fecha_requerida": "on"})
+        campo = self.version.campos.get(etiqueta="Para cuándo")
+        self.assertTrue(campo.es_fecha_requerida)
+        pagina = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "entrada"})
+        self.assertContains(pagina, "Fecha requerida")
+
+    def test_se_marca_un_campo_fecha_hora(self):
+        self._guardar(**{"campo-nuevo-tipo": "FECHA_HORA", "campo-nuevo-es_fecha_requerida": "on"})
+        self.assertTrue(self.version.campos.get(etiqueta="Para cuándo").es_fecha_requerida)
+
+    def test_un_campo_que_no_es_fecha_no_puede_marcarse(self):
+        respuesta = self._guardar(**{"campo-nuevo-tipo": "TEXTO", "campo-nuevo-es_fecha_requerida": "on"})
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertFalse(self.version.campos.filter(etiqueta="Para cuándo").exists())
+
+    def test_no_se_admite_una_segunda_fecha_requerida(self):
+        self._guardar(**{"campo-nuevo-es_fecha_requerida": "on"})
+        self._guardar(**{"campo-nuevo-etiqueta": "Otra fecha", "campo-nuevo-es_fecha_requerida": "on"})
+        self.assertFalse(self.version.campos.filter(etiqueta="Otra fecha").exists())
+        self.assertEqual(self.version.campos.filter(es_fecha_requerida=True).count(), 1)
+
+    def test_una_fecha_sin_marcar_sigue_siendo_una_fecha_normal(self):
+        self._guardar()
+        self.assertFalse(self.version.campos.get(etiqueta="Para cuándo").es_fecha_requerida)
+
+    def test_se_puede_desmarcar_editando_el_campo(self):
+        self._guardar(**{"campo-nuevo-es_fecha_requerida": "on"})
+        campo = self.version.campos.get(etiqueta="Para cuándo")
+        prefijo = f"campo-{campo.pk}-editar"
+        self.client.post(
+            reverse("catalogo:studio_campo_editar", args=[self.servicio.pk, campo.pk]),
+            {f"{prefijo}-orden": "0", f"{prefijo}-tipo": "FECHA", f"{prefijo}-etiqueta": "Para cuándo"},
+        )
+        campo.refresh_from_db()
+        self.assertFalse(campo.es_fecha_requerida)

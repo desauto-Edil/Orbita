@@ -137,6 +137,12 @@ def puede_tomar(usuario, ticket):
     para el servicio del ticket."""
     if ticket.estado != Ticket.Estado.RADICADO or ticket.usuario_responsable_id is not None:
         return False
+    # 4.F2 (regla V1): en SU propio ticket una persona es solicitante, no quien lo atiende;
+    # no se autoasigna la atención de su solicitud aunque pertenezca al equipo responsable
+    # o tenga alcance GLOBAL. Es regla de dominio (la revalida `operaciones.tomar_ticket`),
+    # no solo un botón oculto. Asignar/reasignar son otras operaciones y no cambian.
+    if es_propietario_borrador(usuario, ticket):
+        return False
     alcances = alcances_autorizados(usuario, PERMISO_ATENDER)
     if not (alcances["global"] or alcances["areas"] or alcances["unidades_negocio"]):
         return False
@@ -234,6 +240,9 @@ def puede_solicitar_informacion(usuario, ticket):
     responsable de ESTE ticket, no basta (decisión explícita del usuario)."""
     if ticket.estado not in _ESTADOS_ABIERTOS_A_INTERACCION:
         return False
+    # 4.G1: un ticket generado por programación no tiene solicitante a quien preguntarle.
+    if ticket.solicitante_id is None:
+        return False
     return es_responsable_actual(usuario, ticket)
 
 
@@ -327,7 +336,12 @@ def puede_entregar_ticket(usuario, ticket):
     """Responsable individual actual, ticket EN_ATENCION y con política de
     entrega congelada. Sin política (tickets anteriores a 4.5) no hay entrega
     formal: siguen el flujo resolver/cerrar."""
-    return bool(ticket.entrega_politica) and puede_escribir_entregables_finales(usuario, ticket)
+    # 4.G1: sin solicitante no hay a quién entregarle formalmente.
+    return (
+        bool(ticket.entrega_politica)
+        and ticket.solicitante_id is not None
+        and puede_escribir_entregables_finales(usuario, ticket)
+    )
 
 
 def puede_responder_entrega(usuario, entrega):

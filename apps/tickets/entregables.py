@@ -29,7 +29,9 @@ from apps.workflows.models import InstanciaEtapa, InstanciaWorkflow
 
 def _auditar(instancia, actor, anterior, nuevo, accion=RegistroAuditoria.Accion.ACTUALIZAR):
     registrar_evento(
-        accion=accion, instancia=instancia, origen=RegistroAuditoria.Origen.USUARIO,
+        accion=accion, instancia=instancia,
+        # 4.G1: `actor=None` = el Sistema (materialización de un ticket programado, sin solicitante).
+        origen=RegistroAuditoria.Origen.USUARIO if actor is not None else RegistroAuditoria.Origen.SISTEMA,
         usuario=actor, datos_anteriores=anterior, datos_nuevos=nuevo,
     )
 

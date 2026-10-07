@@ -1,0 +1,22 @@
+{% comment %}Línea de tiempo del ticket (compartida por el detalle y el seguimiento). Espera `historial`.{% endcomment %}
+  <section class="card">
+    <h3>Línea de tiempo</h3>
+    <ul class="plain-list">
+      {% for evento in historial %}
+        <li>
+          <span class="badge badge--info">{{ evento.get_tipo_evento_display }}</span>
+          <span>{% if evento.actor %}{{ evento.actor.get_full_name|default:evento.actor }}{% else %}Sistema{% endif %}</span>
+          {% if evento.datos.causa == "ACEPTACION_SOLICITANTE" %}<span class="text-muted">(aceptado por el solicitante)</span>
+          {% elif evento.datos.causa == "VENCIMIENTO_SIN_RESPUESTA" %}<span class="text-muted">(plazo vencido sin respuesta)</span>
+          {% elif evento.datos.causa == "CIERRE_DIRECTO" %}<span class="text-muted">(al entregar)</span>
+          {% elif evento.datos.causa == "POLITICA_SIN_APROBACION" %}<span class="text-muted">(automática, sin aprobación)</span>{% endif %}
+          {% if evento.tipo_evento == "DIRECCIONADO" %}<span class="text-muted">Destino: {{ evento.datos.destino_etiqueta }} · Responsable: {{ evento.datos.responsable_etiqueta }}{% if evento.datos.es_predeterminado %} (destino de reserva){% endif %}</span>{% endif %}
+          {% if evento.tipo_evento == "RADICADO" and evento.datos.origen == "PROGRAMACION" %}<span class="text-muted">Generado por programación · {{ evento.datos.etiqueta }}</span>{% endif %}
+          {% if evento.datos.nueva_fecha %}<span class="text-muted">→ {{ evento.datos.nueva_fecha|slice:":10" }}</span>{% endif %}
+          <span class="text-muted">{{ evento.creado_en|date:"d/m/Y H:i" }}</span>
+        </li>
+      {% empty %}
+        <li class="text-muted">Sin eventos.</li>
+      {% endfor %}
+    </ul>
+  </section>

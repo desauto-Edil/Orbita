@@ -16,7 +16,9 @@ Qué alimenta cada bloque:
                         filtrados otra vez por visibilidad (un servicio
                         desactivado o ya no visible no aparece).
   Tu día                Fechas reales: `Tarea.fecha_limite` de sus tareas
-                        pendientes y `EntregaTicket.vence_en` de las
+                        pendientes (las que el flujo crea no traen fecha: GAP
+                        de 4.F3, no se inventa una), `Ticket.fecha_objetivo_vigente`
+                        de los tickets que atiende y `EntregaTicket.vence_en` de las
                         entregas que el usuario (como solicitante) debe
                         responder. Las aprobaciones no tienen fecha y no se
                         inventan.
@@ -47,6 +49,7 @@ from apps.catalogo.visibilidad import servicios_visibles_para
 from apps.core.autorizacion import alcances_autorizados
 from apps.tareas.consultas import tareas_asignadas_a, tareas_disponibles_para_tomar
 from apps.tareas.models import Tarea
+from apps.tickets import trabajo as trabajo_ops
 from apps.tickets.models import EntregaTicket, Ticket
 
 LIMITE_CATEGORIAS_TILES = 6
@@ -55,6 +58,7 @@ LIMITE_TICKETS_RECIENTES = 4
 LIMITE_RESULTADOS_EXPLORADOR = 48
 DIAS_PROXIMOS = 14
 LIMITE_EVENTOS = 200
+LIMITE_TICKETS_TRABAJO = 4
 
 def tono(pk):
     """1–4: variante de color de categoría (tokens `--tag-*` de V0), estable
@@ -187,7 +191,7 @@ def tickets_recientes(usuario):
     )
     for ticket in tickets:
         ticket.url_inicio = reverse(
-            "tickets:borrador" if ticket.estado == Ticket.Estado.BORRADOR else "tickets:detalle", args=[ticket.pk]
+            "tickets:borrador" if ticket.estado == Ticket.Estado.BORRADOR else "tickets:seguimiento", args=[ticket.pk]
         )
     return tickets
 
@@ -220,8 +224,13 @@ def resumen_trabajo(usuario):
         "tareas_por_tomar": tareas_por_tomar,
         "aprobaciones": aprobaciones,
         "tickets_a_cargo": tickets_a_cargo,
-        # Mismo destino que el dock: Cola si tiene acceso; si no, Mi trabajo.
-        "url": reverse("tickets:cola" if acceso_cola else "core:mi_trabajo"),
+        # 4.F3: los tickets que atiende (fase, bloque actual y objetivo), con acceso directo a «Continuar».
+        "tickets": [
+            trabajo_ops.tarjeta(usuario, ticket)
+            for ticket in trabajo_ops.tickets_a_cargo(usuario)[:LIMITE_TICKETS_TRABAJO]
+        ],
+        # Mismo destino que el dock: Trabajo abre «Mi trabajo» (4.F3).
+        "url": reverse("core:mi_trabajo"),
     }
 
 
@@ -261,6 +270,25 @@ def _eventos(usuario, hasta):
             {
                 "tipo": "tarea", "titulo": tarea.titulo, "fecha": tarea.fecha_limite,
                 "url": reverse("tareas:detalle", args=[tarea.pk]), "etiqueta": "Vence la tarea",
+            }
+        )
+    # 4.F3: la fecha objetivo (real, ya fijada al radicar) de los tickets que la persona atiende.
+    a_cargo = (
+        Ticket.objects.filter(
+            usuario_responsable=usuario, estado=Ticket.Estado.EN_ATENCION,
+            fecha_objetivo_vigente__isnull=False, fecha_objetivo_vigente__lt=hasta,
+        )
+        .select_related("detalle_servicio__servicio")
+        .order_by("fecha_objetivo_vigente")[:LIMITE_EVENTOS]
+    )
+    for ticket in a_cargo:
+        eventos.append(
+            {
+                "tipo": "ticket",
+                "titulo": f"{ticket.codigo or 'Ticket'} · {ticket.detalle_servicio.servicio.nombre}",
+                "fecha": ticket.fecha_objetivo_vigente,
+                "url": reverse("tickets:trabajo", args=[ticket.pk]),
+                "etiqueta": "Fecha objetivo del ticket",
             }
         )
     entregas = (

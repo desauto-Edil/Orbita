@@ -8,13 +8,13 @@
 {% block content %}
 <section class="card sol-done" aria-labelledby="sol-done-title">
   <span class="sol-done__mark" aria-hidden="true">{% include "components/icon.html" with name="check" size="lg" %}</span>
-  <h1 class="sol-title" id="sol-done-title">Solicitud enviada</h1>
-  <p class="sol-done__id" aria-label="Radicado">{{ ticket.radicado }}</p>
+  <h1 class="sol-title" id="sol-done-title">Ticket creado</h1>
+  <p class="sol-done__id" aria-label="Código del ticket">{{ ticket.codigo|default:"—" }}</p>
   <p class="sol-done__service">{{ servicio.nombre }}</p>
-  <p class="sol-done__text">Radicada el {{ ticket.radicado_en|date:"j \d\e F \d\e Y, H:i" }}. Ya puedes seguir su avance desde Mis tickets.</p>
+  <p class="sol-done__text">Radicado el {{ ticket.radicado_en|date:"j \d\e F \d\e Y, H:i" }}. Ya puedes seguir su avance.</p>
   <div class="sol-done__actions">
-    <a class="btn btn--primary" href="{% url 'tickets:detalle' ticket.pk %}">Ver Ticket</a>
-    <a class="btn btn--secondary" href="{% url 'tickets:mis_tickets' %}">Ir a Mis Tickets</a>
+    <a class="btn btn--primary" href="{% url 'tickets:seguimiento' ticket.pk %}">Ver mi ticket</a>
+    <a class="btn btn--secondary" href="{% url 'tickets:mis_tickets' %}">Ir a Mis tickets</a>
   </div>
 </section>
 {% endblock %}

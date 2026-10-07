@@ -20,6 +20,7 @@ from django.utils import timezone
 
 from apps.tickets.entregas import cerrar_entrega_vencida
 from apps.tickets.models import EntregaTicket
+from apps.tickets.programadas import reconciliar_ejecuciones_programadas
 
 logger = logging.getLogger(__name__)
 
@@ -41,3 +42,16 @@ def cerrar_entregas_vencidas():
             logger.exception("Error cerrando la entrega vencida %s.", entrega.pk)
     logger.info("cerrar_entregas_vencidas: %s entrega(s) cerrada(s).", cerradas)
     return cerradas
+
+
+@shared_task
+def generar_ejecuciones_programadas():
+    """4.G1 — reconciliador de Procesos programados (cada hora, UNA tarea para todos).
+
+    No pregunta «¿hoy es el día N?»: calcula qué ejecución ya debería existir y la crea si falta,
+    así que un Beat apagado se recupera solo. La lógica vive en
+    `apps.tickets.programadas.reconciliar_ejecuciones_programadas`; un error en un Proceso se
+    registra en su programación y no impide procesar los demás."""
+    resumen = reconciliar_ejecuciones_programadas()
+    logger.info("generar_ejecuciones_programadas: %s", resumen)
+    return resumen

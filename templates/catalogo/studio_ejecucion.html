@@ -256,6 +256,12 @@
         </div>
       </section>
 
+      {% if variables_decision %}
+        <datalist id="variables-decision">
+          {% for referencia, descripcion in variables_decision %}<option value="{{ referencia }}">{{ descripcion }}</option>{% endfor %}
+        </datalist>
+      {% endif %}
+
       <div class="svc-phase-list">
         {% for item in fases_configuracion %}
           <section class="svc-phase">
@@ -314,16 +320,20 @@
                               <div class="field">{{ fila.form_configurar.fecha_objetivo.label_tag }}{{ fila.form_configurar.fecha_objetivo }}</div>
                             </div>
                           {% elif fila.tipo_empresarial == "APROBACION" %}
-                            <div class="svc-form-grid svc-form-grid--two">
-                              <div class="field">{{ fila.form_configurar.modo.label_tag }}{{ fila.form_configurar.modo }}</div>
-                              <div class="field">{{ fila.form_configurar.politica.label_tag }}{{ fila.form_configurar.politica }}</div>
-                            </div>
                             <div class="field">{{ fila.form_configurar.revisa.label_tag }}{{ fila.form_configurar.revisa }}</div>
                             <p class="svc-note">Opcional. Si eliges un entregable, quien aprueba verá qué está revisando. Solo aparecen los bloques de entregable ya agregados al flujo.</p>
-                            {{ fila.formset_participantes.management_form }}
-                            {% for pform in fila.formset_participantes %}
-                              <div class="field">{{ pform.tipo }} {{ pform.usuario }} {{ pform.equipo }}{% if pform.DELETE %} {{ pform.DELETE }} eliminar{% endif %}</div>
-                            {% endfor %}
+                            <div data-aprobacion>
+                              <div class="field">{{ fila.form_configurar.cantidad.label_tag }}{{ fila.form_configurar.cantidad }}</div>
+                              {% for pform in fila.filas_aprobadores %}
+                                <div class="field" data-aprobacion-fila{% if forloop.counter > fila.cantidad_aprobadores %} hidden{% endif %}>
+                                  <label>Aprobador {{ forloop.counter }}</label> {{ pform.tipo }} {{ pform.usuario }} {{ pform.equipo }}
+                                </div>
+                              {% endfor %}
+                              <div class="svc-form-grid svc-form-grid--two" data-aprobacion-modo{% if fila.cantidad_aprobadores < 2 %} hidden{% endif %}>
+                                <div class="field">{{ fila.form_configurar.modo.label_tag }}{{ fila.form_configurar.modo }}</div>
+                                <div class="field">{{ fila.form_configurar.politica.label_tag }}{{ fila.form_configurar.politica }}</div>
+                              </div>
+                            </div>
                           {% endif %}
                           <button type="submit" class="btn btn--primary">Guardar bloque</button>
                         </form>
@@ -404,14 +414,30 @@
                               <p class="svc-note">El flujo continuará cuando este entregable del ticket esté completado.</p>
                             {% endif %}
                           {% elif codigo == "APROBACION" %}
-                            <div class="field">{{ form_aprobacion_nuevo.modo.label_tag }}{{ form_aprobacion_nuevo.modo }}</div>
-                            <div class="field">{{ form_aprobacion_nuevo.politica.label_tag }}{{ form_aprobacion_nuevo.politica }}</div>
                             <div class="field">{{ form_aprobacion_nuevo.revisa.label_tag }}{{ form_aprobacion_nuevo.revisa }}</div>
                             <p class="svc-note">Opcional. Si eliges un entregable, quien aprueba verá qué está revisando. Solo aparecen los bloques de entregable ya agregados al flujo.</p>
-                            {{ formset_participantes_nuevo.management_form }}
-                            {% for pform in formset_participantes_nuevo %}
-                              <div class="field">{{ pform.tipo }} {{ pform.usuario }} {{ pform.equipo }}</div>
-                            {% endfor %}
+                            <div data-aprobacion>
+                              <div class="field">{{ form_aprobacion_nuevo.cantidad.label_tag }}{{ form_aprobacion_nuevo.cantidad }}</div>
+                              {% for pform in filas_aprobadores_nuevo %}
+                                <div class="field" data-aprobacion-fila{% if not forloop.first %} hidden{% endif %}>
+                                  <label>Aprobador {{ forloop.counter }}</label> {{ pform.tipo }} {{ pform.usuario }} {{ pform.equipo }}
+                                </div>
+                              {% endfor %}
+                              <div class="svc-form-grid svc-form-grid--two" data-aprobacion-modo hidden>
+                                <div class="field">{{ form_aprobacion_nuevo.modo.label_tag }}{{ form_aprobacion_nuevo.modo }}</div>
+                                <div class="field">{{ form_aprobacion_nuevo.politica.label_tag }}{{ form_aprobacion_nuevo.politica }}</div>
+                              </div>
+                            </div>
+                          {% elif codigo == "DECISION" and form_decision_condicion_nuevo %}
+                            <div class="svc-decision-config">
+                              <h5>¿Cuándo se cumple?</h5>
+                              {% include "catalogo/_variables_decision.html" %}
+                              <div class="field">Si {{ form_decision_condicion_nuevo.variable }} {{ form_decision_condicion_nuevo.operador }} {{ form_decision_condicion_nuevo.valor }}</div>
+                              {{ form_decision_condicion_nuevo.prioridad.as_hidden }}
+                              <div class="field"><label for="{{ form_decision_condicion_nuevo.destino.id_for_label }}">Si se cumple, ir a</label> {{ form_decision_condicion_nuevo.destino }}</div>
+                              <div class="field"><label for="{{ form_decision_otro_caso_nuevo.destino.id_for_label }}">Si no se cumple, ir a</label> {{ form_decision_otro_caso_nuevo.destino }}</div>
+                              <p class="svc-note">Puedes agregar más condiciones después, editando la decisión.</p>
+                            </div>
                           {% endif %}
                           <button type="submit" class="btn btn--primary"{% if codigo == "ENTREGABLE" and servicio_sin_entregables %} disabled{% endif %}>Agregar</button>
                         </form>

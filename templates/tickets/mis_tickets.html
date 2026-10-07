@@ -7,23 +7,38 @@
 {% block content %}
   <section class="card">
     <h1>Mis tickets</h1>
-    <p class="text-muted">Borradores en curso y tickets ya radicados.</p>
+    <p class="text-muted">Lo que has solicitado: borradores en curso y tickets en seguimiento.</p>
     <p><a class="btn btn--primary" href="{% url 'catalogo:lista' %}">{% include "components/icon.html" with name="plus" %}Nuevo ticket</a></p>
   </section>
 
   {% if tickets %}
     <section class="card">
-      <ul class="plain-list">
+      <ul class="list-row-group">
         {% for ticket in tickets %}
-          <li>
+          <li class="list-row" style="flex-wrap: wrap;">
+            <span class="list-row__title">
+              {% if ticket.estado == "BORRADOR" %}
+                <a href="{% url 'tickets:borrador' ticket.pk %}">{{ ticket.detalle_servicio.servicio.nombre }}</a>
+              {% else %}
+                <span class="text-muted">{{ ticket.codigo|default:"Ticket" }}</span>
+                <a href="{% url 'tickets:seguimiento' ticket.pk %}">{{ ticket.detalle_servicio.servicio.nombre }}</a>
+              {% endif %}
+            </span>
             {% if ticket.estado == "BORRADOR" %}
-              <a href="{% url 'tickets:borrador' ticket.pk %}">{{ ticket.detalle_servicio.servicio.nombre }}</a>
               <span class="badge badge--warning">Borrador</span>
+              <span class="text-muted">Sin enviar · creado el {{ ticket.creado_en|date:"d/m/Y H:i" }}</span>
+              <a class="btn btn--ghost btn--sm" href="{% url 'tickets:borrador' ticket.pk %}">Continuar</a>
             {% else %}
-              <a href="{% url 'tickets:detalle' ticket.pk %}">{{ ticket.detalle_servicio.servicio.nombre }}</a>
-              <span class="badge badge--info">{{ ticket.get_estado_display }}</span>
+              <span class="badge {% if ticket.estado == 'RESUELTO' or ticket.estado == 'CERRADO' %}badge--success{% elif ticket.estado == 'CANCELADO' %}badge--danger{% else %}badge--info{% endif %}">{{ ticket.get_estado_display }}</span>
+              {% if ticket.fase_actual %}<span class="text-muted">Fase: {{ ticket.fase_actual }}</span>{% endif %}
+              <span class="text-muted">
+                {% if ticket.responsable.equipo %}{{ ticket.responsable.equipo }}{% if ticket.responsable.persona %} · {{ ticket.responsable.persona }}{% endif %}
+                {% elif ticket.responsable.persona %}{{ ticket.responsable.persona }}
+                {% else %}Sin asignar{% endif %}
+              </span>
+              {% if ticket.fecha_objetivo_vigente %}<span class="text-muted">Objetivo: {{ ticket.fecha_objetivo_vigente|date:"d/m/Y" }}</span>{% endif %}
+              <a class="btn btn--ghost btn--sm" href="{% url 'tickets:seguimiento' ticket.pk %}">Ver ticket</a>
             {% endif %}
-            <span class="text-muted">{{ ticket.creado_en|date:"d/m/Y H:i" }}</span>
           </li>
         {% endfor %}
       </ul>

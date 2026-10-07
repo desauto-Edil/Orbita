@@ -131,6 +131,18 @@ def validar_configuracion_ejecucion(version):
                 errores.append(f"La decision {bloque.nombre} debe tener exactamente una ruta alternativa.")
             if not any(not t.es_fallback for t in salientes):
                 errores.append(f"La decision {bloque.nombre} no tiene condicion.")
+    # 4.G1: un Proceso con programación activa no puede depender de un solicitante humano.
+    from apps.catalogo.programacion import (
+        bloques_dirigidos_al_solicitante,
+        mensaje_bloque_solicitante,
+        programacion_activa_de,
+    )
+
+    if programacion_activa_de(version.servicio) is not None:
+        errores.extend(
+            mensaje_bloque_solicitante(nombre)
+            for nombre in bloques_dirigidos_al_solicitante(version.servicio, version)
+        )
     return errores
 
 

@@ -1,4 +1,4 @@
-/* Mi trabajo — vista previa (mejora progresiva).
+/* Trabajo — vista previa de Mi trabajo y resumen de la Cola (mejora progresiva).
    Sin este script, o en pantallas angostas, cada fila es un enlace normal a su
    detalle. Con él, en pantallas amplias, la fila abre un panel lateral con un
    fragmento que renderiza el servidor (que también decide si el usuario puede
@@ -23,7 +23,7 @@
   if (amplio.addEventListener) amplio.addEventListener("change", sincronizar);
 
   function seleccionar(fila) {
-    raiz.querySelectorAll(".work-row.is-selected").forEach(function (f) {
+    raiz.querySelectorAll("[data-vista].is-selected").forEach(function (f) {
       f.classList.remove("is-selected");
       f.removeAttribute("aria-current");
     });

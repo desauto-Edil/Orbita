@@ -109,6 +109,7 @@
       </form>
     </section>
 
+    {% if not proceso_programado %}
     <section class="svc-panel">
       <div class="svc-panel__head">
         <div>
@@ -124,6 +125,7 @@
       {% endif %}
       <a class="btn btn--ghost btn--sm" href="{% url 'catalogo:studio' servicio.pk %}?tab=salida">Ajustar salida</a>
     </section>
+    {% endif %}
   </div>
 
   {% if impacto_compartido %}

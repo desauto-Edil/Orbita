@@ -25,6 +25,19 @@
     </div>
   {% endif %}
 
+  {% if plazo_corto %}
+    <div class="alert alert--warning" role="status" id="plazo-corto">
+      <span class="alert__icon" aria-hidden="true">{% include "components/icon.html" with name="alert" %}</span>
+      <span class="alert__text">
+        <strong>La fecha solicitada es anterior al tiempo establecido para este servicio.</strong><br>
+        Solicitaste: {% if plazo_corto.con_hora %}{{ plazo_corto.valor|date:"j \d\e F \d\e Y, H:i" }}{% else %}{{ plazo_corto.valor|date:"j \d\e F \d\e Y" }}{% endif %}<br>
+        Tiempo objetivo del servicio: {{ plazo_corto.tiempo }}<br>
+        Fecha estimada según el tiempo establecido: {{ plazo_corto.objetivo|date:"j \d\e F \d\e Y" }}<br>
+        Puedes continuar con la solicitud. El equipo responsable será informado de la fecha solicitada.
+      </span>
+    </div>
+  {% endif %}
+
   <section class="card sol-review" aria-label="Resumen de tu solicitud">
     {% if destino_general and destino_general.resumen %}<p class="sol-lede">Dirigida a: <strong>{{ destino_general.resumen }}</strong></p>{% endif %}
     {% include "tickets/_solicitud_resumen.html" %}

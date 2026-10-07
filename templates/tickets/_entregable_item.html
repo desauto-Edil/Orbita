@@ -1,0 +1,69 @@
+{% comment %}
+  Un entregable del Ticket con las acciones de dominio de siempre. Espera: `ticket`, `entregable` (con
+  `archivos_vigentes` y `operable_ahora`), `puede_escribir_entregables` y, opcional, `next_url` (la
+  pantalla a la que vuelve la acción). Un entregable que el flujo aún no alcanzó no ofrece acciones.
+{% endcomment %}
+          <li class="list-row" style="flex-direction: column; align-items: stretch;">
+            <div class="list-row" style="border-bottom: none; padding: 0;">
+              <span class="list-row__title">{{ entregable.nombre }}</span>
+              <span class="badge">{{ entregable.get_tipo_display }}</span>
+              {% if entregable.obligatorio %}<span class="badge badge--warning">Obligatorio</span>{% endif %}
+              {% if entregable.satisfecho %}<span class="badge badge--success">Listo</span>{% else %}<span class="badge">Pendiente</span>{% endif %}
+            </div>
+            {% if entregable.descripcion %}<p class="text-muted">{{ entregable.descripcion }}</p>{% endif %}
+
+            {% if entregable.tipo == "TEXTO" or entregable.tipo == "ENLACE" %}
+              {% if puede_escribir_entregables and entregable.operable_ahora %}
+                <form method="post" action="{% url 'tickets:entregable_resultado' ticket.pk entregable.pk %}" class="form">
+                  {% csrf_token %}{% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+                  <div class="field">
+                    {% if entregable.tipo == "TEXTO" %}
+                      <textarea name="valor" aria-label="Resultado">{{ entregable.texto }}</textarea>
+                    {% else %}
+                      <input type="url" name="valor" value="{{ entregable.enlace }}" placeholder="https://" aria-label="Enlace">
+                    {% endif %}
+                  </div>
+                  <button type="submit" class="btn btn--secondary">Guardar</button>
+                </form>
+              {% elif entregable.tipo == "TEXTO" %}
+                {% if entregable.texto %}<p>{{ entregable.texto }}</p>{% endif %}
+              {% elif entregable.enlace %}
+                <p><a href="{{ entregable.enlace }}" rel="noopener noreferrer">{{ entregable.enlace }}</a></p>
+              {% endif %}
+            {% elif entregable.tipo == "ARCHIVO" %}
+              <ul class="plain-list">
+                {% for archivo in entregable.archivos_vigentes %}
+                  <li>
+                    <a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a>
+                    {% if puede_escribir_entregables and entregable.operable_ahora %}
+                      <form method="post" action="{% url 'tickets:entregable_retirar_archivo' ticket.pk archivo.pk %}" style="display:inline;">
+                        {% csrf_token %}{% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+                        <button type="submit" class="btn btn--ghost">Retirar</button>
+                      </form>
+                    {% endif %}
+                  </li>
+                {% empty %}
+                  <li class="text-muted">Sin archivos.</li>
+                {% endfor %}
+              </ul>
+              {% if puede_escribir_entregables and entregable.operable_ahora %}
+                <form method="post" action="{% url 'tickets:entregable_adjuntar' ticket.pk entregable.pk %}" enctype="multipart/form-data" class="form">
+                  {% csrf_token %}{% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+                  <div class="field"><input type="file" name="archivo" required aria-label="Archivo"></div>
+                  <button type="submit" class="btn btn--secondary">Adjuntar archivo</button>
+                </form>
+              {% endif %}
+            {% elif entregable.tipo == "CONFIRMACION" %}
+              {% if entregable.confirmado_en %}
+                <p class="text-muted">Confirmado por {{ entregable.confirmado_por }} — {{ entregable.confirmado_en|date:"d/m/Y H:i" }}</p>
+              {% elif puede_escribir_entregables and entregable.operable_ahora %}
+                <form method="post" action="{% url 'tickets:entregable_confirmar' ticket.pk entregable.pk %}">
+                  {% csrf_token %}{% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+                  <button type="submit" class="btn btn--secondary">Confirmar</button>
+                </form>
+              {% endif %}
+            {% endif %}
+          {% if not entregable.operable_ahora and puede_escribir_entregables %}
+  <p class="text-muted">Se podrá completar cuando el flujo llegue a este paso.</p>
+{% endif %}
+</li>

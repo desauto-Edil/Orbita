@@ -37,7 +37,7 @@ import shutil
 import tempfile
 import threading
 import uuid
-from datetime import timedelta
+from datetime import date, timedelta
 
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
@@ -1567,10 +1567,13 @@ class ColaAtencionViewTests(_EscenarioAtencionMixin, TestCase):
         respuesta = self.client.get(reverse("tickets:cola"))
         self.assertIn(self.ticket, respuesta.context["tickets"])
 
-    def test_gestor_de_area_ve_el_ticket_en_su_cola(self):
+    def test_gestor_de_area_lo_ve_en_supervision_y_no_como_algo_que_pueda_tomar(self):
+        # 4.F3: la Cola es lo que se PUEDE tomar; la supervisión por alcance (asignar) es un filtro aparte.
         self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:cola"))
-        self.assertIn(self.ticket, respuesta.context["tickets"])
+        self.assertNotIn(self.ticket, self.client.get(reverse("tickets:cola")).context["tickets"])
+        supervision = self.client.get(reverse("tickets:cola"), {"ver": "supervision"})
+        self.assertIn(self.ticket, supervision.context["tickets"])
+        self.assertNotContains(supervision, reverse("tickets:tomar", args=[self.ticket.pk]))
 
     def test_usuario_sin_autorizacion_no_ve_el_ticket(self):
         self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
@@ -4831,10 +4834,12 @@ class SolicitudEnvioTests(_EscenarioSolicitudMixin, TestCase):
         respuesta = self.client.get(self._url("enviada"))
         self.assertEqual(respuesta.status_code, 200)
         self.assertTemplateUsed(respuesta, "tickets/solicitud_enviada.html")
-        self.assertContains(respuesta, "Solicitud enviada")
-        self.assertContains(respuesta, str(self.ticket.radicado))
+        # 4.F2: confirmación con el código corto (no el UUID) y los dos destinos del solicitante.
+        self.assertContains(respuesta, "Ticket creado")
+        self.assertContains(respuesta, self.ticket.codigo)
+        self.assertNotContains(respuesta, str(self.ticket.radicado))
         self.assertContains(respuesta, self.servicio.nombre)
-        self.assertContains(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertContains(respuesta, reverse("tickets:seguimiento", args=[self.ticket.pk]))
         self.assertContains(respuesta, reverse("tickets:mis_tickets"))
 
     def test_un_doble_envio_no_falla_ni_radica_dos_veces(self):
@@ -7969,13 +7974,15 @@ class TicketGeneralColaDestinoTests(_EscenarioDestinosMixin, TestCase):
             self.assertNotIn(ticket.pk, self._ids(self._cola(usuario)), usuario.username)
 
     def test_un_ticket_dirigido_a_una_persona_aparece_sin_tomar_hasta_iniciar(self):
+        from apps.tickets.trabajo import tickets_a_cargo
+
         ticket = self._radicar_a(self.d_persona)
-        self.assertIn(ticket.pk, self._ids(self._cola(self.persona_g, ver="sin_tomar")))
-        self.assertNotIn(ticket.pk, self._ids(self._cola(self.persona_g, ver="en_atencion")))
-        self.assertIn(ticket.pk, self._ids(self._cola(self.persona_g, ver="mios")))
+        self.assertIn(ticket.pk, self._ids(self._cola(self.persona_g)))
+        self.assertNotIn(ticket.pk, [t.pk for t in tickets_a_cargo(self.persona_g)])
         iniciar_atencion_ticket(ticket, self.persona_g)
-        self.assertNotIn(ticket.pk, self._ids(self._cola(self.persona_g, ver="sin_tomar")))
-        self.assertIn(ticket.pk, self._ids(self._cola(self.persona_g, ver="en_atencion")))
+        # Iniciada la atención deja la Cola y pasa a «Mi trabajo».
+        self.assertNotIn(ticket.pk, self._ids(self._cola(self.persona_g)))
+        self.assertIn(ticket.pk, [t.pk for t in tickets_a_cargo(self.persona_g)])
 
     def test_la_cola_sigue_ordenada_por_llegada_con_los_tickets_generales(self):
         primero = self._radicar_a(self.d_area)
@@ -7983,11 +7990,13 @@ class TicketGeneralColaDestinoTests(_EscenarioDestinosMixin, TestCase):
         segundo = self._radicar_a(self.d_area, usuario=normal_usuario)
         self.assertEqual(self._ids(self._cola(self.atiende_g)), [primero.pk, segundo.pk])
 
-    def test_quien_toma_deja_el_ticket_en_atencion_en_la_misma_cola(self):
+    def test_quien_toma_saca_el_ticket_de_la_cola_y_lo_lleva_a_su_trabajo(self):
+        from apps.tickets.trabajo import tickets_a_cargo
+
         ticket = self._radicar_a(self.d_area)
         tomar_ticket(ticket, self.miembro_tic)
-        self.assertIn(ticket.pk, self._ids(self._cola(self.miembro_tic, ver="mios")))
-        self.assertIn(ticket.pk, self._ids(self._cola(self.miembro_tic, ver="en_atencion")))
+        self.assertNotIn(ticket.pk, self._ids(self._cola(self.miembro_tic)))
+        self.assertIn(ticket.pk, [t.pk for t in tickets_a_cargo(self.miembro_tic)])
 
     def test_los_ajenos_no_pueden_ver_el_detalle(self):
         ticket = self._radicar_a(self.d_area)
@@ -9794,3 +9803,1968 @@ class OperabilidadE2Tests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
         self.assertTrue(contexto["por_fases"])
         self.assertIsNone(contexto["etapa"])
         self.assertEqual((contexto["fase"].nombre, contexto["bloque"].nombre), ("Revisión", "Revisar presentación"))
+
+
+# ---------------------------------------------------------------------------
+# 4.F2 — código público, seguimiento del solicitante, separación solicitante/trabajo
+# y fecha requerida
+# ---------------------------------------------------------------------------
+
+
+class CodigoPublicoTicketTests(_EscenarioAtencionMixin, TestCase):
+    """`TCK-000123`: corto, único, estable y asignado una sola vez al radicar."""
+
+    def setUp(self):
+        self._preparar_escenario()
+
+    def _otro_radicado(self):
+        ticket = crear_borrador(self.solicitante, self.servicio)
+        _completar_texto(ticket, self.solicitante, self.campos)
+        radicar_ticket(ticket, self.solicitante)
+        ticket.refresh_from_db()
+        return ticket
+
+    def test_el_borrador_no_tiene_codigo(self):
+        borrador = crear_borrador(self.solicitante, self.servicio)
+        self.assertIsNone(borrador.consecutivo)
+        self.assertIsNone(borrador.codigo)
+
+    def test_radicar_asigna_un_codigo_corto_con_el_formato_esperado(self):
+        import re
+
+        self.assertRegex(self.ticket.codigo, r"^TCK-\d{6}$")
+        self.assertNotIn(str(self.ticket.radicado), self.ticket.codigo)
+        self.assertEqual(self.ticket.codigo, f"TCK-{self.ticket.consecutivo:06d}")
+        self.assertIsNotNone(re.match(r"^TCK-0+\d+$", self.ticket.codigo))
+
+    def test_los_codigos_son_consecutivos_y_unicos(self):
+        segundo = self._otro_radicado()
+        tercero = self._otro_radicado()
+        self.assertEqual(segundo.consecutivo, self.ticket.consecutivo + 1)
+        self.assertEqual(tercero.consecutivo, self.ticket.consecutivo + 2)
+        self.assertEqual(len({self.ticket.codigo, segundo.codigo, tercero.codigo}), 3)
+
+    def test_la_unicidad_la_garantiza_la_base_de_datos(self):
+        otro = crear_borrador(self.solicitante, self.servicio)
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Ticket.objects.filter(pk=otro.pk).update(consecutivo=self.ticket.consecutivo)
+
+    def test_el_codigo_es_estable_a_lo_largo_de_la_vida_del_ticket(self):
+        codigo = self.ticket.codigo
+        tomar_ticket(self.ticket, self.responsable_directo)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.codigo, codigo)
+
+    def test_el_codigo_no_se_puede_modificar_ni_borrar(self):
+        for nuevo in (self.ticket.consecutivo + 500, None):
+            with self.subTest(nuevo=nuevo):
+                self.ticket.consecutivo = nuevo
+                with self.assertRaises(ValidationError):
+                    self.ticket.save()
+                self.ticket.refresh_from_db()
+
+    def test_un_borrador_o_una_radicacion_que_falla_no_gastan_numero(self):
+        from apps.tickets.models import ConsecutivoTicket
+
+        antes = ConsecutivoTicket.objects.get(pk=1).ultimo
+        borrador = crear_borrador(self.solicitante, self.servicio)
+        Campo.objects.filter(pk=self.campos["Texto"].pk).update(obligatorio=True)  # nunca queda completo
+        with self.assertRaises(ValidationError):
+            radicar_ticket(borrador, self.solicitante)
+        self.assertEqual(ConsecutivoTicket.objects.get(pk=1).ultimo, antes)
+
+    def test_se_puede_buscar_un_ticket_por_su_codigo(self):
+        from apps.tickets.codigos import consecutivo_desde_codigo
+
+        numero = self.ticket.consecutivo
+        for escrito in (self.ticket.codigo, self.ticket.codigo.lower(), f" tck {numero} ", f"TCK-{numero}"):
+            with self.subTest(escrito=escrito):
+                self.assertEqual(consecutivo_desde_codigo(escrito), numero)
+        for invalido in ("", "123", "TCK-", "TICKET-1", "TCK-12a"):
+            with self.subTest(invalido=invalido):
+                self.assertIsNone(consecutivo_desde_codigo(invalido))
+        self.assertEqual(Ticket.objects.get(consecutivo=consecutivo_desde_codigo(self.ticket.codigo)), self.ticket)
+
+
+class ConfirmacionYMisTicketsTests(_EscenarioAtencionMixin, TestCase):
+    """Después de radicar: confirmación con el código y dos caminos; «Mis tickets» = lo que
+    yo solicité, nunca lo que debo atender."""
+
+    def setUp(self):
+        self._preparar_escenario()
+        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+
+    def _borrador_completo(self):
+        borrador = crear_borrador(self.solicitante, self.servicio)
+        _completar_texto(borrador, self.solicitante, self.campos)
+        return borrador
+
+    def test_enviar_lleva_a_la_confirmacion_y_no_a_trabajo(self):
+        borrador = self._borrador_completo()
+        respuesta = self.client.post(reverse("tickets:enviar", args=[borrador.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:enviada", args=[borrador.pk]))
+        self.assertNotIn(reverse("tickets:cola"), respuesta["Location"])
+
+    def test_la_confirmacion_muestra_el_codigo_y_los_dos_botones(self):
+        respuesta = self.client.get(reverse("tickets:enviada", args=[self.ticket.pk]))
+        self.assertContains(respuesta, "Ticket creado")
+        self.assertContains(respuesta, self.ticket.codigo)
+        self.assertContains(respuesta, "Ver mi ticket")
+        self.assertContains(respuesta, reverse("tickets:seguimiento", args=[self.ticket.pk]))
+        self.assertContains(respuesta, "Ir a Mis tickets")
+        self.assertContains(respuesta, reverse("tickets:mis_tickets"))
+        self.assertNotContains(respuesta, "Tomar")
+        self.assertNotContains(respuesta, reverse("tickets:cola"))
+
+    def test_mis_tickets_incluye_los_mios_en_cualquier_estado(self):
+        tomar_ticket(self.ticket, self.responsable_directo)  # ahora EN_ATENCION
+        borrador = self._borrador_completo()
+        respuesta = self.client.get(reverse("tickets:mis_tickets"))
+        self.assertEqual({t.pk for t in respuesta.context["tickets"]}, {self.ticket.pk, borrador.pk})
+        self.assertContains(respuesta, self.ticket.codigo)
+        self.assertContains(respuesta, reverse("tickets:seguimiento", args=[self.ticket.pk]))
+        self.assertContains(respuesta, "Ver ticket")
+        self.assertContains(respuesta, self.servicio.nombre)
+
+    def test_mis_tickets_no_incluye_lo_que_debo_atender(self):
+        self.client.logout()
+        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:mis_tickets"))
+        self.assertEqual(list(respuesta.context["tickets"]), [])
+        self.assertNotContains(respuesta, self.ticket.codigo)
+
+    def test_cada_fila_muestra_estado_responsable_y_fecha_objetivo(self):
+        asignar_ticket(self.ticket, self.gestor_area, equipo=self.equipo)
+        objetivo = timezone.now() + timedelta(days=3)
+        Ticket.objects.filter(pk=self.ticket.pk).update(
+            tiempo_objetivo_cantidad=3, tiempo_objetivo_unidad="DIAS",
+            fecha_objetivo_original=objetivo, fecha_objetivo_vigente=objetivo,
+        )
+        respuesta = self.client.get(reverse("tickets:mis_tickets"))
+        self.assertContains(respuesta, "Radicado")
+        self.assertContains(respuesta, self.equipo.nombre)
+        self.assertContains(respuesta, "Objetivo:")
+
+    def test_el_borrador_sigue_abriendose_para_continuar(self):
+        borrador = crear_borrador(self.solicitante, self.servicio)
+        respuesta = self.client.get(reverse("tickets:mis_tickets"))
+        self.assertContains(respuesta, reverse("tickets:borrador", args=[borrador.pk]))
+
+
+class SeguimientoSolicitanteTests(_EscenarioAtencionMixin, TestCase):
+    """«Ver mi ticket»: seguimiento de solo lectura, sin acciones internas y sin acceso ajeno."""
+
+    def setUp(self):
+        self._preparar_escenario()
+        self.url = reverse("tickets:seguimiento", args=[self.ticket.pk])
+
+    def _ver(self, usuario):
+        self.client.logout()
+        self.assertTrue(self.client.login(username=usuario.get_username(), password=CLAVE_PRUEBA))
+        return self.client.get(self.url)
+
+    def test_el_solicitante_ve_su_ticket_con_lo_esencial(self):
+        asignar_ticket(self.ticket, self.gestor_area, equipo=self.equipo)
+        respuesta = self._ver(self.solicitante)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTemplateUsed(respuesta, "tickets/seguimiento.html")
+        self.assertContains(respuesta, self.ticket.codigo)
+        self.assertContains(respuesta, self.servicio.nombre)
+        self.assertContains(respuesta, "Radicado")  # estado
+        self.assertContains(respuesta, self.equipo.nombre)  # quién lo tiene
+        self.assertContains(respuesta, "Respuestas")  # lo que pidió
+        self.assertContains(respuesta, "Texto")
+
+    def test_no_ofrece_ninguna_accion_interna(self):
+        respuesta = self._ver(self.solicitante)
+        for nombre in ("tomar", "asignar", "reasignar", "resolver", "cerrar", "iniciar_atencion"):
+            with self.subTest(nombre):
+                self.assertNotContains(respuesta, reverse(f"tickets:{nombre}", args=[self.ticket.pk]))
+        self.assertNotContains(respuesta, "Trabajo actual")
+        self.assertNotContains(respuesta, "Entregables")
+
+    def test_no_revela_usernames_ni_ids_internos_del_responsable(self):
+        responsable = Usuario.objects.create_user(
+            username="ana.perez.interno", password=CLAVE_PRUEBA, first_name="Ana", last_name="Pérez"
+        )
+        _otorgar_tickets_atender(responsable)
+        Ticket.objects.filter(pk=self.ticket.pk).update(usuario_responsable=responsable)
+        respuesta = self._ver(self.solicitante)
+        self.assertContains(respuesta, "Ana Pérez")
+        self.assertNotContains(respuesta, "ana.perez.interno")
+        self.assertNotContains(respuesta, "tickets.atender")
+
+    def test_un_usuario_ajeno_recibe_403_aunque_cambie_el_id(self):
+        self.assertEqual(self._ver(self.ajeno).status_code, 403)
+        self.assertEqual(self._ver(self.gestor_otra_area).status_code, 403)
+        otro = Usuario.objects.create_user(username="otro_solicitante23", password=CLAVE_PRUEBA)
+        self.client.logout()
+        self.client.login(username="otro_solicitante23", password=CLAVE_PRUEBA)
+        self.assertEqual(self.client.get(self.url).status_code, 403)
+        self.assertEqual(self.client.get(reverse("tickets:seguimiento", args=[99999999])).status_code, 404)
+
+    def test_quien_ya_puede_consultar_el_ticket_tambien_lo_ve(self):
+        self.assertEqual(self._ver(self.responsable_directo).status_code, 200)
+        self.assertEqual(self._ver(self.gestor_area).status_code, 200)
+
+    def test_exige_sesion(self):
+        self.client.logout()
+        self.assertEqual(self.client.get(self.url).status_code, 302)
+
+    def test_un_borrador_lleva_al_formulario_y_no_se_ve_si_es_ajeno(self):
+        borrador = crear_borrador(self.solicitante, self.servicio)
+        url = reverse("tickets:seguimiento", args=[borrador.pk])
+        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        self.assertRedirects(self.client.get(url), reverse("tickets:borrador", args=[borrador.pk]))
+        self.client.logout()
+        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        self.assertEqual(self.client.get(url).status_code, 403)
+
+    def test_sin_flujo_por_fases_no_hay_progreso(self):
+        respuesta = self._ver(self.solicitante)
+        self.assertIsNone(respuesta.context["progreso"])
+        self.assertNotContains(respuesta, "Progreso")
+
+    def test_el_solicitante_aun_puede_responder_una_solicitud_de_informacion(self):
+        ticket = tomar_ticket(self.ticket, self.responsable_directo)  # la instancia devuelta es la EN_ATENCION
+        solicitar_informacion(ticket, self.responsable_directo, "¿Puedes aclarar el motivo?")
+        respuesta = self._ver(self.solicitante)
+        self.assertContains(respuesta, "te pidió más información")
+        self.assertContains(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+
+    def test_el_detalle_operativo_conserva_su_contenido_y_enlaza_al_seguimiento_del_solicitante(self):
+        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        detalle = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertContains(detalle, self.ticket.codigo)
+        self.assertContains(detalle, self.url)
+        self.assertContains(detalle, "Línea de tiempo")
+        self.assertContains(detalle, "Respuestas")
+
+
+class SeguimientoPorFasesTests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
+    """El progreso sale del estado real de la ejecución (fase actual, pasadas y fases omitidas)."""
+
+    def setUp(self):
+        self._preparar_e2()
+
+    def _progreso(self, ticket):
+        self.client.logout()
+        self.client.login(username=self.solicitante.get_username(), password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:seguimiento", args=[ticket.pk]))
+        self.assertEqual(respuesta.status_code, 200)
+        datos = respuesta.context["progreso"]
+        return respuesta, {fila["nombre"]: fila["situacion"] for fila in datos["fases"]}, datos
+
+    def test_la_fase_actual_avanza_con_la_ejecucion(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+
+        respuesta, situacion, datos = self._progreso(ticket)
+        self.assertEqual(datos["actual"], "Recepción")
+        self.assertEqual(situacion["Recepción"], "actual")
+        self.assertEqual(situacion["Producción"], "pendiente")
+        self.assertContains(respuesta, "Fase actual")
+
+        self._hasta_la_primera_revision(ticket, definicion)
+        _respuesta, situacion, datos = self._progreso(ticket)
+        self.assertEqual(datos["actual"], "Revisión")
+        self.assertEqual(situacion["Recepción"], "completada")
+        self.assertEqual(situacion["Producción"], "completada")
+        self.assertEqual(situacion["Revisión"], "actual")
+        self.assertEqual(situacion["Entrega"], "pendiente")
+
+    def test_las_fases_futuras_no_se_prometen_como_obligatorias(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        respuesta, _situacion, datos = self._progreso(ticket)
+        self.assertTrue(datos["hay_pendientes"])
+        self.assertContains(respuesta, "no todas se recorren siempre")
+
+    def test_una_fase_a_la_que_no_se_llego_queda_como_no_necesaria_al_terminar(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion)
+        self._revisar(ticket, "APROBADA")
+        self._completar(ticket, "Entregar resultado")
+
+        respuesta, situacion, datos = self._progreso(ticket)
+        self.assertTrue(datos["terminado"])
+        self.assertEqual(datos["actual"], "")
+        self.assertEqual(situacion["Ajustes"], "no_aplico")
+        self.assertEqual(situacion["Entrega"], "completada")
+        self.assertContains(respuesta, "No fue necesaria")
+
+    def test_una_devolucion_pasa_por_ajustes_y_vuelve_a_la_revision(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion)
+        self._revisar(ticket, "DEVUELTA")
+
+        _respuesta, situacion, datos = self._progreso(ticket)
+        self.assertEqual(datos["actual"], "Ajustes")
+        self.assertEqual(situacion["Revisión"], "completada")
+
+    def test_mis_tickets_muestra_la_fase_actual(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._hasta_la_primera_revision(ticket, definicion)
+        self.client.login(username=self.solicitante.get_username(), password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:mis_tickets"))
+        self.assertContains(respuesta, "Fase: Revisión")
+        self.assertContains(respuesta, ticket.codigo)
+
+
+class SolicitanteNoTomaSuTicketTests(_EscenarioAtencionMixin, TestCase):
+    """Regla V1 en dominio/autorización: quien solicita no se autoasigna la atención."""
+
+    def setUp(self):
+        self._preparar_escenario()
+        # Solicita Y pertenece al equipo responsable (y tiene `tickets.atender` global).
+        self.doble = Usuario.objects.create_user(username="doble_rol23", password=CLAVE_PRUEBA)
+        MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.doble, activo=True)
+        _otorgar_tickets_atender(self.doble)
+        self.suyo = crear_borrador(self.doble, self.servicio)
+        _completar_texto(self.suyo, self.doble, self.campos)
+        radicar_ticket(self.suyo, self.doble)
+        self.suyo.refresh_from_db()
+
+    def test_el_solicitante_no_puede_tomar_su_propio_ticket_aunque_sea_del_equipo(self):
+        self.assertTrue(usuario_es_responsable_configurado(self.doble, self.servicio))
+        self.assertFalse(puede_tomar(self.doble, self.suyo))
+
+    def test_la_operacion_de_dominio_tambien_lo_rechaza(self):
+        with self.assertRaises(PermissionDenied):
+            tomar_ticket(self.suyo, self.doble)
+        self.suyo.refresh_from_db()
+        self.assertEqual((self.suyo.estado, self.suyo.usuario_responsable_id), (Ticket.Estado.RADICADO, None))
+
+    def test_el_endpoint_directo_tambien_lo_rechaza(self):
+        self.client.login(username="doble_rol23", password=CLAVE_PRUEBA)
+        respuesta = self.client.post(reverse("tickets:tomar", args=[self.suyo.pk]))
+        self.assertEqual(respuesta.status_code, 302)
+        self.suyo.refresh_from_db()
+        self.assertEqual((self.suyo.estado, self.suyo.usuario_responsable_id), (Ticket.Estado.RADICADO, None))
+        self.assertTrue(any("autorización" in str(m) for m in get_messages(respuesta.wsgi_request)))
+
+    def test_el_detalle_no_ofrece_tomar_al_solicitante(self):
+        self.client.login(username="doble_rol23", password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tickets:detalle", args=[self.suyo.pk]))
+        self.assertFalse(respuesta.context["puede_tomar"])
+        self.assertNotContains(respuesta, reverse("tickets:tomar", args=[self.suyo.pk]))
+
+    def test_un_miembro_valido_del_equipo_si_puede_tomar_ese_ticket(self):
+        self.assertTrue(puede_tomar(self.miembro_equipo, self.suyo))
+        tomado = tomar_ticket(self.suyo, self.miembro_equipo)
+        self.assertEqual((tomado.estado, tomado.usuario_responsable_id), (Ticket.Estado.EN_ATENCION, self.miembro_equipo.pk))
+
+    def test_el_mismo_usuario_si_puede_tomar_los_tickets_de_otras_personas(self):
+        self.assertTrue(puede_tomar(self.doble, self.ticket))
+        self.assertEqual(tomar_ticket(self.ticket, self.doble).usuario_responsable_id, self.doble.pk)
+
+    def test_un_responsable_global_tampoco_toma_su_propio_ticket(self):
+        global_ = Usuario.objects.create_user(username="global_solicita23", password=CLAVE_PRUEBA)
+        _otorgar_tickets_atender(global_)
+        propio = crear_borrador(global_, self.servicio)
+        _completar_texto(propio, global_, self.campos)
+        radicar_ticket(propio, global_)
+        propio.refresh_from_db()
+        self.assertFalse(puede_tomar(global_, propio))
+        with self.assertRaises(PermissionDenied):
+            tomar_ticket(propio, global_)
+
+    def test_asignar_sigue_siendo_otra_operacion_y_no_cambia(self):
+        self.assertTrue(puede_asignar(self.gestor_area, self.suyo))
+
+    def test_crear_un_ticket_no_lo_pone_en_la_cola_del_solicitante(self):
+        self.client.login(username="doble_rol23", password=CLAVE_PRUEBA)
+        cola = self.client.get(reverse("tickets:cola"))
+        self.assertNotIn(self.suyo, cola.context["tickets"])
+        self.assertIn(self.ticket, cola.context["tickets"])  # lo ajeno sí sigue siendo trabajo suyo
+
+    def test_los_miembros_validos_siguen_viendolo_en_su_cola(self):
+        self.client.login(username="miembro23", password=CLAVE_PRUEBA)
+        cola = self.client.get(reverse("tickets:cola"))
+        self.assertIn(self.suyo, cola.context["tickets"])
+        self.assertTrue(puede_ver_en_cola(self.miembro_equipo, self.suyo))
+
+    def test_si_alguien_le_asigna_su_propio_ticket_si_es_trabajo_suyo(self):
+        from apps.tickets.trabajo import tickets_a_cargo
+
+        asignado = asignar_ticket(self.suyo, self.gestor_area, usuario=self.doble)
+        self.assertIn(asignado.pk, [t.pk for t in tickets_a_cargo(self.doble)])
+
+    def test_el_escenario_a_b_del_equipo(self):
+        # A solicita; B pertenece al equipo responsable.
+        self.assertFalse(puede_ver_en_cola(self.ajeno, self.ticket))
+        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        self.assertIn(self.ticket, self.client.get(reverse("tickets:mis_tickets")).context["tickets"])
+        self.assertNotIn(self.ticket, self.client.get(reverse("tickets:cola")).context["tickets"])
+        self.assertFalse(puede_tomar(self.solicitante, self.ticket))
+        self.client.logout()
+        self.client.login(username="miembro23", password=CLAVE_PRUEBA)
+        self.assertIn(self.ticket, self.client.get(reverse("tickets:cola")).context["tickets"])
+        self.assertEqual(self.client.get(reverse("tickets:seguimiento", args=[self.ticket.pk])).status_code, 200)
+        self.assertTrue(puede_tomar(self.miembro_equipo, self.ticket))
+
+
+class FechaRequeridaPlazoTests(TestCase):
+    """La fecha que pide el solicitante frente al tiempo objetivo del servicio: informa, no bloquea."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="plazo_solicitante", password=CLAVE_PRUEBA)
+        self.responsable = Usuario.objects.create_user(username="plazo_responsable", password=CLAVE_PRUEBA)
+        self.equipo = Equipo.objects.create(nombre="Equipo plazo")
+        MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.responsable)
+        _otorgar_tickets_atender(self.responsable)
+
+    def _servicio(self, *, con_marca=True, tiempo=(5, "DIAS", True), tipo=Campo.TipoCampo.FECHA):
+        servicio, _version, campos = _crear_servicio_con_formulario(
+            self.usuario,
+            [
+                {"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Tema", "orden": 0},
+                {"tipo": tipo, "etiqueta": "Para cuándo", "orden": 1, "es_fecha_requerida": con_marca},
+            ],
+        )
+        ServicioResponsable.objects.create(
+            servicio=servicio, tipo_responsable=ServicioResponsable.TipoResponsable.EQUIPO, equipo=self.equipo
+        )
+        if tiempo is not None:
+            Servicio.objects.filter(pk=servicio.pk).update(
+                tiempo_objetivo_cantidad=tiempo[0], tiempo_objetivo_unidad=tiempo[1], tiempo_objetivo_habiles=tiempo[2]
+            )
+        servicio.refresh_from_db()
+        self.campos = campos
+        return servicio
+
+    def _borrador(self, servicio, fecha=None):
+        ticket = crear_borrador(self.usuario, servicio)
+        respuestas = {self.campos["Tema"].id: "Presentación cliente Ara"}
+        if fecha is not None:
+            respuestas[self.campos["Para cuándo"].id] = fecha
+        guardar_respuestas_borrador(ticket, self.usuario, respuestas)
+        ticket.refresh_from_db()
+        return ticket
+
+    def _evaluar(self, ticket, **kw):
+        from apps.tickets import plazos
+
+        return plazos.evaluar_plazo(ticket, **kw)
+
+    def test_sin_tiempo_objetivo_no_hay_alerta(self):
+        servicio = self._servicio(tiempo=None)
+        ticket = self._borrador(servicio, "2026-10-09")
+        self.assertIsNone(self._evaluar(ticket))
+        self.assertEqual(self._fecha(ticket).isoformat(), "2026-10-09")  # la fecha sí se conserva
+
+    def _fecha(self, ticket):
+        from apps.tickets import plazos
+
+        return plazos.fecha_solicitada(ticket)["valor"]
+
+    def test_sin_fecha_diligenciada_no_hay_alerta(self):
+        ticket = self._borrador(self._servicio(), None)
+        self.assertIsNone(self._evaluar(ticket))
+
+    def test_un_campo_fecha_sin_la_marca_no_es_un_plazo(self):
+        ticket = self._borrador(self._servicio(con_marca=False), "2026-10-09")
+        self.assertIsNone(self._evaluar(ticket))
+        from apps.tickets import plazos
+
+        self.assertIsNone(plazos.fecha_solicitada(ticket))
+
+    def test_la_comparacion_usa_el_calculo_de_dias_habiles_de_4a1(self):
+        from apps.tickets import tiempos
+
+        servicio = self._servicio()
+        with _bogota():
+            ahora = _local(2026, 10, 5, 9)  # lunes: 5 días hábiles → lunes 12
+            esperado = tiempos.calcular_fecha_objetivo(ahora, 5, "DIAS", True)
+            casos = {"2026-10-09": True, "2026-10-11": True, "2026-10-12": False, "2026-10-13": False}
+            for fecha, anticipada in casos.items():
+                with self.subTest(fecha=fecha):
+                    ticket = self._borrador(servicio, fecha)
+                    plazo = self._evaluar(ticket, ahora=ahora)
+                    self.assertEqual(plazo["objetivo"], esperado)
+                    self.assertEqual(plazo["anticipada"], anticipada)
+                    self.assertEqual(plazo["tiempo"], "5 días hábiles")
+
+    def test_fecha_y_hora_se_compara_con_el_instante_exacto(self):
+        servicio = self._servicio(tiempo=(8, "HORAS", False), tipo=Campo.TipoCampo.FECHA_HORA)
+        ticket = self._borrador(servicio, "2026-10-12T08:00")
+        pedida = self._fecha(ticket)
+        self.assertTrue(self._evaluar(ticket, ahora=pedida - timedelta(hours=7))["anticipada"])  # objetivo = pedida + 1 h
+        self.assertFalse(self._evaluar(ticket, ahora=pedida - timedelta(hours=9))["anticipada"])  # objetivo = pedida − 1 h
+        self.assertFalse(self._evaluar(ticket, ahora=pedida - timedelta(hours=8))["anticipada"])  # justo en el objetivo
+        self.assertEqual(self._evaluar(ticket, ahora=pedida)["tiempo"], "8 horas")
+
+    def test_la_alerta_no_bloquea_revisar_ni_radicar(self):
+        servicio = self._servicio()
+        ayer = (timezone.localdate() - timedelta(days=1)).isoformat()
+        ticket = self._borrador(servicio, ayer)
+        self.client.login(username="plazo_solicitante", password=CLAVE_PRUEBA)
+
+        revision = self.client.get(reverse("tickets:revisar", args=[ticket.pk]))
+        self.assertEqual(revision.status_code, 200)
+        self.assertContains(revision, "La fecha solicitada es anterior al tiempo establecido")
+        self.assertContains(revision, "5 días hábiles")
+        self.assertContains(revision, "Puedes continuar con la solicitud")
+        self.assertContains(revision, reverse("tickets:enviar", args=[ticket.pk]))  # «Solicitar» sigue ahí
+
+        enviado = self.client.post(reverse("tickets:enviar", args=[ticket.pk]))
+        self.assertRedirects(enviado, reverse("tickets:enviada", args=[ticket.pk]))
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+
+    def test_una_fecha_dentro_del_objetivo_no_muestra_alerta(self):
+        servicio = self._servicio()
+        lejos = (timezone.localdate() + timedelta(days=60)).isoformat()
+        ticket = self._borrador(servicio, lejos)
+        self.client.login(username="plazo_solicitante", password=CLAVE_PRUEBA)
+        revision = self.client.get(reverse("tickets:revisar", args=[ticket.pk]))
+        self.assertEqual(revision.status_code, 200)
+        self.assertNotContains(revision, "La fecha solicitada es anterior")
+
+    def test_la_fecha_solicitada_se_puede_recuperar_despues_de_radicar(self):
+        servicio = self._servicio()
+        ayer = timezone.localdate() - timedelta(days=1)
+        ticket = self._borrador(servicio, ayer.isoformat())
+        radicar_ticket(ticket, self.usuario)
+        ticket.refresh_from_db()
+        plazo = self._evaluar(ticket)
+        self.assertEqual(plazo["valor"], ayer)
+        self.assertTrue(plazo["anticipada"])
+        self.assertEqual(plazo["objetivo"], ticket.fecha_objetivo_original)  # el compromiso real, no una recomputación
+
+    def test_quien_atiende_ve_el_aviso_y_no_cambia_nada_mas(self):
+        servicio = self._servicio()
+        ticket = self._borrador(servicio, (timezone.localdate() - timedelta(days=1)).isoformat())
+        radicar_ticket(ticket, self.usuario)
+        ticket.refresh_from_db()
+        estado, vigente, politica = ticket.estado, ticket.fecha_objetivo_vigente, ticket.prorroga_politica
+
+        self.client.login(username="plazo_responsable", password=CLAVE_PRUEBA)
+        detalle = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        self.assertContains(detalle, "Fecha solicitada anterior al tiempo objetivo")
+        self.assertContains(detalle, "Objetivo del servicio")
+        ticket.refresh_from_db()
+        # Es información operativa: ni prioridad, ni SLA, ni prórroga automática.
+        self.assertEqual((ticket.estado, ticket.fecha_objetivo_vigente, ticket.prorroga_politica), (estado, vigente, politica))
+        self.assertFalse(ticket.prorrogas.exists())
+
+    def test_el_solicitante_ve_su_fecha_solicitada_y_la_objetivo_en_el_seguimiento(self):
+        servicio = self._servicio()
+        ticket = self._borrador(servicio, "2030-01-15")
+        radicar_ticket(ticket, self.usuario)
+        self.client.login(username="plazo_solicitante", password=CLAVE_PRUEBA)
+        seguimiento = self.client.get(reverse("tickets:seguimiento", args=[ticket.pk]))
+        self.assertContains(seguimiento, "Fecha solicitada")
+        self.assertContains(seguimiento, "15 Ene 2030")
+        self.assertContains(seguimiento, "Fecha objetivo")
+        self.assertNotContains(seguimiento, "anterior al tiempo")
+
+
+# ---------------------------------------------------------------------------
+# 4.F3 — experiencia operativa de Trabajo (Cola, Mi trabajo, espacio por fases, Home)
+# ---------------------------------------------------------------------------
+
+
+class _EscenarioTrabajoMixin(_EscenarioE2Mixin):
+    """Servicio «Creación de presentaciones» sobre la plantilla de cinco fases (4.E2)."""
+
+    def _entrar(self, usuario):
+        self.client.logout()
+        self.assertTrue(self.client.login(username=usuario.get_username(), password=CLAVE_PRUEBA))
+
+    def _trabajo(self, ticket):
+        return self.client.get(reverse("tickets:trabajo", args=[ticket.pk]))
+
+    def _escenario_completo(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)
+        ticket = self._radicar_e2(servicio, campos)
+        return servicio, definicion, ticket
+
+    def _estados_fases(self, respuesta):
+        return {fila["nombre"]: fila["situacion"] for fila in respuesta.context["progreso"]["fases"]}
+
+
+class ColaYTomarTests(_EscenarioTrabajoMixin, TestCase):
+    """Cola → Ver resumen (no toma) → Tomar → Mi trabajo."""
+
+    def setUp(self):
+        self._preparar_e2()
+        _servicio, _definicion, self.ticket = self._escenario_completo()
+
+    def test_el_solicitante_lo_ve_en_mis_tickets_y_no_en_la_cola(self):
+        self._entrar(self.solicitante)
+        self.assertIn(self.ticket, self.client.get(reverse("tickets:mis_tickets")).context["tickets"])
+        self.assertNotIn(self.ticket, self.client.get(reverse("tickets:cola")).context["tickets"])
+        self.assertEqual(self.client.get(reverse("core:mi_trabajo")).context["tarjetas"], [])
+
+    def test_quien_puede_tomarlo_lo_ve_con_lo_necesario_para_decidir(self):
+        self._entrar(self.responsable)
+        cola = self.client.get(reverse("tickets:cola"))
+        self.assertIn(self.ticket, cola.context["tickets"])
+        self.assertContains(cola, self.ticket.codigo)
+        self.assertContains(cola, self.ticket.detalle_servicio.servicio.nombre)
+        self.assertContains(cola, "Ver resumen")
+        self.assertContains(cola, "Tomar ticket")
+        self.assertContains(cola, reverse("tickets:resumen", args=[self.ticket.pk]))
+
+    def test_ver_el_resumen_no_toma_el_ticket(self):
+        self._entrar(self.responsable)
+        pagina = self.client.get(reverse("tickets:resumen", args=[self.ticket.pk]))
+        fragmento = self.client.get(reverse("tickets:resumen", args=[self.ticket.pk]), HTTP_X_REQUESTED_WITH="fetch")
+        for respuesta in (pagina, fragmento):
+            self.assertEqual(respuesta.status_code, 200)
+            self.assertContains(respuesta, self.ticket.codigo)
+            self.assertContains(respuesta, "Tomar ticket")  # se ofrece, no se ejecuta
+        self.assertNotContains(fragmento, "<html")
+        self.ticket.refresh_from_db()
+        self.assertEqual((self.ticket.estado, self.ticket.usuario_responsable_id), (Ticket.Estado.RADICADO, None))
+
+    def test_el_resumen_solo_lo_ve_quien_puede_verlo_en_la_cola(self):
+        self._entrar(self.solicitante)
+        self.assertEqual(self.client.get(reverse("tickets:resumen", args=[self.ticket.pk])).status_code, 403)
+        ajeno = Usuario.objects.create_user(username="trabajo_ajeno", password=CLAVE_PRUEBA)
+        self._entrar(ajeno)
+        self.assertEqual(self.client.get(reverse("tickets:resumen", args=[self.ticket.pk])).status_code, 403)
+
+    def test_tomar_lo_saca_de_la_cola_y_lo_lleva_a_mi_trabajo(self):
+        self._entrar(self.responsable)
+        mi_trabajo = reverse("core:mi_trabajo")
+        respuesta = self.client.post(reverse("tickets:tomar", args=[self.ticket.pk]), {"next": mi_trabajo})
+        self.assertRedirects(respuesta, mi_trabajo)
+        self.ticket.refresh_from_db()
+        self.assertEqual((self.ticket.estado, self.ticket.usuario_responsable_id), (Ticket.Estado.EN_ATENCION, self.responsable.pk))
+        self.assertNotIn(self.ticket, self.client.get(reverse("tickets:cola")).context["tickets"])
+        tarjetas = self.client.get(mi_trabajo).context["tarjetas"]
+        self.assertEqual([t["ticket"].pk for t in tarjetas], [self.ticket.pk])
+        self.assertEqual(tarjetas[0]["fase"], "Recepción")
+        self.assertEqual(tarjetas[0]["bloque"], "Analizar solicitud")
+
+    def test_un_destino_externo_en_next_se_ignora(self):
+        self._entrar(self.responsable)
+        respuesta = self.client.post(reverse("tickets:tomar", args=[self.ticket.pk]), {"next": "https://otro.example/x"})
+        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]), fetch_redirect_response=False)
+
+    def test_el_solicitante_no_puede_tomarlo_ni_llamando_al_endpoint(self):
+        self._entrar(self.solicitante)
+        self.client.post(reverse("tickets:tomar", args=[self.ticket.pk]))
+        self.ticket.refresh_from_db()
+        self.assertEqual((self.ticket.estado, self.ticket.usuario_responsable_id), (Ticket.Estado.RADICADO, None))
+
+
+class EspacioDeTrabajoPorFasesTests(_MediaAisladaMixin, _EscenarioTrabajoMixin, TestCase):
+    """El espacio muestra el estado REAL del flujo y solo ofrece lo que el motor y el dominio permiten."""
+
+    def setUp(self):
+        self._preparar_e2()
+        self.servicio, self.definicion, ticket = self._escenario_completo()
+        self.ticket = self._atender(ticket)
+        self._entrar(self.responsable)
+
+    def test_las_fases_salen_de_la_ejecucion_real_y_las_futuras_no_son_operables(self):
+        respuesta = self._trabajo(self.ticket)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(
+            self._estados_fases(respuesta),
+            {"Recepción": "actual", "Producción": "pendiente", "Revisión": "pendiente", "Ajustes": "pendiente", "Entrega": "pendiente"},
+        )
+        self.assertEqual(respuesta.context["panel"]["nombre"], "Analizar solicitud")
+        self.assertEqual([f["nombre"] for f in respuesta.context["bloques"]], ["Analizar solicitud"])
+        # Lo futuro no ofrece ninguna acción: el único formulario de actividad es el de la tarea vigente.
+        tarea = respuesta.context["panel"]["tarea"]
+        self.assertContains(respuesta, reverse("tareas:completar", args=[tarea.pk]))
+        self.assertNotContains(respuesta, "Finalizar fase")
+        self.assertNotContains(respuesta, "Continuar flujo")
+
+    def test_completar_la_actividad_hace_que_el_motor_entre_solo_a_la_siguiente_fase(self):
+        respuesta = self._trabajo(self.ticket)
+        tarea = respuesta.context["panel"]["tarea"]
+        enviada = self.client.post(reverse("tareas:completar", args=[tarea.pk]), {"next": reverse("tickets:trabajo", args=[self.ticket.pk])})
+        self.assertRedirects(enviada, reverse("tickets:trabajo", args=[self.ticket.pk]))
+        respuesta = self._trabajo(self.ticket)
+        estados = self._estados_fases(respuesta)
+        self.assertEqual((estados["Recepción"], estados["Producción"], estados["Revisión"]), ("completada", "actual", "pendiente"))
+        self.assertEqual(respuesta.context["panel"]["nombre"], "Preparar presentación")
+
+    def test_el_entregable_se_completa_desde_el_espacio_y_el_flujo_continua_a_la_revision(self):
+        self._completar(self.ticket, "Analizar solicitud")
+        self._completar(self.ticket, "Preparar presentación")
+        respuesta = self._trabajo(self.ticket)
+        self.assertEqual(respuesta.context["panel"]["tipo"], "ENTREGABLE")
+        self.assertTrue(respuesta.context["panel"]["puede_escribir"])
+        entregable = respuesta.context["panel"]["entregable"]
+        self.assertContains(respuesta, reverse("tickets:entregable_resultado", args=[self.ticket.pk, entregable.pk]))
+        self.assertNotContains(respuesta, "Continuar flujo")
+
+        self.client.post(
+            reverse("tickets:entregable_resultado", args=[self.ticket.pk, entregable.pk]),
+            {"valor": "Versión 1 de la presentación", "next": reverse("tickets:trabajo", args=[self.ticket.pk])},
+        )
+        respuesta = self._trabajo(self.ticket)
+        self.assertEqual(self._estados_fases(respuesta)["Revisión"], "actual")
+        self.assertEqual(respuesta.context["panel"]["tipo"], "APROBACION")
+        self.assertContains(respuesta, "Enviado a revisión")
+        self.assertContains(respuesta, "Pendiente")
+        # Quien atiende no puede aprobar: no se le ofrece abrir la aprobación.
+        self.assertIsNone(respuesta.context["panel"]["aprobacion"])
+        self.assertNotContains(respuesta, "Abrir la aprobación")
+
+    def test_un_entregable_de_una_fase_futura_no_se_puede_escribir_por_url(self):
+        entregable = self.ticket.entregables.get(definicion=self.definicion)
+        for ruta, datos in (
+            ("tickets:entregable_resultado", {"valor": "Adelantado"}),
+            ("tickets:entregable_adjuntar", {"archivo": SimpleUploadedFile("adelantado.txt", b"x")}),
+            ("tickets:entregable_confirmar", {}),
+        ):
+            with self.subTest(ruta):
+                respuesta = self.client.post(reverse(ruta, args=[self.ticket.pk, entregable.pk]), datos)
+                self.assertEqual(respuesta.status_code, 302)
+                entregable.refresh_from_db()
+                self.assertFalse(entregable.satisfecho)
+        self.assertEqual(self._nombre_ultima(self.ticket), "Analizar solicitud")  # el flujo no se movió
+        self.assertEqual(entregable.archivos.count(), 0)
+
+    def test_el_detalle_tampoco_ofrece_escribir_un_entregable_que_aun_no_es_su_turno(self):
+        detalle = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        entregable = self.ticket.entregables.get(definicion=self.definicion)
+        self.assertContains(detalle, "Se podrá completar cuando el flujo llegue a este paso")
+        self.assertNotContains(detalle, reverse("tickets:entregable_resultado", args=[self.ticket.pk, entregable.pk]))
+
+    def test_una_devolucion_habilita_ajustes_y_el_flujo_terminado_se_refleja(self):
+        self._hasta_la_primera_revision(self.ticket, self.definicion)
+        self._revisar(self.ticket, "DEVUELTA")
+        respuesta = self._trabajo(self.ticket)
+        estados = self._estados_fases(respuesta)
+        self.assertEqual((estados["Revisión"], estados["Ajustes"]), ("completada", "actual"))
+        self.assertEqual(respuesta.context["panel"]["nombre"], "Corregir presentación")
+
+        self._completar(self.ticket, "Corregir presentación")
+        self._satisfacer(self.ticket, self.definicion, "Versión 2")
+        self._revisar(self.ticket, "APROBADA")
+        self._completar(self.ticket, "Entregar resultado")
+        respuesta = self._trabajo(self.ticket)
+        self.assertTrue(respuesta.context["flujo_terminado"])
+        self.assertContains(respuesta, "El flujo de trabajo terminó")
+        self.assertEqual(self._instancia(self.ticket).estado, "COMPLETADA")
+
+    def test_un_ajeno_o_el_solicitante_no_operan_el_espacio(self):
+        self._entrar(self.solicitante)
+        self.assertRedirects(
+            self._trabajo(self.ticket), reverse("tickets:seguimiento", args=[self.ticket.pk]), fetch_redirect_response=False
+        )
+        ajeno = Usuario.objects.create_user(username="trabajo_ajeno2", password=CLAVE_PRUEBA)
+        self._entrar(ajeno)
+        self.assertEqual(self._trabajo(self.ticket).status_code, 403)
+        tarea = self._trabajo_tarea()
+        self.assertEqual(self.client.post(reverse("tareas:completar", args=[tarea.pk])).status_code, 403)
+
+    def _trabajo_tarea(self):
+        from apps.workflows.models import TareaWorkflow
+
+        return TareaWorkflow.objects.get(instancia_etapa=self._ultima(self.ticket)).tarea
+
+    def test_sin_flujo_se_indica_y_se_remite_al_detalle(self):
+        servicio, _version, campos = _crear_servicio_con_formulario(self.solicitante, [])
+        ticket = crear_borrador(self.solicitante, servicio)
+        radicar_ticket(ticket, self.solicitante)
+        ticket = self._atender(Ticket.objects.get(pk=ticket.pk))
+        respuesta = self._trabajo(ticket)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "no tiene un flujo de trabajo asociado")
+
+
+class TrabajoVariasActividadesYDecisionTests(_EscenarioTrabajoMixin, TestCase):
+    def setUp(self):
+        self._preparar_e2()
+
+    def test_varias_actividades_avanzan_en_orden_y_la_ultima_cambia_de_fase_sola(self):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        servicio, campos, _definicion = self._servicio_e2()
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        for nombre in ("A", "B", "C"):
+            self._act(config, self.f_recepcion, nombre)
+        self._act(config, self.f_produccion, "D")
+        self._activar(servicio, config)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._entrar(self.responsable)
+
+        for anterior, siguiente in (("A", "B"), ("B", "C")):
+            self.assertEqual(self._nombre_ultima(ticket), anterior)
+            self._completar(ticket, anterior)
+            self.assertEqual(self._nombre_ultima(ticket), siguiente)
+            self.assertEqual(self._estados_fases(self._trabajo(ticket))["Recepción"], "actual")
+        self._completar(ticket, "C")
+        respuesta = self._trabajo(ticket)
+        self.assertEqual(self._nombre_ultima(ticket), "D")
+        self.assertEqual(self._estados_fases(respuesta)["Producción"], "actual")
+        self.assertEqual(self._estados_fases(respuesta)["Recepción"], "completada")
+        self.assertNotContains(respuesta, "Finalizar fase")
+
+    def test_una_decision_se_evalua_sola_y_se_muestra_sin_boton(self):
+        from apps.catalogo.configuracion_ejecucion import crear_nueva_version_configuracion
+
+        servicio, campos, _definicion = self._servicio_e2()
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        previa = self._act(config, self.f_produccion, "Preparar")
+        decision = self._agregar(config, self.f_produccion, BloqueOperativo.Tipo.DECISION, "¿Requiere revisión?")
+        siguiente = self._act(config, self.f_produccion, "Revisar contenido")
+        self._ruta(decision, siguiente, variable="formulario.requiere_revision", operador="IGUAL_A", valor="Sí", prioridad=0)
+        self._ruta(decision, siguiente, es_fallback=True)
+        self._activar(servicio, config)
+        ticket = self._atender(self._radicar_e2(servicio, campos))
+        self._entrar(self.responsable)
+
+        self._completar(ticket, "Preparar")
+        self.assertEqual(self._nombre_ultima(ticket), "Revisar contenido")  # nadie ejecutó la decisión
+        respuesta = self._trabajo(ticket)
+        filas = {f["nombre"]: f for f in respuesta.context["bloques"]}
+        self.assertEqual(filas["¿Requiere revisión?"]["situacion"], "completado")
+        self.assertEqual(filas["¿Requiere revisión?"]["detalle"], "Condición evaluada")
+        self.assertEqual(filas["Revisar contenido"]["situacion"], "actual")
+        self.assertEqual(respuesta.context["panel"]["tipo"], "ACTIVIDAD")
+        self.assertContains(respuesta, "Condición evaluada")
+
+
+class TareasDelFlujoSinDuenoTests(_EscenarioTrabajoMixin, TestCase):
+    """GAP de 4.F3: la actividad «para el responsable del ticket» creada antes de que el ticket tuviera
+    responsable pasa a quien lo toma (o a quien se lo asignan)."""
+
+    def setUp(self):
+        self._preparar_e2()
+
+    def _servicio_con_actividad_del_responsable(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo, crear_nueva_version_configuracion
+
+        servicio, campos, _definicion = self._servicio_e2()
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        agregar_bloque_operativo(
+            config, self.admin, fase=self.f_recepcion, tipo=BloqueOperativo.Tipo.ACTIVIDAD, nombre="Atender solicitud",
+            configuracion={"tipo_actor": "RESPONSABLE_TICKET"},
+        )
+        self._activar(servicio, config)
+        return servicio, campos
+
+    def _tarea_vigente(self, ticket):
+        from apps.workflows.models import TareaWorkflow
+
+        return TareaWorkflow.objects.get(instancia_etapa=self._ultima(ticket)).tarea
+
+    def test_tomar_el_ticket_entrega_la_actividad_pendiente_a_quien_lo_toma(self):
+        servicio, campos = self._servicio_con_actividad_del_responsable()
+        ticket = self._radicar_e2(servicio, campos)
+        tarea = self._tarea_vigente(ticket)
+        self.assertIsNone(tarea.usuario_responsable_id)  # el flujo arrancó sin responsable del ticket
+
+        tomar_ticket(ticket, self.responsable)
+        tarea.refresh_from_db()
+        self.assertEqual(tarea.usuario_responsable_id, self.responsable.pk)
+        self.assertTrue(tarea.historial.filter(tipo_evento="ASIGNADA", datos__causa="TICKET_TOMADO").exists())
+
+        self._entrar(self.responsable)
+        respuesta = self._trabajo(ticket)
+        self.assertTrue(respuesta.context["panel"]["puede_completar_tarea"])
+        self.assertContains(respuesta, "Completar actividad")
+
+    def test_asignar_el_ticket_a_una_persona_tambien_le_entrega_la_actividad(self):
+        servicio, campos = self._servicio_con_actividad_del_responsable()
+        ticket = self._radicar_e2(servicio, campos)
+        gestor = Usuario.objects.create_user(username="trabajo_gestor", password=CLAVE_PRUEBA)
+        _otorgar_tickets_atender(gestor)
+        asignar_ticket(ticket, gestor, usuario=self.responsable)
+        self.assertEqual(self._tarea_vigente(ticket).usuario_responsable_id, self.responsable.pk)
+
+    def test_no_pisa_a_un_responsable_ni_toca_actividades_de_otro_tipo(self):
+        servicio, campos, definicion = self._servicio_e2()
+        self._configurar_e2(servicio, definicion)  # actividades con responsable fijo (USUARIO)
+        ticket = self._radicar_e2(servicio, campos)
+        otro = Usuario.objects.create_user(username="trabajo_otro_miembro", password=CLAVE_PRUEBA)
+        _otorgar_tickets_atender(otro)
+        MiembroEquipo.objects.create(equipo=self.equipo, usuario=otro)
+        antes = self._tarea_vigente(ticket).usuario_responsable_id
+        tomar_ticket(ticket, otro)
+        self.assertEqual(self._tarea_vigente(ticket).usuario_responsable_id, antes)
+        self.assertNotEqual(antes, otro.pk)
+
+
+class TrabajoEnElHomeYCalendarioTests(_EscenarioTrabajoMixin, TestCase):
+    def setUp(self):
+        self._preparar_e2()
+        _servicio, _definicion, ticket = self._escenario_completo()
+        self.ticket = self._atender(ticket)
+
+    def test_el_home_resume_los_tickets_que_se_atienden_y_lleva_a_continuar(self):
+        from apps.core import inicio
+
+        resumen = inicio.resumen_trabajo(self.responsable)
+        self.assertEqual([t["ticket"].pk for t in resumen["tickets"]], [self.ticket.pk])
+        self.assertEqual(resumen["tickets"][0]["bloque"], "Analizar solicitud")
+        self._entrar(self.responsable)
+        respuesta = self.client.get(reverse("core:inicio"))
+        self.assertContains(respuesta, self.ticket.codigo)
+        self.assertContains(respuesta, reverse("tickets:trabajo", args=[self.ticket.pk]))
+        self.assertEqual(resumen["url"], reverse("core:mi_trabajo"))
+
+    def test_el_solicitante_no_ve_en_su_trabajo_un_ticket_que_solo_solicito(self):
+        from apps.core import inicio
+
+        self.assertEqual(inicio.resumen_trabajo(self.solicitante), None)
+
+    def test_el_calendario_usa_solo_fechas_reales(self):
+        from apps.core import inicio
+        from apps.tareas.models import Tarea
+
+        hasta = timezone.now() + timedelta(days=60)
+        eventos = inicio._eventos(self.responsable, hasta)
+        # La tarea que creó el flujo NO trae fecha límite: no se inventa una (GAP reportado en 4.F3).
+        self.assertFalse([e for e in eventos if e["tipo"] == "tarea"])
+        # La fecha objetivo del ticket es real y ya está fijada al radicar.
+        ticket_eventos = [e for e in eventos if e["tipo"] == "ticket"]
+        if self.ticket.fecha_objetivo_vigente is not None:
+            self.assertEqual(len(ticket_eventos), 1)
+            self.assertEqual(ticket_eventos[0]["fecha"], self.ticket.fecha_objetivo_vigente)
+            self.assertEqual(ticket_eventos[0]["url"], reverse("tickets:trabajo", args=[self.ticket.pk]))
+        else:
+            self.assertEqual(ticket_eventos, [])
+
+        # Si la tarea tiene una fecha límite (campo real de Tarea), sí aparece y abre la tarea.
+        tarea = self._ultima_tarea()
+        Tarea.objects.filter(pk=tarea.pk).update(fecha_limite=timezone.now() + timedelta(days=3))
+        eventos = inicio._eventos(self.responsable, hasta)
+        con_fecha = [e for e in eventos if e["tipo"] == "tarea"]
+        self.assertEqual([e["url"] for e in con_fecha], [reverse("tareas:detalle", args=[tarea.pk])])
+
+    def test_la_fecha_objetivo_del_ticket_aparece_en_el_calendario_del_home(self):
+        from apps.core import inicio
+
+        objetivo = timezone.now() + timedelta(days=4)
+        Ticket.objects.filter(pk=self.ticket.pk).update(
+            tiempo_objetivo_cantidad=4, tiempo_objetivo_unidad="DIAS",
+            fecha_objetivo_original=objetivo, fecha_objetivo_vigente=objetivo,
+        )
+        agenda = inicio.agenda(self.responsable)
+        self.assertTrue(agenda["hay_eventos"])
+        self.assertIn(self.ticket.codigo, " ".join(e["titulo"] for e in agenda["proximos"]))
+
+    def _ultima_tarea(self):
+        from apps.workflows.models import TareaWorkflow
+
+        return TareaWorkflow.objects.get(instancia_etapa=self._ultima(self.ticket)).tarea
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4.G1 — Procesos programables: generación automática de ejecuciones.
+# PROGRAMACIÓN (cuándo) ≠ WORKFLOW (ruta). Un ticket programado es un Ticket normal
+# (tipo PROCESO, origen PROGRAMACION, sin solicitante) que entra a Cola → Mi trabajo.
+# ---------------------------------------------------------------------------
+
+from apps.catalogo.models import DefinicionEntregable, ProgramacionProceso  # noqa: E402
+from apps.catalogo.operaciones import (  # noqa: E402
+    configurar_politica_entrega,
+    editar_servicio_general,
+    retirar_responsable,
+)
+from apps.catalogo.programacion import configurar_programacion, desactivar_programacion  # noqa: E402
+from apps.catalogo.visibilidad import servicios_visibles_para  # noqa: E402
+from apps.tickets import periodos  # noqa: E402
+from apps.tickets.models import EjecucionProgramada  # noqa: E402
+from apps.tickets.programadas import (  # noqa: E402
+    generar_ejecucion_programada,
+    periodos_omitidos,
+    reconciliar_ejecuciones_programadas,
+)
+from django.test import SimpleTestCase  # noqa: E402
+
+
+class PeriodosProgramadosTests(SimpleTestCase):
+    """Módulo puro de periodos: sin base de datos ni reloj."""
+
+    def test_mes_actual_y_mes_siguiente(self):
+        actual = periodos.periodo_de_creacion(date(2026, 10, 25), periodos.MES_ACTUAL)
+        siguiente = periodos.periodo_de_creacion(date(2026, 10, 25), periodos.MES_SIGUIENTE)
+        self.assertEqual(tuple(actual), (date(2026, 10, 1), date(2026, 10, 31), "Octubre 2026"))
+        self.assertEqual(tuple(siguiente), (date(2026, 11, 1), date(2026, 11, 30), "Noviembre 2026"))
+
+    def test_diciembre_pasa_a_enero_del_anio_siguiente(self):
+        periodo = periodos.periodo_de_creacion(date(2026, 12, 25), periodos.MES_SIGUIENTE)
+        self.assertEqual(tuple(periodo), (date(2027, 1, 1), date(2027, 1, 31), "Enero 2027"))
+
+    def test_febrero_y_anios_bisiestos(self):
+        self.assertEqual(periodos.periodo_mensual(2027, 2).fin, date(2027, 2, 28))
+        self.assertEqual(periodos.periodo_mensual(2028, 2).fin, date(2028, 2, 29))
+        self.assertEqual(periodos.periodo_mensual(2100, 2).fin, date(2100, 2, 28))  # no bisiesto
+        self.assertEqual(periodos.periodo_de_creacion(date(2028, 1, 28), periodos.MES_SIGUIENTE).etiqueta, "Febrero 2028")
+
+    def test_el_dia_de_creacion_es_de_1_a_28(self):
+        for valido in (1, 15, 28):
+            self.assertEqual(periodos.validar_dia(valido), valido)
+        for invalido in (0, 29, 31, -1, "5", None, True, 2.0):
+            with self.subTest(dia=invalido), self.assertRaises(ValueError):
+                periodos.validar_dia(invalido)
+
+    def test_la_creacion_vencida_mas_reciente_no_depende_de_que_hoy_sea_el_dia(self):
+        self.assertEqual(periodos.creacion_vencida_mas_reciente(date(2026, 10, 25), 25), date(2026, 10, 25))
+        self.assertEqual(periodos.creacion_vencida_mas_reciente(date(2026, 10, 26), 25), date(2026, 10, 25))
+        self.assertEqual(periodos.creacion_vencida_mas_reciente(date(2026, 10, 24), 25), date(2026, 9, 25))
+        self.assertEqual(periodos.creacion_vencida_mas_reciente(date(2027, 1, 10), 25), date(2026, 12, 25))
+
+    def test_creaciones_entre_lista_las_fechas_de_un_rango(self):
+        fechas = periodos.creaciones_entre(date(2026, 1, 1), date(2026, 4, 1), 1)
+        self.assertEqual(fechas, [date(2026, 1, 1), date(2026, 2, 1), date(2026, 3, 1), date(2026, 4, 1)])
+        self.assertEqual(periodos.creaciones_entre(date(2026, 1, 26), date(2026, 2, 24), 25), [])
+
+    def test_periodo_desconocido_falla(self):
+        with self.assertRaises(ValueError):
+            periodos.periodo_de_creacion(date(2026, 1, 1), "SEMANA")
+
+    def test_la_siguiente_creacion_es_siempre_posterior_a_hoy(self):
+        self.assertEqual(periodos.creacion_siguiente(date(2026, 10, 7), 25), date(2026, 10, 25))
+        self.assertEqual(periodos.creacion_siguiente(date(2026, 10, 25), 25), date(2026, 11, 25))
+        self.assertEqual(periodos.creacion_siguiente(date(2026, 12, 30), 1), date(2027, 1, 1))
+
+
+class _EscenarioProgramadoMixin(_EscenarioTrabajoMixin):
+    """Procesos sobre la plantilla de cinco fases de 4.E2, con un Equipo Analítica como
+    responsable inicial por defecto."""
+
+    def _preparar_programado(self):
+        self._preparar_e2()
+        self.analitica = Equipo.objects.create(nombre="Equipo Analítica")
+        self.analista = Usuario.objects.create_user(username="g1_analista", password=CLAVE_PRUEBA)
+        MiembroEquipo.objects.create(equipo=self.analitica, usuario=self.analista)
+        _otorgar_tickets_atender(self.analista)
+
+    def _proceso(
+        self, nombre="Informe mensual de indicadores", *, flujo="informe", campos=None, politica=None,
+        responsable_usuario=False,
+    ):
+        """Proceso PUBLICADO con su responsable (equipo Analítica, o el usuario analista).
+        `flujo`: "informe" (Preparar → Aprobación → Entregable → Cierre), "simple" (una actividad del
+        responsable del ticket), "solicitante" (actividad dirigida al solicitante) o
+        "aprobacion_solicitante". Devuelve `(servicio, servicio_responsable)`."""
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo, crear_nueva_version_configuracion
+
+        servicio, _, _ = _crear_servicio_con_formulario(self.admin, campos or [])
+        servicio.nombre = nombre
+        servicio.tipo = "PROCESO"
+        servicio.workflow = self.workflow_e2
+        servicio.save(update_fields=["nombre", "tipo", "workflow", "actualizado_en"])
+        if politica:
+            Servicio.objects.filter(pk=servicio.pk).update(politica_entrega=politica, dias_observacion=None)
+        if responsable_usuario:
+            responsable = ServicioResponsable.objects.create(
+                servicio=servicio, tipo_responsable="USUARIO", usuario=self.analista
+            )
+        else:
+            responsable = ServicioResponsable.objects.create(
+                servicio=servicio, tipo_responsable="EQUIPO", equipo=self.analitica
+            )
+        ACT = BloqueOperativo.Tipo.ACTIVIDAD
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        if flujo == "informe":
+            definicion = DefinicionEntregable.objects.create(
+                servicio=servicio, nombre="Informe de indicadores", tipo="TEXTO", obligatorio=True, orden=0
+            )
+            self._agregar(config, self.f_recepcion, ACT, "Preparar informe", tipo_actor="RESPONSABLE_TICKET")
+            aprobacion = self._apr(config, self.f_revision, "Aprobar informe")
+            entrega = agregar_bloque_operativo(
+                config, self.admin, fase=self.f_entrega, tipo=BloqueOperativo.Tipo.ENTREGABLE,
+                nombre="Entregar informe", definicion_entregable=definicion,
+            )
+            self._agregar(config, self.f_entrega, ACT, "Cierre", tipo_actor="RESPONSABLE_TICKET")
+            self._ruta(aprobacion, entrega, resultado_aprobacion="APROBADA")
+            self._ruta(aprobacion, None, resultado_aprobacion="DEVUELTA")
+            self._ruta(aprobacion, None, resultado_aprobacion="RECHAZADA")
+        elif flujo == "simple":
+            self._agregar(config, self.f_recepcion, ACT, "Atender", tipo_actor="RESPONSABLE_TICKET")
+        elif flujo == "solicitante":
+            self._agregar(config, self.f_recepcion, ACT, "Confirmar con quien solicitó", tipo_actor="SOLICITANTE")
+        elif flujo == "aprobacion_solicitante":
+            aprobacion = agregar_bloque_operativo(
+                config, self.admin, fase=self.f_recepcion, tipo=BloqueOperativo.Tipo.APROBACION,
+                nombre="Visto bueno del solicitante",
+                configuracion={
+                    "modo": "SECUENCIAL", "politica": "",
+                    "participantes": [{"tipo": "SOLICITANTE", "usuario_id": None, "equipo_id": None}],
+                },
+            )
+            for resultado in ("APROBADA", "DEVUELTA", "RECHAZADA"):
+                self._ruta(aprobacion, None, resultado_aprobacion=resultado)
+        self._activar(servicio, config)
+        return servicio, responsable
+
+    def _programar(self, servicio, responsable, *, dia=1, periodo="MES_ACTUAL", desde=date(2026, 1, 1)):
+        """Deja el Proceso programado y fija `activada_desde` (la fecha de activación real depende
+        del reloj; las pruebas necesitan una fecha conocida)."""
+        programacion = configurar_programacion(
+            servicio, self.admin, dia_creacion=dia, periodo=periodo, responsable_inicial=responsable
+        )
+        ProgramacionProceso.objects.filter(pk=programacion.pk).update(activada_desde=desde)
+        programacion.refresh_from_db()
+        return programacion
+
+    def _ejecucion(self, servicio):
+        return EjecucionProgramada.objects.get(servicio=servicio)
+
+    def _completar_como(self, ticket, nombre, usuario):
+        from apps.workflows.integracion import completar_tarea_workflow
+        from apps.workflows.models import TareaWorkflow
+
+        ticket.refresh_from_db()
+        ejecucion = (
+            ticket.instancia_workflow.ejecuciones_etapa.filter(bloque_operativo__nombre=nombre).order_by("-orden").first()
+        )
+        completar_tarea_workflow(TareaWorkflow.objects.get(instancia_etapa=ejecucion).tarea, usuario)
+
+
+class ProgramacionProcesoModeloTests(_EscenarioProgramadoMixin, TestCase):
+    def setUp(self):
+        self._preparar_programado()
+
+    def test_solo_un_proceso_puede_programarse(self):
+        servicio, _, _ = _crear_servicio_con_formulario(self.admin, [])  # tipo SERVICIO
+        with self.assertRaises(ValidationError):
+            ProgramacionProceso(servicio=servicio, activa=False, dia_creacion=5).save()
+        with self.assertRaises(ValidationError):
+            configurar_programacion(
+                servicio, self.admin, dia_creacion=5, periodo="MES_ACTUAL", responsable_inicial=None
+            )
+        self.assertFalse(ProgramacionProceso.objects.exists())
+
+    def test_el_dia_va_de_1_a_28_en_el_dominio_y_en_la_base_de_datos(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        for invalido in (0, 29, 31):
+            with self.subTest(dia=invalido):
+                with self.assertRaises(ValidationError):
+                    configurar_programacion(
+                        servicio, self.admin, dia_creacion=invalido, periodo="MES_ACTUAL", responsable_inicial=responsable
+                    )
+                with self.assertRaises(IntegrityError), transaction.atomic():
+                    ProgramacionProceso.objects.bulk_create(
+                        [ProgramacionProceso(servicio=servicio, activa=False, dia_creacion=invalido)]
+                    )
+
+    def test_una_programacion_activa_exige_responsable_y_fecha_de_activacion(self):
+        servicio, _ = self._proceso(flujo="simple")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ProgramacionProceso.objects.bulk_create([ProgramacionProceso(servicio=servicio, activa=True, dia_creacion=5)])
+
+    def test_el_responsable_inicial_debe_ser_de_este_proceso(self):
+        servicio, _ = self._proceso(flujo="simple")
+        _, ajeno = self._proceso("Otro proceso", flujo="simple")
+        with self.assertRaises(ValidationError):
+            configurar_programacion(
+                servicio, self.admin, dia_creacion=5, periodo="MES_ACTUAL", responsable_inicial=ajeno
+            )
+        with self.assertRaises(ValidationError):
+            ProgramacionProceso(servicio=servicio, activa=False, dia_creacion=5, responsable_inicial=ajeno).save()
+
+    def test_solo_quien_administra_el_catalogo_programa(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        with self.assertRaises(PermissionDenied):
+            configurar_programacion(
+                servicio, self.solicitante, dia_creacion=5, periodo="MES_ACTUAL", responsable_inicial=responsable
+            )
+
+    def test_configurar_audita_y_cambiar_el_calendario_reinicia_la_fecha_de_activacion(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        programacion = self._programar(servicio, responsable, dia=25, periodo="MES_SIGUIENTE", desde=date(2026, 1, 1))
+        self.assertTrue(
+            RegistroAuditoria.objects.filter(modelo="catalogo.programacionproceso", object_id=programacion.pk).exists()
+        )
+        # Cambiar solo el responsable no reinicia; cambiar el día sí (nunca genera hacia atrás).
+        configurar_programacion(servicio, self.admin, dia_creacion=25, periodo="MES_SIGUIENTE", responsable_inicial=responsable)
+        programacion.refresh_from_db()
+        self.assertEqual(programacion.activada_desde, date(2026, 1, 1))
+        configurar_programacion(servicio, self.admin, dia_creacion=10, periodo="MES_SIGUIENTE", responsable_inicial=responsable)
+        programacion.refresh_from_db()
+        self.assertGreater(programacion.activada_desde, date(2026, 1, 1))
+
+    def test_manual_pausa_sin_perder_la_configuracion(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        programacion = self._programar(servicio, responsable, dia=7)
+        desactivar_programacion(servicio, self.admin)
+        programacion.refresh_from_db()
+        self.assertFalse(programacion.activa)
+        self.assertEqual(programacion.dia_creacion, 7)
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=date(2026, 3, 8))["generadas"], 0)
+
+
+class TicketProgramadoModeloTests(_EscenarioProgramadoMixin, TestCase):
+    def setUp(self):
+        self._preparar_programado()
+
+    def test_un_ticket_manual_no_puede_quedar_sin_solicitante(self):
+        for origen in ("MANUAL", "SISTEMA"):
+            with self.subTest(origen=origen), self.assertRaises(IntegrityError), transaction.atomic():
+                Ticket.objects.create(solicitante=None, tipo="PROCESO", origen=origen)
+
+    def test_un_ticket_de_programacion_no_puede_tener_solicitante(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Ticket.objects.create(solicitante=self.solicitante, tipo="PROCESO", origen="PROGRAMACION")
+
+    def test_un_ticket_de_programacion_es_siempre_un_proceso(self):
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Ticket.objects.create(solicitante=None, tipo="SERVICIO", origen="PROGRAMACION")
+
+    def test_un_ticket_de_programacion_sin_solicitante_es_valido(self):
+        ticket = Ticket.objects.create(solicitante=None, tipo="PROCESO", origen="PROGRAMACION")
+        self.assertIsNone(ticket.solicitante_id)
+        self.assertFalse(es_propietario_borrador(self.solicitante, ticket))
+
+
+class ProcesoProgramadoFueraDelCatalogoTests(_EscenarioProgramadoMixin, TestCase):
+    def setUp(self):
+        self._preparar_programado()
+        self.servicio, self.resp_servicio = self._proceso(flujo="simple")
+
+    def test_un_proceso_manual_sigue_en_el_catalogo(self):
+        self.assertIn(self.servicio.pk, [s.pk for s in servicios_visibles_para(self.solicitante)])
+
+    def test_un_proceso_programado_activo_sale_de_toda_vista_basada_en_visibles(self):
+        from apps.catalogo.busqueda import buscar_servicios_por_necesidad, servicios_buscables_para
+        from apps.core import inicio
+
+        self.assertIn(self.servicio.pk, [s.pk for s in servicios_buscables_para(self.solicitante)])
+        self.assertEqual(len(inicio.categorias_con_servicios(self.solicitante)), 1)
+        self._programar(self.servicio, self.resp_servicio)
+        self.assertNotIn(self.servicio.pk, [s.pk for s in servicios_visibles_para(self.solicitante)])
+        self.assertNotIn(self.servicio.pk, [s.pk for s in servicios_buscables_para(self.solicitante)])
+        self.assertEqual(inicio.categorias_con_servicios(self.solicitante), [])
+        resultados, _ = inicio.buscar_servicios(self.solicitante, "Informe")
+        self.assertNotIn(self.servicio.pk, [s.pk for s in resultados])
+        encontrados = buscar_servicios_por_necesidad(self.solicitante, "informe mensual indicadores")
+        self.assertNotIn(self.servicio.pk, [r.servicio.pk for r in encontrados])
+        with self.assertRaises(PermissionDenied):
+            crear_borrador(self.solicitante, self.servicio)
+        self._entrar(self.solicitante)
+        self.assertEqual(self.client.get(reverse("tickets:solicitar", args=[self.servicio.pk])).status_code, 404)
+        self.assertEqual(self.client.get(reverse("catalogo:detalle", args=[self.servicio.pk])).status_code, 404)
+
+    def test_pausar_la_programacion_devuelve_el_proceso_al_catalogo(self):
+        self._programar(self.servicio, self.resp_servicio)
+        desactivar_programacion(self.servicio, self.admin)
+        self.assertIn(self.servicio.pk, [s.pk for s in servicios_visibles_para(self.solicitante)])
+
+    def test_un_proceso_manual_se_sigue_solicitando_con_origen_manual_y_solicitante(self):
+        ticket = crear_borrador(self.solicitante, self.servicio)
+        radicar_ticket(ticket, self.solicitante)
+        ticket.refresh_from_db()
+        self.assertEqual((ticket.tipo, ticket.origen, ticket.etiqueta), ("PROCESO", "MANUAL", ""))
+        self.assertEqual(ticket.solicitante, self.solicitante)
+        evento = ticket.historial.get(tipo_evento="RADICADO")
+        self.assertEqual(evento.actor, self.solicitante)
+        self.assertIsNone(evento.datos)
+        self.assertFalse(EjecucionProgramada.objects.exists())
+
+    def test_un_servicio_sigue_radicando_con_su_solicitante(self):
+        servicio, _, _ = _crear_servicio_con_formulario(self.solicitante, [])
+        ticket = crear_borrador(self.solicitante, servicio)
+        radicar_ticket(ticket, self.solicitante)
+        ticket.refresh_from_db()
+        self.assertEqual((ticket.tipo, ticket.origen, ticket.solicitante), ("SERVICIO", "MANUAL", self.solicitante))
+        self.assertEqual(ticket.estado, "RADICADO")
+
+
+class CompatibilidadDeProcesoProgramadoTests(_EscenarioProgramadoMixin, TestCase):
+    def setUp(self):
+        self._preparar_programado()
+
+    def _intentar(self, servicio, responsable):
+        return configurar_programacion(
+            servicio, self.admin, dia_creacion=5, periodo="MES_ACTUAL", responsable_inicial=responsable
+        )
+
+    def _rechaza(self, servicio, responsable, fragmento):
+        with self.assertRaises(ValidationError) as contexto:
+            self._intentar(servicio, responsable)
+        self.assertIn(fragmento, " ".join(contexto.exception.messages))
+        self.assertFalse(ProgramacionProceso.objects.filter(servicio=servicio).exists())
+
+    def test_una_actividad_dirigida_al_solicitante_bloquea_la_activacion_y_dice_cual(self):
+        servicio, responsable = self._proceso(flujo="solicitante")
+        self._rechaza(servicio, responsable, "Confirmar con quien solicitó")
+
+    def test_una_aprobacion_con_el_solicitante_como_participante_bloquea(self):
+        servicio, responsable = self._proceso(flujo="aprobacion_solicitante")
+        self._rechaza(servicio, responsable, "Visto bueno del solicitante")
+
+    def test_la_entrega_formal_bloquea(self):
+        servicio, responsable = self._proceso(flujo="simple", politica=DIRECTO)
+        self._rechaza(servicio, responsable, "entrega formal")
+
+    def test_un_formulario_con_campos_obligatorios_bloquea(self):
+        T = Campo.TipoCampo
+        servicio, responsable = self._proceso(
+            flujo="simple", campos=[{"tipo": T.TEXTO, "etiqueta": "Motivo", "orden": 1, "obligatorio": True}]
+        )
+        self._rechaza(servicio, responsable, "Motivo")
+
+    def test_un_proceso_compatible_se_programa(self):
+        servicio, responsable = self._proceso(flujo="informe")
+        self.assertTrue(self._intentar(servicio, responsable).activa)
+
+    def test_publicar_un_flujo_con_actor_solicitante_se_rechaza_si_el_proceso_esta_programado(self):
+        from apps.catalogo.configuracion_ejecucion import activar_configuracion_ejecucion, crear_nueva_version_configuracion
+
+        servicio, responsable = self._proceso(flujo="simple")
+        self._programar(servicio, responsable)
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        self._agregar(config, self.f_recepcion, BloqueOperativo.Tipo.ACTIVIDAD, "Pedir dato", tipo_actor="SOLICITANTE")
+        with self.assertRaises(ValidationError) as contexto:
+            activar_configuracion_ejecucion(servicio, config, self.admin)
+        self.assertIn("Pedir dato", " ".join(contexto.exception.messages))
+
+    def test_no_se_puede_definir_entrega_formal_ni_pasar_a_servicio_mientras_este_programado(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        self._programar(servicio, responsable)
+        with self.assertRaises(ValidationError):
+            configurar_politica_entrega(servicio, self.admin, politica="CIERRE_DIRECTO")
+        with self.assertRaises(ValidationError):
+            editar_servicio_general(
+                servicio, self.admin, nombre=servicio.nombre, descripcion="", categoria=servicio.categoria,
+                tipo="SERVICIO", instrucciones="", alcance_visibilidad=servicio.alcance_visibilidad,
+            )
+
+    def test_no_se_activa_una_version_de_formulario_con_obligatorios_en_un_proceso_programado(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        self._programar(servicio, responsable)
+        nueva = crear_nueva_version(servicio.formulario, self.admin)
+        Campo.objects.create(version=nueva, tipo=Campo.TipoCampo.TEXTO, etiqueta="Obligatorio", obligatorio=True, orden=1)
+        with self.assertRaises(ValueError):
+            activar_version(servicio.formulario, nueva, self.admin)
+
+    def test_el_diagnostico_de_publicacion_senala_un_proceso_programado_incompatible(self):
+        from apps.catalogo.operaciones import validar_publicacion
+
+        servicio, responsable = self._proceso(flujo="simple")
+        programacion = self._programar(servicio, responsable)
+        Servicio.objects.filter(pk=servicio.pk).update(politica_entrega=DIRECTO)  # saltando la operación
+        servicio.refresh_from_db()
+        with self.assertRaises(ValidationError) as contexto:
+            validar_publicacion(servicio)
+        self.assertIn("entrega formal", " ".join(contexto.exception.messages))
+        # Y la generación automática lo rechaza en vez de crear un ticket que no se puede cerrar bien.
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=date(2026, 3, 2))["con_error"], 1)
+        programacion.refresh_from_db()
+        self.assertIn("entrega formal", programacion.ultimo_error)
+
+
+class GenerarEjecucionProgramadaTests(_EscenarioProgramadoMixin, TestCase):
+    """Casos E2E de 4.G1."""
+
+    def setUp(self):
+        self._preparar_programado()
+
+    # --- caso principal ---------------------------------------------------------------
+
+    def test_informe_mensual_dia_1_mes_actual_genera_el_ticket_y_recorre_el_circuito(self):
+        servicio, responsable = self._proceso("Informe mensual de indicadores", flujo="informe")
+        self._programar(servicio, responsable, dia=1, periodo="MES_ACTUAL", desde=date(2026, 9, 15))
+
+        resumen = reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 1))
+        self.assertEqual(resumen, {"generadas": 1, "con_error": 0, "omitidos": 0})
+
+        ejecucion = self._ejecucion(servicio)
+        ticket = ejecucion.ticket
+        ticket.refresh_from_db()
+        self.assertEqual((ticket.tipo, ticket.origen), ("PROCESO", "PROGRAMACION"))
+        self.assertIsNone(ticket.solicitante_id)
+        self.assertEqual(ticket.etiqueta, "Octubre 2026")
+        self.assertEqual((ejecucion.periodo_inicio, ejecucion.periodo_fin), (date(2026, 10, 1), date(2026, 10, 31)))
+        self.assertEqual((ejecucion.etiqueta, ejecucion.frecuencia), ("Octubre 2026", "MENSUAL"))
+        self.assertTrue(ticket.codigo.startswith("TCK-"))
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
+        self.assertEqual(ticket.detalle_servicio.servicio, servicio)
+        self.assertEqual(ticket.entrega_politica, "")
+        self.assertIsNotNone(ticket.instancia_workflow_id)
+        self.assertEqual(ticket.instancia_workflow.estado, "EN_ESPERA")
+        self.assertEqual((ticket.equipo_responsable, ticket.usuario_responsable_id), (self.analitica, None))
+        self.assertEqual(ticket.entregables.count(), 1)
+        self.assertEqual(ejecucion.programacion_foto["dia_creacion"], 1)
+        self.assertEqual(ejecucion.programacion_foto["responsable_inicial"]["equipo_id"], self.analitica.pk)
+
+        # Historial como SISTEMA y auditoría sin usuario.
+        radicado = ticket.historial.get(tipo_evento="RADICADO")
+        self.assertIsNone(radicado.actor_id)
+        self.assertEqual((radicado.datos["origen"], radicado.datos["etiqueta"]), ("PROGRAMACION", "Octubre 2026"))
+        auditoria = RegistroAuditoria.objects.get(modelo="tickets.ejecucionprogramada", object_id=ejecucion.pk)
+        self.assertEqual((auditoria.origen, auditoria.usuario_id), ("SISTEMA", None))
+        self.assertTrue(
+            _auditorias_de_ticket(ticket).filter(origen="SISTEMA", usuario__isnull=True).exists()
+        )
+
+        # No aparece en Mis tickets de nadie; sí en la Cola del equipo.
+        for persona in (self.analista, self.admin, self.solicitante):
+            self._entrar(persona)
+            self.assertNotIn(ticket, self.client.get(reverse("tickets:mis_tickets")).context["tickets"])
+        self._entrar(self.analista)
+        self.assertIn(ticket, self.client.get(reverse("tickets:cola")).context["tickets"])
+        cola = self.client.get(reverse("tickets:cola"))
+        self.assertContains(cola, "Octubre 2026")
+        self.assertContains(cola, "Generado por programación")
+
+        # Pantallas de lectura sin solicitante.
+        self.assertEqual(self.client.get(reverse("tickets:detalle", args=[ticket.pk])).status_code, 200)
+        self.assertEqual(self.client.get(reverse("tickets:resumen", args=[ticket.pk])).status_code, 200)
+        self.assertRedirects(
+            self.client.get(reverse("tickets:seguimiento", args=[ticket.pk])),
+            reverse("tickets:detalle", args=[ticket.pk]), fetch_redirect_response=False,
+        )
+
+        # Un miembro autorizado lo toma y pasa a Mi trabajo.
+        self.client.post(reverse("tickets:tomar", args=[ticket.pk]))
+        ticket.refresh_from_db()
+        self.assertEqual((ticket.estado, ticket.usuario_responsable), (Ticket.Estado.EN_ATENCION, self.analista))
+        tarjetas = self.client.get(reverse("core:mi_trabajo")).context["tarjetas"]
+        self.assertEqual([t["ticket"].pk for t in tarjetas], [ticket.pk])
+        self.assertContains(self.client.get(reverse("core:mi_trabajo")), "Octubre 2026")
+        self.assertEqual(self.client.get(reverse("tickets:trabajo", args=[ticket.pk])).status_code, 200)
+
+        # No hay a quién pedirle información ni entregarle formalmente.
+        from apps.tickets.autorizacion import puede_entregar_ticket
+
+        self.assertFalse(puede_solicitar_informacion(self.analista, ticket))
+        self.assertFalse(puede_entregar_ticket(self.analista, ticket))
+
+        # Workflow normal: preparar → aprobar → entregable → cierre.
+        self._completar_como(ticket, "Preparar informe", self.analista)
+        self._revisar(ticket, "APROBADA", nombre="Aprobar informe")
+        entregable = ticket.entregables.get()
+        registrar_resultado_entregable(entregable, self.analista, "Informe de octubre listo")
+        self._completar_como(ticket, "Cierre", self.analista)
+        ticket.instancia_workflow.refresh_from_db()
+        self.assertEqual(ticket.instancia_workflow.estado, "COMPLETADA")
+        # Completar el Workflow no cierra el Ticket: se resuelve y cierra por las operaciones de siempre.
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+        resolver_ticket(ticket, self.analista, "Informe publicado")
+        cerrar_ticket(ticket, self.analista)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.CERRADO)
+
+    def test_el_nombre_del_proceso_no_se_toca_y_la_etiqueta_se_congela(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        self._programar(servicio, responsable)
+        reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 1))
+        ticket = self._ejecucion(servicio).ticket
+        self.assertEqual(ticket.detalle_servicio.servicio.nombre, "Informe mensual de indicadores")
+        ticket.etiqueta = "Otra"
+        with self.assertRaises(ValidationError):
+            ticket.save()
+        ejecucion = self._ejecucion(servicio)
+        ejecucion.etiqueta = "Otra"
+        with self.assertRaises(ValidationError):
+            ejecucion.save()
+
+    # --- segundo caso: mes siguiente y no duplicar ---------------------------------------
+
+    def test_revision_mensual_dia_25_mes_siguiente_crea_enero_y_no_se_duplica(self):
+        servicio, responsable = self._proceso("Revisión mensual de indicadores", flujo="simple")
+        self._programar(servicio, responsable, dia=25, periodo="MES_SIGUIENTE", desde=date(2026, 12, 1))
+
+        hoy = date(2026, 12, 25)
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=hoy)["generadas"], 1)
+        ejecucion = self._ejecucion(servicio)
+        self.assertEqual((ejecucion.periodo_inicio, ejecucion.periodo_fin), (date(2027, 1, 1), date(2027, 1, 31)))
+        self.assertEqual(ejecucion.ticket.etiqueta, "Enero 2027")
+
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=hoy)["generadas"], 0)
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=date(2026, 12, 31))["generadas"], 0)
+        self.assertEqual(EjecucionProgramada.objects.count(), 1)
+        self.assertEqual(Ticket.objects.count(), 1)
+
+    def test_pausar_cambiar_el_responsable_y_reactivar_no_duplican_el_periodo(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        otro = ServicioResponsable.objects.create(servicio=servicio, tipo_responsable="USUARIO", usuario=self.analista)
+        self._programar(servicio, responsable, dia=25, periodo="MES_SIGUIENTE", desde=date(2026, 12, 1))
+        reconciliar_ejecuciones_programadas(hoy=date(2026, 12, 25))
+        desactivar_programacion(servicio, self.admin)
+        configurar_programacion(servicio, self.admin, dia_creacion=25, periodo="MES_SIGUIENTE", responsable_inicial=otro)
+        ProgramacionProceso.objects.filter(servicio=servicio).update(activada_desde=date(2026, 12, 1))
+        reconciliar_ejecuciones_programadas(hoy=date(2026, 12, 28))
+        self.assertEqual(EjecucionProgramada.objects.filter(servicio=servicio).count(), 1)
+
+    def test_la_base_de_datos_impide_dos_ejecuciones_del_mismo_proceso_y_periodo(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        self._programar(servicio, responsable)
+        reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 1))
+        original = self._ejecucion(servicio)
+        otro_ticket = Ticket.objects.create(solicitante=None, tipo="PROCESO", origen="PROGRAMACION", etiqueta="Octubre 2026")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            EjecucionProgramada.objects.create(
+                servicio=servicio, frecuencia="MENSUAL", periodo_inicio=original.periodo_inicio,
+                periodo_fin=original.periodo_fin, etiqueta="Octubre 2026", ticket=otro_ticket,
+                generada_en=timezone.now(),
+            )
+
+    # --- recuperación, retroactividad y acumulación --------------------------------------
+
+    def test_si_el_beat_no_corrio_el_dia_25_la_ejecucion_se_recupera_el_26(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        self._programar(servicio, responsable, dia=25, periodo="MES_SIGUIENTE", desde=date(2026, 10, 1))
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 24))["generadas"], 0)  # aún no vence
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 26))["generadas"], 1)
+        ejecucion = self._ejecucion(servicio)
+        self.assertEqual(ejecucion.etiqueta, "Noviembre 2026")
+        self.assertEqual(EjecucionProgramada.objects.count(), 1)
+
+    def test_no_es_retroactivo_la_primera_ejecucion_es_el_siguiente_vencimiento_real(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        self._programar(servicio, responsable, dia=25, periodo="MES_SIGUIENTE", desde=date(2026, 10, 7))
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 7))["generadas"], 0)
+        # Configurada el 26: el vencimiento del 25 ya pasó y no se rellena.
+        ProgramacionProceso.objects.filter(servicio=servicio).update(activada_desde=date(2026, 10, 26))
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 27))["generadas"], 0)
+        self.assertFalse(EjecucionProgramada.objects.exists())
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=date(2026, 11, 25))["generadas"], 1)
+        self.assertEqual(self._ejecucion(servicio).etiqueta, "Diciembre 2026")
+
+    def test_si_el_beat_estuvo_apagado_meses_no_se_acumulan_ejecuciones_en_silencio(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        programacion = self._programar(servicio, responsable, dia=1, periodo="MES_ACTUAL", desde=date(2026, 1, 1))
+        hoy = date(2026, 7, 1)
+        resumen = reconciliar_ejecuciones_programadas(hoy=hoy)
+        self.assertEqual((resumen["generadas"], resumen["omitidos"]), (1, 6))
+        self.assertEqual(EjecucionProgramada.objects.count(), 1)
+        self.assertEqual(self._ejecucion(servicio).etiqueta, "Julio 2026")
+        # Los periodos que faltaron se pueden detectar, no se rellenan.
+        self.assertEqual(
+            [p.etiqueta for p in periodos_omitidos(programacion, hoy)],
+            ["Enero 2026", "Febrero 2026", "Marzo 2026", "Abril 2026", "Mayo 2026", "Junio 2026"],
+        )
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=hoy)["generadas"], 0)
+
+    # --- responsable inicial -------------------------------------------------------------
+
+    def test_responsable_inicial_usuario_deja_el_ticket_dirigido_sin_falsear_la_atencion(self):
+        servicio, responsable = self._proceso(flujo="informe", responsable_usuario=True)
+        self._programar(servicio, responsable, dia=1, periodo="MES_ACTUAL")
+        reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 1))
+        ticket = self._ejecucion(servicio).ticket
+        ticket.refresh_from_db()
+        self.assertEqual((ticket.usuario_responsable, ticket.equipo_responsable_id), (self.analista, None))
+        self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)  # dirigido NO es en atención
+        self.assertTrue(puede_iniciar_atencion(self.analista, ticket))
+        self.assertFalse(puede_tomar(self.analista, ticket))
+        # La actividad «para el responsable del ticket» ya nace con dueño.
+        from apps.workflows.models import TareaWorkflow
+
+        tarea = TareaWorkflow.objects.get(instancia_etapa=self._ultima(ticket)).tarea
+        self.assertEqual(tarea.usuario_responsable_id, self.analista.pk)
+        self._entrar(self.analista)
+        self.assertIn(ticket, self.client.get(reverse("tickets:cola")).context["tickets"])
+        self.assertEqual(self.client.get(reverse("core:mi_trabajo")).context["tarjetas"], [])
+        iniciar_atencion_ticket(ticket, self.analista)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.EN_ATENCION)
+        self.assertEqual([t["ticket"].pk for t in self.client.get(reverse("core:mi_trabajo")).context["tarjetas"]], [ticket.pk])
+
+    def test_responsable_inicial_equipo_lo_deja_en_la_cola_de_sus_miembros(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        self._programar(servicio, responsable)
+        reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 1))
+        ticket = self._ejecucion(servicio).ticket
+        self.assertEqual((ticket.equipo_responsable, ticket.usuario_responsable_id), (self.analitica, None))
+        self.assertTrue(puede_tomar(self.analista, ticket))
+        ajeno = Usuario.objects.create_user(username="g1_ajeno", password=CLAVE_PRUEBA)
+        self.assertFalse(puede_tomar(ajeno, ticket))
+        self.assertFalse(puede_tomar(self.admin, ticket))  # administrar el catálogo no es atender
+
+    # --- errores -------------------------------------------------------------------------
+
+    def test_un_responsable_inactivo_no_genera_un_ticket_huerfano_y_deja_el_error(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        programacion = self._programar(servicio, responsable)
+        retirar_responsable(responsable, self.admin)
+
+        resumen = reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 1))
+        self.assertEqual((resumen["generadas"], resumen["con_error"]), (0, 1))
+        self.assertFalse(Ticket.objects.exists())
+        self.assertFalse(EjecucionProgramada.objects.exists())
+        programacion.refresh_from_db()
+        self.assertIsNotNone(programacion.ultimo_intento_en)
+        self.assertIn("responsable inicial", programacion.ultimo_error)
+
+    def test_un_usuario_responsable_desactivado_tampoco_genera(self):
+        servicio, responsable = self._proceso(flujo="simple", responsable_usuario=True)
+        programacion = self._programar(servicio, responsable)
+        Usuario.objects.filter(pk=self.analista.pk).update(is_active=False)
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 1))["con_error"], 1)
+        programacion.refresh_from_db()
+        self.assertIn("ya no está activo", programacion.ultimo_error)
+        self.assertFalse(Ticket.objects.exists())
+
+    def test_un_error_en_un_proceso_no_impide_generar_los_demas_y_se_limpia_al_funcionar(self):
+        malo, resp_malo = self._proceso("Proceso con responsable retirado", flujo="simple")
+        bueno, resp_bueno = self._proceso("Proceso sano", flujo="simple")
+        prog_malo = self._programar(malo, resp_malo)
+        self._programar(bueno, resp_bueno)
+        retirar_responsable(resp_malo, self.admin)
+
+        resumen = reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 1))
+        self.assertEqual((resumen["generadas"], resumen["con_error"]), (1, 1))
+        self.assertEqual(EjecucionProgramada.objects.get().servicio, bueno)
+        prog_malo.refresh_from_db()
+        self.assertTrue(prog_malo.ultimo_error)
+
+        # Se corrige (otro responsable activo) y la siguiente corrida genera y limpia el error.
+        nuevo = ServicioResponsable.objects.create(servicio=malo, tipo_responsable="EQUIPO", equipo=self.analitica)
+        ProgramacionProceso.objects.filter(pk=prog_malo.pk).update(responsable_inicial=nuevo)
+        resumen = reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 2))
+        self.assertEqual((resumen["generadas"], resumen["con_error"]), (1, 0))
+        prog_malo.refresh_from_db()
+        self.assertEqual(prog_malo.ultimo_error, "")
+        self.assertEqual(EjecucionProgramada.objects.count(), 2)
+
+    def test_un_flujo_incompatible_descubierto_al_generar_queda_registrado_en_la_programacion(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        programacion = self._programar(servicio, responsable)
+        # Alguien deja el flujo dirigido al solicitante saltándose la validación de publicación.
+        bloque = servicio.configuracion_ejecucion_activa.bloques.get()
+        BloqueOperativo.objects.filter(pk=bloque.pk).update(configuracion={"tipo_actor": "SOLICITANTE"})
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 1))["con_error"], 1)
+        programacion.refresh_from_db()
+        self.assertIn("solicitante", programacion.ultimo_error)
+        self.assertFalse(Ticket.objects.exists())
+
+    def test_si_algo_falla_al_crear_no_queda_nada_ni_se_gasta_el_consecutivo(self):
+        from unittest.mock import patch
+
+        from apps.tickets.models import ConsecutivoTicket
+
+        servicio, responsable = self._proceso(flujo="simple")
+        programacion = self._programar(servicio, responsable)
+        with patch("apps.tickets.programadas.EjecucionProgramada.objects.create", side_effect=RuntimeError("falla")):
+            with self.assertRaises(RuntimeError):
+                generar_ejecucion_programada(programacion, hoy=date(2026, 10, 1))
+        self.assertFalse(Ticket.objects.exists())
+        self.assertFalse(EjecucionProgramada.objects.exists())
+        self.assertEqual(ConsecutivoTicket.objects.filter(ultimo__gt=0).count(), 0)
+        # Sin el fallo, la misma operación genera el ticket y el consecutivo sigue desde el principio.
+        self.assertEqual(generar_ejecucion_programada(programacion, hoy=date(2026, 10, 1)).ticket.consecutivo, 1)
+
+    def test_una_programacion_pausada_no_genera(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        programacion = self._programar(servicio, responsable)
+        desactivar_programacion(servicio, self.admin)
+        self.assertIsNone(generar_ejecucion_programada(programacion, hoy=date(2026, 10, 1)))
+        self.assertFalse(Ticket.objects.exists())
+
+    def test_las_variables_del_workflow_ven_el_origen_y_un_solicitante_vacio(self):
+        from apps.workflows.variables import _CAMPOS_TICKET
+
+        servicio, responsable = self._proceso(flujo="simple")
+        self._programar(servicio, responsable)
+        reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 1))
+        ticket = self._ejecucion(servicio).ticket
+        self.assertEqual(_CAMPOS_TICKET["origen"](ticket), "PROGRAMACION")
+        self.assertIsNone(_CAMPOS_TICKET["solicitante"](ticket))
+
+
+class ConcurrenciaEjecucionProgramadaTests(_EscenarioProgramadoMixin, TransactionTestCase):
+    """Bloqueante: dos workers que generan el mismo periodo producen UN solo ticket."""
+
+    def setUp(self):
+        self._preparar_programado()
+
+    def test_dos_workers_generando_el_mismo_periodo_crean_una_sola_ejecucion(self):
+        servicio, responsable = self._proceso(flujo="simple")
+        programacion = self._programar(servicio, responsable, dia=1, periodo="MES_ACTUAL")
+        barrera = threading.Barrier(2)
+        resultados = []
+
+        def trabajar():
+            try:
+                barrera.wait(timeout=10)
+                ejecucion = generar_ejecucion_programada(programacion, hoy=date(2026, 10, 1))
+                resultados.append("generada" if ejecucion is not None else "nada")
+            except Exception as exc:  # noqa: BLE001
+                resultados.append(exc)
+            finally:
+                connection.close()
+
+        hilos = [threading.Thread(target=trabajar, daemon=True) for _ in range(2)]
+        for hilo in hilos:
+            hilo.start()
+        for hilo in hilos:
+            hilo.join(timeout=30)
+            self.assertFalse(hilo.is_alive())
+        self.assertCountEqual(resultados, ["generada", "nada"])
+        self.assertEqual(EjecucionProgramada.objects.count(), 1)
+        self.assertEqual(Ticket.objects.count(), 1)
+        self.assertEqual(Ticket.objects.get().historial.filter(tipo_evento="RADICADO").count(), 1)
+
+
+class StudioInicioProcesoTests(_EscenarioProgramadoMixin, TestCase):
+    """Tipo = Proceso → «¿Cómo inicia este proceso?» (Manual / Programado), dentro de las mismas
+    pantallas de crear y de Básico. Programado NO es una categoría aparte del Diseñador."""
+
+    def setUp(self):
+        self._preparar_programado()
+        self.servicio, self.resp_servicio = self._proceso(flujo="informe")
+
+    def _datos_generales(self, servicio=None, **extra):
+        servicio = servicio or self.servicio
+        datos = {
+            "nombre": servicio.nombre, "descripcion": servicio.descripcion or "", "categoria": servicio.categoria_id,
+            "tipo": servicio.tipo, "instrucciones": servicio.instrucciones or "",
+            "alcance_visibilidad": servicio.alcance_visibilidad,
+        }
+        datos.update(extra)
+        return datos
+
+    def _guardar(self, servicio=None, **inicio):
+        servicio = servicio or self.servicio
+        return self.client.post(
+            reverse("catalogo:studio_general_guardar", args=[servicio.pk]), self._datos_generales(servicio, **inicio)
+        )
+
+    def _programado(self, **extra):
+        datos = {
+            "modo": "PROGRAMADO", "frecuencia": "MENSUAL", "dia_creacion": "25", "periodo": "MES_SIGUIENTE",
+            "responsable_inicial": f"E:{self.analitica.pk}",
+        }
+        datos.update(extra)
+        return datos
+
+    def _mensajes(self, respuesta):
+        return [str(m) for m in get_messages(respuesta.wsgi_request)]
+
+    # --- qué se muestra según el Tipo ---
+
+    def test_un_proceso_muestra_inicio_manual_programado_y_un_servicio_lo_trae_oculto(self):
+        self._entrar(self.admin)
+        pagina = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]))
+        self.assertContains(pagina, 'id="inicio-proceso"')
+        self.assertContains(pagina, "¿Cómo inicia este proceso?")
+        self.assertContains(pagina, "Manual")
+        self.assertContains(pagina, "Programado")
+        self.assertNotContains(pagina, 'id="inicio-proceso" data-solo-proceso hidden')
+        servicio_simple, _, _ = _crear_servicio_con_formulario(self.admin, [])
+        pagina = self.client.get(reverse("catalogo:studio", args=[servicio_simple.pk]))
+        self.assertContains(pagina, 'id="inicio-proceso" data-solo-proceso hidden')
+        self.assertContains(pagina, "data-solo-proceso")  # el JS lo muestra si el Tipo pasa a Proceso
+
+    def test_proceso_manual_oculta_la_programacion_y_programado_la_muestra(self):
+        self._entrar(self.admin)
+        manual = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]))
+        self.assertContains(manual, "data-inicio-programado hidden")
+        self._guardar(**self._programado())
+        programado = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]))
+        self.assertNotContains(programado, "data-inicio-programado hidden")
+        self.assertContains(programado, "Órbita creará automáticamente una nueva ejecución")
+        self.assertContains(programado, "Crear ejecución el día")
+
+    def test_editar_un_proceso_programado_precarga_su_configuracion(self):
+        self._entrar(self.admin)
+        self._guardar(**self._programado(dia_creacion="12", periodo="MES_ACTUAL"))
+        pagina = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]))
+        inicial = pagina.context["form_inicio"].initial
+        self.assertEqual(
+            (inicial["modo"], inicial["dia_creacion"], inicial["periodo"], inicial["responsable_inicial"]),
+            ("PROGRAMADO", 12, "MES_ACTUAL", f"E:{self.analitica.pk}"),
+        )
+        self.assertTrue(pagina.context["proceso_programado"])
+        self.assertContains(pagina, 'value="12"')
+        self.assertContains(pagina, "Próxima ejecución")
+
+    def test_un_proceso_programado_no_muestra_lo_orientado_a_quien_solicita(self):
+        self._entrar(self.admin)
+        self._guardar(**self._programado())
+        basico = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]))
+        self.assertContains(basico, 'svc-panel--visibility" data-oculto-si-programado hidden')
+        self.assertContains(basico, 'id="terminos-busqueda" data-oculto-si-programado hidden')
+        salida = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]) + "?tab=salida")
+        self.assertNotContains(salida, "Entrega al solicitante")
+        self.assertContains(salida, "no admite entrega formal")
+        publicar = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]) + "?tab=publicacion")
+        self.assertNotContains(publicar, "Qué verá el solicitante al cierre")
+        # El mismo Proceso en modo Manual conserva todo lo de siempre.
+        self._guardar(modo="MANUAL")
+        salida = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]) + "?tab=salida")
+        self.assertContains(salida, "Entrega al solicitante")
+
+    def test_crear_trae_la_pregunta_de_inicio_dentro_del_mismo_formulario(self):
+        self._entrar(self.admin)
+        pagina = self.client.get(reverse("core:disenador_servicio_crear"))
+        self.assertContains(pagina, "data-config-inicio")
+        self.assertContains(pagina, "¿Cómo inicia este proceso?")
+        self.assertContains(pagina, "Crear ejecución el día")
+        self.assertContains(pagina, "Responsable inicial")
+        self.assertContains(pagina, "data-solo-proceso hidden")  # Servicio es el tipo inicial
+
+    # --- crear ---
+
+    def _crear(self, **extra):
+        datos = {"tipo": "PROCESO", "nombre": "Cierre contable", "categoria_nueva": "Finanzas G1"}
+        datos.update(extra)
+        return self.client.post(reverse("core:disenador_servicio_crear"), datos)
+
+    def test_crear_un_proceso_programado_lo_deja_programado_con_su_responsable(self):
+        self._entrar(self.admin)
+        respuesta = self._crear(**self._programado(dia_creacion="7"))
+        servicio = Servicio.objects.get(nombre="Cierre contable")
+        self.assertRedirects(
+            respuesta, reverse("catalogo:studio", args=[servicio.pk]) + "?tab=general", fetch_redirect_response=False
+        )
+        programacion = ProgramacionProceso.objects.get(servicio=servicio)
+        self.assertEqual((servicio.tipo, servicio.activo), ("PROCESO", False))
+        self.assertEqual((programacion.activa, programacion.dia_creacion), (True, 7))
+        self.assertEqual(programacion.responsable_inicial.servicio, servicio)
+        self.assertEqual(programacion.responsable_inicial.equipo, self.analitica)
+        self.assertTrue(any("programado" in m for m in self._mensajes(respuesta)))
+
+    def test_crear_un_proceso_manual_o_un_servicio_no_crea_programacion(self):
+        self._entrar(self.admin)
+        self._crear(modo="MANUAL")
+        self._crear(nombre="Soporte puntual", tipo="SERVICIO", categoria_nueva="Soporte G1", **self._programado())  # lo de Inicio se ignora
+        self.assertEqual(Servicio.objects.filter(nombre__in=["Cierre contable", "Soporte puntual"]).count(), 2)
+        self.assertFalse(ProgramacionProceso.objects.filter(servicio__nombre__in=["Cierre contable", "Soporte puntual"]).exists())
+
+    def test_crear_un_proceso_programado_incompleto_no_crea_nada(self):
+        self._entrar(self.admin)
+        respuesta = self._crear(modo="PROGRAMADO", frecuencia="MENSUAL")
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertFalse(Servicio.objects.filter(nombre="Cierre contable").exists())
+        self.assertContains(respuesta, "Indique el día del mes")
+        self.assertContains(respuesta, "Seleccione quién recibe cada ejecución")
+
+    # --- editar ---
+
+    def test_programar_guarda_la_configuracion_y_saca_el_proceso_del_catalogo(self):
+        self._entrar(self.admin)
+        respuesta = self._guardar(**self._programado())
+        programacion = ProgramacionProceso.objects.get(servicio=self.servicio)
+        self.assertEqual(
+            (programacion.activa, programacion.dia_creacion, programacion.periodo, programacion.responsable_inicial),
+            (True, 25, "MES_SIGUIENTE", self.resp_servicio),  # reutiliza el responsable ya configurado
+        )
+        self.assertTrue(any("Información general actualizada" in m for m in self._mensajes(respuesta)))
+        self.assertNotIn(self.servicio.pk, [s.pk for s in servicios_visibles_para(self.solicitante)])
+
+    def test_volver_a_manual_pausa_conserva_la_fila_y_lo_devuelve_al_catalogo(self):
+        self._entrar(self.admin)
+        self._guardar(**self._programado(dia_creacion="5", periodo="MES_ACTUAL"))
+        programacion = ProgramacionProceso.objects.get(servicio=self.servicio)
+        ProgramacionProceso.objects.filter(pk=programacion.pk).update(activada_desde=date(2020, 1, 1))
+        generar_ejecucion_programada(programacion, hoy=date(2026, 10, 7))
+        self._guardar(modo="MANUAL")
+        programacion.refresh_from_db()
+        self.assertFalse(programacion.activa)
+        self.assertEqual(programacion.dia_creacion, 5)
+        self.assertEqual(EjecucionProgramada.objects.filter(servicio=self.servicio).count(), 1)
+        self.assertIn(self.servicio.pk, [s.pk for s in servicios_visibles_para(self.solicitante)])
+
+    def test_un_envio_sin_la_seccion_inicio_no_toca_la_programacion(self):
+        self._entrar(self.admin)
+        self._guardar(**self._programado())
+        self.client.post(
+            reverse("catalogo:studio_general_guardar", args=[self.servicio.pk]),
+            self._datos_generales(descripcion="Nueva descripción"),
+        )
+        self.assertTrue(ProgramacionProceso.objects.get(servicio=self.servicio).activa)
+
+    def test_programado_exige_dia_periodo_y_responsable_y_no_guarda_nada(self):
+        self._entrar(self.admin)
+        self._guardar(modo="PROGRAMADO", frecuencia="MENSUAL", descripcion="No debe quedar")
+        self.assertFalse(ProgramacionProceso.objects.exists())
+        self._guardar(**self._programado(dia_creacion="29"), descripcion="No debe quedar")
+        self.assertFalse(ProgramacionProceso.objects.exists())
+        self.servicio.refresh_from_db()
+        self.assertNotEqual(self.servicio.descripcion, "No debe quedar")
+
+    def test_un_flujo_incompatible_explica_que_corregir_y_no_guarda_nada(self):
+        servicio, _ = self._proceso("Con solicitante", flujo="solicitante")
+        self._entrar(self.admin)
+        respuesta = self._guardar(servicio, **self._programado(), descripcion="No debe quedar")
+        self.assertFalse(ProgramacionProceso.objects.filter(servicio=servicio).exists())
+        self.assertTrue(any("Confirmar con quien solicitó" in m for m in self._mensajes(respuesta)))
+        servicio.refresh_from_db()
+        self.assertNotEqual(servicio.descripcion, "No debe quedar")
+        pagina = self.client.get(reverse("catalogo:studio", args=[servicio.pk]))
+        self.assertContains(pagina, "Para programarlo hay que corregir")
+
+    def test_pasar_a_servicio_un_proceso_programado_se_rechaza(self):
+        self._entrar(self.admin)
+        self._guardar(**self._programado())
+        respuesta = self.client.post(
+            reverse("catalogo:studio_general_guardar", args=[self.servicio.pk]), self._datos_generales(tipo="SERVICIO")
+        )
+        self.assertTrue(any("programación activa" in m for m in self._mensajes(respuesta)))
+        self.servicio.refresh_from_db()
+        self.assertEqual(self.servicio.tipo, "PROCESO")
+
+    def test_solo_quien_administra_el_catalogo_puede_guardar(self):
+        self._entrar(self.solicitante)
+        respuesta = self._guardar(**self._programado())
+        self.assertEqual(respuesta.status_code, 403)
+        self.assertFalse(ProgramacionProceso.objects.exists())
+
+    # --- ya no existe «Programados» como categoría del Diseñador ---
+
+    def test_ya_no_existe_la_pestana_programados(self):
+        from django.urls import NoReverseMatch
+
+        with self.assertRaises(NoReverseMatch):
+            reverse("core:disenador_programados")
+        self._entrar(self.admin)
+        self.assertEqual(self.client.get("/disenador/programados/").status_code, 404)
+        pagina = self.client.get(reverse("core:disenador"))
+        self.assertNotIn("programados", [t["clave"] for t in pagina.context["disenador_tabs"]])
+
+    def test_el_error_de_la_ultima_corrida_es_visible_desde_la_configuracion(self):
+        self._programar(self.servicio, self.resp_servicio)
+        retirar_responsable(self.resp_servicio, self.admin)
+        reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 1))
+        self._entrar(self.admin)
+        pagina = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]))
+        self.assertContains(pagina, "La última ejecución no se pudo generar")
+        self.assertContains(pagina, "responsable inicial")
+
+    def test_la_tarea_periodica_es_una_sola_y_delega_en_el_reconciliador(self):
+        from unittest.mock import patch
+
+        from apps.tickets import tasks
+
+        with patch("apps.tickets.tasks.reconciliar_ejecuciones_programadas", return_value={"generadas": 0}) as mock:
+            self.assertEqual(tasks.generar_ejecuciones_programadas(), {"generadas": 0})
+        mock.assert_called_once_with()
+
+
+class ProximaEjecucionProgramadaTests(_EscenarioProgramadoMixin, TestCase):
+    def setUp(self):
+        self._preparar_programado()
+        self.servicio, self.resp = self._proceso(flujo="simple")
+
+    def test_antes_de_la_fecha_de_creacion_la_proxima_es_futura(self):
+        from apps.tickets.programadas import proxima_ejecucion
+
+        programacion = self._programar(self.servicio, self.resp, dia=25, periodo="MES_SIGUIENTE", desde=date(2026, 10, 1))
+        creacion, periodo, vencida = proxima_ejecucion(programacion, date(2026, 10, 7))
+        self.assertEqual((creacion, periodo.etiqueta, vencida), (date(2026, 10, 25), "Noviembre 2026", False))
+
+    def test_vencida_y_sin_generar_se_marca_y_al_generarla_pasa_a_la_siguiente(self):
+        from apps.tickets.programadas import proxima_ejecucion
+
+        programacion = self._programar(self.servicio, self.resp, dia=25, periodo="MES_SIGUIENTE", desde=date(2026, 10, 1))
+        creacion, periodo, vencida = proxima_ejecucion(programacion, date(2026, 10, 26))
+        self.assertEqual((creacion, periodo.etiqueta, vencida), (date(2026, 10, 25), "Noviembre 2026", True))
+        generar_ejecucion_programada(programacion, hoy=date(2026, 10, 26))
+        creacion, periodo, vencida = proxima_ejecucion(programacion, date(2026, 10, 26))
+        self.assertEqual((creacion, periodo.etiqueta, vencida), (date(2026, 11, 25), "Diciembre 2026", False))
+
+    def test_configurar_el_dia_de_hoy_deja_la_ejecucion_vencida_de_inmediato(self):
+        from apps.tickets.programadas import proxima_ejecucion
+
+        programacion = self._programar(self.servicio, self.resp, dia=7, periodo="MES_SIGUIENTE", desde=date(2026, 10, 7))
+        _, periodo, vencida = proxima_ejecucion(programacion, date(2026, 10, 7))
+        self.assertEqual((periodo.etiqueta, vencida), ("Noviembre 2026", True))

@@ -9,14 +9,15 @@ RESTRINGIDO-con-concesión), sin variación de comportamiento que justifique
 Strategy/Specification u otra abstracción.
 """
 
-from django.db.models import Q
+from django.db.models import Exists, OuterRef, Q
 
-from apps.catalogo.models import Servicio, ServicioVisibilidad
+from apps.catalogo.models import ProgramacionProceso, Servicio, ServicioVisibilidad
 
 
 def servicios_visibles_para(usuario):
     """Servicios CATALOGADOS que `usuario` puede consultar: los de
-    `servicios_accesibles_para` sin el Servicio interno del Ticket General.
+    `servicios_accesibles_para` sin el Servicio interno del Ticket General y sin los Procesos
+    con programación activa (4.G1: un Proceso programado se inicia por programación, no se solicita).
 
     Es la única autoridad de qué se ofrece en el catálogo, el explorador, las
     búsquedas, los frecuentes y cualquier selector de Servicio/Proceso; excluir
@@ -24,7 +25,8 @@ def servicios_visibles_para(usuario):
     permite crear un ticket por la vía normal (`crear_borrador`): el Ticket
     General tiene su propia entrada de dominio (`crear_borrador_ticket_general`).
     """
-    return servicios_accesibles_para(usuario).filter(es_ticket_general=False)
+    programados = ProgramacionProceso.objects.filter(servicio=OuterRef("pk"), activa=True)
+    return servicios_accesibles_para(usuario).filter(es_ticket_general=False).exclude(Exists(programados))
 
 
 def servicios_accesibles_para(usuario):

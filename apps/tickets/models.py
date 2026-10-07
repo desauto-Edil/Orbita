@@ -79,10 +79,16 @@ class Ticket(RegistroBase):
     class Origen(models.TextChoices):
         MANUAL = "MANUAL", "Manual"
         SISTEMA = "SISTEMA", "Sistema"
+        # 4.G1 — ejecución de un Proceso programado: nace del reloj, no de una persona.
+        PROGRAMACION = "PROGRAMACION", "Programación"
 
     tipo = models.CharField(max_length=20, choices=Tipo.choices, default=Tipo.SERVICIO)
+    # 4.G1 — NULL SOLO para `origen=PROGRAMACION` (constraint en ambos sentidos): un ticket
+    # generado por una programación no tiene solicitante y no se inventa uno. Todo ticket
+    # MANUAL (o SISTEMA) conserva un solicitante humano.
     solicitante = models.ForeignKey(
-        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="tickets_solicitados"
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True,
+        related_name="tickets_solicitados",
     )
     estado = models.CharField(max_length=20, choices=Estado.choices, default=Estado.BORRADOR)
     origen = models.CharField(max_length=20, choices=Origen.choices, default=Origen.MANUAL)
@@ -94,6 +100,11 @@ class Ticket(RegistroBase):
     # RN-016 — siempre `timezone.now()` en `operaciones.radicar_ticket`,
     # nunca un valor recibido del cliente.
     radicado_en = models.DateTimeField(null=True, blank=True, editable=False)
+    # 4.F2 — código público CORTO (`TCK-000123`): es lo que ve y busca la gente. Consecutivo
+    # empresarial, sin huecos, asignado una sola vez al radicar bajo el lock del contador
+    # (`apps.tickets.codigos`). NULL mientras es BORRADOR. No sustituye a la PK ni al UUID
+    # `radicado`, que siguen siendo las referencias internas.
+    consecutivo = models.PositiveIntegerField(null=True, blank=True, unique=True, editable=False)
     # 2.3 (CU-017, RQF-056) — independientes y ambos nullable a propósito:
     # un ticket puede caer en la cola de un `equipo_responsable` antes de
     # que exista un `usuario_responsable` concreto (TOMAR/ASIGNAR lo llena
@@ -161,8 +172,26 @@ class Ticket(RegistroBase):
         Equipo, on_delete=models.PROTECT, null=True, blank=True, editable=False, related_name="+"
     )
 
+    # 4.G1 — etiqueta de la EJECUCIÓN («Noviembre 2026»), congelada al crear el ticket. Identifica
+    # cuál ejecución es; no reemplaza el nombre del Proceso ni se concatena a él. Vacía en los
+    # tickets manuales (no se inventan etiquetas para Servicios).
+    etiqueta = models.CharField(max_length=60, blank=True, default="", editable=False)
+
     class Meta:
         constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(origen="PROGRAMACION", solicitante__isnull=True)
+                    | (~Q(origen="PROGRAMACION") & Q(solicitante__isnull=False))
+                ),
+                name="ck_ticket_solicitante_segun_origen",
+                violation_error_message="Solo un ticket generado por programación puede no tener solicitante.",
+            ),
+            models.CheckConstraint(
+                condition=~Q(origen="PROGRAMACION") | Q(tipo="PROCESO"),
+                name="ck_ticket_programacion_es_proceso",
+                violation_error_message="Solo un Proceso puede generarse por programación.",
+            ),
             models.CheckConstraint(
                 condition=(
                     Q(
@@ -202,6 +231,13 @@ class Ticket(RegistroBase):
             ),
         ]
 
+    @property
+    def codigo(self):
+        """`TCK-000123`, o `None` mientras el ticket no se ha radicado."""
+        from apps.tickets.codigos import formatear
+
+        return formatear(self.consecutivo)
+
     _CAMPOS_TIEMPO_CONGELADOS = ("tiempo_objetivo_cantidad", "tiempo_objetivo_unidad", "tiempo_objetivo_habiles")
     _CAMPOS_PRORROGA_CONGELADOS = ("prorroga_politica", "prorroga_aprobador_usuario_id", "prorroga_aprobador_equipo_id")
 
@@ -210,9 +246,14 @@ class Ticket(RegistroBase):
             anterior = Ticket.objects.filter(pk=self.pk).values(
                 "instancia_workflow_id", "entregables_materializados",
                 "entrega_politica", "entrega_dias_observacion",
-                "fecha_objetivo_original", *self._CAMPOS_TIEMPO_CONGELADOS, *self._CAMPOS_PRORROGA_CONGELADOS,
+                "fecha_objetivo_original", "consecutivo", "etiqueta",
+                *self._CAMPOS_TIEMPO_CONGELADOS, *self._CAMPOS_PRORROGA_CONGELADOS,
             ).first()
             if anterior is not None:
+                if anterior["consecutivo"] is not None and anterior["consecutivo"] != self.consecutivo:
+                    raise ValidationError("El código de un Ticket no puede modificarse ni borrarse.")
+                if anterior["etiqueta"] != self.etiqueta:
+                    raise ValidationError("La etiqueta de ejecución de un Ticket se congela al crearlo y no puede modificarse.")
                 if anterior["instancia_workflow_id"] is not None and anterior["instancia_workflow_id"] != self.instancia_workflow_id:
                     raise ValidationError("La instancia de Workflow de un Ticket no puede reemplazarse ni quitarse.")
                 if anterior["entregables_materializados"] and not self.entregables_materializados:
@@ -255,7 +296,19 @@ class Ticket(RegistroBase):
         super().delete(*args, **kwargs)
 
     def __str__(self):
-        return f"Ticket #{self.pk} ({self.get_estado_display()})"
+        return f"Ticket {self.codigo or '#' + str(self.pk)} ({self.get_estado_display()})"
+
+
+class ConsecutivoTicket(models.Model):
+    """4.F2 — contador del código público de los Tickets (una sola fila). Se incrementa bajo
+    `select_for_update()` dentro de la misma transacción que radica, así que nunca entrega dos
+    veces el mismo número ni deja huecos por una radicación que falla. Lo usa únicamente
+    `apps.tickets.codigos.siguiente_consecutivo`."""
+
+    ultimo = models.PositiveIntegerField(default=0)
+
+    def __str__(self):
+        return f"Último consecutivo: {self.ultimo}"
 
 
 class HistorialTicket(models.Model):
@@ -1242,3 +1295,48 @@ class DireccionamientoTicket(RegistroBase):
     @property
     def esta_fijado(self):
         return self.fijado_en is not None
+
+
+class EjecucionProgramada(RegistroBase):
+    """Identidad de una ejecución automática de un Proceso programado — 4.G1.
+
+    Garantiza que «Proceso X, periodo Y» produzca UN solo Ticket: la restricción única
+    (`servicio`, `frecuencia`, `periodo_inicio`) es la garantía de base de datos, y
+    `apps.tickets.programadas.generar_ejecucion_programada` la respalda con un lock. La clave
+    usa el Servicio y NO la programación, para que pausar, reactivar o cambiar el día o el
+    responsable no pueda duplicar un periodo ya generado.
+
+    Es un registro histórico: nace junto con su Ticket y no se modifica (`save()` lo rechaza).
+    `programacion_foto` conserva cómo estaba configurada la programación cuando se generó
+    (día, periodo, responsable inicial), de modo que cambiarla después no reescribe la historia.
+    `Ticket.etiqueta` guarda la misma etiqueta para mostrarla sin esta relación inversa.
+    """
+
+    servicio = models.ForeignKey(Servicio, on_delete=models.PROTECT, related_name="ejecuciones_programadas")
+    frecuencia = models.CharField(max_length=20)
+    periodo_inicio = models.DateField()
+    periodo_fin = models.DateField()
+    etiqueta = models.CharField(max_length=60)
+    ticket = models.OneToOneField(Ticket, on_delete=models.PROTECT, related_name="ejecucion_programada")
+    generada_en = models.DateTimeField()
+    programacion_foto = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(
+                fields=["servicio", "frecuencia", "periodo_inicio"], name="uq_ejecucionprogramada_periodo"
+            ),
+            models.CheckConstraint(
+                condition=Q(periodo_fin__gte=F("periodo_inicio")),
+                name="ck_ejecucionprogramada_periodo_ordenado",
+            ),
+        ]
+        ordering = ["-periodo_inicio", "-pk"]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("Una ejecución programada es un registro histórico y no puede modificarse.")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.servicio} — {self.etiqueta}"

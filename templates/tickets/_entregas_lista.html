@@ -1,0 +1,48 @@
+{% comment %}Entregas realizadas al solicitante (detalle y seguimiento). Espera `entregas`.{% endcomment %}
+      {% if entregas %}
+        <h4 style="margin-top: var(--space-5);">Entregas</h4>
+        <ul class="list-row-group">
+          {% for entrega in entregas %}
+            <li class="list-row" style="flex-direction: column; align-items: stretch;">
+              <div class="list-row" style="border-bottom: none; padding: 0;">
+                <span class="list-row__title">Entrega {{ entrega.numero }}</span>
+                <span class="badge {% if entrega.estado == 'ACEPTADA' %}badge--success{% elif entrega.estado == 'OBSERVADA' %}badge--warning{% elif entrega.estado == 'PENDIENTE' %}badge--info{% endif %}">{{ entrega.get_estado_display }}</span>
+                <span class="text-muted">{{ entrega.entregada_por }} — {{ entrega.entregada_en|date:"d/m/Y H:i" }}</span>
+              </div>
+              {% if entrega.vence_en and entrega.estado == 'PENDIENTE' %}
+                <p class="text-muted">Plazo de observaciones: hasta el {{ entrega.vence_en|date:"d/m/Y H:i" }}</p>
+              {% endif %}
+              <ul class="plain-list">
+                {% for resultado in entrega.resultados.all %}
+                  <li>
+                    <strong>{{ resultado.nombre }}</strong>
+                    {% if resultado.tipo == "TEXTO" %}
+                      <p>{{ resultado.texto }}</p>
+                    {% elif resultado.tipo == "ENLACE" %}
+                      <p><a href="{{ resultado.enlace }}" rel="noopener noreferrer">{{ resultado.enlace }}</a></p>
+                    {% elif resultado.tipo == "ARCHIVO" %}
+                      {% for archivo in resultado.adjuntos.all %}
+                        <p><a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a></p>
+                      {% endfor %}
+                    {% elif resultado.tipo == "CONFIRMACION" %}
+                      <p class="text-muted">Confirmado por {{ resultado.confirmado_por }} — {{ resultado.confirmado_en|date:"d/m/Y H:i" }}</p>
+                    {% endif %}
+                  </li>
+                {% empty %}
+                  <li class="text-muted">Esta entrega no incluyó resultados específicos.</li>
+                {% endfor %}
+              </ul>
+              {% if entrega.estado == 'OBSERVADA' %}
+                <p><strong>Observaciones de {{ entrega.resuelta_por }}</strong> <span class="text-muted">{{ entrega.resuelta_en|date:"d/m/Y H:i" }}</span></p>
+                <p>{{ entrega.observaciones }}</p>
+              {% elif entrega.estado == 'ACEPTADA' %}
+                <p class="text-muted">Aceptada por {{ entrega.resuelta_por }} el {{ entrega.resuelta_en|date:"d/m/Y H:i" }}.</p>
+              {% elif entrega.estado == 'CERRADA_POR_VENCIMIENTO' %}
+                <p class="text-muted">Cerrada automáticamente el {{ entrega.resuelta_en|date:"d/m/Y H:i" }}: el plazo terminó sin respuesta.</p>
+              {% elif entrega.estado == 'CERRADA_SIN_RESPUESTA' %}
+                <p class="text-muted">Cerrada al entregar, sin esperar respuesta.</p>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}

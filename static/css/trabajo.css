@@ -452,3 +452,335 @@
   color: var(--text-muted);
   font-size: var(--font-size-caption);
 }
+
+/* ===================================================================== */
+/* 4.F3 — Cola en tarjetas, tarjetas de Mi trabajo, resumen y espacio de */
+/* trabajo por fases. Solo tokens semánticos.                            */
+/* ===================================================================== */
+
+.ws-sub {
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-body-lg);
+}
+
+/* --- Cola --- */
+
+.queue-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.queue-card {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: var(--space-4);
+  align-items: center;
+  padding: var(--space-4);
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.queue-card__pos {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+
+.queue-card__code,
+.ticket-card__code,
+.ws-head__code,
+.resumen__code {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.queue-card__title,
+.ticket-card__title {
+  margin: var(--space-1) 0;
+  font-size: var(--font-size-body-lg);
+}
+
+.queue-card__meta,
+.queue-card__chips {
+  margin: var(--space-1) 0 0;
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+}
+
+.queue-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.queue-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .queue-card {
+    grid-template-columns: auto 1fr;
+  }
+  .queue-card__actions {
+    grid-column: 1 / -1;
+    justify-content: flex-start;
+  }
+}
+
+/* --- Resumen --- */
+
+.resumen__head {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: flex-start;
+}
+
+.resumen__title {
+  margin: 0;
+}
+
+.resumen__datos,
+.resumen__respuestas {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-4) 0;
+}
+
+.resumen__datos {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.resumen dt {
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.resumen dd {
+  margin: var(--space-1) 0 0;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+}
+
+.resumen__sub {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--font-size-body);
+}
+
+.resumen__acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-4);
+}
+
+/* --- Mi trabajo: tarjetas de tickets --- */
+
+.ticket-cards {
+  margin-bottom: var(--space-5);
+}
+
+.ticket-cards__grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: var(--space-4);
+}
+
+.ticket-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.ticket-card__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+}
+
+.ticket-card__now {
+  margin: 0;
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+}
+
+.ticket-card__prog {
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.ticket-card .btn {
+  align-self: flex-start;
+  margin-top: auto;
+}
+
+/* --- Espacio de trabajo por fases --- */
+
+.ws-head {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-4);
+  align-items: flex-start;
+}
+
+.ws-head__title {
+  margin: var(--space-1) 0;
+}
+
+.ws-head__meta {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+}
+
+.ws-head__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.ws-fases {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.ws-fase {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  color: var(--text-muted);
+  background: var(--surface-card);
+}
+
+.ws-fase__estado {
+  font-size: var(--font-size-caption);
+}
+
+.ws-fase--completada {
+  color: var(--text-primary);
+  border-color: var(--status-success);
+  background: var(--status-success-soft);
+}
+
+.ws-fase--actual {
+  color: var(--text-primary);
+  font-weight: 600;
+  border-color: var(--text-primary);
+  background: var(--color-primary-soft);
+}
+
+.ws-fase--no_aplico {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.ws-nota {
+  margin: var(--space-3) 0 0;
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+}
+
+.ws-cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .ws-cols {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.ws-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.ws-bloque {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+}
+
+.ws-bloque--completado {
+  color: var(--text-primary);
+}
+
+.ws-bloque--actual {
+  color: var(--text-primary);
+  font-weight: 600;
+  background: var(--color-primary-soft);
+}
+
+.ws-bloque--con_error {
+  color: var(--status-danger);
+}
+
+.ws-bloque__detalle {
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.ws-ahora__titulo {
+  margin: 0 0 var(--space-2);
+}
+
+.ws-ahora__dato {
+  margin: var(--space-2) 0;
+}
+
+.ws-acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+/* 4.G1 — etiqueta de la ejecución («Noviembre 2026») bajo el nombre del proceso: secundaria. */
+.ticket-etiqueta {
+  margin: 0;
+  font-size: var(--font-size-small);
+}

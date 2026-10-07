@@ -3,14 +3,14 @@
     <div>
       <p class="svc-kicker">Básico</p>
       <h2>Información general</h2>
-      <p>Define cómo aparecerá este {{ servicio.get_tipo_display|lower }} en el catálogo.</p>
+      <p data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>Define cómo aparecerá este {{ servicio.get_tipo_display|lower }} en el catálogo.</p>
     </div>
     <button type="submit" form="form-general-servicio" class="btn btn--primary">Guardar</button>
   </header>
 
   <div class="svc-basic-grid">
     <article class="svc-panel svc-panel--editor">
-      <form id="form-general-servicio" method="post" action="{% url 'catalogo:studio_general_guardar' servicio.pk %}" class="form">
+      <form id="form-general-servicio" method="post" action="{% url 'catalogo:studio_general_guardar' servicio.pk %}" class="form" data-config-inicio>
         {% csrf_token %}
         <div class="svc-form-grid svc-form-grid--two">
           <div class="field">
@@ -26,18 +26,46 @@
             {{ form_general.tipo }}
             <span class="svc-help">Servicio: necesidad puntual. Proceso: ciclo estructurado.</span>
           </div>
-          <div class="field">
+          <div class="field" data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>
             <label for="id_alcance_visibilidad">Visibilidad</label>
             {{ form_general.alcance_visibilidad }}
             <span class="svc-help">El acceso restringido se define abajo.</span>
           </div>
         </div>
 
+        {% if inicio_aplica %}
+          <div class="svc-start" id="inicio-proceso" data-solo-proceso{% if servicio.tipo != "PROCESO" %} hidden{% endif %}>
+            <fieldset class="field">
+              <legend>{{ form_inicio.modo.label }}</legend>
+              {% for opcion in form_inicio.modo %}
+                <label class="choice">{{ opcion.tag }} {{ opcion.choice_label }}</label>
+              {% endfor %}
+            </fieldset>
+
+            <div data-inicio-programado{% if not programacion_activa %} hidden{% endif %}>
+              <div class="svc-form-grid svc-form-grid--two">
+                <div class="field">{{ form_inicio.frecuencia.label_tag }}{{ form_inicio.frecuencia }}</div>
+                <div class="field">{{ form_inicio.dia_creacion.label_tag }}{{ form_inicio.dia_creacion }}<span class="svc-help">Del 1 al 28, para que exista todos los meses.</span></div>
+                <div class="field">{{ form_inicio.periodo.label_tag }}{{ form_inicio.periodo }}<span class="svc-help">Qué mes cubre la ejecución respecto del día en que se crea.</span></div>
+                <div class="field">{{ form_inicio.responsable_inicial.label_tag }}{{ form_inicio.responsable_inicial }}<span class="svc-help">Una persona o un equipo. Queda como responsable de este proceso.</span></div>
+              </div>
+              <p class="svc-help">Órbita creará automáticamente una nueva ejecución de este proceso según esta programación. Aplica hacia adelante: no se crean ejecuciones de periodos que ya pasaron, y un proceso programado no se solicita manualmente.</p>
+              <p class="svc-help">Una ejecución no tiene solicitante: el flujo no puede incluir bloques dirigidos al solicitante, ni entrega formal ni campos obligatorios en el formulario.</p>
+              {% if inicio_incompatibilidades %}
+                <div class="alert alert--warning" role="status">
+                  <strong>Para programarlo hay que corregir:</strong>
+                  <ul>{% for mensaje in inicio_incompatibilidades %}<li>{{ mensaje }}</li>{% endfor %}</ul>
+                </div>
+              {% endif %}
+            </div>
+          </div>
+        {% endif %}
+
         <div class="field">
           <label for="id_descripcion">Descripción</label>
           {{ form_general.descripcion }}
         </div>
-        <div class="field">
+        <div class="field" data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>
           <label for="id_instrucciones">Instrucciones para quien lo solicita</label>
           {{ form_general.instrucciones }}
         </div>
@@ -53,12 +81,50 @@
         {% if servicio.categoria %}<span>{{ servicio.categoria.nombre }}</span>{% endif %}
         <span>{% if servicio.activo %}Publicado{% else %}Borrador{% endif %}</span>
       </div>
-      <div class="svc-preview__line">
+      <div class="svc-preview__line" data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>
         <strong>Visibilidad</strong>
         <span>{% if es_restringido %}Restringido{% else %}Público interno{% endif %}</span>
       </div>
+      {% if proceso_programado %}
+        <div class="svc-preview__line"><strong>Inicio</strong><span>Programado</span></div>
+      {% endif %}
     </aside>
   </div>
+
+  {% if programacion_activa or ejecuciones_programadas %}
+    <section class="svc-panel svc-panel--start">
+      <div class="svc-panel__head">
+        <div>
+          <h3>Programación</h3>
+          <p>Cómo va la creación automática de ejecuciones de este proceso.</p>
+        </div>
+        {% if programacion_activa %}<span class="svc-pill svc-pill--ok">Programado</span>{% else %}<span class="svc-pill">Manual</span>{% endif %}
+      </div>
+      {% if proxima_ejecucion %}
+        <div class="svc-preview__line">
+          <strong>Próxima ejecución</strong>
+          <span>«{{ proxima_ejecucion.periodo.etiqueta }}» · {% if proxima_ejecucion.vencida %}ya vencida (se crea en la próxima revisión horaria, cuando el proceso esté publicado){% else %}se crea el {{ proxima_ejecucion.fecha|date:"d/m/Y" }}{% endif %}</span>
+        </div>
+      {% endif %}
+      {% if programacion %}
+        {% if programacion.ultimo_intento_en %}<div class="svc-preview__line"><strong>Último intento</strong><span>{{ programacion.ultimo_intento_en|date:"d/m/Y H:i" }}</span></div>{% endif %}
+        {% if programacion.ultimo_error %}
+          <div class="alert alert--danger" role="alert"><strong>La última ejecución no se pudo generar:</strong> {{ programacion.ultimo_error }}</div>
+        {% endif %}
+      {% endif %}
+      {% if ejecuciones_programadas %}
+        <h4>Ejecuciones generadas</h4>
+        <ul class="svc-compact-list">
+          {% for ejecucion in ejecuciones_programadas %}
+            <li>
+              <span><strong>{{ ejecucion.etiqueta }}</strong> · {{ ejecucion.ticket.codigo }}</span>
+              <span class="svc-tag">{{ ejecucion.generada_en|date:"d/m/Y" }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </section>
+  {% endif %}
 
   <section class="svc-panel svc-panel--time">
     <div class="svc-panel__head">
@@ -102,7 +168,7 @@
     </form>
   </section>
 
-  <section class="svc-panel svc-panel--visibility">
+  <section class="svc-panel svc-panel--visibility" data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>
     <div class="svc-panel__head">
       <div>
         <h3>Visibilidad</h3>
@@ -147,7 +213,7 @@
     {% endif %}
   </section>
   {% if terminos_aplican %}
-    <section class="svc-panel svc-panel--terms" id="terminos-busqueda">
+    <section class="svc-panel svc-panel--terms" id="terminos-busqueda" data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>
       <div class="svc-panel__head">
         <div>
           <h3>Términos de búsqueda</h3>

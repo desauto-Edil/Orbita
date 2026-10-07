@@ -42,7 +42,7 @@ from apps.catalogo.operaciones import validar_ejecucion
 from apps.catalogo.visibilidad import servicios_visibles_para
 from apps.core.auditoria import registrar_evento
 from apps.core.models import RegistroAuditoria
-from apps.tickets import direccionamiento, historial, tiempos
+from apps.tickets import codigos, direccionamiento, historial, tiempos
 from apps.tickets.autorizacion import (
     es_propietario_borrador,
     puede_asignar,
@@ -75,6 +75,7 @@ from apps.tickets.models import (
     TicketServicio,
 )
 from apps.tickets.validaciones import calcular_estados_efectivos, validar_para_radicar
+from apps.workflows.integracion import entregar_tareas_pendientes_al_responsable
 from apps.workflows.models import InstanciaWorkflow
 from apps.workflows.motor import iniciar_workflow
 
@@ -109,9 +110,11 @@ def crear_borrador_ticket_general(usuario):
     return _crear_borrador_de_servicio(usuario, servicio_para_crear_ticket(usuario))
 
 
-def _crear_borrador_de_servicio(usuario, servicio):
-    """Lógica común de `crear_borrador` y `crear_borrador_ticket_general`: el
-    llamador ya comprobó que `usuario` puede crear tickets de `servicio`."""
+def _crear_borrador_de_servicio(usuario, servicio, *, origen=Ticket.Origen.MANUAL, etiqueta=""):
+    """Lógica común de `crear_borrador`, `crear_borrador_ticket_general` y (4.G1)
+    `programadas.generar_ejecucion_programada`: el llamador ya comprobó que `usuario` puede crear
+    tickets de `servicio`. Un ticket generado por programación llega con `usuario=None`,
+    `origen=PROGRAMACION` y la `etiqueta` de su ejecución; los manuales no cambian."""
     servicio = Servicio.objects.select_related("formulario__version_activa").get(pk=servicio.pk)
     formulario = servicio.formulario
     version = formulario.version_activa if formulario else None
@@ -121,7 +124,8 @@ def _crear_borrador_de_servicio(usuario, servicio):
     # 4.5: la política de entrega se congela aquí, igual que las expectativas
     # de entregables — un cambio posterior en el Servicio no afecta este Ticket.
     ticket = Ticket.objects.create(
-        solicitante=usuario, tipo=servicio.tipo, entregables_materializados=False,
+        solicitante=usuario, tipo=servicio.tipo, origen=origen, etiqueta=etiqueta,
+        entregables_materializados=False,
         entrega_politica=servicio.politica_entrega, entrega_dias_observacion=servicio.dias_observacion,
         # 4.A1: el compromiso temporal también se congela aquí; la fecha objetivo
         # se calcula recién al radicar.
@@ -307,6 +311,73 @@ def _trabajo_interno_en_curso(ticket):
     ).exists()
 
 
+def _radicar_nucleo(ticket, servicio, actor, *, datos_historial=None):
+    """Núcleo común de la radicación (4.G1): lo que ocurre DESPUÉS de las validaciones de quien la
+    pide. Interno —no es un endpoint ni una operación pública—: lo llaman `radicar_ticket` (tras
+    validar al propietario, el estado y el formulario) y `programadas.generar_ejecucion_programada`
+    (tras validar la programación). El llamador ya bloqueó el ticket BORRADOR.
+
+    `actor` es quien radica; `None` = el Sistema (ticket programado), que queda así en el
+    historial. `datos_historial` solo enriquece el evento RADICADO."""
+    ticket.tipo = servicio.tipo
+    validar_ejecucion(servicio)
+    if servicio.workflow_id is not None:
+        datos_workflow = {"ticket_id": ticket.pk}
+        if servicio.workflow.modo == "PLANTILLA_FASES":
+            datos_workflow["configuracion_ejecucion_version_id"] = servicio.configuracion_ejecucion_activa_id
+        # Es una ejecución interna derivada de una radicación autorizada,
+        # no una acción técnica del solicitante sobre el motor.
+        instancia = iniciar_workflow(
+            servicio.workflow, origen=RegistroAuditoria.Origen.SISTEMA,
+            datos_iniciales=datos_workflow,
+        )
+        if instancia.estado == InstanciaWorkflow.Estado.ERROR:
+            ejecucion_error = instancia.ejecuciones_etapa.order_by("-orden").first()
+            detalle = ""
+            if ejecucion_error and ejecucion_error.error:
+                detalle = ejecucion_error.error.get("mensaje") or ""
+            mensaje = "No fue posible iniciar la ejecución; el ticket sigue en borrador."
+            if detalle:
+                mensaje = f"{mensaje} Detalle: {detalle}"
+            raise ValidationError(mensaje)
+        ticket.instancia_workflow = instancia
+
+    ticket.radicado = uuid.uuid4()
+    ticket.radicado_en = timezone.now()
+    # 4.F2: código público corto. Se reserva tarde (lo más cerca posible del `save`) para
+    # mantener corto el lock del contador y no gastar números en radicaciones que fallan.
+    ticket.consecutivo = codigos.siguiente_consecutivo()
+    # 4.A1: única vez que se fija la fecha objetivo (original = vigente). Sin
+    # compromiso temporal congelado queda en NULL.
+    fecha_objetivo = tiempos.fecha_objetivo_de(ticket, ticket.radicado_en)
+    ticket.fecha_objetivo_original = fecha_objetivo
+    ticket.fecha_objetivo_vigente = fecha_objetivo
+    ticket.estado = Ticket.Estado.RADICADO
+    # 4.C2: un Ticket General se DIRIGE al radicarse (destino + responsable
+    # inicial), pero NO cambia a EN_ATENCION: sigue RADICADO hasta que se tome o
+    # inicie la atención. Sin un destino/responsable válido no se radica.
+    direccion = direccionamiento.preparar(ticket) if servicio.es_ticket_general else None
+    ticket.save()
+
+    for contexto in servicio.contextos_atencion.filter(activo=True):
+        TicketContextoAtencion.objects.create(
+            ticket=ticket,
+            tipo_alcance=contexto.tipo_alcance,
+            area=contexto.area,
+            unidad_negocio=contexto.unidad_negocio,
+        )
+
+    historial.registrar(ticket, HistorialTicket.TipoEvento.RADICADO, actor, **(datos_historial or {}))
+    if direccion is not None:
+        direccionamiento.fijar(ticket, actor, *direccion)
+        _auditar_cambio_responsable(
+            ticket, actor, usuario_anterior_id=None, usuario_nuevo_id=ticket.usuario_responsable_id,
+            equipo_anterior_id=None, equipo_nuevo_id=ticket.equipo_responsable_id,
+        )
+        # 4.F3: el flujo arrancó antes de dirigir el ticket; lo que esperaba «al responsable» ya tiene dueño.
+        entregar_tareas_pendientes_al_responsable(ticket, actor)
+
+
 @transaction.atomic
 def radicar_ticket(ticket, actor):
     """CU-014/RQF-053/RQF-054, RN-014/RN-016 — incremento 2.2.
@@ -357,58 +428,7 @@ def radicar_ticket(ticket, actor):
 
     validar_para_radicar(ticket)
 
-    ticket.tipo = servicio.tipo
-    validar_ejecucion(servicio)
-    if servicio.workflow_id is not None:
-        datos_workflow = {"ticket_id": ticket.pk}
-        if servicio.workflow.modo == "PLANTILLA_FASES":
-            datos_workflow["configuracion_ejecucion_version_id"] = servicio.configuracion_ejecucion_activa_id
-        # Es una ejecución interna derivada de una radicación autorizada,
-        # no una acción técnica del solicitante sobre el motor.
-        instancia = iniciar_workflow(
-            servicio.workflow, origen=RegistroAuditoria.Origen.SISTEMA,
-            datos_iniciales=datos_workflow,
-        )
-        if instancia.estado == InstanciaWorkflow.Estado.ERROR:
-            ejecucion_error = instancia.ejecuciones_etapa.order_by("-orden").first()
-            detalle = ""
-            if ejecucion_error and ejecucion_error.error:
-                detalle = ejecucion_error.error.get("mensaje") or ""
-            mensaje = "No fue posible iniciar la ejecución; el ticket sigue en borrador."
-            if detalle:
-                mensaje = f"{mensaje} Detalle: {detalle}"
-            raise ValidationError(mensaje)
-        ticket.instancia_workflow = instancia
-
-    ticket.radicado = uuid.uuid4()
-    ticket.radicado_en = timezone.now()
-    # 4.A1: única vez que se fija la fecha objetivo (original = vigente). Sin
-    # compromiso temporal congelado queda en NULL.
-    fecha_objetivo = tiempos.fecha_objetivo_de(ticket, ticket.radicado_en)
-    ticket.fecha_objetivo_original = fecha_objetivo
-    ticket.fecha_objetivo_vigente = fecha_objetivo
-    ticket.estado = Ticket.Estado.RADICADO
-    # 4.C2: un Ticket General se DIRIGE al radicarse (destino + responsable
-    # inicial), pero NO cambia a EN_ATENCION: sigue RADICADO hasta que se tome o
-    # inicie la atención. Sin un destino/responsable válido no se radica.
-    direccion = direccionamiento.preparar(ticket) if servicio.es_ticket_general else None
-    ticket.save()
-
-    for contexto in servicio.contextos_atencion.filter(activo=True):
-        TicketContextoAtencion.objects.create(
-            ticket=ticket,
-            tipo_alcance=contexto.tipo_alcance,
-            area=contexto.area,
-            unidad_negocio=contexto.unidad_negocio,
-        )
-
-    historial.registrar(ticket, HistorialTicket.TipoEvento.RADICADO, actor)
-    if direccion is not None:
-        direccionamiento.fijar(ticket, actor, *direccion)
-        _auditar_cambio_responsable(
-            ticket, actor, usuario_anterior_id=None, usuario_nuevo_id=ticket.usuario_responsable_id,
-            equipo_anterior_id=None, equipo_nuevo_id=ticket.equipo_responsable_id,
-        )
+    _radicar_nucleo(ticket, servicio, actor)
 
     # Conserva el contrato anterior: el objeto recibido refleja el éxito.
     ticket_original.refresh_from_db()
@@ -435,6 +455,8 @@ def tomar_ticket(ticket, actor):
     ticket.usuario_responsable = actor
     ticket.save()
     historial.registrar(ticket, HistorialTicket.TipoEvento.TOMADO, actor)
+    # 4.F3: el trabajo que el flujo dejó esperando «al responsable del ticket» pasa a quien lo toma.
+    entregar_tareas_pendientes_al_responsable(ticket, actor)
     _auditar_cambio_responsable(
         ticket,
         actor,
@@ -510,6 +532,8 @@ def asignar_ticket(ticket, actor, *, usuario=None, equipo=None):
         equipo_anterior_id=equipo_anterior_id,
         equipo_nuevo_id=ticket.equipo_responsable_id,
     )
+    if usuario is not None:
+        entregar_tareas_pendientes_al_responsable(ticket, actor)  # 4.F3 (ver `tomar_ticket`)
     return ticket
 
 
@@ -607,6 +631,8 @@ def solicitar_informacion(ticket, actor, mensaje, archivos=None):
     (R.1 aprobado): nunca aceptado como parámetro externo/POST."""
     if not puede_solicitar_informacion(actor, ticket):
         raise PermissionDenied("No tiene autorización para solicitar información en este ticket.")
+    if ticket.solicitante_id is None:  # 4.G1: defensa; `puede_solicitar_informacion` ya lo excluye.
+        raise ValidationError("Este ticket no tiene solicitante a quien pedirle información.")
     if not mensaje or not mensaje.strip():
         raise ValidationError("El mensaje de la solicitud no puede estar vacío.")
 
@@ -676,7 +702,8 @@ def _auditar_cambio_responsable(
     registrar_evento(
         accion=RegistroAuditoria.Accion.ACTUALIZAR,
         instancia=ticket,
-        origen=RegistroAuditoria.Origen.USUARIO,
+        # 4.G1: `actor=None` = el Sistema (responsable inicial de un ticket programado).
+        origen=RegistroAuditoria.Origen.USUARIO if actor is not None else RegistroAuditoria.Origen.SISTEMA,
         usuario=actor,
         datos_anteriores={
             "usuario_responsable_id": usuario_anterior_id,

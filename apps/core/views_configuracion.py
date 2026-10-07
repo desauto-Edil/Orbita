@@ -42,6 +42,8 @@ from apps.core.models import (
     AreaUnidadNegocio,
     AsignacionRol,
     ConfiguracionSistema,
+    Equipo,
+    MiembroEquipo,
     Permiso,
     RolFuncional,
     RolPermiso,
@@ -161,7 +163,11 @@ def logo_view(request):
 _MEMBRESIAS = {
     "area": (UsuarioArea, "area", Area, "Área"),
     "unidad": (UsuarioUnidadNegocio, "unidad_negocio", UnidadNegocio, "Unidad de negocio"),
+    # 4.F2 — la relación Usuario↔Equipo YA existe (`MiembroEquipo`, con vigencia e historial);
+    # aquí solo se expone. Pertenecer a un equipo no tiene «principal» y retirar no borra.
+    "equipo": (MiembroEquipo, "equipo", Equipo, "Equipo"),
 }
+_CON_PRINCIPAL = ("area", "unidad")
 
 
 @login_required
@@ -227,7 +233,10 @@ def _disponibles(tipo, usuario):
 
 
 def _form_membresia(tipo, usuario, datos=None):
-    return MembresiaForm(datos, queryset=_disponibles(tipo, usuario), etiqueta=_MEMBRESIAS[tipo][3], prefix=tipo)
+    return MembresiaForm(
+        datos, queryset=_disponibles(tipo, usuario), etiqueta=_MEMBRESIAS[tipo][3], prefix=tipo,
+        con_principal=tipo in _CON_PRINCIPAL,
+    )
 
 
 def _quitar_principal(modelo, usuario, actor, excepto=None):
@@ -247,7 +256,13 @@ def _accion_membresia(request, objetivo, tipo, operacion):
         form = _form_membresia(tipo, objetivo, request.POST)
         if not form.is_valid():
             return form
-        destino, principal = form.cleaned_data["destino"], form.cleaned_data["es_principal"]
+        destino = form.cleaned_data["destino"]
+        if tipo == "equipo":
+            # Un reingreso abre una membresía nueva: la anterior (con sus fechas) es historia.
+            _guardar(modelo(usuario=objetivo, equipo=destino, fecha_inicio=timezone.localdate()), actor)
+            messages.success(request, f"{etiqueta} añadido: {destino}.")
+            return None
+        principal = form.cleaned_data["es_principal"]
         if principal:
             _quitar_principal(modelo, objetivo, actor)
         membresia = modelo.objects.filter(usuario=objetivo, **{campo: destino}).first() or modelo(
@@ -259,6 +274,15 @@ def _accion_membresia(request, objetivo, tipo, operacion):
         return None
 
     membresia = get_object_or_404(modelo, pk=request.POST.get("membresia"), usuario=objetivo, activo=True)
+    if tipo not in _CON_PRINCIPAL:
+        if operacion != "quitar":
+            raise PermissionDenied
+        hoy = timezone.localdate()
+        membresia.activo = False
+        membresia.fecha_fin = max(hoy, membresia.fecha_inicio)
+        messages.success(request, f"{etiqueta} retirado: {getattr(membresia, campo)}.")
+        _guardar(membresia, actor)
+        return None
     if operacion == "principal":
         _quitar_principal(modelo, objetivo, actor, excepto=membresia.pk)
         membresia.es_principal = True
@@ -356,6 +380,7 @@ def usuario_view(request, pk):
             "unidades": objetivo.unidades_negocio.filter(activo=True)
             .select_related("unidad_negocio")
             .order_by("-es_principal", "unidad_negocio__nombre"),
+            "equipos": objetivo.equipos.filter(activo=True).select_related("equipo").order_by("equipo__nombre"),
             "asignaciones": asignaciones,
         }
     )
@@ -366,6 +391,7 @@ def usuario_view(request, pk):
                 "form_clave": SetPasswordForm(objetivo),
                 "form_area": _form_membresia("area", objetivo),
                 "form_unidad": _form_membresia("unidad", objetivo),
+                "form_equipo": _form_membresia("equipo", objetivo),
             }
         )
     if edita_roles:

@@ -77,6 +77,7 @@
                   <span class="svc-tag">{{ campo.get_tipo_display }}</span>
                   {% if campo.clave %}<span class="svc-tag" title="Así se referencia en las decisiones de un flujo">formulario.{{ campo.clave }}</span>{% endif %}
                   {% if campo.obligatorio %}<span class="svc-tag svc-tag--accent">Obligatorio</span>{% endif %}
+                  {% if campo.es_fecha_requerida %}<span class="svc-tag svc-tag--accent" title="Órbita compara esta fecha con el tiempo objetivo del servicio">Fecha requerida</span>{% endif %}
                 </div>
                 {% if editable_entrada %}
                   <div class="svc-row-actions">
@@ -98,6 +99,10 @@
                         <div class="field">{{ campo.form_editar.orden.label_tag }}{{ campo.form_editar.orden }}</div>
                       </div>
                       <label class="choice">{{ campo.form_editar.obligatorio }} {{ campo.form_editar.obligatorio.label_tag }}</label>
+                      <div class="field" data-solo-tipos="FECHA,FECHA_HORA"{% if campo.tipo != "FECHA" and campo.tipo != "FECHA_HORA" %} hidden{% endif %}>
+                        <label class="choice">{{ campo.form_editar.es_fecha_requerida }} {{ campo.form_editar.es_fecha_requerida.label_tag }}</label>
+                        <small class="text-muted">{{ campo.form_editar.es_fecha_requerida.help_text }}</small>
+                      </div>
                       <div class="svc-form-grid svc-form-grid--three">
                         <div class="field">{{ campo.form_editar.longitud_maxima.label_tag }}{{ campo.form_editar.longitud_maxima }}</div>
                         <div class="field">{{ campo.form_editar.minimo.label_tag }}{{ campo.form_editar.minimo }}</div>
@@ -157,6 +162,10 @@
                 <div class="field">{{ campo_form_nuevo.orden.label_tag }}{{ campo_form_nuevo.orden }}</div>
               </div>
               <label class="choice">{{ campo_form_nuevo.obligatorio }} {{ campo_form_nuevo.obligatorio.label_tag }}</label>
+              <div class="field" data-solo-tipos="FECHA,FECHA_HORA" hidden>
+                <label class="choice">{{ campo_form_nuevo.es_fecha_requerida }} {{ campo_form_nuevo.es_fecha_requerida.label_tag }}</label>
+                <small class="text-muted">{{ campo_form_nuevo.es_fecha_requerida.help_text }}</small>
+              </div>
               <div class="svc-form-grid svc-form-grid--three">
                 <div class="field">{{ campo_form_nuevo.longitud_maxima.label_tag }}{{ campo_form_nuevo.longitud_maxima }}</div>
                 <div class="field">{{ campo_form_nuevo.minimo.label_tag }}{{ campo_form_nuevo.minimo }}</div>

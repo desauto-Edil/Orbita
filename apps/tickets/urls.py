@@ -19,6 +19,11 @@ urlpatterns = [
     path("<int:pk>/enviada/", views.solicitud_enviada_view, name="enviada"),
     path("<int:pk>/radicar/", views.radicar_view, name="radicar"),
     path("<int:pk>/detalle/", views.detalle_view, name="detalle"),
+    # 4.F2 — «Ver mi ticket»: seguimiento orientado al solicitante (solo lectura)
+    path("<int:pk>/seguimiento/", views.seguimiento_view, name="seguimiento"),
+    # 4.F3 — experiencia operativa y resumen de solo lectura (Trabajo)
+    path("<int:pk>/trabajo/", views.trabajo_view, name="trabajo"),
+    path("<int:pk>/resumen/", views.resumen_view, name="resumen"),
     path("<int:pk>/tomar/", views.tomar_view, name="tomar"),
     path("<int:pk>/iniciar-atencion/", views.iniciar_atencion_view, name="iniciar_atencion"),
     path("<int:pk>/asignar/", views.asignar_view, name="asignar"),

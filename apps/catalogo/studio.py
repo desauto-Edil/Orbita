@@ -30,6 +30,7 @@ from django.db import transaction
 from django.http import HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
+from django.utils import timezone
 
 from apps.catalogo.entregables import configurar_definicion_entregable, retirar_definicion_entregable
 from apps.catalogo.terminos_busqueda import (
@@ -84,7 +85,10 @@ from apps.catalogo.forms import (
     EsperaConfigForm,
     FallbackForm,
     FormularioForm,
+    InicioProcesoForm,
+    MAX_APROBADORES,
     OpcionCampoForm,
+    ParticipanteAprobacionForm,
     ParticipanteAprobacionFormSet,
     PoliticaEntregaForm,
     PoliticaProrrogaForm,
@@ -107,6 +111,7 @@ from apps.catalogo.models import (
     DefinicionEntregable,
     FormularioVersion,
     OpcionCampo,
+    ProgramacionProceso,
     ReglaCondicional,
     Servicio,
     ServicioResponsable,
@@ -129,7 +134,15 @@ from apps.catalogo.operaciones import (
     retirar_visibilidad,
     validar_publicacion,
 )
+from apps.catalogo.programacion import (
+    asegurar_responsable_inicial,
+    programacion_activa_de,
+    configurar_programacion,
+    desactivar_programacion,
+    errores_de_compatibilidad,
+)
 from apps.catalogo.versionamiento import activar_version, crear_nueva_version
+from apps.tickets.programadas import proxima_ejecucion
 from apps.core.autorizacion import usuario_tiene_permiso
 from apps.workflows.autorizacion import puede_administrar_workflows, puede_vincular_workflows
 from apps.workflows.models import Etapa, FaseWorkflow, TransicionEtapa, Workflow, WorkflowVersion
@@ -227,16 +240,38 @@ def studio_lista_view(request):
     return render(request, "catalogo/studio_lista.html", contexto)
 
 
+def _aplicar_inicio(servicio, actor, datos):
+    """4.G1 — «¿Cómo inicia este proceso?» dentro del guardado del Proceso: Programado crea o
+    actualiza la programación (y deja al responsable elegido como responsable del proceso); Manual
+    la pausa. Se llama dentro de la misma transacción que crea o edita el proceso."""
+    if datos["modo"] == InicioProcesoForm.PROGRAMADO:
+        responsable = asegurar_responsable_inicial(servicio, actor, datos["responsable_inicial"])
+        configurar_programacion(
+            servicio, actor, dia_creacion=datos["dia_creacion"], periodo=datos["periodo"],
+            responsable_inicial=responsable,
+        )
+    else:
+        desactivar_programacion(servicio, actor)
+
+
 @login_required
 def studio_crear_view(request):
-    """4.4.1, brecha 1 — alta de un Servicio/Proceso sin Django Admin. Crea
-    solo el BORRADOR (sin Workflow/Formulario/Entregables) y redirige a su
-    pestaña General para completarlo."""
+    """4.4.1, brecha 1 — alta de un Servicio/Proceso sin Django Admin. Crea solo el BORRADOR (sin
+    Workflow/Formulario/Entregables) y redirige a su pestaña General para completarlo.
+
+    4.G1: si el tipo es Proceso, el mismo formulario pregunta «¿Cómo inicia este proceso?» (Manual o
+    Programado) y, en Programado, su calendario y responsable inicial. El JS solo muestra u oculta;
+    el servidor valida."""
     if not _puede_catalogo(request.user):
         raise PermissionDenied
     if request.method == "POST":
         form = ServicioCreacionForm(request.POST)
-        if form.is_valid():
+        form_inicio = InicioProcesoForm(request.POST)
+        es_proceso = request.POST.get("tipo") == Servicio.Tipo.PROCESO
+        valido = form.is_valid()
+        if es_proceso:
+            valido = form_inicio.is_valid() and valido
+        if valido:
             datos = form.cleaned_data
             try:
                 with transaction.atomic():
@@ -245,14 +280,29 @@ def studio_crear_view(request):
                         request.user, nombre=datos["nombre"], descripcion=datos.get("descripcion", ""),
                         categoria=categoria, tipo=datos["tipo"], instrucciones=datos.get("instrucciones", ""),
                     )
+                    programado = es_proceso and form_inicio.cleaned_data["modo"] == InicioProcesoForm.PROGRAMADO
+                    if programado:
+                        _aplicar_inicio(servicio, request.user, form_inicio.cleaned_data)
             except ValidationError as exc:
                 form.add_error(None, _mensaje_error(exc))
             else:
-                messages.success(request, "Creado como borrador. Complete su configuración en las pestañas.")
+                if programado:
+                    messages.success(
+                        request,
+                        "Creado como borrador y programado. Completa su flujo y publícalo: Órbita empezará "
+                        "a crear sus ejecuciones cuando esté publicado.",
+                    )
+                else:
+                    messages.success(request, "Creado como borrador. Complete su configuración en las pestañas.")
                 return redirect(_volver(servicio.pk, "general"))
     else:
         form = ServicioCreacionForm(initial={"tipo": Servicio.Tipo.SERVICIO})
-    return render(request, "catalogo/studio_crear.html", {"form": form, "titulo_pagina": "Crear en Studio"})
+        form_inicio = InicioProcesoForm(
+            initial={"modo": InicioProcesoForm.MANUAL, "frecuencia": "MENSUAL",
+                     "periodo": ProgramacionProceso.Periodo.MES_SIGUIENTE}
+        )
+    contexto = {"form": form, "form_inicio": form_inicio, "titulo_pagina": "Crear en Studio"}
+    return render(request, "catalogo/studio_crear.html", contexto)
 
 
 # --- Helpers de composición de contexto -----------------------------------
@@ -643,7 +693,42 @@ def _conectar_bloque_nuevo(ancla, version, nuevo_bloque, actor, tipo_empresarial
         ancla.conectar(version, nuevo_bloque, destino, actor, **_reglas_salida_nueva(nuevo_bloque))
 
 
-def _parsear_configuracion_bloque(request, tipo, *, bloque_id=None, servicio=None, incluir_pk=None, version=None):
+def _filas_aprobadores(prefijo, participantes=None):
+    """Una fila por aprobador posible (hasta `MAX_APROBADORES`), sin enlazarlas a un formset:
+    el navegador muestra tantas como diga «¿Cuántos aprobadores participan?» y el servidor solo
+    lee esas. `participantes`: dicts `{tipo, usuario, equipo}` ya configurados (o None)."""
+    participantes = participantes or []
+    return [
+        ParticipanteAprobacionForm(
+            prefix=f"{prefijo}-{indice}", initial=participantes[indice] if indice < len(participantes) else None
+        )
+        for indice in range(MAX_APROBADORES)
+    ]
+
+
+def _leer_aprobadores(request, prefijo, cantidad, errores):
+    """Los `cantidad` aprobadores enviados como `[(tipo, referencia)]`, o `None` (con el motivo
+    en `errores`) si alguno está incompleto. Las filas más allá de `cantidad` se ignoran."""
+    participantes = []
+    for indice in range(cantidad):
+        fila = ParticipanteAprobacionForm(request.POST, prefix=f"{prefijo}-{indice}")
+        if not fila.is_valid():
+            motivo = "; ".join(m for lista in fila.errors.values() for m in lista)
+            errores.append(f"Aprobador {indice + 1}: {motivo or 'indica quién aprueba.'}")
+            return None
+        tipo_p = fila.cleaned_data["tipo"]
+        referencia = (
+            fila.cleaned_data.get("usuario") if tipo_p == "USUARIO"
+            else (fila.cleaned_data.get("equipo") if tipo_p == "EQUIPO" else None)
+        )
+        participantes.append((tipo_p, referencia))
+    return participantes
+
+
+def _parsear_configuracion_bloque(
+    request, tipo, *, bloque_id=None, servicio=None, incluir_pk=None, version=None, errores=None
+):
+    errores = errores if errores is not None else []
     prefix = f"bloque-{bloque_id}-config" if bloque_id else "nuevo-config"
     if tipo == "ENTREGABLE":
         # Solo un bloque de configuración por fases tiene un Servicio del cual elegir entregables.
@@ -680,17 +765,28 @@ def _parsear_configuracion_bloque(request, tipo, *, bloque_id=None, servicio=Non
         prefix_participantes = f"bloque-{bloque_id}-participantes" if bloque_id else "nuevo-participantes"
         revisables = _bloques_entregable_revisables(version)
         form = AprobacionConfigForm(request.POST, prefix=prefix, bloques_entregable=revisables)
-        formset = ParticipanteAprobacionFormSet(request.POST, prefix=prefix_participantes)
-        if not (form.is_valid() and formset.is_valid()):
+        if not form.is_valid():
+            errores.extend(m for lista in form.errors.values() for m in lista)
             return {}, False
-        participantes = []
-        for datos_p in formset.cleaned_data:
-            if not datos_p or datos_p.get("DELETE"):
-                continue
-            tipo_p = datos_p["tipo"]
-            referencia = datos_p.get("usuario") if tipo_p == "USUARIO" else (datos_p.get("equipo") if tipo_p == "EQUIPO" else None)
-            participantes.append((tipo_p, referencia))
+        cantidad = form.cleaned_data.get("cantidad")
+        if cantidad is not None:
+            # 4.F1: «¿Cuántos aprobadores?» manda; los aprobadores son lo único que se guarda.
+            participantes = _leer_aprobadores(request, prefix_participantes, cantidad, errores)
+            if participantes is None:
+                return {}, False
+        else:
+            formset = ParticipanteAprobacionFormSet(request.POST, prefix=prefix_participantes)
+            if not formset.is_valid():
+                return {}, False
+            participantes = []
+            for datos_p in formset.cleaned_data:
+                if not datos_p or datos_p.get("DELETE"):
+                    continue
+                tipo_p = datos_p["tipo"]
+                referencia = datos_p.get("usuario") if tipo_p == "USUARIO" else (datos_p.get("equipo") if tipo_p == "EQUIPO" else None)
+                participantes.append((tipo_p, referencia))
         if not participantes:
+            errores.append("Indica al menos un aprobador.")
             return {}, False
         revisa = form.cleaned_data.get("revisa")
         return {
@@ -730,8 +826,48 @@ def _contexto_terminos(servicio):
     }
 
 
+def _contexto_inicio(servicio):
+    """4.G1 — «¿Cómo inicia este proceso?»: manual o programado, y cómo va la programación. La
+    sección se arma siempre (salvo el Servicio interno del Ticket General) porque el selector de
+    Tipo puede convertir un Servicio en Proceso sin recargar; el JS la muestra solo con Proceso."""
+    if servicio.es_ticket_general:
+        return {"inicio_aplica": False}
+    programacion = ProgramacionProceso.objects.filter(servicio=servicio).select_related(
+        "responsable_inicial__usuario", "responsable_inicial__equipo"
+    ).first()
+    activa = programacion is not None and programacion.activa
+    inicial = {"modo": InicioProcesoForm.PROGRAMADO if activa else InicioProcesoForm.MANUAL}
+    if programacion is not None:
+        inicial.update(
+            frecuencia=programacion.frecuencia, dia_creacion=programacion.dia_creacion,
+            periodo=programacion.periodo,
+            responsable_inicial=InicioProcesoForm.valor_responsable(programacion.responsable_inicial),
+        )
+    else:
+        inicial.update(frecuencia="MENSUAL", periodo=ProgramacionProceso.Periodo.MES_SIGUIENTE)
+    proxima = None
+    if activa:
+        creacion, periodo, vencida = proxima_ejecucion(programacion, timezone.localdate())
+        proxima = {"fecha": creacion, "periodo": periodo, "vencida": vencida}
+    ejecuciones = servicio.ejecuciones_programadas.select_related("ticket")[:5]
+    return {
+        "inicio_aplica": True,
+        "form_inicio": InicioProcesoForm(initial=inicial),
+        "programacion": programacion,
+        "programacion_activa": activa,
+        "proxima_ejecucion": proxima,
+        "ejecuciones_programadas": list(ejecuciones),
+        # Solo informativo: lo que habría que corregir para poder programarlo.
+        "inicio_incompatibilidades": (
+            errores_de_compatibilidad(servicio)
+            if not activa and servicio.tipo == Servicio.Tipo.PROCESO else []
+        ),
+    }
+
+
 def _contexto_general(servicio):
     return {
+        **_contexto_inicio(servicio),
         "form_general": ServicioGeneralForm(instance=servicio),
         "form_prorroga": PoliticaProrrogaForm(
             initial={
@@ -979,14 +1115,19 @@ def _bloque_operativo_para_presentacion(bloque, editable, bloques_entregable=())
             initial=_config_inicial_para_formulario(bloque), prefix=f"bloque-{bloque.pk}-config"
         )
     elif bloque.tipo == BloqueOperativo.Tipo.APROBACION:
+        participantes_actuales = len((bloque.configuracion or {}).get("participantes") or [])
         fila["form_configurar"] = AprobacionConfigForm(
-            initial={**_config_inicial_para_formulario(bloque), "revisa": bloque.entregable_revisado_id or ""},
+            initial={
+                **_config_inicial_para_formulario(bloque),
+                "revisa": bloque.entregable_revisado_id or "",
+                "cantidad": max(participantes_actuales, 1),
+            },
             prefix=f"bloque-{bloque.pk}-config",
             bloques_entregable=bloques_entregable,
         )
-        fila["formset_participantes"] = ParticipanteAprobacionFormSet(
-            initial=_participantes_iniciales_operativos(bloque), prefix=f"bloque-{bloque.pk}-participantes"
-        )
+        iniciales = _participantes_iniciales_operativos(bloque) or []
+        fila["filas_aprobadores"] = _filas_aprobadores(f"bloque-{bloque.pk}-participantes", iniciales)
+        fila["cantidad_aprobadores"] = max(len(iniciales), 1)
         destinos = _destinos_bloque_choices(bloque.version, excluir_pk=bloque.pk)
         rutas = {t.resultado_aprobacion: t for t in bloque.transiciones_salientes.all()}
         fila["rutas"] = rutas
@@ -1042,6 +1183,7 @@ def _contexto_configuracion_operativa(servicio):
     editable = config_borrador is not None
     errores_configuracion = validar_configuracion_ejecucion(config_borrador) if config_borrador is not None else []
     bloques_entregable = _bloques_entregable_revisables(config_mostrada)
+    destinos_decision = _destinos_bloque_choices(config_mostrada) if config_mostrada is not None else []
     fases = []
     for fase in _fases_para_resumen(version_activa):
         bloques = []
@@ -1076,7 +1218,14 @@ def _contexto_configuracion_operativa(servicio):
         "form_entregable_nuevo": EntregableConfigForm(servicio=servicio, prefix="nuevo-config"),
         "servicio_sin_entregables": not servicio.definiciones_entregables.filter(activo=True).exists(),
         "form_aprobacion_nuevo": AprobacionConfigForm(prefix="nuevo-config", bloques_entregable=bloques_entregable),
-        "formset_participantes_nuevo": ParticipanteAprobacionFormSet(prefix="nuevo-participantes"),
+        "filas_aprobadores_nuevo": _filas_aprobadores("nuevo-participantes"),
+        # 4.F1: una DECISION se configura al crearla (condición + rutas), no después.
+        "form_decision_condicion_nuevo": (
+            CondicionalForm(destinos=destinos_decision, prefix="nuevo-cond") if editable else None
+        ),
+        "form_decision_otro_caso_nuevo": (
+            FallbackForm(destinos=destinos_decision, prefix="nuevo-fallback") if editable else None
+        ),
     }
 
 
@@ -1329,6 +1478,9 @@ def studio_view(request, pk):
         "puede_formulario": _puede_formulario(request.user),
         "puede_ejecucion": puede_administrar_workflows(request.user),
         "puede_vincular_workflow": puede_vincular_workflows(request.user),
+        # 4.G1: un Proceso programado no tiene solicitante; las secciones orientadas a quien solicita
+        # (entrega formal, catálogo, búsqueda) no se le muestran.
+        "proceso_programado": servicio.tipo == Servicio.Tipo.PROCESO and programacion_activa_de(servicio) is not None,
     }
     constructores = {
         "general": _contexto_general,
@@ -1349,6 +1501,8 @@ def studio_view(request, pk):
 
 @login_required
 def studio_general_guardar_view(request, pk):
+    """Guarda Básico. 4.G1: en un Proceso incluye «¿Cómo inicia?» (Manual/Programado) en el mismo
+    formulario y la misma transacción: si la programación no es válida no se guarda nada."""
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     if not _puede_catalogo(request.user):
@@ -1359,12 +1513,24 @@ def studio_general_guardar_view(request, pk):
         messages.error(request, "Revise los datos generales.")
         return redirect(_volver(pk, "general"))
     datos = form.cleaned_data
+    # Solo un Proceso (no el Servicio interno del Ticket General) y solo si el formulario trae la
+    # sección «Inicio»: un envío sin ella no toca la programación.
+    con_inicio = (
+        datos["tipo"] == Servicio.Tipo.PROCESO and not servicio.es_ticket_general and "modo" in request.POST
+    )
+    form_inicio = InicioProcesoForm(request.POST) if con_inicio else None
+    if con_inicio and not form_inicio.is_valid():
+        messages.error(request, "; ".join(e for errores in form_inicio.errors.values() for e in errores))
+        return redirect(_volver(pk, "general"))
     try:
-        editar_servicio_general(
-            servicio, request.user, nombre=datos["nombre"], descripcion=datos.get("descripcion", ""),
-            categoria=datos["categoria"], tipo=datos["tipo"], instrucciones=datos.get("instrucciones", ""),
-            alcance_visibilidad=datos["alcance_visibilidad"],
-        )
+        with transaction.atomic():
+            editar_servicio_general(
+                servicio, request.user, nombre=datos["nombre"], descripcion=datos.get("descripcion", ""),
+                categoria=datos["categoria"], tipo=datos["tipo"], instrucciones=datos.get("instrucciones", ""),
+                alcance_visibilidad=datos["alcance_visibilidad"],
+            )
+            if con_inicio:
+                _aplicar_inicio(servicio, request.user, form_inicio.cleaned_data)
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
     else:
@@ -1967,6 +2133,39 @@ def _configuracion_operativa_o_error(servicio):
     return version
 
 
+def _parsear_decision_inicial(request, version, errores):
+    """Condición y rutas que la experiencia de creación envía junto con una DECISION (4.F1).
+
+    `None` si el envío no las trae (creación sin configuración, como antes: el bloque queda
+    pendiente y la publicación lo señalará). Si las trae, TODAS son obligatorias —condición,
+    «si se cumple» y «si no se cumple»— y `None` + `errores` si algo falta: así nunca se crea
+    una decisión que parece lista y no lo está."""
+    if "nuevo-cond-variable" not in request.POST:
+        return None
+    destinos = _destinos_bloque_choices(version)
+    condicion = CondicionalForm({"nuevo-cond-prioridad": "0", **request.POST.dict()}, destinos=destinos, prefix="nuevo-cond")
+    otro_caso = FallbackForm(request.POST, destinos=destinos, prefix="nuevo-fallback")
+    valido = condicion.is_valid()
+    valido = otro_caso.is_valid() and valido
+    if not valido:
+        etiquetas = {"variable": "Variable", "operador": "Operador", "valor": "Valor", "destino": "Destino"}
+        for formulario, nombre in ((condicion, "Si se cumple"), (otro_caso, "Si no se cumple")):
+            for campo, lista in formulario.errors.items():
+                etiqueta = nombre if campo == "destino" else etiquetas.get(campo, campo)
+                errores.extend(f"{etiqueta}: {mensaje}" for mensaje in lista)
+        return None
+    datos = condicion.cleaned_data
+    destino, finaliza = _resolver_destino_operativo(version, datos["destino"])
+    destino_otro, finaliza_otro = _resolver_destino_operativo(version, otro_caso.cleaned_data["destino"])
+    return {
+        "condicion": {
+            "variable": datos["variable"], "operador": datos["operador"], "valor": datos["valor"],
+            "prioridad": datos["prioridad"], "destino": destino, "finaliza": finaliza,
+        },
+        "otro_caso": {"destino": destino_otro, "finaliza": finaliza_otro},
+    }
+
+
 def _h_bloque_operativo_guardar(request, servicio, bloque_id=None):
     version = _configuracion_operativa_o_error(servicio)
     if bloque_id is None:
@@ -1980,26 +2179,44 @@ def _h_bloque_operativo_guardar(request, servicio, bloque_id=None):
             messages.error(request, "Seleccione una fase valida.")
             return redirect(_volver(servicio.pk, "ejecucion"))
         tipo = general_form.cleaned_data["tipo"]
-        config_kwargs, config_valido = _parsear_configuracion_bloque(request, tipo, servicio=servicio, version=version)
+        errores = []
+        config_kwargs, config_valido = _parsear_configuracion_bloque(
+            request, tipo, servicio=servicio, version=version, errores=errores
+        )
         if not config_valido:
-            messages.error(request, "Revise la configuracion del bloque.")
+            messages.error(request, "; ".join(errores) or "Revise la configuracion del bloque.")
             return redirect(_volver(servicio.pk, "ejecucion"))
+        decision = None
+        if tipo == BloqueOperativo.Tipo.DECISION:
+            decision = _parsear_decision_inicial(request, version, errores)
+            if decision is None and errores:
+                messages.error(request, "Completa la decisión: " + "; ".join(errores))
+                return redirect(_volver(servicio.pk, "ejecucion"))
         try:
-            agregar_bloque_operativo(
-                version,
-                request.user,
-                fase=fase,
-                tipo=tipo,
-                nombre=general_form.cleaned_data["nombre"],
-                descripcion=general_form.cleaned_data.get("descripcion", ""),
-                configuracion=_serializar_configuracion_bloque_operativo(tipo, config_kwargs),
-                definicion_entregable=config_kwargs.get("definicion"),
-                entregable_revisado=config_kwargs.get("entregable_revisado"),
-            )
+            # Todo o nada: la decisión y sus rutas se crean juntas; si algo es inválido no
+            # queda un bloque a medias.
+            with transaction.atomic():
+                bloque = agregar_bloque_operativo(
+                    version,
+                    request.user,
+                    fase=fase,
+                    tipo=tipo,
+                    nombre=general_form.cleaned_data["nombre"],
+                    descripcion=general_form.cleaned_data.get("descripcion", ""),
+                    configuracion=_serializar_configuracion_bloque_operativo(tipo, config_kwargs),
+                    definicion_entregable=config_kwargs.get("definicion"),
+                    entregable_revisado=config_kwargs.get("entregable_revisado"),
+                )
+                if decision is not None:
+                    condicion, otro_caso = decision["condicion"], decision["otro_caso"]
+                    conectar_bloques_operativos(bloque, condicion.pop("destino"), request.user, **condicion)
+                    conectar_bloques_operativos(
+                        bloque, otro_caso["destino"], request.user, es_fallback=True, finaliza=otro_caso["finaliza"]
+                    )
         except ValidationError as exc:
             messages.error(request, _mensaje_error(exc))
         else:
-            messages.success(request, "Bloque agregado.")
+            messages.success(request, "Decisión agregada y configurada." if decision is not None else "Bloque agregado.")
         return redirect(_volver(servicio.pk, "ejecucion"))
 
     bloque = get_object_or_404(BloqueOperativo, pk=bloque_id, version=version)
@@ -2007,12 +2224,13 @@ def _h_bloque_operativo_guardar(request, servicio, bloque_id=None):
     if not editar_form.is_valid():
         messages.error(request, "Revise el nombre del bloque.")
         return redirect(_volver(servicio.pk, "ejecucion"))
+    errores = []
     config_kwargs, config_valido = _parsear_configuracion_bloque(
         request, bloque.tipo, bloque_id=bloque_id, servicio=servicio, incluir_pk=bloque.definicion_entregable_id,
-        version=version,
+        version=version, errores=errores,
     )
     if not config_valido:
-        messages.error(request, "Revise la configuracion del bloque.")
+        messages.error(request, "; ".join(errores) or "Revise la configuracion del bloque.")
         return redirect(_volver(servicio.pk, "ejecucion"))
     extra = {}
     if bloque.tipo == BloqueOperativo.Tipo.APROBACION:

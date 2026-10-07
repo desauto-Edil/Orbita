@@ -20,7 +20,7 @@ imposible (todo o nada). Sin `signals`, sin Domain Events/Observer todavía
 from django.db import transaction
 
 from apps.aprobaciones.operaciones import resolver_aprobacion
-from apps.tareas.operaciones import completar_tarea
+from apps.tareas.operaciones import asignar_por_flujo, completar_tarea
 from apps.workflows.models import EsquemaAprobacionWorkflow, InstanciaEtapa, InstanciaWorkflow, TareaWorkflow
 from apps.workflows.motor import continuar_espera_externa
 
@@ -48,6 +48,37 @@ def completar_tarea_workflow(tarea, actor):
     tarea_completada = completar_tarea(tarea, actor)
     continuar_espera_externa(vinculo.instancia_etapa, motivo_espera=InstanciaEtapa.MotivoEspera.TAREA)
     return tarea_completada
+
+
+@transaction.atomic
+def entregar_tareas_pendientes_al_responsable(ticket, actor):
+    """4.F3 — cuando el Ticket recibe un responsable individual (tomar / asignar), las Tareas que
+    el flujo ya creó PARA «EL RESPONSABLE DEL TICKET» y que quedaron sin dueño (el Ticket aún no
+    tenía responsable cuando el motor llegó a ese bloque) pasan a esa persona. Solo toca esas:
+    una Tarea con responsable o equipo propio, o de otro tipo de actor, no se modifica.
+    Devuelve las Tareas entregadas."""
+    if ticket.instancia_workflow_id is None or ticket.usuario_responsable_id is None:
+        return []
+    entregadas = []
+    vinculos = (
+        TareaWorkflow.objects.filter(
+            instancia_etapa__instancia_workflow_id=ticket.instancia_workflow_id,
+            instancia_etapa__estado=InstanciaEtapa.Estado.EN_ESPERA,
+            tarea__usuario_responsable__isnull=True,
+            tarea__equipo_responsable__isnull=True,
+        )
+        .select_related("tarea", "instancia_etapa__bloque_operativo", "instancia_etapa__etapa")
+    )
+    for vinculo in vinculos:
+        ejecucion = vinculo.instancia_etapa
+        if ejecucion.bloque_operativo_id is not None:
+            tipo_actor = (ejecucion.bloque_operativo.configuracion or {}).get("tipo_actor")
+        else:
+            configuracion = getattr(ejecucion.etapa, "configuracion_tarea", None)
+            tipo_actor = getattr(configuracion, "tipo_responsable", None)
+        if tipo_actor == "RESPONSABLE_TICKET":
+            entregadas.append(asignar_por_flujo(vinculo.tarea, ticket.usuario_responsable, actor))
+    return entregadas
 
 
 @transaction.atomic

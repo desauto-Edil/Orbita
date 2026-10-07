@@ -48,6 +48,7 @@ def crear_nueva_version(formulario, actor, clonar_desde=None):
                 etiqueta=campo.etiqueta,
                 # 4.B0: la clave es la identidad estable del campo entre versiones.
                 clave=campo.clave,
+                es_fecha_requerida=campo.es_fecha_requerida,
                 ayuda=campo.ayuda,
                 obligatorio=campo.obligatorio,
                 orden=campo.orden,
@@ -78,6 +79,18 @@ def crear_nueva_version(formulario, actor, clonar_desde=None):
     return nueva
 
 
+def _exigir_compatible_con_procesos_programados(formulario, version):
+    """4.G1 — un Proceso programado nace con el formulario vacío y sin solicitante: no se activa
+    una versión con campos obligatorios mientras un Proceso programado (activo) la use."""
+    from apps.catalogo.programacion import campos_obligatorios_de_version, mensaje_campos_obligatorios
+
+    if not formulario.servicios.filter(programacion__activa=True).exists():
+        return
+    obligatorios = campos_obligatorios_de_version(version)
+    if obligatorios:
+        raise ValueError(mensaje_campos_obligatorios(obligatorios))
+
+
 @transaction.atomic
 def activar_version(formulario, version, actor):
     """Activa `version` como versión vigente de `formulario` (RQF-047).
@@ -92,6 +105,7 @@ def activar_version(formulario, version, actor):
         raise ValueError("La versión no pertenece a este formulario.")
     if version.estado != FormularioVersion.Estado.BORRADOR:
         raise ValueError("Solo se puede activar una versión en estado BORRADOR.")
+    _exigir_compatible_con_procesos_programados(formulario, version)
 
     datos_anteriores = {"version_activa_id": formulario.version_activa_id}
 

@@ -112,6 +112,15 @@ class Campo(RegistroBase):
     ayuda = models.TextField(blank=True)
     obligatorio = models.BooleanField(default=False)
     orden = models.PositiveIntegerField(default=0)
+    # 4.F2 — marca SEMÁNTICA: este campo es la «fecha requerida por el solicitante». Nunca se
+    # infiere del nombre ni del tipo (una fecha de nacimiento o de un evento no es un plazo):
+    # la decide quien configura el formulario. Solo FECHA o FECHA_HORA, y como mucho UNO por
+    # versión. Se copia al versionar y no depende de la etiqueta.
+    es_fecha_requerida = models.BooleanField(
+        default=False,
+        help_text="Órbita comparará esta fecha con el tiempo objetivo del servicio y avisará al "
+        "solicitante si pide un plazo menor al establecido.",
+    )
     # Validado por la Strategy del tipo (`campos.py`) — nunca un contenedor
     # libre: claves fuera del esquema de su tipo son rechazadas en clean().
     configuracion = models.JSONField(default=dict, blank=True)
@@ -122,6 +131,13 @@ class Campo(RegistroBase):
             UniqueConstraint(
                 fields=["version", "clave"], condition=~Q(clave=""), name="uq_campo_version_clave"
             ),
+            UniqueConstraint(
+                fields=["version"], condition=Q(es_fecha_requerida=True), name="uq_campo_version_fecha_requerida"
+            ),
+            models.CheckConstraint(
+                condition=Q(es_fecha_requerida=False) | Q(tipo__in=["FECHA", "FECHA_HORA"]),
+                name="ck_campo_fecha_requerida_tipo",
+            ),
         ]
 
     def clean(self):
@@ -129,6 +145,18 @@ class Campo(RegistroBase):
         if estrategia is None:
             raise ValidationError({"tipo": "Tipo de campo no soportado."})
         estrategia.validar_configuracion(self.configuracion or {})
+        if self.es_fecha_requerida:
+            if self.tipo not in (self.TipoCampo.FECHA, self.TipoCampo.FECHA_HORA):
+                raise ValidationError(
+                    {"es_fecha_requerida": "Solo un campo de fecha, o de fecha y hora, puede ser la fecha requerida."}
+                )
+            if self.version_id is not None:
+                otra = Campo.objects.filter(version_id=self.version_id, es_fecha_requerida=True).exclude(pk=self.pk).first()
+                if otra is not None:
+                    raise ValidationError(
+                        {"es_fecha_requerida": f"El formulario ya tiene una fecha requerida («{otra.etiqueta}»). "
+                         "Solo puede haber una: desmárcala primero."}
+                    )
         if self.clave and self.version_id is not None:
             repetida = Campo.objects.filter(version_id=self.version_id, clave=self.clave).exclude(pk=self.pk)
             if repetida.exists():

@@ -10,6 +10,7 @@ from .catalogo import (
 from .ticket_general import ConfiguracionTicketGeneral, DestinoTicketGeneral
 from .ejecucion import BloqueOperativo, ConfiguracionEjecucionVersion, TransicionBloqueOperativo
 from .formularios import Campo, Formulario, FormularioVersion, OpcionCampo, ReglaCondicional
+from .programacion import ProgramacionProceso
 
 __all__ = [
     "BloqueOperativo",
@@ -18,6 +19,7 @@ __all__ = [
     "ConfiguracionTicketGeneral",
     "DefinicionEntregable",
     "DestinoTicketGeneral",
+    "ProgramacionProceso",
     "TerminoServicio",
     "TransicionBloqueOperativo",
     "Servicio",

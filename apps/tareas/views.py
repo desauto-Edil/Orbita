@@ -48,6 +48,7 @@ from django.template.loader import render_to_string
 from django.utils import timezone
 from django.views.decorators.http import require_GET
 
+from apps.core.redirecciones import volver_a
 from apps.tareas import operaciones
 from apps.tareas.autorizacion import (
     delegado_actual,
@@ -222,7 +223,7 @@ def tomar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Tarea tomada.")
-    return redirect("tareas:detalle", pk=pk)
+    return volver_a(request, "tareas:detalle", pk)
 
 
 @login_required
@@ -238,7 +239,7 @@ def iniciar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Tarea iniciada.")
-    return redirect("tareas:detalle", pk=pk)
+    return volver_a(request, "tareas:detalle", pk)
 
 
 @login_required
@@ -257,7 +258,7 @@ def completar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Tarea completada.")
-    return redirect("tareas:detalle", pk=pk)
+    return volver_a(request, "tareas:detalle", pk)
 
 
 @login_required

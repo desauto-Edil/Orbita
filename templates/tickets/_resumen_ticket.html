@@ -1,0 +1,78 @@
+{% comment %}
+  Resumen de SOLO LECTURA de una solicitud (4.F3): lo que alguien necesita para decidir si toma un ticket.
+  Se usa como página (`resumen.html`) y como fragmento del panel lateral de la Cola. Ver el resumen NO
+  toma el ticket: «Tomar» es un POST aparte, solo si la autorización de dominio lo permite.
+{% endcomment %}
+<div class="resumen" data-resumen>
+  <header class="resumen__head">
+    <p class="resumen__code">{{ ticket.codigo|default:"Sin código" }}</p>
+    <h2 class="resumen__title">{{ servicio.nombre }}</h2>
+    {% if ticket.etiqueta %}<p class="ticket-etiqueta text-muted">{{ ticket.etiqueta }}</p>{% endif %}
+    <span class="badge badge--info badge--dot">{{ ticket.get_estado_display }}</span>
+  </header>
+
+  {% if plazo_corto %}
+    <p class="alert alert--warning resumen__aviso" role="status">
+      <strong>Fecha solicitada anterior al tiempo objetivo</strong><br>
+      Solicitada: {% if plazo_corto.con_hora %}{{ plazo_corto.valor|date:"d M Y, H:i" }}{% else %}{{ plazo_corto.valor|date:"d M Y" }}{% endif %}<br>
+      Objetivo del servicio: {{ plazo_corto.objetivo|date:"d M Y" }}{% if plazo_corto.tiempo %} ({{ plazo_corto.tiempo }}){% endif %}
+    </p>
+  {% endif %}
+
+  <dl class="resumen__datos">
+    {% if ticket.solicitante %}
+      <div><dt>Solicita</dt><dd>{{ ticket.solicitante.get_full_name|default:ticket.solicitante.get_username }}</dd></div>
+    {% else %}
+      <div><dt>Origen</dt><dd>Generado por programación</dd></div>
+    {% endif %}
+    <div><dt>Radicado el</dt><dd>{{ ticket.radicado_en|date:"j \d\e F \d\e Y, H:i" }}</dd></div>
+    {% if ticket.fecha_objetivo_vigente %}<div><dt>Fecha objetivo</dt><dd>{{ ticket.fecha_objetivo_vigente|date:"d M Y" }}</dd></div>{% endif %}
+    {% if plazo_solicitado %}<div><dt>Fecha solicitada</dt><dd>{% if plazo_solicitado.con_hora %}{{ plazo_solicitado.valor|date:"d M Y, H:i" }}{% else %}{{ plazo_solicitado.valor|date:"d M Y" }}{% endif %}</dd></div>{% endif %}
+    <div>
+      <dt>Lo tiene</dt>
+      <dd>
+        {% if responsable.equipo %}{{ responsable.equipo }}{% if responsable.persona %} · {{ responsable.persona }}{% endif %}
+        {% elif responsable.persona %}{{ responsable.persona }}
+        {% else %}Sin asignar{% endif %}
+      </dd>
+    </div>
+  </dl>
+
+  <h3 class="resumen__sub">Lo que pidió</h3>
+  <dl class="resumen__respuestas">
+    {% for item in campos_formulario %}
+      <div>
+        <dt>{{ item.campo.etiqueta }}</dt>
+        <dd>
+          {% if not item.respuesta %}—
+          {% elif item.campo.tipo == "ARCHIVO" %}{% if item.respuesta.archivo %}<a href="{% url 'tickets:descargar_archivo' item.respuesta.archivo.pk %}">{{ item.respuesta.archivo.nombre_original }}</a>{% else %}Sin archivo{% endif %}
+          {% elif item.campo.tipo == "USUARIO" %}{{ item.respuesta.valor_usuario }}
+          {% elif item.campo.tipo == "AREA" %}{{ item.respuesta.valor_area }}
+          {% elif item.campo.tipo == "UNIDAD" %}{{ item.respuesta.valor_unidad }}
+          {% elif item.campo.tipo == "BOOLEANO" %}{% if item.respuesta.valor %}Sí{% else %}No{% endif %}
+          {% elif item.campo.tipo == "MULTILISTA" %}{% for opcion in item.opciones %}{% if opcion.valor in item.respuesta.valor %}{{ opcion.etiqueta }}{% if not forloop.last %}, {% endif %}{% endif %}{% endfor %}
+          {% elif item.campo.tipo == "LISTA" %}{% for opcion in item.opciones %}{% if opcion.valor == item.respuesta.valor %}{{ opcion.etiqueta }}{% endif %}{% endfor %}
+          {% else %}{{ item.respuesta.valor|default_if_none:"—" }}{% endif %}
+        </dd>
+      </div>
+    {% empty %}
+      <p class="text-muted">Este formulario no tiene campos.</p>
+    {% endfor %}
+  </dl>
+
+  <div class="resumen__acciones">
+    {% if puede_tomar %}
+      <form method="post" action="{% url 'tickets:tomar' ticket.pk %}">
+        {% csrf_token %}<input type="hidden" name="next" value="{% url 'core:mi_trabajo' %}">
+        <button type="submit" class="btn btn--primary">Tomar ticket</button>
+      </form>
+    {% elif puede_iniciar_atencion %}
+      <form method="post" action="{% url 'tickets:iniciar_atencion' ticket.pk %}">
+        {% csrf_token %}<input type="hidden" name="next" value="{% url 'core:mi_trabajo' %}">
+        <button type="submit" class="btn btn--primary">Iniciar atención</button>
+      </form>
+    {% endif %}
+    {% if es_mio %}<a class="btn btn--primary" href="{% url 'tickets:trabajo' ticket.pk %}">Continuar</a>{% endif %}
+    <a class="btn btn--ghost" href="{% url 'tickets:detalle' ticket.pk %}">Abrir el ticket completo</a>
+  </div>
+</div>

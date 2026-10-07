@@ -1,0 +1,87 @@
+/* Seguimiento del ticket para el solicitante (4.F2). Solo tokens semánticos. */
+
+.seg-code {
+  margin: 0 0 var(--space-1);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--text-muted);
+}
+
+.seg-datos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: var(--space-4);
+  margin: var(--space-4) 0 0;
+}
+
+.seg-datos dt {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.seg-datos dd {
+  margin: var(--space-1) 0 0;
+  color: var(--text-primary);
+}
+
+.seg-pasos {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.seg-paso {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+}
+
+.seg-paso__marca {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--border-strong);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-xs);
+}
+
+.seg-paso--completada {
+  color: var(--text-primary);
+}
+
+.seg-paso--completada .seg-paso__marca {
+  border-color: var(--status-success);
+  background: var(--status-success-soft);
+  color: var(--status-success);
+}
+
+.seg-paso--actual {
+  background: var(--color-primary-soft);
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.seg-paso--actual .seg-paso__marca {
+  border-color: var(--text-primary);
+  background: var(--color-primary);
+}
+
+.seg-paso--no_aplico {
+  text-decoration: line-through;
+  opacity: 0.7;
+}
+
+.seg-nota {
+  margin: var(--space-3) 0 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}

@@ -119,7 +119,12 @@ MESSAGE_TAGS = {
 }
 
 LANGUAGE_CODE = "es"
-TIME_ZONE = env("TIME_ZONE", default="UTC")
+# Zona horaria OPERATIVA de la organización (4.G1): «el día 25» de un Proceso programado y toda
+# fecha local se interpretan con ella (`timezone.localdate()`), nunca con un desfase UTC escrito a
+# mano. Se sigue configurando por entorno (`.env` ya la fija); el valor por defecto es el de la
+# organización para que un entorno sin la variable no programe en UTC. Los timestamps se
+# almacenan en UTC (`USE_TZ`) como siempre.
+TIME_ZONE = env("TIME_ZONE", default="America/Bogota")
 CELERY_TIMEZONE = TIME_ZONE
 USE_I18N = True
 USE_TZ = True

@@ -39,10 +39,10 @@ depende de una capacidad real que ya existe en el dominio:
 "Más" solo se renderiza si el usuario tiene al menos un destino dentro; los
 grupos vacíos tampoco. El Diseñador nunca va dentro de Trabajo.
 
-Trabajo agrupa dos vistas hermanas — Cola (tickets disponibles para tomar por
-su relación con el equipo) y Mi trabajo (lo que requiere algo del usuario).
-El destino del dock abre Cola si el usuario tiene acceso a ella y, si no,
-Mi trabajo; las pestañas locales solo existen cuando ambas son útiles.
+Trabajo agrupa dos vistas hermanas — Mi trabajo (lo que el usuario atiende y lo
+que requiere algo de él) y Cola (tickets que puede tomar). Desde 4.F3 el destino
+del dock abre SIEMPRE Mi trabajo; las pestañas locales [Mi trabajo] [Cola] existen
+cuando el usuario tiene acceso a la Cola.
 
 Este módulo no depende del código de ningún dominio de forma permanente: las
 consultas de "trabajo personal" se importan de forma perezosa y son las mismas
@@ -88,8 +88,12 @@ def _tiene_trabajo_personal(usuario):
     from apps.aprobaciones.consultas import aprobaciones_pendientes_para
     from apps.tareas.consultas import tareas_asignadas_a, tareas_disponibles_para_tomar
     from apps.tareas.models import Tarea
+    from apps.tickets.models import Ticket
 
     if aprobaciones_pendientes_para(usuario).exists():
+        return True
+    # 4.F3: los tickets que la persona atiende son su trabajo (no los que solicitó).
+    if Ticket.objects.filter(usuario_responsable=usuario, estado=Ticket.Estado.EN_ATENCION).exists():
         return True
     return (
         tareas_asignadas_a(usuario).exclude(estado=Tarea.Estado.COMPLETADA).exists()
@@ -123,9 +127,10 @@ def _construir_elementos(usuario, acceso_cola, trabajo_personal):
         elementos.append(
             {
                 "etiqueta": "Trabajo",
-                "url_name": VISTA_COLA if acceso_cola else VISTA_MI_TRABAJO,
+                # 4.F3: Trabajo abre «Mi trabajo»; la Cola es la otra pestaña.
+                "url_name": VISTA_MI_TRABAJO,
                 "icono": "trabajo",
-                "destinos": (VISTA_COLA, VISTA_MI_TRABAJO),
+                "destinos": (VISTA_COLA, VISTA_MI_TRABAJO, "tickets:trabajo", "tickets:resumen"),
                 # Detalles de Tarea/Aprobación pertenecen a "Trabajo".
                 "namespaces": ("tareas", "aprobaciones"),
             }
@@ -240,7 +245,7 @@ def construir_navegacion(usuario, resolver_match):
         }
 
     vista = resolver_match.view_name if resolver_match else None
-    en_trabajo = vista in (VISTA_COLA, VISTA_MI_TRABAJO)
+    en_trabajo = vista in (VISTA_COLA, VISTA_MI_TRABAJO, "tickets:trabajo", "tickets:resumen")
 
     acceso_cola = _acceso_a_cola(usuario)
     # Con acceso a Cola, "Trabajo" ya es visible: el trabajo personal solo
@@ -254,10 +259,12 @@ def construir_navegacion(usuario, resolver_match):
 
     grupos = grupos_mas(elementos)
     pestanas = []
-    if en_trabajo and acceso_cola and trabajo_personal:
+    if en_trabajo and acceso_cola:
+        # 4.F3: [Mi trabajo] [Cola]; Mi trabajo primero. Con acceso a la Cola siempre hay dos vistas útiles
+        # (Mi trabajo puede estar vacío, pero es el lugar al que llega lo que se toma de la Cola).
         pestanas = [
-            {"etiqueta": "Cola", "url_name": VISTA_COLA, "activa": vista == VISTA_COLA},
-            {"etiqueta": "Mi trabajo", "url_name": VISTA_MI_TRABAJO, "activa": vista == VISTA_MI_TRABAJO},
+            {"etiqueta": "Mi trabajo", "url_name": VISTA_MI_TRABAJO, "activa": vista != VISTA_COLA and vista != "tickets:resumen"},
+            {"etiqueta": "Cola", "url_name": VISTA_COLA, "activa": vista in (VISTA_COLA, "tickets:resumen")},
         ]
 
     return {

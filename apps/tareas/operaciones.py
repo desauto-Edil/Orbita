@@ -178,6 +178,30 @@ def asignar_tarea(tarea, actor, *, usuario=None, equipo=None):
 
 
 @transaction.atomic
+def asignar_por_flujo(tarea, usuario, actor):
+    """4.F3 — una Tarea creada por el flujo para «el responsable del Ticket» antes de que el
+    Ticket tuviera responsable queda sin dueño; cuando alguien toma o recibe el Ticket, la
+    integración (`apps.workflows.integracion`) se la entrega a esa persona. No es una asignación
+    discrecional (no exige `tareas.gestionar`): solo traslada una responsabilidad que ya se
+    decidió en el Ticket, queda en el historial y en la auditoría con quien actuó, y nunca
+    pisa a un responsable existente."""
+    tarea = Tarea.objects.select_for_update().get(pk=tarea.pk)
+    if tarea.estado == Tarea.Estado.COMPLETADA or tarea.usuario_responsable_id is not None:
+        return tarea
+    usuario_anterior_id, equipo_anterior_id = tarea.usuario_responsable_id, tarea.equipo_responsable_id
+    tarea.usuario_responsable = usuario
+    tarea.save(update_fields=["usuario_responsable", "actualizado_en"])
+    _registrar_historial(
+        tarea, HistorialTarea.TipoEvento.ASIGNADA, actor, usuario_id=usuario.id, equipo_id=None, causa="TICKET_TOMADO"
+    )
+    _auditar_cambio_responsable(
+        tarea, actor, usuario_anterior_id=usuario_anterior_id, usuario_nuevo_id=usuario.id,
+        equipo_anterior_id=equipo_anterior_id, equipo_nuevo_id=tarea.equipo_responsable_id,
+    )
+    return tarea
+
+
+@transaction.atomic
 def reasignar_tarea(tarea, actor, *, usuario=None, equipo=None):
     tarea = Tarea.objects.select_for_update().get(pk=tarea.pk)
     if tarea.estado == Tarea.Estado.COMPLETADA:

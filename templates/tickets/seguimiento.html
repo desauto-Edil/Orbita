@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}{{ ticket.codigo|default:"Ticket" }} — {{ sistema.nombre }}{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/seguimiento.css' %}">{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'tickets:mis_tickets' %}">Mis tickets</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">{{ ticket.codigo|default:servicio.nombre }}</span>
+  </nav>
+
+  {# --- Cabecera --- #}
+  <section class="card" id="seguimiento-cabecera">
+    <p class="seg-code">{{ ticket.codigo|default:"Sin código" }}</p>
+    <h1>{{ servicio.nombre }}</h1>
+    <span class="badge
+      {% if ticket.estado == 'RESUELTO' or ticket.estado == 'CERRADO' %}badge--success
+      {% elif ticket.estado == 'CANCELADO' %}badge--danger
+      {% else %}badge--info{% endif %}">{{ ticket.get_estado_display }}</span>
+    <dl class="seg-datos">
+      <div><dt>Radicado el</dt><dd>{{ ticket.radicado_en|date:"j \d\e F \d\e Y, H:i" }}</dd></div>
+      {% if progreso and progreso.actual %}<div><dt>Fase actual</dt><dd>{{ progreso.actual }}</dd></div>{% endif %}
+      <div>
+        <dt>Lo tiene</dt>
+        <dd>
+          {% if responsable.equipo %}{{ responsable.equipo }}{% if responsable.persona %} · {{ responsable.persona }}{% endif %}
+          {% elif responsable.persona %}{{ responsable.persona }}
+          {% else %}Aún sin asignar{% endif %}
+        </dd>
+      </div>
+      {% if fecha_solicitada %}
+        <div>
+          <dt>Fecha solicitada</dt>
+          <dd>{% if fecha_solicitada.con_hora %}{{ fecha_solicitada.valor|date:"d M Y, H:i" }}{% else %}{{ fecha_solicitada.valor|date:"d M Y" }}{% endif %}</dd>
+        </div>
+      {% endif %}
+      {% if ticket.fecha_objetivo_vigente %}
+        <div>
+          <dt>Fecha objetivo</dt>
+          <dd>{{ ticket.fecha_objetivo_vigente|date:"d M Y" }}{% if compromiso_ampliado %} <span class="text-muted">(ampliada por prórroga)</span>{% endif %}</dd>
+        </div>
+      {% endif %}
+    </dl>
+    {% if solicitudes_pendientes %}
+      <p class="alert alert--warning" role="status">El equipo te pidió más información. <a href="{% url 'tickets:detalle' ticket.pk %}#solicitudes">Respóndela aquí</a>.</p>
+    {% endif %}
+    {% if puede_responder_entrega %}
+      <p class="alert alert--info" role="status">Tienes una entrega por revisar. <a href="{% url 'tickets:detalle' ticket.pk %}">Aceptarla o enviar observaciones</a>.</p>
+    {% endif %}
+  </section>
+
+  {# --- Progreso --- #}
+  {% if progreso %}
+    <section class="card" id="seguimiento-progreso" aria-labelledby="seg-progreso">
+      <h2 id="seg-progreso">Progreso</h2>
+      <ol class="seg-pasos">
+        {% for paso in progreso.fases %}
+          <li class="seg-paso seg-paso--{{ paso.situacion }}"{% if paso.situacion == "actual" %} aria-current="step"{% endif %}>
+            <span class="seg-paso__marca" aria-hidden="true">{% if paso.situacion == "completada" %}✓{% elif paso.situacion == "actual" %}●{% else %}○{% endif %}</span>
+            <span>{{ paso.nombre }}</span>
+            <span class="text-muted">
+              {% if paso.situacion == "completada" %}Completada{% elif paso.situacion == "actual" %}En curso{% elif paso.situacion == "no_aplico" %}No fue necesaria{% else %}Pendiente{% endif %}
+            </span>
+          </li>
+        {% endfor %}
+      </ol>
+      {% if progreso.hay_pendientes %}
+        <p class="seg-nota">Las fases pendientes pueden cambiar según cómo avance tu solicitud: no todas se recorren siempre.</p>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {# --- Entregas disponibles --- #}
+  {% if entregas %}
+    <section class="card" id="seguimiento-entregas">
+      <h2>Entregas</h2>
+      {% include "tickets/_entregas_lista.html" %}
+    </section>
+  {% endif %}
+
+  {# --- Solicitud --- #}
+  {% include "tickets/_respuestas.html" %}
+
+  {% include "tickets/_historial.html" %}
+
+  {% if puede_ver_operacion %}
+    <p class="seg-nota"><a href="{% url 'tickets:detalle' ticket.pk %}">Abrir la vista de atención de este ticket</a></p>
+  {% elif es_solicitante %}
+    <p class="seg-nota"><a href="{% url 'tickets:detalle' ticket.pk %}">Comentar o ver la comunicación del ticket</a></p>
+  {% endif %}
+{% endblock %}

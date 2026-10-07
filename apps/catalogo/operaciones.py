@@ -77,6 +77,11 @@ def validar_publicacion(servicio):
         usuario, equipo = servicio.prorroga_aprobador_usuario, servicio.prorroga_aprobador_equipo
         if not ((usuario is not None and usuario.is_active) or (equipo is not None and equipo.activo)):
             errores.append("La prórroga con aprobación necesita un aprobador activo (usuario o equipo).")
+    # 4.G1: un Proceso con programación activa no puede depender de un solicitante humano.
+    from apps.catalogo.programacion import errores_de_compatibilidad, programacion_activa_de
+
+    if programacion_activa_de(servicio) is not None:
+        errores.extend(errores_de_compatibilidad(servicio))
     if errores:
         raise ValidationError(errores)
 
@@ -90,6 +95,13 @@ def diagnosticar_activos_incompletos():
             validar_publicacion(servicio)
         except ValidationError as exc:
             yield {"id": servicio.pk, "nombre": servicio.nombre, "tipo": servicio.tipo, "errores": exc.messages}
+
+
+def _tiene_programacion_activa(servicio):
+    # Import diferido: `programacion` usa este módulo para `validar_publicacion`.
+    from apps.catalogo.programacion import programacion_activa_de
+
+    return programacion_activa_de(servicio) is not None
 
 
 def _exigir_administracion(actor):
@@ -149,6 +161,11 @@ def editar_servicio_general(servicio, actor, *, nombre, descripcion, categoria, 
     proyecto, no una excepción de Studio."""
     _exigir_administracion(actor)
     servicio = Servicio.objects.select_for_update().get(pk=servicio.pk)
+    # 4.G1: un Proceso programado deja de poder serlo si cambia de tipo.
+    if tipo != Servicio.Tipo.PROCESO and _tiene_programacion_activa(servicio):
+        raise ValidationError(
+            "Este proceso tiene una programación activa. Pásalo a «Manual» en Inicio antes de cambiarlo a servicio."
+        )
     anterior = _datos_generales(servicio)
     servicio.nombre = nombre
     servicio.descripcion = descripcion
@@ -380,6 +397,11 @@ def configurar_politica_entrega(servicio, actor, *, politica, dias_observacion=N
     else:
         dias_observacion = None
     servicio = Servicio.objects.select_for_update().get(pk=servicio.pk)
+    if _tiene_programacion_activa(servicio):
+        raise ValidationError(
+            "Este proceso se genera por programación y no tiene solicitante a quien entregarle: "
+            "pásalo a «Manual» en Inicio antes de definir una entrega formal."
+        )
     anterior = {"politica_entrega": servicio.politica_entrega, "dias_observacion": servicio.dias_observacion}
     nuevo = {"politica_entrega": politica, "dias_observacion": dias_observacion}
     if anterior == nuevo:

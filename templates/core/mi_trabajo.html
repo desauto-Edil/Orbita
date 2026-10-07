@@ -11,11 +11,41 @@
   <header class="page-header">
     <div>
       <h1 class="page-header__title">Mi trabajo</h1>
-      <p class="page-header__subtitle">Tareas y aprobaciones que requieren tu atención.</p>
+      <p class="page-header__subtitle">Los tickets que atiendes, y las tareas y aprobaciones que requieren tu atención.</p>
     </div>
   </header>
 
   {% include "layout/trabajo_tabs.html" %}
+
+  {% if tarjetas %}
+    <section class="ticket-cards" aria-labelledby="mt-tickets">
+      <h2 id="mt-tickets" class="ws-sub">Tickets que atiendes <span class="work-count">{{ tarjetas|length }}</span></h2>
+      <ul class="ticket-cards__grid">
+        {% for tarjeta in tarjetas %}
+          <li class="ticket-card">
+            <p class="ticket-card__code">{{ tarjeta.ticket.codigo|default:"Sin código" }}</p>
+            <h3 class="ticket-card__title">{{ tarjeta.servicio.nombre }}</h3>
+            {% if tarjeta.ticket.etiqueta %}<p class="ticket-etiqueta text-muted">{{ tarjeta.ticket.etiqueta }}</p>{% endif %}
+            <p class="ticket-card__chips">
+              <span class="badge badge--info badge--dot">{{ tarjeta.ticket.get_estado_display }}</span>
+              {% if tarjeta.fase %}<span class="badge">{{ tarjeta.fase }}</span>{% endif %}
+              {% if tarjeta.ticket.fecha_objetivo_vigente %}<span class="badge">Objetivo {{ tarjeta.ticket.fecha_objetivo_vigente|date:"d M" }}</span>{% endif %}
+            </p>
+            <p class="ticket-card__now">
+              {% if tarjeta.bloque %}<strong>{{ tarjeta.bloque }}</strong> · {{ tarjeta.bloque_tipo }}{% if tarjeta.pendiente %}<br><span class="text-muted">{{ tarjeta.pendiente }}</span>{% endif %}
+              {% elif tarjeta.terminado %}<strong>Flujo terminado</strong><br><span class="text-muted">Falta resolver y entregar el ticket.</span>
+              {% else %}<span class="text-muted">Sin flujo de trabajo asociado.</span>{% endif %}
+            </p>
+            {% if tarjeta.fases_total %}
+              <progress class="progress" max="{{ tarjeta.fases_total }}" value="{{ tarjeta.fases_completadas }}" aria-label="Fases completadas">{{ tarjeta.porcentaje }}%</progress>
+              <p class="ticket-card__prog">{{ tarjeta.fases_completadas }} de {{ tarjeta.fases_total }} fases</p>
+            {% endif %}
+            <a class="btn btn--primary btn--sm" href="{% url 'tickets:trabajo' tarjeta.ticket.pk %}">Continuar</a>
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
 
   <div class="work-toolbar">
     <nav class="segmented" aria-label="Qué ver en Mi trabajo">
@@ -60,7 +90,7 @@
         <div class="work-preview__body" data-trabajo-contenido hidden></div>
       </aside>
     </div>
-  {% else %}
+  {% elif not tarjetas or tab != "todo" %}
     <div class="empty-state">
       <p>
         {% if tab == "tareas" %}No tienes tareas pendientes.

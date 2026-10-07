@@ -986,7 +986,8 @@ class ApplicationShellTests(TestCase):
         )
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertContains(respuesta, "Trabajo")
-        self.assertContains(respuesta, reverse("tickets:cola"))
+        # 4.F3: «Trabajo» abre «Mi trabajo»; la Cola es su otra pestaña.
+        self.assertContains(respuesta, reverse("core:mi_trabajo"))
 
     def test_rutas_principales_del_dock_siguen_resolviendo(self):
         # 2.UI.1 es exclusivamente visual/navegación: no debe romper ninguna
@@ -1328,29 +1329,26 @@ class NavegacionGlobalTests(TestCase):
         Tarea.objects.filter(pk=tarea.pk).update(estado=Tarea.Estado.COMPLETADA)
         self.assertNotIn("Trabajo", self._dock(self._get()))
 
-    def test_trabajo_abre_cola_cuando_hay_acceso_a_ella(self):
+    def test_trabajo_abre_mi_trabajo_tambien_cuando_hay_acceso_a_la_cola(self):
+        # 4.F3: Trabajo abre «Mi trabajo»; la Cola es la otra pestaña.
         _otorgar_permiso_nav(self.usuario, "tickets.atender")
         self._con_tarea()
         respuesta = self._get()
         trabajo = next(i for i in respuesta.context["nav_dock"] if i["etiqueta"] == "Trabajo")
-        self.assertEqual(trabajo["url_name"], "tickets:cola")
+        self.assertEqual(trabajo["url_name"], "core:mi_trabajo")
 
-    def test_pestanas_de_trabajo_solo_con_cola_y_trabajo_personal(self):
-        # Solo Cola: la pestaña no aporta nada → no se muestra.
+    def test_pestanas_de_trabajo_con_acceso_a_la_cola(self):
+        # 4.F3: [Mi trabajo] [Cola] siempre que haya acceso a la Cola (Mi trabajo es a donde llega lo que se toma).
         _otorgar_permiso_nav(self.usuario, "tickets.atender")
         respuesta = self._get("tickets:cola")
-        self.assertEqual(respuesta.context["nav_trabajo_tabs"], [])
-        self.assertNotContains(respuesta, "Secciones de Trabajo")
-
-        # Cola + trabajo personal: dos pestañas, la de la vista actual activa.
-        self._con_tarea()
-        respuesta = self._get("tickets:cola")
         tabs = respuesta.context["nav_trabajo_tabs"]
-        self.assertEqual([(t["etiqueta"], t["activa"]) for t in tabs], [("Cola", True), ("Mi trabajo", False)])
+        self.assertEqual([(t["etiqueta"], t["activa"]) for t in tabs], [("Mi trabajo", False), ("Cola", True)])
         self.assertContains(respuesta, "Secciones de Trabajo")
+
+        self._con_tarea()
         respuesta = self._get("core:mi_trabajo")
         tabs = respuesta.context["nav_trabajo_tabs"]
-        self.assertEqual([(t["etiqueta"], t["activa"]) for t in tabs], [("Cola", False), ("Mi trabajo", True)])
+        self.assertEqual([(t["etiqueta"], t["activa"]) for t in tabs], [("Mi trabajo", True), ("Cola", False)])
 
     def test_sin_cola_no_hay_pestanas_aunque_haya_trabajo_personal(self):
         self._con_tarea()
@@ -1411,7 +1409,7 @@ class NavegacionGlobalTests(TestCase):
         _otorgar_permiso_nav(self.usuario, "tickets.atender")
         self._con_tarea()
         for vista in ("tickets:cola", "core:mi_trabajo", "tareas:lista"):
-            self.assertEqual(self._get(vista).context["nav_item_activo"], "tickets:cola", vista)
+            self.assertEqual(self._get(vista).context["nav_item_activo"], "core:mi_trabajo", vista)
         self.assertEqual(self._get("tickets:mis_tickets").context["nav_item_activo"], "tickets:mis_tickets")
 
     def test_el_recorrido_de_solicitud_no_resalta_mis_tickets(self):
@@ -1773,7 +1771,7 @@ class InicioPortalTests(TestCase):
         trabajo = respuesta.context["trabajo"]
         self.assertTrue(trabajo["acceso_cola"])
         self.assertFalse(trabajo["hay_pendientes"])
-        self.assertEqual(trabajo["url"], reverse("tickets:cola"))
+        self.assertEqual(trabajo["url"], reverse("core:mi_trabajo"))
         self.assertContains(respuesta, "Todo al día")
         self.assertNotContains(respuesta, "Tu trabajo")
         self.assertNotContains(respuesta, "work-pills")
@@ -1785,7 +1783,7 @@ class InicioPortalTests(TestCase):
         respuesta = self._inicio()
         trabajo = respuesta.context["trabajo"]
         self.assertTrue(trabajo["hay_pendientes"])
-        self.assertEqual(trabajo["url"], reverse("tickets:cola"))
+        self.assertEqual(trabajo["url"], reverse("core:mi_trabajo"))
         self.assertContains(respuesta, "Tu trabajo")
         self.assertContains(respuesta, "Cola de atención")
         self.assertContains(respuesta, "Ir a Trabajo")
@@ -2548,21 +2546,22 @@ class TrabajoTests(TestCase):
         self.assertEqual(tickets, [primero, segundo])
         self.assertEqual([t.posicion for t in tickets], [1, 2])
 
-    def test_los_filtros_no_cambian_la_posicion_ni_la_poblacion(self):
+    def test_tomar_un_ticket_lo_saca_de_la_cola_y_la_posicion_se_recalcula(self):
         from apps.tickets.operaciones import tomar_ticket
 
         primero, segundo = self.escenario.ticket, self._otro_ticket()
         tomar_ticket(primero, self.responsable)
 
-        respuesta = self._cola("?ver=sin_tomar")
-        self.assertEqual([(t.pk, t.posicion) for t in respuesta.context["tickets"]], [(segundo.pk, 2)])
-        self.assertEqual(respuesta.context["conteos"], {"todos": 2, "sin_tomar": 1, "en_atencion": 1, "mios": 1})
-        self.assertEqual([t.pk for t in self._cola("?ver=mios").context["tickets"]], [primero.pk])
-        # Un filtro desconocido cae en "todos"; nunca amplía lo autorizado.
-        self.assertEqual(self._cola("?ver=otra-cosa").context["ver"], "todos")
+        respuesta = self._cola()
+        self.assertEqual([(t.pk, t.posicion) for t in respuesta.context["tickets"]], [(segundo.pk, 1)])
+        self.assertEqual(respuesta.context["conteos"], {"para_tomar": 1, "supervision": 0})
+        # Lo que se tomó ya no es de la Cola ni de «Supervisión»: es trabajo propio (Mi trabajo).
+        self.assertEqual(list(self._cola("?ver=supervision").context["tickets"]), [])
+        # Un filtro desconocido cae en «para tomar»; nunca amplía lo autorizado.
+        self.assertEqual(self._cola("?ver=otra-cosa").context["ver"], "para_tomar")
         self.client.logout()
         self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
-        self.assertEqual(list(self._cola("?ver=todos").context["tickets"]), [])
+        self.assertEqual(list(self._cola("?ver=para_tomar").context["tickets"]), [])
 
     # --- Mi trabajo: vista previa ---
 
@@ -2752,3 +2751,114 @@ class NecesidadBuscadorTests(TestCase):
         self.assertContains(self.client.get(reverse("core:explorar")), "Soporte de vacaciones")
         self.assertContains(self.client.get(reverse("core:explorar"), {"q": "vacaciones"}), "Soporte de vacaciones")
         self.assertEqual(self.client.get(reverse("core:inicio")).status_code, 200)
+
+
+class ConfiguracionEquiposDeUsuarioTests(TestCase):
+    """4.F2 — la relación Usuario↔Equipo YA existía (`MiembroEquipo`, con vigencia e historial):
+    la ficha de la persona solo la expone, sin modelo paralelo ni regla nueva de responsables."""
+
+    def setUp(self):
+        self.admin = Usuario.objects.create_user(username="eq_admin", password=CLAVE_PRUEBA)
+        _otorgar_permiso_nav(self.admin, "usuarios.administrar")
+        self.client.login(username="eq_admin", password=CLAVE_PRUEBA)
+        self.persona = Usuario.objects.create_user(username="eq_persona", password=CLAVE_PRUEBA)
+        self.mercadeo = Equipo.objects.create(nombre="Mercadeo")
+        self.tic = Equipo.objects.create(nombre="TIC")
+        self.financiera = Equipo.objects.create(nombre="Financiera")
+        self.url = reverse("core:configuracion_usuario", args=[self.persona.pk])
+
+    def _ficha(self, datos):
+        return self.client.post(self.url, datos)
+
+    def _agregar(self, equipo):
+        return self._ficha({"accion": "equipo_agregar", "equipo-destino": equipo.pk})
+
+    def _activos(self):
+        return set(MiembroEquipo.objects.filter(usuario=self.persona, activo=True).values_list("equipo__nombre", flat=True))
+
+    def test_la_ficha_muestra_los_equipos_y_ofrece_los_disponibles(self):
+        respuesta = self.client.get(self.url)
+        self.assertContains(respuesta, "Equipos")
+        self.assertContains(respuesta, "Todavía no pertenece a ningún equipo.")
+        opciones = set(respuesta.context["form_equipo"].fields["destino"].queryset.values_list("nombre", flat=True))
+        self.assertEqual(opciones, {"Mercadeo", "TIC", "Financiera"})
+        self.assertNotIn("es_principal", respuesta.context["form_equipo"].fields)  # un equipo no tiene «principal»
+
+    def test_agregar_usa_la_membresia_existente_y_la_audita(self):
+        antes = MiembroEquipo.objects.count()
+        self.assertRedirects(self._agregar(self.mercadeo), self.url)
+        miembro = MiembroEquipo.objects.get(usuario=self.persona, equipo=self.mercadeo)
+        self.assertEqual(MiembroEquipo.objects.count(), antes + 1)
+        self.assertTrue(miembro.activo)
+        self.assertIsNone(miembro.fecha_fin)
+        self.assertEqual(miembro.fecha_inicio, timezone.localdate())
+        self.assertTrue(
+            RegistroAuditoria.objects.filter(
+                content_type=ContentType.objects.get_for_model(MiembroEquipo), object_id=miembro.pk
+            ).exists()
+        )
+        self.assertContains(self.client.get(self.url), "Mercadeo")
+
+    def test_puede_pertenecer_a_varios_equipos(self):
+        self._agregar(self.mercadeo)
+        self._agregar(self.tic)
+        self.assertEqual(self._activos(), {"Mercadeo", "TIC"})
+        disponibles = set(
+            self.client.get(self.url).context["form_equipo"].fields["destino"].queryset.values_list("nombre", flat=True)
+        )
+        self.assertEqual(disponibles, {"Financiera"})  # los que ya tiene no se ofrecen otra vez
+
+    def test_quitar_conserva_la_fila_y_cierra_la_vigencia(self):
+        self._agregar(self.mercadeo)
+        miembro = MiembroEquipo.objects.get(usuario=self.persona, equipo=self.mercadeo)
+        self._ficha({"accion": "equipo_quitar", "membresia": miembro.pk})
+        miembro.refresh_from_db()
+        self.assertFalse(miembro.activo)
+        self.assertIsNotNone(miembro.fecha_fin)
+        self.assertEqual(self._activos(), set())
+
+    def test_volver_a_entrar_abre_una_membresia_nueva_y_conserva_la_historia(self):
+        self._agregar(self.mercadeo)
+        anterior = MiembroEquipo.objects.get(usuario=self.persona, equipo=self.mercadeo)
+        self._ficha({"accion": "equipo_quitar", "membresia": anterior.pk})
+        self._agregar(self.mercadeo)
+        filas = MiembroEquipo.objects.filter(usuario=self.persona, equipo=self.mercadeo)
+        self.assertEqual(filas.count(), 2)
+        self.assertEqual(filas.filter(activo=True).count(), 1)
+
+    def test_un_equipo_inactivo_no_se_ofrece(self):
+        Equipo.objects.filter(pk=self.tic.pk).update(activo=False)
+        opciones = set(
+            self.client.get(self.url).context["form_equipo"].fields["destino"].queryset.values_list("nombre", flat=True)
+        )
+        self.assertNotIn("TIC", opciones)
+
+    def test_pertenecer_al_equipo_tiene_el_efecto_de_dominio_de_siempre(self):
+        from apps.tickets.autorizacion import es_responsable_actual
+
+        class _Ticket:
+            usuario_responsable_id = None
+            equipo_responsable_id = self.mercadeo.pk
+
+        self.assertFalse(es_responsable_actual(self.persona, _Ticket()))
+        self._agregar(self.mercadeo)
+        self.assertTrue(es_responsable_actual(self.persona, _Ticket()))
+
+    def test_exige_la_capacidad_de_administrar_usuarios(self):
+        AsignacionRol.objects.filter(usuario=self.admin).delete()
+        _otorgar_permiso_nav(self.admin, "permisos.administrar")  # ve la ficha, pero no edita la cuenta
+        self.assertEqual(self.client.get(self.url).status_code, 200)
+        self.assertEqual(self._agregar(self.mercadeo).status_code, 403)
+        self.assertEqual(self._activos(), set())
+
+    def test_una_pertenencia_a_equipo_no_admite_hacerla_principal(self):
+        self._agregar(self.mercadeo)
+        miembro = MiembroEquipo.objects.get(usuario=self.persona, equipo=self.mercadeo)
+        self.assertEqual(self._ficha({"accion": "equipo_principal", "membresia": miembro.pk}).status_code, 403)
+
+    def test_no_se_puede_retirar_la_membresia_de_otra_persona(self):
+        otra = Usuario.objects.create_user(username="eq_otra", password=CLAVE_PRUEBA)
+        ajena = MiembroEquipo.objects.create(equipo=self.tic, usuario=otra)
+        self.assertEqual(self._ficha({"accion": "equipo_quitar", "membresia": ajena.pk}).status_code, 404)
+        ajena.refresh_from_db()
+        self.assertTrue(ajena.activo)

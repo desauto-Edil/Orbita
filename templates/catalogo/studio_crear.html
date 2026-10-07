@@ -7,13 +7,15 @@
 
 {% block extra_head %}<link rel="stylesheet" href="{% static 'css/disenador.css' %}">{% endblock %}
 
+{% block extra_scripts %}<script src="{% static 'js/studio.js' %}" defer></script>{% endblock %}
+
 {% block content %}
   {% include "components/disenador_miga.html" with seccion="servicios" actual="Nuevo" %}
   <section class="card dis-form-card">
     <h1>Crear servicio o proceso</h1>
     <p class="text-muted">Empieza con lo basico. Se crea como borrador; despues completas formulario, flujo, salida y publicacion.</p>
 
-    <form method="post" action="{% url 'core:disenador_servicio_crear' %}" class="form">
+    <form method="post" action="{% url 'core:disenador_servicio_crear' %}" class="form" data-config-inicio>
       {% csrf_token %}
       {% if form.non_field_errors %}
         <div class="alert alert--danger"><div class="alert__text">{{ form.non_field_errors|join:" " }}</div></div>
@@ -23,6 +25,36 @@
         {{ form.tipo }}
         <span class="text-muted" style="font-size: var(--text-xs);">Servicio: una necesidad puntual. Proceso: un ciclo estructurado de trabajo.</span>
         {{ form.tipo.errors }}
+      </div>
+      <div data-solo-proceso{% if form.tipo.value != "PROCESO" %} hidden{% endif %}>
+        <fieldset class="field">
+          <legend>{{ form_inicio.modo.label }}</legend>
+          {% for opcion in form_inicio.modo %}
+            <label class="choice">{{ opcion.tag }} {{ opcion.choice_label }}</label>
+          {% endfor %}
+          {{ form_inicio.modo.errors }}
+        </fieldset>
+        <div data-inicio-programado{% if form_inicio.modo.value != "PROGRAMADO" %} hidden{% endif %}>
+          <div class="field">
+            {{ form_inicio.frecuencia.label_tag }}{{ form_inicio.frecuencia }}
+            {{ form_inicio.frecuencia.errors }}
+          </div>
+          <div class="field">
+            {{ form_inicio.dia_creacion.label_tag }}{{ form_inicio.dia_creacion }}
+            <span class="text-muted" style="font-size: var(--text-xs);">Del 1 al 28, para que exista todos los meses.</span>
+            {{ form_inicio.dia_creacion.errors }}
+          </div>
+          <div class="field">
+            {{ form_inicio.periodo.label_tag }}{{ form_inicio.periodo }}
+            {{ form_inicio.periodo.errors }}
+          </div>
+          <div class="field">
+            {{ form_inicio.responsable_inicial.label_tag }}{{ form_inicio.responsable_inicial }}
+            <span class="text-muted" style="font-size: var(--text-xs);">Una persona o un equipo. Queda como responsable de este proceso.</span>
+            {{ form_inicio.responsable_inicial.errors }}
+          </div>
+          <p class="text-muted" style="font-size: var(--text-xs);">Órbita creará automáticamente una nueva ejecución de este proceso según esta programación. Un proceso programado no se solicita manualmente. Aplica hacia adelante y empieza cuando lo publiques.</p>
+        </div>
       </div>
       <div class="field">
         <label for="{{ form.nombre.id_for_label }}">{{ form.nombre.label }}</label>
@@ -44,7 +76,7 @@
         {{ form.descripcion }}
         {{ form.descripcion.errors }}
       </div>
-      <div class="field">
+      <div class="field" data-oculto-si-programado{% if form_inicio.modo.value == "PROGRAMADO" and form.tipo.value == "PROCESO" %} hidden{% endif %}>
         <label for="{{ form.instrucciones.id_for_label }}">{{ form.instrucciones.label }}</label>
         {{ form.instrucciones }}
         {{ form.instrucciones.errors }}

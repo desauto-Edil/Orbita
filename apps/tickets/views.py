@@ -9,8 +9,10 @@ from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
 from django.db.models import Exists, OuterRef, Q
-from django.http import FileResponse, Http404, HttpResponseNotAllowed, JsonResponse
+from django.http import FileResponse, Http404, HttpResponse, HttpResponseNotAllowed, JsonResponse
 from django.shortcuts import get_object_or_404, redirect, render
+from django.template.loader import render_to_string
+from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
 from apps.catalogo.campos import ESTRATEGIAS_POR_TIPO
@@ -19,9 +21,11 @@ from apps.catalogo import ticket_general as general_ops
 from apps.catalogo.models import Campo, Servicio
 from apps.catalogo.visibilidad import servicios_visibles_para
 from apps.core.models import Equipo
+from apps.core.redirecciones import volver_a
 from apps.tickets import entregables as entregables_ops
 from apps.tickets import entregas as entregas_ops
-from apps.tickets import direccionamiento, operaciones, prorrogas, solicitud
+from apps.tickets import direccionamiento, operaciones, plazos, prorrogas, seguimiento, solicitud
+from apps.tickets import trabajo as trabajo_ops
 from apps.tickets.autorizacion import (
     es_propietario_borrador,
     es_responsable_actual,
@@ -68,18 +72,17 @@ def _mensaje_error(exc):
 
 @login_required
 def mis_tickets_view(request):
-    """CU-014/CU-015 — lista BORRADOR y RADICADO propios (2.2). La
-    estructura (badge/enlace por `ticket.estado` en la plantilla) admite
-    agregar EN_ATENCION/RESUELTO/etc. en 2.3+ sumando una rama, sin
-    rehacer la pantalla."""
-    tickets = (
-        Ticket.objects.filter(
-            solicitante=request.user,
-            estado__in=[Ticket.Estado.BORRADOR, Ticket.Estado.RADICADO],
-        )
-        .select_related("detalle_servicio__servicio")
+    """CU-014/CU-015 — los tickets que YO solicité (borradores incluidos), en cualquier estado:
+    «Mis tickets» no es lo que debo atender (eso es la Cola/Trabajo). Cada fila abre el
+    seguimiento del solicitante (4.F2)."""
+    tickets = list(
+        Ticket.objects.filter(solicitante=request.user)
+        .select_related("detalle_servicio__servicio", "equipo_responsable", "usuario_responsable")
         .order_by("-creado_en")
     )
+    for ticket in tickets:
+        ticket.fase_actual = seguimiento.fase_actual(ticket)
+        ticket.responsable = seguimiento.responsable_visible(ticket)
     contexto = {"tickets": tickets, "titulo_pagina": "Mis tickets"}
     return render(request, "tickets/mis_tickets.html", contexto)
 
@@ -89,58 +92,125 @@ COLA_POR_PAGINA = 30
 
 @login_required
 def cola_atencion_view(request):
-    """CU-017/RQF-061 — separada de `mis_tickets_view`: aquí nunca aparecen
-    tickets donde el usuario es solo el solicitante. El candidato se filtra
-    por estado en SQL; la autorización efectiva (`puede_ver_en_cola`, que
-    combina alcance de `tickets.atender` con la relación operacional real)
-    se evalúa en Python — volumen esperado bajo para una herramienta
-    interna, sin necesidad de traducir la lógica de autorización a SQL.
+    """CU-017/RQF-061 + 4.F3 — la Cola es el trabajo DISPONIBLE: tickets que `request.user` puede tomar
+    (o iniciar, si ya se dirigieron a su persona) AHORA, en orden de llegada. La decisión no se
+    reimplementa aquí: sale de `puede_tomar` / `puede_iniciar_atencion`, así que el solicitante no ve
+    su propio ticket, ni quien no tiene relación operacional con el servicio. Lo que ya está en
+    atención a su cargo vive en «Mi trabajo».
 
-    Orden de llegada: el que lleva más tiempo radicado va primero, y su
-    posición en la cola no cambia al filtrar. `ver` es un filtro LOCAL de
-    presentación (sin tomar / en atención / míos) sobre esa misma población
-    autorizada; no concede ni oculta nada por permisos."""
+    «Supervisión» es un filtro LOCAL con lo que la persona ve por su alcance sin poder tomarlo
+    (asignar/reasignar a otros); no concede nada ni cambia la posición en la cola."""
     candidatos = (
         Ticket.objects.filter(estado__in=[Ticket.Estado.RADICADO, Ticket.Estado.EN_ATENCION])
         .select_related("detalle_servicio__servicio", "solicitante", "usuario_responsable", "equipo_responsable")
         .prefetch_related("contextos_atencion")
         .order_by("radicado_en", "pk")
     )
-    visibles = [t for t in candidatos if puede_ver_en_cola(request.user, t)]
-    for posicion, ticket in enumerate(visibles, start=1):
-        ticket.posicion = posicion
-        # "Sin tomar" = todavía no se inició la atención. Un Ticket General dirigido a
-        # una persona (4.C2) está RADICADO con responsable: sigue sin iniciar.
-        ticket.sin_tomar = ticket.estado == Ticket.Estado.RADICADO
-        ticket.es_mio = ticket.usuario_responsable_id == request.user.pk
+    usuario = request.user
+    para_tomar, supervision = [], []
+    for ticket in candidatos:
+        if ticket.solicitante_id == usuario.pk and ticket.usuario_responsable_id != usuario.pk:
+            continue  # crear un ticket no es tener trabajo
+        if ticket.estado == Ticket.Estado.RADICADO and (
+            puede_tomar(usuario, ticket) or puede_iniciar_atencion(usuario, ticket)
+        ):
+            ticket.puede_tomar_ahora = puede_tomar(usuario, ticket)
+            ticket.puede_iniciar_ahora = puede_iniciar_atencion(usuario, ticket)
+            para_tomar.append(ticket)
+        elif ticket.usuario_responsable_id != usuario.pk and puede_ver_en_cola(usuario, ticket):
+            supervision.append(ticket)
 
-    filtros = {
-        "todos": lambda t: True,
-        "sin_tomar": lambda t: t.sin_tomar,
-        "en_atencion": lambda t: not t.sin_tomar,
-        "mios": lambda t: t.es_mio,
-    }
+    segmentos = {"para_tomar": para_tomar, "supervision": supervision}
     ver = request.GET.get("ver")
-    if ver not in filtros:
-        ver = "todos"
-    conteos = {clave: sum(1 for t in visibles if criterio(t)) for clave, criterio in filtros.items()}
-    pagina = Paginator([t for t in visibles if filtros[ver](t)], COLA_POR_PAGINA).get_page(request.GET.get("pagina"))
+    if ver not in segmentos:
+        ver = "para_tomar"
+    elegidos = segmentos[ver]
+    for posicion, ticket in enumerate(elegidos, start=1):
+        ticket.posicion = posicion
+        ticket.sin_tomar = ticket.estado == Ticket.Estado.RADICADO
+        aviso = plazos.evaluar_plazo(ticket)
+        ticket.plazo_corto = aviso if aviso is not None and aviso["anticipada"] else None
+    pagina = Paginator(elegidos, COLA_POR_PAGINA).get_page(request.GET.get("pagina"))
+    conteos = {clave: len(lista) for clave, lista in segmentos.items()}
     contexto = {
         "tickets": pagina.object_list,
         "pagina": pagina,
         "ver": ver,
         "conteos": conteos,
         "segmentos": [
-            {"clave": "todos", "etiqueta": "Todos"},
-            {"clave": "sin_tomar", "etiqueta": "Sin tomar"},
-            {"clave": "en_atencion", "etiqueta": "En atención"},
-            {"clave": "mios", "etiqueta": "Míos"},
+            {"clave": "para_tomar", "etiqueta": "Para tomar", "total": conteos["para_tomar"]},
+            {"clave": "supervision", "etiqueta": "Supervisión", "total": conteos["supervision"]},
         ],
         "titulo_pagina": "Cola de atención",
     }
-    for segmento in contexto["segmentos"]:
-        segmento["total"] = conteos[segmento["clave"]]
     return render(request, "tickets/cola_atencion.html", contexto)
+
+
+@login_required
+@require_GET
+def resumen_view(request, pk):
+    """4.F3 — «Ver resumen»: solo lectura de la solicitud, SIN tomar el ticket. Con
+    `X-Requested-With: fetch` responde el fragmento del panel lateral de la Cola; sin él, la página
+    completa (respaldo sin JS). Lo ve quien puede verlo en la Cola/Trabajo (`puede_ver_en_cola`); desde
+    aquí solo se ofrece Tomar / Iniciar atención si la autorización de dominio lo permite."""
+    ticket = get_object_or_404(
+        Ticket.objects.select_related("detalle_servicio__servicio", "solicitante", "equipo_responsable", "usuario_responsable"),
+        pk=pk,
+    )
+    if ticket.estado == Ticket.Estado.BORRADOR or not puede_ver_en_cola(request.user, ticket):
+        raise PermissionDenied
+    respuesta_formulario = ticket.respuesta_formulario
+    aviso = plazos.evaluar_plazo(ticket)
+    contexto = {
+        "ticket": ticket,
+        "servicio": ticket.detalle_servicio.servicio,
+        "campos_formulario": _construir_campos_formulario(respuesta_formulario, respuesta_formulario.formulario_version),
+        "responsable": seguimiento.responsable_visible(ticket),
+        "plazo_solicitado": aviso,
+        "plazo_corto": aviso if aviso is not None and aviso["anticipada"] else None,
+        "puede_tomar": puede_tomar(request.user, ticket),
+        "puede_iniciar_atencion": puede_iniciar_atencion(request.user, ticket),
+        "es_mio": ticket.usuario_responsable_id == request.user.pk,
+        "titulo_pagina": f"Resumen {ticket.codigo or ticket.pk}",
+    }
+    if request.headers.get("X-Requested-With") == "fetch":
+        return HttpResponse(render_to_string("tickets/_resumen_ticket.html", contexto, request=request))
+    return render(request, "tickets/resumen.html", contexto)
+
+
+@login_required
+@require_GET
+def trabajo_view(request, pk):
+    """4.F3 — experiencia operativa de un Ticket que se atiende: fases, bloques de la fase actual y
+    qué hay que hacer ahora. Solo LEE el estado real del flujo (`apps.tickets.trabajo.espacio`); cada
+    botón es la acción de dominio de siempre y se revalida en su vista."""
+    ticket = get_object_or_404(
+        Ticket.objects.select_related(
+            "detalle_servicio__servicio", "solicitante", "equipo_responsable", "usuario_responsable",
+            "instancia_workflow__workflow_version", "instancia_workflow__configuracion_ejecucion_version",
+        ),
+        pk=pk,
+    )
+    if ticket.estado == Ticket.Estado.BORRADOR:
+        raise PermissionDenied
+    if not puede_ver_en_cola(request.user, ticket):
+        if es_propietario_borrador(request.user, ticket):
+            return redirect("tickets:seguimiento", pk=ticket.pk)
+        raise PermissionDenied
+    aviso = plazos.evaluar_plazo(ticket)
+    contexto = {
+        "ticket": ticket,
+        "servicio": ticket.detalle_servicio.servicio,
+        "responsable": seguimiento.responsable_visible(ticket),
+        "plazo_corto": aviso if aviso is not None and aviso["anticipada"] else None,
+        "puede_tomar": puede_tomar(request.user, ticket),
+        "puede_iniciar_atencion": puede_iniciar_atencion(request.user, ticket),
+        "es_mio": ticket.usuario_responsable_id == request.user.pk,
+        "titulo_pagina": f"{ticket.codigo or ticket.pk} — {ticket.detalle_servicio.servicio.nombre}",
+    }
+    contexto.update(trabajo_ops.espacio(request.user, ticket))
+    contexto["ws_next"] = reverse("tickets:trabajo", args=[ticket.pk])
+    return render(request, "tickets/trabajo.html", contexto)
 
 
 @login_required
@@ -397,6 +467,9 @@ def revisar_view(request, pk):
 
     contexto = solicitud.contexto_workspace(ticket)
     contexto["titulo_pagina"] = f"Revisa tu solicitud — {contexto['servicio'].nombre}"
+    # 4.F2: aviso (no bloqueante) si pidió una fecha anterior al tiempo objetivo del servicio.
+    plazo = plazos.evaluar_plazo(ticket)
+    contexto["plazo_corto"] = plazo if plazo is not None and plazo["anticipada"] else None
     return render(request, "tickets/solicitud_revision.html", contexto)
 
 
@@ -436,7 +509,7 @@ def solicitud_enviada_view(request, pk):
     contexto = {
         "ticket": ticket,
         "servicio": ticket.detalle_servicio.servicio,
-        "titulo_pagina": "Solicitud enviada",
+        "titulo_pagina": "Ticket creado",
     }
     return render(request, "tickets/solicitud_enviada.html", contexto)
 
@@ -519,6 +592,9 @@ def detalle_view(request, pk):
         "servicio": ticket.detalle_servicio.servicio,
         "campos_formulario": _construir_campos_formulario(respuesta_formulario, version),
         "historial": ticket.historial.select_related("actor").all(),
+        "es_solicitante": es_solicitante,
+        # 4.F2: información operativa para quien atiende (no cambia prioridad ni SLA).
+        "plazo_solicitado": plazos.evaluar_plazo(ticket) if puede_ver_en_cola(request.user, ticket) else None,
         "puede_tomar": puede_tomar(request.user, ticket),
         "puede_iniciar_atencion": puede_iniciar_atencion(request.user, ticket),
         "direccionamiento": direccionamiento.direccionamiento_de(ticket),
@@ -551,7 +627,7 @@ def detalle_view(request, pk):
         "puede_cerrar": puede_cerrar_ticket(request.user, ticket),
         "puede_cancelar": puede_cancelar_ticket(request.user, ticket),
         "puede_reabrir": puede_reabrir_ticket(request.user, ticket),
-        "titulo_pagina": f"Ticket {ticket.radicado} — {ticket.detalle_servicio.servicio.nombre}",
+        "titulo_pagina": f"Ticket {ticket.codigo or ticket.pk} — {ticket.detalle_servicio.servicio.nombre}",
     }
     contexto.update(_contexto_entrega(request.user, ticket))
     contexto.update(_contexto_prorrogas(request.user, ticket))
@@ -559,76 +635,61 @@ def detalle_view(request, pk):
     return render(request, "tickets/detalle.html", contexto)
 
 
-_TIPOS_BLOQUE_PRESENTACION = {
-    "ACTIVIDAD": "Actividad", "ENTREGABLE": "Entregable", "APROBACION": "Aprobación", "DECISION": "Decisión",
-    "ESPERA": "Espera",
-}
+@login_required
+@require_GET
+def seguimiento_view(request, pk):
+    """4.F2 — «Ver mi ticket»: seguimiento orientado al SOLICITANTE, no la vista operativa.
+
+    Solo lectura y en lenguaje de quien pidió algo (código, estado, fase, quién lo tiene, fecha
+    objetivo y solicitada, lo que pidió, entregas, historial). No muestra ninguna acción
+    interna: tomar, asignar, resolver, entregables de trabajo o configuración del flujo. Lo ve
+    quien lo solicitó o quien ya puede consultarlo por la autorización existente
+    (`puede_consultar_ticket`); cualquier otra persona recibe 403 aunque cambie el id."""
+    ticket = get_object_or_404(
+        Ticket.objects.select_related(
+            "detalle_servicio__servicio__categoria", "equipo_responsable", "usuario_responsable",
+            "instancia_workflow__workflow_version",
+        ),
+        pk=pk,
+    )
+    if not puede_consultar_ticket(request.user, ticket):
+        raise PermissionDenied
+    if ticket.estado == Ticket.Estado.BORRADOR:
+        return redirect("tickets:borrador", pk=ticket.pk)
+    # 4.G1: un ticket generado por programación no tiene solicitante, y por tanto tampoco
+    # «seguimiento de solicitante»: quien puede consultarlo lo ve en su vista operativa.
+    if ticket.solicitante_id is None:
+        return redirect("tickets:detalle", pk=ticket.pk)
+
+    respuesta_formulario = ticket.respuesta_formulario
+    entrega = _contexto_entrega(request.user, ticket)
+    solicitudes_pendientes = ticket.solicitudes_informacion.filter(
+        estado=SolicitudInformacion.Estado.PENDIENTE, destinatario=request.user
+    ).count()
+    contexto = {
+        "ticket": ticket,
+        "servicio": ticket.detalle_servicio.servicio,
+        "es_solicitante": es_propietario_borrador(request.user, ticket),
+        "progreso": seguimiento.progreso(ticket),
+        "responsable": seguimiento.responsable_visible(ticket),
+        "fecha_solicitada": plazos.fecha_solicitada(ticket),
+        "compromiso_ampliado": ticket.fecha_objetivo_original is not None
+        and ticket.fecha_objetivo_vigente != ticket.fecha_objetivo_original,
+        "campos_formulario": _construir_campos_formulario(respuesta_formulario, respuesta_formulario.formulario_version),
+        "historial": ticket.historial.select_related("actor").all(),
+        "entregas": entrega["entregas"],
+        "entrega_pendiente": entrega["entrega_pendiente"],
+        "puede_responder_entrega": entrega["puede_responder_entrega"],
+        "solicitudes_pendientes": solicitudes_pendientes,
+        "puede_ver_operacion": puede_ver_en_cola(request.user, ticket),
+        "titulo_pagina": f"{ticket.codigo or 'Ticket'} — {ticket.detalle_servicio.servicio.nombre}",
+    }
+    return render(request, "tickets/seguimiento.html", contexto)
 
 
 def _contexto_trabajo_actual(usuario, ticket):
-    """4.E2 — OPERABILIDAD mínima del flujo: qué trabajo tiene el Ticket ahora y dónde actuar.
-    No es una línea de tiempo ni un diagrama: solo el bloque vigente de su ejecución, su
-    situación y los enlaces a la Tarea / Aprobación que corresponda (solo a quien puede
-    consultarlas). `trabajo_interno_en_curso` es la misma regla que protege resolver/entregar."""
-    if ticket.instancia_workflow_id is None:
-        return {"trabajo_actual": None, "trabajo_interno_en_curso": False}
-    from apps.aprobaciones.autorizacion import puede_aprobar, puede_consultar_aprobacion
-    from apps.tareas.autorizacion import puede_consultar_tarea
-    from apps.workflows.models import EsquemaAprobacionWorkflow, InstanciaEtapa, InstanciaWorkflow, TareaWorkflow
-
-    instancia = ticket.instancia_workflow
-    ultima = (
-        instancia.ejecuciones_etapa.select_related("bloque_operativo", "etapa", "fase_workflow")
-        .order_by("-orden")
-        .first()
-    )
-    en_curso = instancia.estado in (InstanciaWorkflow.Estado.EN_EJECUCION, InstanciaWorkflow.Estado.EN_ESPERA)
-    if ultima is None:
-        return {"trabajo_actual": None, "trabajo_interno_en_curso": en_curso}
-
-    bloque = ultima.bloque_operativo
-    definicion = bloque if bloque is not None else ultima.etapa
-    trabajo = {
-        "fase": ultima.fase_workflow.nombre if ultima.fase_workflow_id else "",
-        "nombre": definicion.nombre,
-        "tipo": _TIPOS_BLOQUE_PRESENTACION.get(bloque.tipo, bloque.get_tipo_display())
-        if bloque is not None
-        else definicion.get_tipo_display(),
-        "terminado": instancia.estado == InstanciaWorkflow.Estado.COMPLETADA,
-        "con_error": instancia.estado == InstanciaWorkflow.Estado.ERROR,
-        "pendiente": "",
-        "tarea": None,
-        "aprobacion": None,
-        "entregable": None,
-    }
-    if ultima.estado == InstanciaEtapa.Estado.EN_ESPERA:
-        motivo = ultima.motivo_espera
-        if motivo == InstanciaEtapa.MotivoEspera.TAREA:
-            trabajo["pendiente"] = "Hay una actividad por completar."
-            vinculo = TareaWorkflow.objects.filter(instancia_etapa=ultima).select_related("tarea").first()
-            if vinculo is not None and puede_consultar_tarea(usuario, vinculo.tarea):
-                trabajo["tarea"] = vinculo.tarea
-        elif motivo == InstanciaEtapa.MotivoEspera.APROBACION:
-            trabajo["pendiente"] = "Está pendiente de aprobación."
-            vinculo = (
-                EsquemaAprobacionWorkflow.objects.filter(instancia_etapa=ultima).select_related("esquema").first()
-            )
-            if vinculo is not None:
-                propias = [
-                    a for a in vinculo.esquema.participaciones.all() if puede_consultar_aprobacion(usuario, a)
-                ]
-                propias.sort(key=lambda a: (not puede_aprobar(usuario, a), a.orden))
-                trabajo["aprobacion"] = propias[0] if propias else None
-        elif motivo == InstanciaEtapa.MotivoEspera.ENTREGABLE:
-            entregable_id = (ultima.resultado or {}).get("entregable_id")
-            entregable = ticket.entregables.filter(pk=entregable_id).first() if entregable_id else None
-            trabajo["entregable"] = entregable
-            trabajo["pendiente"] = (
-                f"Falta entregar «{entregable.nombre}»." if entregable is not None else "Falta un entregable."
-            )
-        else:
-            trabajo["pendiente"] = "En espera programada."
-    return {"trabajo_actual": trabajo, "trabajo_interno_en_curso": en_curso}
+    """4.E2 — bloque «Trabajo actual» del detalle (la composición vive en `apps.tickets.trabajo`)."""
+    return trabajo_ops.contexto_trabajo_actual(usuario, ticket)
 
 
 def _contexto_prorrogas(usuario, ticket):
@@ -677,6 +738,7 @@ def _contexto_entrega(usuario, ticket):
         entregables = list(ticket.entregables.prefetch_related("archivos"))
         for entregable in entregables:
             entregable.archivos_vigentes = [a for a in entregable.archivos.all() if a.retirado_en is None]
+            entregable.operable_ahora = trabajo_ops.entregable_operable_ahora(ticket, entregable)
         pendientes = [e for e in entregables if e.obligatorio and not e.satisfecho]
     entregas = list(
         ticket.entregas.select_related("entregada_por", "resuelta_por")
@@ -709,7 +771,7 @@ def tomar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Ticket tomado.")
-    return redirect("tickets:detalle", pk=pk)
+    return volver_a(request, "tickets:detalle", pk)
 
 
 @login_required
@@ -1004,6 +1066,10 @@ def descargar_adjunto_view(request, adjunto_id):
 
 # --- 4.5 — Entregables del responsable, entrega formal y respuesta ---------
 
+_MENSAJE_ENTREGABLE_ADELANTADO = (
+    "Este entregable se completa cuando el flujo llegue a su paso; todavía no es su turno."
+)
+
 
 def _post_ticket_o_405(request, pk):
     if request.method != "POST":
@@ -1017,13 +1083,16 @@ def entregable_resultado_view(request, pk, entregable_id):
     if ticket is None:
         return HttpResponseNotAllowed(["POST"])
     entregable = get_object_or_404(EntregableTicket, pk=entregable_id, ticket=ticket)
+    if not trabajo_ops.entregable_operable_ahora(ticket, entregable):
+        messages.error(request, _MENSAJE_ENTREGABLE_ADELANTADO)
+        return volver_a(request, "tickets:detalle", pk)
     try:
         entregables_ops.registrar_resultado_entregable(entregable, request.user, request.POST.get("valor", ""))
     except (PermissionDenied, ValidationError) as exc:
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Resultado guardado.")
-    return redirect("tickets:detalle", pk=pk)
+    return volver_a(request, "tickets:detalle", pk)
 
 
 @login_required
@@ -1032,13 +1101,16 @@ def entregable_confirmar_view(request, pk, entregable_id):
     if ticket is None:
         return HttpResponseNotAllowed(["POST"])
     entregable = get_object_or_404(EntregableTicket, pk=entregable_id, ticket=ticket)
+    if not trabajo_ops.entregable_operable_ahora(ticket, entregable):
+        messages.error(request, _MENSAJE_ENTREGABLE_ADELANTADO)
+        return volver_a(request, "tickets:detalle", pk)
     try:
         entregables_ops.confirmar_entregable(entregable, request.user)
     except (PermissionDenied, ValidationError) as exc:
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Entregable confirmado.")
-    return redirect("tickets:detalle", pk=pk)
+    return volver_a(request, "tickets:detalle", pk)
 
 
 @login_required
@@ -1047,17 +1119,20 @@ def entregable_adjuntar_view(request, pk, entregable_id):
     if ticket is None:
         return HttpResponseNotAllowed(["POST"])
     entregable = get_object_or_404(EntregableTicket, pk=entregable_id, ticket=ticket)
+    if not trabajo_ops.entregable_operable_ahora(ticket, entregable):
+        messages.error(request, _MENSAJE_ENTREGABLE_ADELANTADO)
+        return volver_a(request, "tickets:detalle", pk)
     archivo = request.FILES.get("archivo")
     if archivo is None:
         messages.error(request, "Seleccione un archivo.")
-        return redirect("tickets:detalle", pk=pk)
+        return volver_a(request, "tickets:detalle", pk)
     try:
         entregables_ops.adjuntar_archivo_entregable(entregable, request.user, archivo)
     except (PermissionDenied, ValidationError) as exc:
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Archivo adjuntado.")
-    return redirect("tickets:detalle", pk=pk)
+    return volver_a(request, "tickets:detalle", pk)
 
 
 @login_required
@@ -1066,13 +1141,16 @@ def entregable_retirar_archivo_view(request, pk, adjunto_id):
     if ticket is None:
         return HttpResponseNotAllowed(["POST"])
     adjunto = get_object_or_404(Adjunto, pk=adjunto_id, entregable__ticket=ticket)
+    if not trabajo_ops.entregable_operable_ahora(ticket, adjunto.entregable):
+        messages.error(request, _MENSAJE_ENTREGABLE_ADELANTADO)
+        return volver_a(request, "tickets:detalle", pk)
     try:
         entregables_ops.retirar_archivo_entregable(adjunto, request.user)
     except (PermissionDenied, ValidationError) as exc:
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Archivo retirado.")
-    return redirect("tickets:detalle", pk=pk)
+    return volver_a(request, "tickets:detalle", pk)
 
 
 @login_required

@@ -10,56 +10,81 @@
 {% block content %}
   <header class="page-header">
     <div>
-      <h1 class="page-header__title">Cola de atención</h1>
-      <p class="page-header__subtitle">Tickets que puedes atender, en orden de llegada: el que más lleva esperando va primero.</p>
+      <h1 class="page-header__title">Cola</h1>
+      <p class="page-header__subtitle">Tickets que puedes tomar, en orden de llegada: el que más lleva esperando va primero. Ver el resumen no lo toma.</p>
     </div>
   </header>
 
   {% include "layout/trabajo_tabs.html" %}
 
-  {% if conteos.todos %}
-    <div class="work-toolbar">
-      <nav class="segmented" aria-label="Filtrar la cola">
-        {% for segmento in segmentos %}
-          <a class="segmented__item" href="?ver={{ segmento.clave }}"{% if segmento.clave == ver %} aria-current="page"{% endif %}>{{ segmento.etiqueta }} <span class="work-count">{{ segmento.total }}</span></a>
-        {% endfor %}
-      </nav>
-    </div>
-  {% endif %}
+  <div class="work-toolbar">
+    <nav class="segmented" aria-label="Filtrar la cola">
+      {% for segmento in segmentos %}
+        <a class="segmented__item" href="?ver={{ segmento.clave }}"{% if segmento.clave == ver %} aria-current="page"{% endif %}>{{ segmento.etiqueta }} <span class="work-count">{{ segmento.total }}</span></a>
+      {% endfor %}
+    </nav>
+  </div>
 
   {% if tickets %}
-    <ol class="work-list work-list--queue" aria-label="Tickets en la cola">
-      {% for ticket in tickets %}
-        <li>
-          <a class="work-row" href="{% url 'tickets:detalle' ticket.pk %}">
-            <span class="work-row__position" aria-label="Posición {{ ticket.posicion }} en la cola">{{ ticket.posicion }}</span>
-            <span class="work-row__main">
-              <span class="work-row__title">{{ ticket.detalle_servicio.servicio.nombre }}</span>
-              <span class="work-row__meta">Solicita {{ ticket.solicitante.get_full_name|default:ticket.solicitante.get_username }}</span>
-            </span>
-            <span class="work-row__when" title="{{ ticket.radicado_en|date:'j \d\e F \d\e Y, H:i' }}">Llegó {{ ticket.radicado_en|naturaltime }}</span>
-            <span class="work-row__owner">
-              {% if ticket.es_mio %}Lo atiendes tú
-              {% elif ticket.usuario_responsable %}{{ ticket.usuario_responsable.get_full_name|default:ticket.usuario_responsable.get_username }}
-              {% elif ticket.equipo_responsable %}{{ ticket.equipo_responsable }}
-              {% else %}Sin responsable{% endif %}
-            </span>
-            <span class="work-row__state">
-              {% if ticket.sin_tomar %}<span class="badge badge--warning badge--dot">Sin tomar</span>{% else %}<span class="badge badge--info badge--dot">{{ ticket.get_estado_display }}</span>{% endif %}
-            </span>
-          </a>
-        </li>
-      {% endfor %}
-    </ol>
-    {% include "layout/_paginacion.html" with extra="ver" valor=ver %}
+    <div class="work-split" data-trabajo>
+      <div class="work-split__list">
+        <ol class="queue-cards" aria-label="Tickets en la cola">
+          {% for ticket in tickets %}
+            <li class="queue-card">
+              <div class="queue-card__pos" aria-label="Posición {{ ticket.posicion }} en la cola">{{ ticket.posicion }}</div>
+              <div class="queue-card__body">
+                <p class="queue-card__code">{{ ticket.codigo|default:"Sin código" }}</p>
+                <h2 class="queue-card__title">{{ ticket.detalle_servicio.servicio.nombre }}</h2>
+                {% if ticket.etiqueta %}<p class="ticket-etiqueta text-muted">{{ ticket.etiqueta }}</p>{% endif %}
+                <p class="queue-card__meta">
+                  {% if ticket.solicitante %}Solicita {{ ticket.solicitante.get_full_name|default:ticket.solicitante.get_username }}{% else %}Generado por programación{% endif %}
+                  · <span title="{{ ticket.radicado_en|date:'j \d\e F \d\e Y, H:i' }}">llegó {{ ticket.radicado_en|naturaltime }}</span>
+                  {% if ticket.fecha_objetivo_vigente %}· objetivo {{ ticket.fecha_objetivo_vigente|date:"d M Y" }}{% endif %}
+                </p>
+                <p class="queue-card__chips">
+                  <span class="badge badge--warning badge--dot">{% if ticket.sin_tomar %}Sin tomar{% else %}{{ ticket.get_estado_display }}{% endif %}</span>
+                  {% if ticket.usuario_responsable %}<span class="badge">Dirigido a {{ ticket.usuario_responsable.get_full_name|default:ticket.usuario_responsable.get_username }}</span>
+                  {% elif ticket.equipo_responsable %}<span class="badge">{{ ticket.equipo_responsable }}</span>{% endif %}
+                  {% if ticket.plazo_corto %}<span class="badge badge--danger" title="Pidió {{ ticket.plazo_corto.valor|date:'d M Y' }}; objetivo del servicio {{ ticket.plazo_corto.objetivo|date:'d M Y' }}">Fecha solicitada anterior al objetivo</span>{% endif %}
+                </p>
+              </div>
+              <div class="queue-card__actions">
+                <a class="btn btn--secondary btn--sm" href="{% url 'tickets:resumen' ticket.pk %}" data-vista="{% url 'tickets:resumen' ticket.pk %}">Ver resumen</a>
+                {% if ticket.puede_tomar_ahora %}
+                  <form method="post" action="{% url 'tickets:tomar' ticket.pk %}">
+                    {% csrf_token %}<input type="hidden" name="next" value="{% url 'core:mi_trabajo' %}">
+                    <button type="submit" class="btn btn--primary btn--sm">Tomar ticket</button>
+                  </form>
+                {% elif ticket.puede_iniciar_ahora %}
+                  <form method="post" action="{% url 'tickets:iniciar_atencion' ticket.pk %}">
+                    {% csrf_token %}<input type="hidden" name="next" value="{% url 'core:mi_trabajo' %}">
+                    <button type="submit" class="btn btn--primary btn--sm">Iniciar atención</button>
+                  </form>
+                {% endif %}
+              </div>
+            </li>
+          {% endfor %}
+        </ol>
+        {% include "layout/_paginacion.html" with extra="ver" valor=ver %}
+      </div>
+
+      <aside class="work-preview" aria-label="Resumen del ticket" aria-live="polite" data-trabajo-vista hidden>
+        <div class="work-preview__empty" data-trabajo-vacio>
+          <span aria-hidden="true">{% include "components/icon.html" with name="eye" %}</span>
+          <p>Pulsa «Ver resumen» para revisar la solicitud sin tomarla.</p>
+        </div>
+        <div class="work-preview__body" data-trabajo-contenido hidden></div>
+      </aside>
+    </div>
   {% else %}
     <div class="empty-state">
-      {% if conteos.todos %}
-        <p>Ningún ticket coincide con este filtro.</p>
-        <a class="btn btn--ghost btn--sm" href="{% url 'tickets:cola' %}">Ver todos</a>
+      {% if ver == "supervision" %}
+        <p>No hay otros tickets que supervisar por tu alcance.</p>
       {% else %}
-        <p>No hay tickets en tu cola de atención.</p>
+        <p>No hay tickets para tomar ahora.</p>
       {% endif %}
     </div>
   {% endif %}
 {% endblock %}
+
+{% block extra_scripts %}<script src="{% static 'js/trabajo.js' %}" defer></script>{% endblock %}

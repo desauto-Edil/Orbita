@@ -129,16 +129,19 @@ class UsuarioDatosForm(_PerfilMixin, forms.ModelForm):
 
 
 class MembresiaForm(forms.Form):
-    """Añadir a un usuario a un Área o a una Unidad de negocio."""
+    """Añadir a un usuario a un Área, a una Unidad de negocio o a un Equipo. Solo Áreas y
+    Unidades distinguen una pertenencia principal; la membresía de equipo no (`con_principal`)."""
 
     destino = forms.ModelChoiceField(queryset=None)
     es_principal = forms.BooleanField(required=False, label="Es la principal")
 
-    def __init__(self, *args, queryset, etiqueta, **kwargs):
+    def __init__(self, *args, queryset, etiqueta, con_principal=True, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["destino"].queryset = queryset
         self.fields["destino"].label = etiqueta
         self.fields["destino"].empty_label = "Selecciona…"
+        if not con_principal:
+            del self.fields["es_principal"]
 
 
 class AsignacionRolForm(forms.ModelForm):
