@@ -27,12 +27,24 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
-from django.http import HttpResponseNotAllowed
+from django.http import Http404, HttpResponseNotAllowed
 from django.shortcuts import get_object_or_404, redirect, render
 from django.urls import reverse
 from django.utils import timezone
 
+from apps.catalogo import experiencia_proceso as proceso_ui
 from apps.catalogo.entregables import configurar_definicion_entregable, retirar_definicion_entregable
+from apps.catalogo.revision_elementos import configuracion_de as configuracion_de_conjunto
+from apps.catalogo.revision_elementos import errores_de_version_de_columnas
+from apps.catalogo.tareas_elemento import (
+    columnas_por_destino,
+    configuracion_de as configuracion_tareas_de,
+    configuracion_activa_de as configuracion_tareas_activa,
+    configurar_tareas_elemento,
+    desactivar_tareas_elemento,
+    errores_de_version_para_tareas,
+)
+from apps.catalogo.tareas_elemento import DESTINOS as DESTINOS_TAREA
 from apps.catalogo.terminos_busqueda import (
     MAX_TERMINOS_POR_SERVICIO,
     cambiar_estado_termino,
@@ -86,6 +98,7 @@ from apps.catalogo.forms import (
     FallbackForm,
     FormularioForm,
     InicioProcesoForm,
+    ParrillaForm,
     MAX_APROBADORES,
     OpcionCampoForm,
     ParticipanteAprobacionForm,
@@ -98,6 +111,7 @@ from apps.catalogo.forms import (
     ServicioCreacionForm,
     ServicioGeneralForm,
     TIPOS_BLOQUE_CHOICES,
+    TIPO_BLOQUE_TAREAS_ELEMENTOS,
     TIPOS_BLOQUE_LEGACY_CHOICES,
     TIPOS_BLOQUE_DESCRIPCION,
     TerminoServicioForm,
@@ -134,6 +148,7 @@ from apps.catalogo.operaciones import (
     retirar_visibilidad,
     validar_publicacion,
 )
+from apps.catalogo.parrilla import configurar_parrilla, definicion_de, desactivar_parrilla
 from apps.catalogo.programacion import (
     asegurar_responsable_inicial,
     programacion_activa_de,
@@ -162,7 +177,7 @@ TAB_LABELS = {
 ETIQUETAS_BLOQUE = {v: k for k, v in TIPOS_BLOQUE.items()}
 ETIQUETAS_BLOQUE_DISPLAY = {
     "ACTIVIDAD": "Actividad", "ENTREGABLE": "Entregable", "APROBACION": "Aprobación", "ESPERA": "Espera",
-    "DECISION": "Decisión",
+    "DECISION": "Decisión", "TAREAS_ELEMENTOS": "Tareas por elemento",
 }
 
 
@@ -308,10 +323,57 @@ def studio_crear_view(request):
 # --- Helpers de composición de contexto -----------------------------------
 
 
-def _version_entrada_editable(servicio):
-    if servicio.formulario_id is None:
+# 4.G2B1 — el editor de campos del Formulario sirve a DOS usos independientes del mismo Servicio:
+# la entrada inicial del ticket (`Servicio.formulario`) y las columnas de la estructura de elementos
+# de un Proceso (`DefinicionParrilla.formulario`). `uso` decide cuál; nunca se mezclan.
+USO_ENTRADA = "entrada"
+USO_PARRILLA = "parrilla"
+
+
+def _formulario_de_uso(servicio, uso=USO_ENTRADA):
+    if uso == USO_PARRILLA:
+        definicion = definicion_de(servicio)
+        return definicion.formulario if definicion is not None else None
+    return servicio.formulario
+
+
+def _volver_entrada(pk, uso=USO_ENTRADA):
+    destino = _volver(pk, "entrada")
+    return f"{destino}&uso={USO_PARRILLA}" if uso == USO_PARRILLA else destino
+
+
+_URLS_EDITOR = {
+    USO_ENTRADA: {
+        "version": "catalogo:studio_entrada_version",
+        "activar": "catalogo:studio_entrada_activar",
+        "campo_crear": "catalogo:studio_campo_crear",
+        "campo_editar": "catalogo:studio_campo_editar",
+        "campo_eliminar": "catalogo:studio_campo_eliminar",
+        "opcion_crear": "catalogo:studio_opcion_crear",
+        "opcion_eliminar": "catalogo:studio_opcion_eliminar",
+    },
+    USO_PARRILLA: {
+        "version": "catalogo:studio_parrilla_version",
+        "activar": "catalogo:studio_parrilla_activar",
+        "campo_crear": "catalogo:studio_parrilla_campo_crear",
+        "campo_editar": "catalogo:studio_parrilla_campo_editar",
+        "campo_eliminar": "catalogo:studio_parrilla_campo_eliminar",
+        "opcion_crear": "catalogo:studio_parrilla_opcion_crear",
+        "opcion_eliminar": "catalogo:studio_parrilla_opcion_eliminar",
+    },
+}
+
+
+def _urls_editor(uso):
+    """Nombres de URL del editor de campos para cada uso (el template los resuelve con `{% url %}`)."""
+    return _URLS_EDITOR[uso]
+
+
+def _version_entrada_editable(servicio, uso=USO_ENTRADA):
+    formulario = _formulario_de_uso(servicio, uso)
+    if formulario is None:
         return None
-    return servicio.formulario.versiones.filter(estado=FormularioVersion.Estado.BORRADOR).order_by("-numero").first()
+    return formulario.versiones.filter(estado=FormularioVersion.Estado.BORRADOR).order_by("-numero").first()
 
 
 def _variables_para_decisiones(servicio, bloques=()):
@@ -796,8 +858,8 @@ def _parsear_configuracion_bloque(
             # `None` = aprobación general; solo la configuración por fases (con `version`) lo usa.
             "entregable_revisado": next((b for b in revisables if str(b.pk) == str(revisa)), None) if revisa else None,
         }, True
-    if tipo == "DECISION":
-        return {}, True
+    if tipo in ("DECISION", "TAREAS_ELEMENTOS"):
+        return {}, True  # TAREAS_ELEMENTOS no tiene más configuración: vive en la del proceso
     return {}, False
 
 
@@ -865,6 +927,15 @@ def _contexto_inicio(servicio):
     }
 
 
+def _contexto_responsables(servicio):
+    return {
+        "responsables": list(
+            servicio.responsables.filter(activo=True).select_related("usuario", "equipo").order_by("pk")
+        ),
+        "form_responsable": ResponsableForm(),
+    }
+
+
 def _contexto_general(servicio):
     return {
         **_contexto_inicio(servicio),
@@ -886,29 +957,84 @@ def _contexto_general(servicio):
         "concesiones": _concesiones_visibilidad(servicio),
         "form_visibilidad": VisibilidadForm(),
         "es_restringido": servicio.alcance_visibilidad == Servicio.AlcanceVisibilidad.RESTRINGIDO,
+        # 4.G2E: en un Proceso los responsables se configuran en Básico (quién lo atiende es parte de su
+        # identidad); en un Servicio siguen en Publicar.
+        **(_contexto_responsables(servicio) if proceso_ui.aplica(servicio) else {}),
         **_contexto_terminos(servicio),
     }
 
 
-def _contexto_entrada(servicio):
-    formulario = servicio.formulario
+def _sin_tipos_no_soportados(form):
+    """En los elementos del proceso no se ofrece ARCHIVO (exigiría ampliar `Adjunto`). La vista que
+    guarda lo rechaza igualmente: ocultarlo aquí solo evita proponerlo."""
+    form.fields["tipo"].choices = [
+        (valor, etiqueta) for valor, etiqueta in form.fields["tipo"].choices if valor != Campo.TipoCampo.ARCHIVO
+    ]
+    return form
+
+
+def _form_campo_nuevo(es_parrilla):
+    form = CampoForm(prefix="campo-nuevo")
+    return _sin_tipos_no_soportados(form) if es_parrilla else form
+
+
+def _contexto_tareas_elemento(servicio):
+    """4.G2D1 — lo que necesita el panel «Tareas por elemento»: la configuración vigente y, por cada dato de
+    la tarea, las columnas de la estructura que pueden darlo."""
+    configuracion = configuracion_tareas_de(servicio)
+    disponibles = columnas_por_destino(servicio)
+    destinos = [
+        {
+            "atributo": atributo, "nombre": nombre, "obligatoria": obligatoria, "columnas": disponibles[atributo],
+            "actual": getattr(configuracion, atributo) if configuracion is not None else "",
+        }
+        for atributo, nombre, _, obligatoria in DESTINOS_TAREA
+    ]
+    return {"tareas_config": configuracion, "tareas_destinos": destinos}
+
+
+def _contexto_entrada(servicio, uso=USO_ENTRADA):
+    es_proceso = servicio.tipo == Servicio.Tipo.PROCESO and not servicio.es_ticket_general
+    if uso == USO_PARRILLA and not es_proceso:
+        uso = USO_ENTRADA
+    es_parrilla = uso == USO_PARRILLA
+    definicion = definicion_de(servicio) if es_proceso else None
+    formulario = _formulario_de_uso(servicio, uso)
     version_activa = formulario.version_activa if formulario else None
-    version_borrador = _version_entrada_editable(servicio)
+    version_borrador = _version_entrada_editable(servicio, uso)
     version_mostrada = version_borrador or version_activa
     campos, reglas = [], []
     if version_mostrada is not None:
         campos = list(version_mostrada.campos.prefetch_related("opciones").order_by("orden", "id"))
-        reglas = list(
+        reglas = [] if es_parrilla else list(
             ReglaCondicional.objects.filter(campo_origen__version=version_mostrada).select_related(
                 "campo_origen", "campo_objetivo"
             )
         )
         for campo in campos:
             campo.form_editar = CampoForm(instance=campo, prefix=f"campo-{campo.pk}-editar")
+            if es_parrilla:
+                _sin_tipos_no_soportados(campo.form_editar)
             campo.form_opcion_nueva = OpcionCampoForm(prefix=f"campo-{campo.pk}-opcion-nueva")
             for opcion in campo.opciones.all():
                 opcion.form_editar = OpcionCampoForm(instance=opcion, prefix=f"campo-{campo.pk}-opcion-{opcion.pk}")
+    if es_proceso:
+        # 4.G2E: para qué se usa cada columna (tarea que originan, revisión) y el resumen de las dos piezas.
+        usos = proceso_ui.usos_de_columnas(servicio) if es_parrilla else {}
+        for campo in campos:
+            campo.usos = usos.get(campo.clave, [])
     return {
+        "uso": uso,
+        "es_parrilla": es_parrilla,
+        "es_proceso": es_proceso,
+        "tarjetas_proceso": proceso_ui.tarjetas_formulario(servicio) if es_proceso else None,
+        "definicion": definicion,
+        **(_contexto_tareas_elemento(servicio) if es_parrilla and definicion is not None and definicion.activa else {}),
+        "form_parrilla": (
+            ParrillaForm(initial={"nombre_elemento": definicion.nombre_elemento if definicion else "Elemento"})
+            if es_parrilla else None
+        ),
+        "urls_editor": _urls_editor(uso),
         "formulario": formulario,
         "version_entrada_activa": version_activa,
         "version_entrada_borrador": version_borrador,
@@ -917,10 +1043,10 @@ def _contexto_entrada(servicio):
         "campos": campos,
         "reglas": reglas,
         "formulario_form": FormularioForm(initial={"nombre": servicio.nombre}) if formulario is None else None,
-        "campo_form_nuevo": CampoForm(prefix="campo-nuevo") if version_borrador is not None else None,
+        "campo_form_nuevo": _form_campo_nuevo(es_parrilla) if version_borrador is not None else None,
         "regla_form_nueva": (
             ReglaCondicionalForm(campos_queryset=Campo.objects.filter(version=version_mostrada), prefix="regla-nueva")
-            if version_borrador is not None and campos
+            if version_borrador is not None and campos and not es_parrilla
             else None
         ),
     }
@@ -1084,6 +1210,8 @@ def _resumen_bloque_operativo(bloque):
         return f"Entregable: {definicion.nombre}" if definicion is not None else "Sin entregable"
     if bloque.tipo == BloqueOperativo.Tipo.DECISION:
         return "Rutas condicionales"
+    if bloque.tipo == BloqueOperativo.Tipo.TAREAS_ELEMENTOS:
+        return "Una tarea por elemento del ticket"
     return "Sin configurar"
 
 
@@ -1196,6 +1324,10 @@ def _contexto_configuracion_operativa(servicio):
             ]
         fases.append({"fase": fase, "bloques": bloques})
     return {
+        "recorrido_proceso": (
+            proceso_ui.recorrido_flujo(servicio, config_mostrada, _resumen_bloque_operativo)
+            if proceso_ui.aplica(servicio) else []
+        ),
         "usa_plantilla_fases": True,
         "version_ejecucion_activa": version_activa,
         "version_ejecucion_borrador": None,
@@ -1208,7 +1340,12 @@ def _contexto_configuracion_operativa(servicio):
         "editable_ejecucion": editable,
         "fases_configuracion": fases,
         "bloques_disponibles": [
-            (codigo, etiqueta, TIPOS_BLOQUE_DESCRIPCION[codigo]) for codigo, etiqueta in TIPOS_BLOQUE_CHOICES
+            (codigo, etiqueta, TIPOS_BLOQUE_DESCRIPCION[codigo])
+            # 4.G2D2: «Tareas por elemento» solo se ofrece si el proceso ya las configuró.
+            for codigo, etiqueta in (
+                [*TIPOS_BLOQUE_CHOICES, TIPO_BLOQUE_TAREAS_ELEMENTOS] if configuracion_tareas_activa(servicio)
+                else TIPOS_BLOQUE_CHOICES
+            )
         ],
         "variables_decision": _variables_para_decisiones(
             servicio, config_mostrada.bloques.all() if config_mostrada is not None else ()
@@ -1304,16 +1441,21 @@ def _contexto_ejecucion(servicio, despues=None, plantilla=None):
 def _contexto_salida(servicio):
     definiciones = list(servicio.definiciones_entregables.filter(activo=True).order_by("orden", "pk"))
     for definicion in definiciones:
+        inicial = {
+            "nombre": definicion.nombre, "descripcion": definicion.descripcion, "tipo": definicion.tipo,
+            "obligatorio": definicion.obligatorio, "orden": definicion.orden,
+        }
+        if definicion.tipo == DefinicionEntregable.Tipo.ELEMENTOS:
+            claves, usuarios, equipos = configuracion_de_conjunto(definicion)
+            inicial.update({"columnas_revisadas": claves, "revisores_usuarios": usuarios, "revisores_equipos": equipos})
         definicion.form_editar = DefinicionEntregableForm(
-            initial={
-                "nombre": definicion.nombre, "descripcion": definicion.descripcion, "tipo": definicion.tipo,
-                "obligatorio": definicion.obligatorio, "orden": definicion.orden,
-            },
-            prefix=f"entregable-{definicion.pk}-editar",
+            initial=inicial, prefix=f"entregable-{definicion.pk}-editar", servicio=servicio
         )
+    organizacion = proceso_ui.organizar_salida(servicio, definiciones) if proceso_ui.aplica(servicio) else {}
     return {
+        **organizacion,
         "definiciones": definiciones,
-        "entregable_form_nuevo": DefinicionEntregableForm(prefix="entregable-nuevo"),
+        "entregable_form_nuevo": DefinicionEntregableForm(prefix="entregable-nuevo", servicio=servicio),
         "form_politica": PoliticaEntregaForm(
             initial={"politica": servicio.politica_entrega or None, "dias_observacion": servicio.dias_observacion}
         ),
@@ -1328,9 +1470,21 @@ def _contexto_publicacion(servicio):
     formulario = servicio.formulario
     version_form_activa = formulario.version_activa if formulario else None
     entrada_ok = version_form_activa is not None and version_form_activa.estado == FormularioVersion.Estado.ACTIVA
-    checklist.append(
-        {"ok": entrada_ok, "texto": "Formulario de entrada" if entrada_ok else "Sin formulario con una versión activa"}
-    )
+    es_proceso_publicacion = proceso_ui.aplica(servicio)
+    if es_proceso_publicacion:
+        texto_entrada = "Datos de inicio" if entrada_ok else "Datos de inicio: sin una versión activa"
+    else:
+        texto_entrada = "Formulario de entrada" if entrada_ok else "Sin formulario con una versión activa"
+    checklist.append({"ok": entrada_ok, "texto": texto_entrada})
+    if es_proceso_publicacion:
+        elementos = proceso_ui.tarjetas_formulario(servicio)["elementos"]
+        if elementos["usa"]:
+            checklist.append({
+                "ok": elementos["version"] is not None and elementos["columnas"] > 0,
+                "texto": "Elementos del proceso: columnas activas"
+                if elementos["version"] is not None and elementos["columnas"] > 0
+                else "Elementos del proceso: faltan columnas activas",
+            })
     try:
         validar_publicacion(servicio)
         publicable = True
@@ -1383,8 +1537,23 @@ def _contexto_publicacion(servicio):
     impacto_compartido = []
     if servicio.workflow_id is not None and _version_ejecucion_editable(servicio) is not None:
         impacto_compartido = list(servicios_que_comparten(servicio.workflow, excluir=servicio))
+    # 4.G2E: dónde corregir cada pendiente y, en un Proceso, el resumen de sus piezas.
+    errores_originales = []
+    try:
+        validar_publicacion(servicio)
+    except ValidationError as exc:
+        errores_originales = list(exc.messages)
+    es_proceso = proceso_ui.aplica(servicio)
+    resumen = (
+        proceso_ui.resumen_publicacion(
+            servicio, servicio.configuracion_ejecucion_activa, _configuracion_ejecucion_editable(servicio)
+        )
+        if es_proceso else {"tarjetas": [], "avisos": []}
+    )
     return {
         "impacto_compartido": impacto_compartido,
+        "errores_por_seccion": proceso_ui.errores_por_seccion(servicio, errores_originales, _traducir_error_ejecucion),
+        "resumen_proceso": resumen,
         "checklist": checklist, "errores": errores, "publicable": publicable,
         "concesiones": concesiones, "es_restringido": es_restringido,
         "responsables": responsables, "form_responsable": ResponsableForm(),
@@ -1392,6 +1561,16 @@ def _contexto_publicacion(servicio):
 
 
 # --- Vista principal (GET, dispatch por pestaña) --------------------------
+
+
+def _texto_formulario_seccion(servicio, formulario_ok, version_form):
+    """Estado de la sección Formulario: en un Proceso resume también los elementos (4.G2E)."""
+    texto = f"v{version_form.numero} activa" if formulario_ok else "Requiere version activa"
+    if proceso_ui.aplica(servicio):
+        definicion = definicion_de(servicio)
+        if definicion is not None and definicion.activa:
+            texto += " · elementos activos"
+    return texto
 
 
 def _estado_secciones(servicio):
@@ -1443,7 +1622,7 @@ def _estado_secciones(servicio):
             "clave": "entrada",
             "etiqueta": TAB_LABELS["entrada"],
             "estado": "complete" if formulario_ok else "attention",
-            "texto": f"v{version_form.numero} activa" if formulario_ok else "Requiere version activa",
+            "texto": _texto_formulario_seccion(servicio, formulario_ok, version_form),
         },
         {
             "clave": "salida",
@@ -1481,6 +1660,8 @@ def studio_view(request, pk):
         # 4.G1: un Proceso programado no tiene solicitante; las secciones orientadas a quien solicita
         # (entrega formal, catálogo, búsqueda) no se le muestran.
         "proceso_programado": servicio.tipo == Servicio.Tipo.PROCESO and programacion_activa_de(servicio) is not None,
+        # 4.G2E: la misma estructura de cinco secciones; un Proceso explica cómo se relacionan sus piezas.
+        "es_proceso": proceso_ui.aplica(servicio),
     }
     constructores = {
         "general": _contexto_general,
@@ -1491,6 +1672,9 @@ def studio_view(request, pk):
     }
     if tab == "ejecucion":
         contexto.update(_contexto_ejecucion(servicio, request.GET.get("despues"), request.GET.get("plantilla")))
+    elif tab == "entrada":
+        uso = USO_PARRILLA if request.GET.get("uso") == USO_PARRILLA else USO_ENTRADA
+        contexto.update(_contexto_entrada(servicio, uso))
     else:
         contexto.update(constructores[tab](servicio))
     return render(request, "catalogo/studio.html", contexto)
@@ -1565,6 +1749,59 @@ def studio_tiempo_objetivo_guardar_view(request, pk):
 
 
 @login_required
+def studio_parrilla_configurar_view(request, pk):
+    """4.G2B1 — activa, renombra o desactiva la estructura de elementos de un Proceso (dentro de la
+    pestaña Formulario). Las columnas se editan con el mismo editor de campos (`uso=parrilla`)."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    if not (_puede_catalogo(request.user) and _puede_formulario(request.user)):
+        raise PermissionDenied
+    servicio = get_object_or_404(Servicio, pk=pk)
+    try:
+        if request.POST.get("accion") == "desactivar":
+            desactivar_parrilla(servicio, request.user)
+            messages.success(request, "Los tickets nuevos de este proceso ya no tendrán elementos estructurados.")
+        else:
+            form = ParrillaForm(request.POST)
+            if not form.is_valid():
+                messages.error(request, "Indique cómo se llama cada elemento (hasta 60 caracteres).")
+            else:
+                configurar_parrilla(servicio, request.user, nombre_elemento=form.cleaned_data["nombre_elemento"])
+                messages.success(request, "Elementos estructurados listos: define sus columnas y activa la versión.")
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    return redirect(_volver_entrada(pk, USO_PARRILLA))
+
+
+@login_required
+def studio_parrilla_tareas_view(request, pk):
+    """4.G2D1 — configura (o desactiva) cómo cada elemento del proceso origina una tarea, dentro de la
+    pestaña Formulario › Elementos del proceso. No genera tareas: eso es una operación de dominio."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    if not (_puede_catalogo(request.user) and _puede_formulario(request.user)):
+        raise PermissionDenied
+    servicio = get_object_or_404(Servicio, pk=pk)
+    try:
+        if request.POST.get("accion") == "desactivar":
+            desactivar_tareas_elemento(servicio, request.user)
+            messages.success(request, "Los tickets nuevos de este proceso ya no generarán tareas por elemento.")
+        else:
+            configurar_tareas_elemento(
+                servicio, request.user,
+                clave_titulo=request.POST.get("clave_titulo", ""),
+                clave_descripcion=request.POST.get("clave_descripcion", ""),
+                clave_responsable=request.POST.get("clave_responsable", ""),
+                clave_fecha_limite=request.POST.get("clave_fecha_limite", ""),
+                requiere_evidencia="requiere_evidencia" in request.POST,
+            )
+            messages.success(request, "Tareas por elemento guardadas. Aplican a los tickets que se creen desde ahora.")
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    return redirect(_volver_entrada(pk, USO_PARRILLA))
+
+
+@login_required
 def studio_prorroga_guardar_view(request, pk):
     """4.A2 — política de prórroga, dentro de la pestaña Básico."""
     if request.method != "POST":
@@ -1593,18 +1830,24 @@ def studio_prorroga_guardar_view(request, pk):
 
 
 @login_required
-def studio_entrada_version_view(request, pk):
+def studio_entrada_version_view(request, pk, uso=USO_ENTRADA):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     if not (_puede_catalogo(request.user) and _puede_formulario(request.user)):
         raise PermissionDenied
     servicio = get_object_or_404(Servicio, pk=pk)
     try:
-        if servicio.formulario_id is None:
+        if uso == USO_PARRILLA:
+            formulario = _formulario_de_uso(servicio, uso)
+            if formulario is None:
+                messages.error(request, "Este proceso todavía no usa elementos estructurados.")
+                return redirect(_volver_entrada(pk, uso))
+            crear_nueva_version(formulario, request.user)
+        elif servicio.formulario_id is None:
             form = FormularioForm(request.POST)
             if not form.is_valid():
                 messages.error(request, "Indique un nombre para el formulario.")
-                return redirect(_volver(pk, "entrada"))
+                return redirect(_volver_entrada(pk, uso))
             asociar_formulario_nuevo(
                 servicio, request.user, nombre=form.cleaned_data["nombre"],
                 descripcion=form.cleaned_data.get("descripcion", ""),
@@ -1615,43 +1858,56 @@ def studio_entrada_version_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Entrada lista para editar.")
-    return redirect(_volver(pk, "entrada"))
+    return redirect(_volver_entrada(pk, uso))
 
 
 @login_required
-def studio_entrada_activar_view(request, pk, version_id):
+def studio_entrada_activar_view(request, pk, version_id, uso=USO_ENTRADA):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     if not (_puede_catalogo(request.user) and _puede_formulario(request.user)):
         raise PermissionDenied
     servicio = get_object_or_404(Servicio, pk=pk)
-    version = get_object_or_404(FormularioVersion, pk=version_id, formulario=servicio.formulario)
+    formulario = _formulario_de_uso(servicio, uso)
+    if formulario is None:
+        raise Http404
+    version = get_object_or_404(FormularioVersion, pk=version_id, formulario=formulario)
     try:
-        activar_version(servicio.formulario, version, request.user)
+        if uso == USO_PARRILLA:
+            # 4.G2C1: la nueva versión no puede quitar columnas que un entregable de revisión necesita.
+            errores = errores_de_version_de_columnas(servicio, version) + errores_de_version_para_tareas(
+                servicio, version
+            )
+            if errores:
+                raise ValueError(" ".join(errores))
+        activar_version(formulario, version, request.user)
     except ValueError as exc:
         messages.error(request, str(exc))
     else:
         messages.success(request, "Formulario activado.")
-    return redirect(_volver(pk, "entrada"))
+    return redirect(_volver_entrada(pk, uso))
 
 
 @login_required
-def studio_campo_guardar_view(request, pk, campo_id=None):
+def studio_campo_guardar_view(request, pk, campo_id=None, uso=USO_ENTRADA):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     if not (_puede_catalogo(request.user) and _puede_formulario(request.user)):
         raise PermissionDenied
     servicio = get_object_or_404(Servicio, pk=pk)
-    version = _version_entrada_editable(servicio)
+    version = _version_entrada_editable(servicio, uso)
     if version is None:
         messages.error(request, "No hay un borrador de entrada editable.")
-        return redirect(_volver(pk, "entrada"))
+        return redirect(_volver_entrada(pk, uso))
     instancia = get_object_or_404(Campo, pk=campo_id, version=version) if campo_id is not None else None
     prefix = f"campo-{campo_id}-editar" if campo_id is not None else "campo-nuevo"
     form = CampoForm(request.POST, instance=instancia, prefix=prefix)
     if not form.is_valid():
         messages.error(request, "Revise los datos del campo.")
-        return redirect(_volver(pk, "entrada"))
+        return redirect(_volver_entrada(pk, uso))
+    if uso == USO_PARRILLA and form.cleaned_data["tipo"] == Campo.TipoCampo.ARCHIVO:
+        messages.error(request, "Los campos de tipo archivo todavía no se admiten en los elementos.")
+        return redirect(_volver_entrada(pk, uso))
     campo = form.save(commit=False)
     campo.version = version
     campo.configuracion = form.configuracion_desde_tipo(form.cleaned_data["tipo"])
@@ -1659,23 +1915,23 @@ def studio_campo_guardar_view(request, pk, campo_id=None):
         campo.full_clean()
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
-        return redirect(_volver(pk, "entrada"))
+        return redirect(_volver_entrada(pk, uso))
     campo.save()
     messages.success(request, "Campo guardado.")
-    return redirect(_volver(pk, "entrada"))
+    return redirect(_volver_entrada(pk, uso))
 
 
 @login_required
-def studio_campo_eliminar_view(request, pk, campo_id):
+def studio_campo_eliminar_view(request, pk, campo_id, uso=USO_ENTRADA):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     if not (_puede_catalogo(request.user) and _puede_formulario(request.user)):
         raise PermissionDenied
     servicio = get_object_or_404(Servicio, pk=pk)
-    version = _version_entrada_editable(servicio)
+    version = _version_entrada_editable(servicio, uso)
     if version is None:
         messages.error(request, "No hay un borrador de entrada editable.")
-        return redirect(_volver(pk, "entrada"))
+        return redirect(_volver_entrada(pk, uso))
     campo = get_object_or_404(Campo, pk=campo_id, version=version)
     try:
         campo.delete()
@@ -1683,55 +1939,55 @@ def studio_campo_eliminar_view(request, pk, campo_id):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Campo eliminado.")
-    return redirect(_volver(pk, "entrada"))
+    return redirect(_volver_entrada(pk, uso))
 
 
 @login_required
-def studio_opcion_guardar_view(request, pk, campo_id, opcion_id=None):
+def studio_opcion_guardar_view(request, pk, campo_id, opcion_id=None, uso=USO_ENTRADA):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     if not (_puede_catalogo(request.user) and _puede_formulario(request.user)):
         raise PermissionDenied
     servicio = get_object_or_404(Servicio, pk=pk)
-    version = _version_entrada_editable(servicio)
+    version = _version_entrada_editable(servicio, uso)
     if version is None:
         messages.error(request, "No hay un borrador de entrada editable.")
-        return redirect(_volver(pk, "entrada"))
+        return redirect(_volver_entrada(pk, uso))
     campo = get_object_or_404(Campo, pk=campo_id, version=version)
     instancia = get_object_or_404(OpcionCampo, pk=opcion_id, campo=campo) if opcion_id is not None else None
     prefix = f"campo-{campo_id}-opcion-{opcion_id}" if opcion_id is not None else f"campo-{campo_id}-opcion-nueva"
     form = OpcionCampoForm(request.POST, instance=instancia, prefix=prefix)
     if not form.is_valid():
         messages.error(request, "Revise los datos de la opción.")
-        return redirect(_volver(pk, "entrada"))
+        return redirect(_volver_entrada(pk, uso))
     opcion = form.save(commit=False)
     opcion.campo = campo
     try:
         opcion.full_clean()
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
-        return redirect(_volver(pk, "entrada"))
+        return redirect(_volver_entrada(pk, uso))
     opcion.save()
     messages.success(request, "Opción guardada.")
-    return redirect(_volver(pk, "entrada"))
+    return redirect(_volver_entrada(pk, uso))
 
 
 @login_required
-def studio_opcion_eliminar_view(request, pk, campo_id, opcion_id):
+def studio_opcion_eliminar_view(request, pk, campo_id, opcion_id, uso=USO_ENTRADA):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
     if not (_puede_catalogo(request.user) and _puede_formulario(request.user)):
         raise PermissionDenied
     servicio = get_object_or_404(Servicio, pk=pk)
-    version = _version_entrada_editable(servicio)
+    version = _version_entrada_editable(servicio, uso)
     if version is None:
         messages.error(request, "No hay un borrador de entrada editable.")
-        return redirect(_volver(pk, "entrada"))
+        return redirect(_volver_entrada(pk, uso))
     campo = get_object_or_404(Campo, pk=campo_id, version=version)
     opcion = get_object_or_404(OpcionCampo, pk=opcion_id, campo=campo)
     opcion.delete()
     messages.success(request, "Opción eliminada.")
-    return redirect(_volver(pk, "entrada"))
+    return redirect(_volver_entrada(pk, uso))
 
 
 @login_required
@@ -2480,7 +2736,7 @@ def studio_entregable_guardar_view(request, pk, definicion_id=None):
     servicio = get_object_or_404(Servicio, pk=pk)
     definicion = get_object_or_404(DefinicionEntregable, pk=definicion_id, servicio=servicio) if definicion_id is not None else None
     prefix = f"entregable-{definicion_id}-editar" if definicion_id is not None else "entregable-nuevo"
-    form = DefinicionEntregableForm(request.POST, prefix=prefix)
+    form = DefinicionEntregableForm(request.POST, prefix=prefix, servicio=servicio)
     if not form.is_valid():
         messages.error(request, "Revise los datos del entregable.")
         return redirect(_volver(pk, "salida"))
@@ -2489,6 +2745,9 @@ def studio_entregable_guardar_view(request, pk, definicion_id=None):
             servicio, request.user, definicion=definicion, nombre=form.cleaned_data["nombre"],
             descripcion=form.cleaned_data.get("descripcion", ""), tipo=form.cleaned_data["tipo"],
             obligatorio=form.cleaned_data.get("obligatorio", False), orden=form.cleaned_data.get("orden", 0),
+            columnas_revisadas=form.cleaned_data.get("columnas_revisadas"),
+            revisores_usuarios=form.cleaned_data.get("revisores_usuarios"),
+            revisores_equipos=form.cleaned_data.get("revisores_equipos"),
         )
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
@@ -2645,6 +2904,12 @@ def studio_visibilidad_retirar_view(request, pk, concesion_id):
     return redirect(_volver(pk, "general"))
 
 
+def _tab_de_origen(request):
+    """Sección del Studio desde la que se envió el formulario (Básico en un Proceso, Publicar por defecto)."""
+    tab = request.POST.get("tab")
+    return tab if tab in ("general", "publicacion") else "publicacion"
+
+
 @login_required
 def studio_responsable_agregar_view(request, pk):
     if request.method != "POST":
@@ -2652,10 +2917,11 @@ def studio_responsable_agregar_view(request, pk):
     if not _puede_catalogo(request.user):
         raise PermissionDenied
     servicio = get_object_or_404(Servicio, pk=pk)
+    tab = _tab_de_origen(request)
     form = ResponsableForm(request.POST)
     if not form.is_valid():
         messages.error(request, "; ".join(e for errores in form.errors.values() for e in errores))
-        return redirect(_volver(pk, "publicacion"))
+        return redirect(_volver(pk, tab))
     datos = form.cleaned_data
     try:
         agregar_responsable(
@@ -2666,7 +2932,7 @@ def studio_responsable_agregar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Responsable agregado.")
-    return redirect(_volver(pk, "publicacion"))
+    return redirect(_volver(pk, tab))
 
 
 @login_required
@@ -2679,7 +2945,7 @@ def studio_responsable_retirar_view(request, pk, responsable_id):
     responsable = get_object_or_404(ServicioResponsable, pk=responsable_id, servicio=servicio)
     retirar_responsable(responsable, request.user)
     messages.success(request, "Responsable retirado.")
-    return redirect(_volver(pk, "publicacion"))
+    return redirect(_volver(pk, _tab_de_origen(request)))
 
 
 @login_required

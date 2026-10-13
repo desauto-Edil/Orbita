@@ -23,7 +23,8 @@
       <p class="work-detail__badges">
         <span class="badge badge--dot
           {% if tarea.estado == 'COMPLETADA' %}badge--success
-          {% elif tarea.estado == 'EN_PROGRESO' %}badge--info
+          {% elif tarea.estado == 'CANCELADA' %}badge--danger
+              {% elif tarea.estado == 'EN_PROGRESO' %}badge--info
           {% else %}badge--warning{% endif %}">{{ tarea.get_estado_display }}</span>
         {% if vencida %}<span class="badge badge--danger">Vencida</span>{% endif %}
       </p>
@@ -57,6 +58,9 @@
         {% endif %}
       </div>
     {% endif %}
+    {% if tarea.requiere_evidencia and tarea.estado != "COMPLETADA" and tarea.estado != "CANCELADA" %}
+      <p class="text-muted">Esta tarea exige al menos una evidencia adjunta para poder completarse.</p>
+    {% endif %}
   </header>
 
   <div class="work-detail">
@@ -79,7 +83,8 @@
                 <a href="{% url 'tareas:detalle' subtarea.pk %}">{{ subtarea.titulo }}</a>
                 <span class="badge
                   {% if subtarea.estado == 'COMPLETADA' %}badge--success
-                  {% elif subtarea.estado == 'EN_PROGRESO' %}badge--info
+                  {% elif subtarea.estado == 'CANCELADA' %}badge--danger
+              {% elif subtarea.estado == 'EN_PROGRESO' %}badge--info
                   {% else %}badge--warning{% endif %}">{{ subtarea.get_estado_display }}</span>
               </li>
             {% empty %}

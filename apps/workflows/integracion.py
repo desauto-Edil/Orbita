@@ -17,10 +17,18 @@ Aprobación decidida pero Workflow no avanzó" queda estructuralmente
 imposible (todo o nada). Sin `signals`, sin Domain Events/Observer todavía
 (ese patrón está atado a Sprint 7 en `CLAUDE.md`, no se adelanta aquí)."""
 
-from django.db import transaction
+from dataclasses import dataclass
 
-from apps.aprobaciones.operaciones import resolver_aprobacion
-from apps.tareas.operaciones import asignar_por_flujo, completar_tarea
+from django.core.exceptions import PermissionDenied, ValidationError
+from django.db import transaction
+from django.db.models import Q
+
+from apps.aprobaciones.models import Aprobacion, EsquemaAprobacion
+from apps.aprobaciones.operaciones import anular_esquema_aprobacion, resolver_aprobacion
+from apps.core.auditoria import registrar_evento
+from apps.core.models import RegistroAuditoria
+from apps.tareas.models import Tarea
+from apps.tareas.operaciones import asignar_por_flujo, cancelar_tarea, completar_tarea
 from apps.workflows.models import EsquemaAprobacionWorkflow, InstanciaEtapa, InstanciaWorkflow, TareaWorkflow
 from apps.workflows.motor import continuar_espera_externa
 
@@ -39,6 +47,12 @@ def completar_tarea_workflow(tarea, actor):
     Tarea, W.6: "solo completar la Tarea principal vinculada al Workflow
     puede producir continuación")."""
     vinculo = TareaWorkflow.objects.filter(tarea=tarea).select_related("instancia_etapa").first()
+    if vinculo is None and hasattr(tarea, "vinculo_elemento"):
+        # 4.G2D2: una Tarea generada por un elemento no tiene su propio bloque; si es la última del conjunto,
+        # libera el bloque TAREAS_ELEMENTOS.
+        tarea_completada = completar_tarea(tarea, actor)
+        continuar_por_tareas_elementos(tarea_completada)
+        return tarea_completada
     if vinculo is None:
         raise ValueError(
             "Esta tarea no está vinculada a ningún Workflow — use "
@@ -48,6 +62,149 @@ def completar_tarea_workflow(tarea, actor):
     tarea_completada = completar_tarea(tarea, actor)
     continuar_espera_externa(vinculo.instancia_etapa, motivo_espera=InstanciaEtapa.MotivoEspera.TAREA)
     return tarea_completada
+
+
+@transaction.atomic
+def continuar_por_tareas_elementos(tarea):
+    """4.G2D2 — libera un bloque TAREAS_ELEMENTOS cuando se completó la ÚLTIMA Tarea generada por los
+    elementos del Ticket. Lo invoca `completar_tarea_workflow` en la misma transacción que completa la Tarea.
+
+    Devuelve `True` si continuó el Workflow y `False` si no había nada que continuar. Es IDEMPOTENTE: bajo
+    el lock de la instancia (orden de locks Tarea → instancia → Ticket, el de siempre) vuelve a evaluar el
+    conjunto y solo continúa si la ejecución vigente sigue EN_ESPERA por ELEMENTOS y ya no queda ninguna
+    Tarea abierta; un segundo aviso (reintento, otra tarea completada a la vez) ya no encuentra esa espera.
+    Una instancia CANCELADA (o ya terminada) no es EN_ESPERA, así que una finalización tardía no la
+    reactiva. Publica `tareas_elementos.<clave>.completadas|total` y sigue por la ruta del bloque."""
+    from apps.tickets import tareas_elemento
+
+    ticket = tareas_elemento.ticket_de(tarea)
+    if ticket is None or ticket.instancia_workflow_id is None:
+        return False
+    instancia = InstanciaWorkflow.objects.select_for_update().get(pk=ticket.instancia_workflow_id)
+    if instancia.estado != InstanciaWorkflow.Estado.EN_ESPERA:
+        return False
+    ejecucion = instancia.ejecuciones_etapa.select_related("bloque_operativo").order_by("-orden").first()
+    if (
+        ejecucion is None
+        or ejecucion.estado != InstanciaEtapa.Estado.EN_ESPERA
+        or ejecucion.motivo_espera != InstanciaEtapa.MotivoEspera.ELEMENTOS
+        or ejecucion.bloque_operativo is None
+    ):
+        return False
+    if tareas_elemento.correccion_pendiente(ejecucion):
+        # 4.G2E: el bloque espera que se corrija información y se reintente la generación; completar una
+        # tarea ya existente no lo libera (aún faltan las de los elementos que no se pudieron generar).
+        return False
+    progreso = tareas_elemento.progreso_de(ticket)
+    if progreso.abiertas:
+        return False
+    datos = {"total": progreso.total, "completadas": progreso.completadas}
+    continuar_espera_externa(
+        ejecucion,
+        motivo_espera=InstanciaEtapa.MotivoEspera.ELEMENTOS,
+        resultado_bloque=("tareas_elementos", datos),
+        resultado_ejecucion=datos,
+    )
+    return True
+
+
+@dataclass(frozen=True)
+class ResultadoReintento:
+    """Qué pasó con un reintento explícito de la generación de tareas por elemento (4.G2E).
+
+    - `aplicado=False` y sin `mensajes`: no había nada que reintentar (ya se corrigió, o el flujo no espera
+      una corrección): idempotente, sin efectos.
+    - `aplicado=True` y `mensajes`: la información sigue incompleta; el bloque sigue esperando y `mensajes`
+      dice qué corregir.
+    - `aplicado=True`, sin `mensajes`: se generaron las tareas; `continuo` indica si además el flujo
+      avanzó (cuando no quedó ninguna tarea abierta)."""
+
+    aplicado: bool = False
+    mensajes: tuple = ()
+    continuo: bool = False
+    generadas: int = 0
+
+
+@transaction.atomic
+def reintentar_tareas_elementos(ticket, actor):
+    """4.G2E — reintento EXPLÍCITO de la generación de tareas de un bloque TAREAS_ELEMENTOS que quedó
+    esperando una corrección de información. Nada lo dispara solo ni lo repite indefinidamente.
+
+    Autoriza quien edita los elementos (`puede_editar_parrilla`: responsable individual en atención).
+    Orden de locks: instancia → Ticket → parrilla (el del motor). Revalida bajo lock:
+
+    - una instancia CANCELADA (o el Ticket cancelado) se rechaza: nunca se reactiva;
+    - si la ejecución vigente ya no espera una corrección (otro reintento la resolvió, o el flujo avanzó)
+      no hace nada (idempotente);
+    - si la información sigue incompleta, conserva el Ticket, la instancia y la espera, y devuelve qué
+      corregir; no genera ninguna tarea (la materialización es atómica);
+    - si ya es válida genera las tareas que falten (asociadas a esta ejecución, sin duplicar) y, si no
+      queda ninguna abierta, continúa por el motor.
+    """
+    from apps.tickets import tareas_elemento
+    from apps.tickets.autorizacion import puede_editar_parrilla
+    from apps.tickets.models import Ticket
+    from apps.workflows.contexto import registrar_resultado_etapa
+
+    if ticket.instancia_workflow_id is None:
+        raise ValidationError("Este ticket no tiene un flujo de trabajo en curso.")
+    instancia = InstanciaWorkflow.objects.select_for_update().get(pk=ticket.instancia_workflow_id)
+    ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    if instancia.estado == InstanciaWorkflow.Estado.CANCELADA or ticket.estado == Ticket.Estado.CANCELADO:
+        raise ValidationError("Este ticket fue cancelado: su flujo no se reactiva.")
+    if not puede_editar_parrilla(actor, ticket):
+        raise PermissionDenied("Solo quien atiende el ticket puede reintentar la generación de tareas.")
+    if instancia.estado != InstanciaWorkflow.Estado.EN_ESPERA:
+        return ResultadoReintento()
+    # La fila de la instancia ya está bloqueada: nadie más avanza esta ejecución mientras tanto.
+    ejecucion = instancia.ejecuciones_etapa.select_related("bloque_operativo").order_by("-orden").first()
+    if (
+        ejecucion is None
+        or ejecucion.estado != InstanciaEtapa.Estado.EN_ESPERA
+        or ejecucion.motivo_espera != InstanciaEtapa.MotivoEspera.ELEMENTOS
+        or ejecucion.bloque_operativo is None
+        or ejecucion.bloque_operativo.tipo != "TAREAS_ELEMENTOS"
+    ):
+        return ResultadoReintento()
+    anterior = tareas_elemento.correccion_pendiente(ejecucion)
+    if not anterior:
+        return ResultadoReintento()
+
+    antes = tareas_elemento.progreso_de(ticket).total
+    try:
+        progreso = tareas_elemento.entrar_al_bloque(ticket, ejecucion)
+    except ValidationError as exc:
+        resultado = {
+            **tareas_elemento.datos_de_correccion(
+                ticket, exc.messages, reintentos=int(anterior.get("reintentos", 0)) + 1
+            ),
+        }
+        ejecucion.resultado = resultado
+        ejecucion.save(update_fields=["resultado", "actualizado_en"])
+        registrar_resultado_etapa(instancia.contexto, ejecucion.bloque_operativo.pk, resultado)
+        instancia.save(update_fields=["contexto", "actualizado_en"])
+        return ResultadoReintento(aplicado=True, mensajes=tuple(exc.messages))
+
+    datos = {"total": progreso.total, "completadas": progreso.completadas}
+    ejecucion.resultado = datos
+    ejecucion.save(update_fields=["resultado", "actualizado_en"])
+    registrar_resultado_etapa(instancia.contexto, ejecucion.bloque_operativo.pk, datos)
+    instancia.save(update_fields=["contexto", "actualizado_en"])
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=ejecucion,
+        origen=RegistroAuditoria.Origen.USUARIO, usuario=actor,
+        datos_anteriores={"correccion": anterior}, datos_nuevos={**datos, "tareas_generadas": progreso.total - antes},
+    )
+    continuo = False
+    if not progreso.abiertas:
+        continuar_espera_externa(
+            ejecucion,
+            motivo_espera=InstanciaEtapa.MotivoEspera.ELEMENTOS,
+            resultado_bloque=("tareas_elementos", datos),
+            resultado_ejecucion=datos,
+        )
+        continuo = True
+    return ResultadoReintento(aplicado=True, continuo=continuo, generadas=progreso.total - antes)
 
 
 @transaction.atomic
@@ -64,9 +221,11 @@ def entregar_tareas_pendientes_al_responsable(ticket, actor):
         TareaWorkflow.objects.filter(
             instancia_etapa__instancia_workflow_id=ticket.instancia_workflow_id,
             instancia_etapa__estado=InstanciaEtapa.Estado.EN_ESPERA,
+            instancia_etapa__instancia_workflow__estado=InstanciaWorkflow.Estado.EN_ESPERA,
             tarea__usuario_responsable__isnull=True,
             tarea__equipo_responsable__isnull=True,
         )
+        .exclude(tarea__estado__in=Tarea.ESTADOS_CERRADOS)
         .select_related("tarea", "instancia_etapa__bloque_operativo", "instancia_etapa__etapa")
     )
     for vinculo in vinculos:
@@ -179,3 +338,69 @@ def continuar_por_entregable(entregable):
         resultado_bloque=("entregables", {"satisfecho": True}),
     )
     return True
+
+
+# --- 4.G1.5 — Cancelación coherente de la ejecución ------------------------------------------------
+
+
+def bloquear_ejecucion(instancia_id):
+    """Toma los locks de una ejecución COMPLETA antes de cancelarla, en el mismo orden en que ya los
+    toman los caminos que la mueven: las Tareas y las aprobaciones (completar una Tarea y decidir una
+    aprobación bloquean primero su propia fila) y DESPUÉS la instancia (`continuar_espera_externa`); el
+    Ticket va a continuación, como en el motor (instancia → ticket). Así una finalización o decisión tardía
+    simultánea espera a la cancelación (y luego no encuentra nada que hacer) en lugar de cruzarse con ella.
+    Devuelve la `InstanciaWorkflow` bloqueada. Debe llamarse dentro de una transacción."""
+    tareas_ids = list(
+        TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow_id=instancia_id).values_list("tarea_id", flat=True)
+    )
+    if tareas_ids:
+        list(
+            Tarea.objects.select_for_update().filter(Q(pk__in=tareas_ids) | Q(tarea_padre_id__in=tareas_ids)).order_by("pk")
+        )
+    esquemas_ids = list(
+        EsquemaAprobacionWorkflow.objects.filter(instancia_etapa__instancia_workflow_id=instancia_id).values_list(
+            "esquema_id", flat=True
+        )
+    )
+    if esquemas_ids:
+        list(EsquemaAprobacion.objects.select_for_update().filter(pk__in=esquemas_ids).order_by("pk"))
+        list(Aprobacion.objects.select_for_update().filter(esquema_id__in=esquemas_ids).order_by("pk"))
+    return InstanciaWorkflow.objects.select_for_update().get(pk=instancia_id)
+
+
+@transaction.atomic
+def cancelar_ejecucion(instancia, actor, *, motivo=""):
+    """Detiene la ejecución de un Ticket cancelado y todo el trabajo que ella creó.
+
+    - La `InstanciaWorkflow` pasa a CANCELADA (terminal): el motor ya no avanza, reanuda ni continúa una
+      espera sobre ella, así que ningún aviso tardío (tarea, aprobación, entregable, Celery) la reactiva.
+      Una ejecución ya COMPLETADA o CANCELADA no se toca. Las ejecuciones de etapa, sus resultados y las
+      decisiones previas se conservan: nada se elimina ni se reinicia.
+    - Las Tareas del flujo que siguen abiertas (y sus subtareas) pasan a CANCELADA; las COMPLETADAS se conservan.
+    - Los esquemas de aprobación sin resultado retiran sus aprobaciones PENDIENTE (`anular_esquema_aprobacion`,
+      el mecanismo existente); las ya decididas se conservan.
+
+    Solo alcanza lo vinculado a ESTA instancia (`TareaWorkflow`, `EsquemaAprobacionWorkflow`): las tareas y
+    aprobaciones independientes u de otros Tickets no se tocan. Idempotente. `actor` es quien cancela el Ticket."""
+    instancia = bloquear_ejecucion(instancia.pk)
+    if instancia.estado in (InstanciaWorkflow.Estado.COMPLETADA, InstanciaWorkflow.Estado.CANCELADA):
+        return instancia
+
+    for vinculo in TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow=instancia).select_related("tarea").order_by("pk"):
+        cancelar_tarea(vinculo.tarea, actor, motivo=motivo)
+    for vinculo in (
+        EsquemaAprobacionWorkflow.objects.filter(instancia_etapa__instancia_workflow=instancia)
+        .select_related("esquema").order_by("pk")
+    ):
+        if vinculo.esquema.resultado is None:
+            anular_esquema_aprobacion(vinculo.esquema, actor)
+
+    estado_anterior = instancia.estado
+    instancia.estado = InstanciaWorkflow.Estado.CANCELADA
+    instancia.save(update_fields=["estado", "actualizado_en"])
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=instancia, origen=RegistroAuditoria.Origen.USUARIO,
+        usuario=actor, datos_anteriores={"estado": estado_anterior},
+        datos_nuevos={"estado": instancia.estado, "motivo": (motivo or "").strip()},
+    )
+    return instancia

@@ -2862,3 +2862,78 @@ class ConfiguracionEquiposDeUsuarioTests(TestCase):
         self.assertEqual(self._ficha({"accion": "equipo_quitar", "membresia": ajena.pk}).status_code, 404)
         ajena.refresh_from_db()
         self.assertTrue(ajena.activo)
+
+
+class ConfiguracionEquiposTests(TestCase):
+    """CU-006 — los equipos se administran en Configuración › Áreas con `organizacion.administrar`,
+    sobre los modelos de Sprint 0 (`Equipo`, `EquipoArea`, `EquipoUnidadNegocio`, `MiembroEquipo`)."""
+
+    def setUp(self):
+        self.admin = Usuario.objects.create_user(username="org_admin", password=CLAVE_PRUEBA)
+        _otorgar_permiso_nav(self.admin, "organizacion.administrar")
+        self.client.login(username="org_admin", password=CLAVE_PRUEBA)
+        self.area = Area.objects.create(nombre="Área Equipos", codigo="AEQ")
+        self.unidad = UnidadNegocio.objects.create(nombre="Unidad Equipos", codigo="UEQ")
+        self.ana = Usuario.objects.create_user(username="eq_ana", password=CLAVE_PRUEBA)
+        self.beto = Usuario.objects.create_user(username="eq_beto", password=CLAVE_PRUEBA)
+
+    def _guardar(self, equipo=None, **datos):
+        url = reverse("core:configuracion_equipo", args=[equipo.pk]) if equipo else reverse("core:configuracion_equipo_crear")
+        return self.client.post(url, {"nombre": "Soporte", "descripcion": "", "activo": "on", **datos})
+
+    def test_la_pestana_areas_lista_los_equipos(self):
+        Equipo.objects.create(nombre="Equipo Listado")
+        respuesta = self.client.get(reverse("core:configuracion_areas"))
+        self.assertContains(respuesta, "Equipo Listado")
+        self.assertContains(respuesta, reverse("core:configuracion_equipo_crear"))
+        self.assertNotContains(self.client.get(reverse("core:configuracion_unidades")), "Equipo Listado")
+
+    def test_crear_equipo_con_areas_unidades_y_miembros_y_auditarlo(self):
+        respuesta = self._guardar(areas=[self.area.pk], unidades=[self.unidad.pk], miembros=[self.ana.pk])
+        self.assertRedirects(respuesta, reverse("core:configuracion_areas"))
+        equipo = Equipo.objects.get(nombre="Soporte")
+        self.assertTrue(EquipoArea.objects.filter(equipo=equipo, area=self.area, activo=True).exists())
+        self.assertTrue(EquipoUnidadNegocio.objects.filter(equipo=equipo, unidad_negocio=self.unidad, activo=True).exists())
+        miembro = MiembroEquipo.objects.get(equipo=equipo, usuario=self.ana)
+        self.assertTrue(miembro.activo)
+        for instancia in (equipo, miembro):
+            self.assertTrue(
+                RegistroAuditoria.objects.filter(
+                    content_type=ContentType.objects.get_for_model(type(instancia)), object_id=instancia.pk,
+                    usuario=self.admin,
+                ).exists()
+            )
+
+    def test_editar_retira_sin_borrar_y_un_reingreso_abre_otra_membresia(self):
+        self._guardar(areas=[self.area.pk], miembros=[self.ana.pk, self.beto.pk])
+        equipo = Equipo.objects.get(nombre="Soporte")
+        self._guardar(equipo, miembros=[self.beto.pk])
+        retirada = MiembroEquipo.objects.get(equipo=equipo, usuario=self.ana)
+        self.assertFalse(retirada.activo)
+        self.assertIsNotNone(retirada.fecha_fin)
+        self.assertFalse(EquipoArea.objects.get(equipo=equipo, area=self.area).activo)
+        self.assertEqual(MiembroEquipo.objects.filter(equipo=equipo, usuario=self.beto).count(), 1)
+        self._guardar(equipo, miembros=[self.ana.pk, self.beto.pk])
+        self.assertEqual(MiembroEquipo.objects.filter(equipo=equipo, usuario=self.ana).count(), 2)
+        self.assertEqual(MiembroEquipo.objects.filter(equipo=equipo, usuario=self.ana, activo=True).count(), 1)
+
+    def test_retirar_un_equipo_es_desactivarlo(self):
+        equipo = Equipo.objects.create(nombre="Soporte")
+        self.client.post(reverse("core:configuracion_equipo", args=[equipo.pk]), {"nombre": "Soporte", "descripcion": ""})
+        equipo.refresh_from_db()
+        self.assertFalse(equipo.activo)
+
+    def test_nombre_repetido_se_rechaza(self):
+        Equipo.objects.create(nombre="soporte")
+        respuesta = self._guardar()
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertContains(respuesta, "Ya existe un equipo con ese nombre.")
+        self.assertEqual(Equipo.objects.count(), 1)
+
+    def test_sin_organizacion_administrar_no_entra(self):
+        otro = Usuario.objects.create_user(username="eq_sin_permiso", password=CLAVE_PRUEBA)
+        _otorgar_permiso_nav(otro, "usuarios.administrar")
+        self.client.login(username="eq_sin_permiso", password=CLAVE_PRUEBA)
+        self.assertEqual(self.client.get(reverse("core:configuracion_equipo_crear")).status_code, 403)
+        self.assertEqual(self._guardar().status_code, 403)
+        self.assertFalse(Equipo.objects.exists())

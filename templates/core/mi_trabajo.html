@@ -52,6 +52,7 @@
       <a class="segmented__item" href="{% url 'core:mi_trabajo' %}?tab=todo"{% if tab == "todo" %} aria-current="page"{% endif %}>Todo <span class="work-count">{{ total }}</span></a>
       <a class="segmented__item" href="{% url 'core:mi_trabajo' %}?tab=tareas"{% if tab == "tareas" %} aria-current="page"{% endif %}>Tareas <span class="work-count">{{ total_tareas }}</span></a>
       <a class="segmented__item" href="{% url 'core:mi_trabajo' %}?tab=aprobaciones"{% if tab == "aprobaciones" %} aria-current="page"{% endif %}>Aprobaciones <span class="work-count">{{ total_aprobaciones }}</span></a>
+      {% if total_revisiones or tab == "revisiones" %}<a class="segmented__item" href="{% url 'core:mi_trabajo' %}?tab=revisiones"{% if tab == "revisiones" %} aria-current="page"{% endif %}>Revisiones <span class="work-count">{{ total_revisiones }}</span></a>{% endif %}
     </nav>
     <span class="work-toolbar__links">
       <a href="{% url 'tareas:lista' %}">Ver todas las tareas</a>
@@ -65,12 +66,12 @@
         <ul class="work-list" aria-label="Trabajo pendiente">
           {% for fila in filas %}
             <li>
-              <a class="work-row work-row--compact" href="{{ fila.url }}" data-vista="{{ fila.vista_url }}">
+              <a class="work-row work-row--compact" href="{{ fila.url }}"{% if fila.vista_url %} data-vista="{{ fila.vista_url }}"{% endif %}>
                 <span class="work-row__kind" aria-hidden="true">{% if fila.tipo == "tarea" %}{% include "components/icon.html" with name="trabajo" size="sm" %}{% else %}{% include "components/icon.html" with name="check-circle" size="sm" %}{% endif %}</span>
                 <span class="work-row__main">
                   <span class="work-row__title">{{ fila.titulo }}</span>
                   <span class="work-row__meta">
-                    {% if fila.tipo == "tarea" %}Tarea{% else %}Aprobación{% endif %}{% if fila.por_tomar %} · disponible para tomar{% endif %}{% if fila.fecha_relevante %} · {% if fila.vencida %}<span class="work-row__late">venció el {{ fila.fecha_relevante|date:"j M" }}</span>{% else %}vence el {{ fila.fecha_relevante|date:"j M, H:i" }}{% endif %}{% endif %}
+                    {% if fila.tipo == "tarea" %}Tarea{% elif fila.tipo == "revision" %}Revisión de elementos · {{ fila.detalle }}{% if fila.pendientes %} · {{ fila.pendientes }} pendiente{{ fila.pendientes|pluralize }}{% endif %}{% if fila.devueltos %} · {{ fila.devueltos }} devuelto{{ fila.devueltos|pluralize }}{% endif %}{% else %}Aprobación{% endif %}{% if fila.por_tomar %} · disponible para tomar{% endif %}{% if fila.fecha_relevante %} · {% if fila.vencida %}<span class="work-row__late">venció el {{ fila.fecha_relevante|date:"j M" }}</span>{% else %}vence el {{ fila.fecha_relevante|date:"j M, H:i" }}{% endif %}{% endif %}
                   </span>
                 </span>
                 <span class="work-row__state"><span class="work-dot work-dot--{{ fila.estado_clase|default:'neutral' }}" aria-hidden="true"></span>{{ fila.estado }}</span>
@@ -95,6 +96,7 @@
       <p>
         {% if tab == "tareas" %}No tienes tareas pendientes.
         {% elif tab == "aprobaciones" %}No tienes aprobaciones pendientes.
+        {% elif tab == "revisiones" %}No tienes revisiones pendientes.
         {% else %}No tienes trabajo pendiente.{% endif %}
       </p>
     </div>

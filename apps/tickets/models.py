@@ -60,6 +60,7 @@ from django.db import models
 from django.db.models import F, Q, UniqueConstraint
 
 from apps.catalogo.models import Campo, DefinicionEntregable, FormularioVersion, Servicio
+from apps.tareas.models import Tarea
 from apps.core.models import Area, Equipo, RegistroBase, UnidadNegocio
 
 
@@ -1007,7 +1008,31 @@ class EntregableTicket(RegistroBase):
             return self.archivos.filter(retirado_en__isnull=True, tamano_bytes__gt=0).exclude(archivo="").exists()
         if self.tipo == DefinicionEntregable.Tipo.CONFIRMACION:
             return self.confirmado_por_id is not None and self.confirmado_en is not None
+        if self.tipo == DefinicionEntregable.Tipo.ELEMENTOS:
+            # 4.G2C1: agregado del conjunto — sigue siendo ESTE contrato el que consume el flujo.
+            from apps.tickets.revision_elementos import conjunto_satisfecho
+
+            return conjunto_satisfecho(self)
         return False
+
+    @property
+    def resumen_conjunto(self):
+        """Total / aprobados / pendientes / devueltos de un entregable ELEMENTOS (`None` para los
+        demás tipos). Calculado, no guardado."""
+        if self.tipo != DefinicionEntregable.Tipo.ELEMENTOS:
+            return None
+        from apps.tickets.revision_elementos import resumen_conjunto
+
+        return resumen_conjunto(self)
+
+    @property
+    def elementos_a_corregir(self):
+        """Elementos devueltos con su observación (vacío para los demás tipos)."""
+        if self.tipo != DefinicionEntregable.Tipo.ELEMENTOS:
+            return []
+        from apps.tickets.revision_elementos import elementos_a_corregir
+
+        return elementos_a_corregir(self)
 
     def __str__(self):
         return self.nombre
@@ -1340,3 +1365,372 @@ class EjecucionProgramada(RegistroBase):
 
     def __str__(self):
         return f"{self.servicio} — {self.etiqueta}"
+
+
+class ParrillaTicket(RegistroBase):
+    """Estructura de elementos de UN Ticket de Proceso — 4.G2B1.
+
+    Existe solo si el Proceso tenía una `catalogo.DefinicionParrilla` activa al nacer el Ticket (el
+    Proceso que no la usa no genera esta fila). Congela la `FormularioVersion` ACTIVA que define las
+    columnas y el nombre de cada elemento: cambiar después la definición del Proceso no altera este
+    Ticket (misma invariante que `TicketServicio.formulario_version`). Es independiente de
+    `RespuestaFormulario`, que sigue siendo la entrada inicial del Ticket.
+
+    Sigue siendo UN Ticket: los elementos son filas de esta ejecución, no tickets ni flujos."""
+
+    ticket = models.OneToOneField(Ticket, on_delete=models.CASCADE, related_name="parrilla")
+    formulario_version = models.ForeignKey(
+        FormularioVersion, on_delete=models.PROTECT, related_name="parrillas_ticket"
+    )
+    nombre_elemento = models.CharField(max_length=60)
+
+    _CAMPOS_INMUTABLES = ("ticket_id", "formulario_version_id", "nombre_elemento")
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            anterior = type(self).objects.filter(pk=self.pk).values(*self._CAMPOS_INMUTABLES).first()
+            if anterior and any(anterior[campo] != getattr(self, campo) for campo in self._CAMPOS_INMUTABLES):
+                raise ValidationError("La estructura congelada de un ticket no puede modificarse.")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Elementos de {self.ticket}"
+
+
+class ElementoParrilla(RegistroBase):
+    """Una fila de la parrilla de un Ticket — 4.G2B1.
+
+    `numero` es el identificador estable dentro de la parrilla (#1, #2…): se asigna una vez y nunca
+    se reutiliza, ni siquiera tras retirar el elemento. `orden` es la posición. Retirar es LÓGICO
+    (`retirado_en`): un elemento existente no se elimina como operación normal del dominio, así lo
+    que se construya sobre él (revisiones, tareas) conserva su referencia."""
+
+    parrilla = models.ForeignKey(ParrillaTicket, on_delete=models.CASCADE, related_name="elementos")
+    numero = models.PositiveIntegerField()
+    orden = models.PositiveIntegerField()
+    retirado_en = models.DateTimeField(null=True, blank=True, editable=False)
+    retirado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, editable=False, related_name="+"
+    )
+
+    class Meta:
+        ordering = ["orden", "pk"]
+        constraints = [
+            UniqueConstraint(fields=["parrilla", "numero"], name="uq_elementoparrilla_numero"),
+            # Entre los elementos vigentes no hay dos en la misma posición.
+            UniqueConstraint(
+                fields=["parrilla", "orden"], condition=Q(retirado_en__isnull=True),
+                name="uq_elementoparrilla_orden_vigente",
+            ),
+            models.CheckConstraint(
+                condition=Q(retirado_en__isnull=False) | Q(retirado_por__isnull=True),
+                name="ck_elementoparrilla_retiro_coherente",
+            ),
+        ]
+
+    @property
+    def vigente(self):
+        return self.retirado_en is None
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            anterior = type(self).objects.filter(pk=self.pk).values("parrilla_id", "numero").first()
+            if anterior and (anterior["parrilla_id"], anterior["numero"]) != (self.parrilla_id, self.numero):
+                raise ValidationError("La identidad de un elemento no puede modificarse.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Un elemento no se elimina: se retira (queda en el historial del ticket).")
+
+    def __str__(self):
+        return f"#{self.numero} de {self.parrilla}"
+
+
+class ValorElemento(RegistroBase):
+    """Valor de UNA celda: `ElementoParrilla` + `Campo` — 4.G2B1.
+
+    Mismo esquema tipado que `RespuestaCampo` (`COLUMNA_POR_TIPO`: una sola columna poblada según el
+    tipo del campo) pero NO es `RespuestaCampo`: aquellas respuestas son 1:1 con el Ticket y solo se
+    escriben en BORRADOR; estos valores se editan durante toda la ejecución. A lo sumo uno por
+    (elemento, campo), y el campo debe pertenecer a la versión congelada en la parrilla.
+
+    ARCHIVO no está soportado todavía (necesitaría ampliar `Adjunto`): no tiene columna aquí."""
+
+    elemento = models.ForeignKey(ElementoParrilla, on_delete=models.CASCADE, related_name="valores")
+    campo = models.ForeignKey(Campo, on_delete=models.PROTECT, related_name="valores_elemento")
+
+    valor_texto = models.TextField(blank=True, default="")
+    valor_numero = models.DecimalField(max_digits=20, decimal_places=6, null=True, blank=True)
+    valor_fecha = models.DateField(null=True, blank=True)
+    valor_fecha_hora = models.DateTimeField(null=True, blank=True)
+    valor_booleano = models.BooleanField(null=True, blank=True)
+    valor_json = models.JSONField(null=True, blank=True)
+    valor_usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    valor_area = models.ForeignKey(Area, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    valor_unidad = models.ForeignKey(UnidadNegocio, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=["elemento", "campo"], name="uq_valorelemento_campo"),
+        ]
+
+    @property
+    def valor(self):
+        columna = COLUMNA_POR_TIPO.get(self.campo.tipo)
+        if columna is None:
+            return None
+        if columna in COLUMNAS_REFERENCIA:
+            return getattr(self, f"{columna}_id")
+        return getattr(self, columna)
+
+    def _columna_poblada(self, nombre):
+        if nombre in COLUMNAS_REFERENCIA:
+            return getattr(self, f"{nombre}_id") is not None
+        valor = getattr(self, nombre)
+        return valor is not None and valor != ""
+
+    def exigir_integridad(self):
+        if self.campo.version_id != self.elemento.parrilla.formulario_version_id:
+            raise ValidationError(
+                "El campo no pertenece a la estructura congelada de este ticket (otra versión del formulario)."
+            )
+        if self.campo.tipo == Campo.TipoCampo.ARCHIVO:
+            raise ValidationError("Los campos de tipo archivo todavía no se admiten en los elementos.")
+        # 4.G2B2: un elemento retirado queda como historia; se consulta en la base para no fiarse de
+        # una instancia desactualizada en memoria.
+        if ElementoParrilla.objects.filter(pk=self.elemento_id, retirado_en__isnull=False).exists():
+            raise ValidationError("El elemento está retirado y ya no admite valores.")
+        columna_esperada = COLUMNA_POR_TIPO.get(self.campo.tipo)
+        for nombre in _COLUMNAS_VALOR:
+            if self._columna_poblada(nombre) and nombre != columna_esperada:
+                raise ValidationError(
+                    f"La columna '{nombre}' no corresponde al tipo de campo {self.campo.tipo} "
+                    f"(columna esperada: {columna_esperada!r})."
+                )
+
+    def save(self, *args, **kwargs):
+        self.exigir_integridad()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.elemento} — {self.campo}"
+
+
+class ColumnaRevisadaEntregable(RegistroBase):
+    """Sprint 4.G2C1 — columna (un `Campo` de la versión CONGELADA en la parrilla del Ticket) que
+    participa en la revisión de un `EntregableTicket` de tipo ELEMENTOS.
+
+    Se resuelve y copia al nacer el Ticket desde la configuración del Proceso (por clave estable) y no
+    cambia nunca: si el Proceso cambia después sus columnas revisadas, este Ticket sigue revisando las
+    suyas. El campo debe pertenecer a la misma versión que la parrilla del Ticket."""
+
+    entregable = models.ForeignKey(EntregableTicket, on_delete=models.CASCADE, related_name="columnas_revisadas")
+    campo = models.ForeignKey(Campo, on_delete=models.PROTECT, related_name="+")
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=["entregable", "campo"], name="uq_columnarevisadaentregable_campo")]
+
+    def exigir_integridad(self):
+        if self.entregable.tipo != DefinicionEntregable.Tipo.ELEMENTOS:
+            raise ValidationError("Solo un entregable de revisión de elementos tiene columnas revisadas.")
+        parrilla = ParrillaTicket.objects.filter(ticket_id=self.entregable.ticket_id).first()
+        if parrilla is None or self.campo.version_id != parrilla.formulario_version_id:
+            raise ValidationError("La columna no pertenece a la estructura congelada de este ticket.")
+        if self.campo.tipo == Campo.TipoCampo.ARCHIVO:
+            raise ValidationError("Las columnas de tipo archivo todavía no se admiten en los elementos.")
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("Las columnas revisadas de un ticket no se modifican.")
+        self.exigir_integridad()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.entregable} · {self.campo}"
+
+
+class RevisorEntregable(RegistroBase):
+    """Sprint 4.G2C1 — quién puede revisar los elementos de un `EntregableTicket` ELEMENTOS: una
+    persona o un equipo, copiados al nacer el Ticket desde la configuración del Proceso. Ser el
+    responsable del Ticket NO convierte a nadie en revisor."""
+
+    entregable = models.ForeignKey(EntregableTicket, on_delete=models.CASCADE, related_name="revisores")
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    equipo = models.ForeignKey(Equipo, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(Q(usuario__isnull=False, equipo__isnull=True) | Q(usuario__isnull=True, equipo__isnull=False)),
+                name="ck_revisorentregable_usuario_o_equipo",
+            ),
+            UniqueConstraint(
+                fields=["entregable", "usuario"], condition=Q(usuario__isnull=False),
+                name="uq_revisorentregable_usuario",
+            ),
+            UniqueConstraint(
+                fields=["entregable", "equipo"], condition=Q(equipo__isnull=False), name="uq_revisorentregable_equipo"
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("Los revisores de un ticket no se modifican.")
+        if self.entregable.tipo != DefinicionEntregable.Tipo.ELEMENTOS:
+            raise ValidationError("Solo un entregable de revisión de elementos tiene revisores.")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.entregable} · {self.usuario or self.equipo}"
+
+
+class RevisionElemento(RegistroBase):
+    """Sprint 4.G2C1 — UNA decisión de revisión sobre un elemento, para un entregable ELEMENTOS.
+
+    Es APPEND-ONLY: cada aprobación o devolución es una fila nueva y ninguna se actualiza ni se
+    elimina, así el historial completo queda intacto. El estado VIGENTE de (elemento, entregable) es la
+    decisión más reciente, comparada con el contenido actual: si el contenido de las columnas revisadas
+    cambió desde entonces (`huella` distinta), esa decisión ya no vale y el elemento vuelve a PENDIENTE
+    sin escribir nada. No es una `Aprobacion` de `apps.aprobaciones` ni crea esquemas por fila.
+
+    `huella` = SHA-256 de la representación determinista de las columnas revisadas
+    (`parrilla.representacion_de_valores`); `contenido` guarda esa misma representación para poder
+    mostrar después QUÉ se revisó. Todo vive en el Ticket: no apunta a configuración mutable."""
+
+    class Decision(models.TextChoices):
+        APROBADA = "APROBADA", "Aprobada"
+        DEVUELTA = "DEVUELTA", "Devuelta"
+
+    entregable = models.ForeignKey(EntregableTicket, on_delete=models.PROTECT, related_name="revisiones")
+    elemento = models.ForeignKey(ElementoParrilla, on_delete=models.PROTECT, related_name="revisiones")
+    decision = models.CharField(max_length=10, choices=Decision.choices)
+    observacion = models.TextField(blank=True)
+    revisor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    decidido_en = models.DateTimeField()
+    huella = models.CharField(max_length=64)
+    contenido = models.TextField()
+
+    class Meta:
+        ordering = ["pk"]
+        indexes = [models.Index(fields=["entregable", "elemento"], name="ix_revisionelemento_ent_elem")]
+        constraints = [
+            models.CheckConstraint(
+                condition=Q(decision="APROBADA") | ~Q(observacion=""), name="ck_revisionelemento_devolucion_observada"
+            ),
+        ]
+
+    def exigir_integridad(self):
+        if self.entregable.tipo != DefinicionEntregable.Tipo.ELEMENTOS:
+            raise ValidationError("Solo un entregable de revisión de elementos admite revisiones.")
+        if self.elemento.parrilla.ticket_id != self.entregable.ticket_id:
+            raise ValidationError("El elemento no pertenece al ticket de este entregable.")
+        if self.decision == self.Decision.DEVUELTA and not (self.observacion or "").strip():
+            raise ValidationError("Una devolución exige una observación.")
+        if not self.huella:
+            raise ValidationError("La revisión debe registrar la huella del contenido revisado.")
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("Una revisión registrada no puede modificarse.")
+        self.exigir_integridad()
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Una revisión registrada no se elimina: queda en el historial.")
+
+    def __str__(self):
+        return f"{self.get_decision_display()} · {self.elemento} · {self.entregable}"
+
+
+class ConfiguracionTareasTicket(RegistroBase):
+    """Sprint 4.G2D1 — copia CONGELADA, dentro de la `ParrillaTicket`, de cómo los elementos de este Ticket
+    se convierten en Tareas. Existe solo si el Proceso tenía una `catalogo.ConfiguracionTareasElemento`
+    ACTIVA al nacer el Ticket. Guarda los `Campo` de la versión congelada (resueltos por clave estable),
+    nunca la configuración mutable: cambiar Studio después no altera este Ticket.
+
+    Es inmutable. Tampoco genera tareas por existir: la materialización es una operación explícita de
+    dominio (`apps.tickets.tareas_elemento.materializar_tareas`)."""
+
+    parrilla = models.OneToOneField(ParrillaTicket, on_delete=models.CASCADE, related_name="configuracion_tareas")
+    campo_titulo = models.ForeignKey(Campo, on_delete=models.PROTECT, related_name="+")
+    campo_descripcion = models.ForeignKey(Campo, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    campo_responsable = models.ForeignKey(Campo, on_delete=models.PROTECT, related_name="+")
+    campo_fecha_limite = models.ForeignKey(Campo, on_delete=models.PROTECT, related_name="+")
+    requiere_evidencia = models.BooleanField(default=False)
+
+    def exigir_integridad(self):
+        """Los cuatro campos pertenecen a la versión congelada y son de un tipo compatible con su destino."""
+        from apps.catalogo.tareas_elemento import DESTINOS
+
+        version_id = ParrillaTicket.objects.values_list("formulario_version_id", flat=True).get(pk=self.parrilla_id)
+        for atributo, nombre, tipos, obligatoria in DESTINOS:
+            campo = getattr(self, "campo_" + atributo.removeprefix("clave_"))
+            if campo is None:
+                if obligatoria:
+                    raise ValidationError(f"Falta la columna del {nombre} de la tarea.")
+                continue
+            if campo.version_id != version_id:
+                raise ValidationError(f"La columna del {nombre} no pertenece a la estructura congelada de este ticket.")
+            if campo.tipo not in tipos:
+                raise ValidationError(f"La columna «{campo.etiqueta}» no es compatible con el {nombre} de la tarea.")
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("La configuración de tareas de un ticket no puede modificarse.")
+        self.exigir_integridad()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"Tareas por elemento de {self.parrilla}"
+
+
+class TareaElemento(RegistroBase):
+    """Sprint 4.G2D1 — vínculo entre un `ElementoParrilla`, la `apps.tareas.Tarea` que originó y la
+    configuración congelada con la que se generó. NO es una Tarea ni un sistema de tareas: la Tarea sigue
+    siendo la de `apps.tareas` (asignación, historial, adjuntos) y `TareaWorkflow` no interviene.
+
+    Identidad estable: a lo sumo UN vínculo por (elemento, configuración) y por Tarea; no se modifica ni
+    se elimina (la Tarea y el elemento se conservan como historia). `requiere_evidencia` se copia de la
+    configuración al generar; que se exija al completar es de una fase posterior."""
+
+    elemento = models.ForeignKey(ElementoParrilla, on_delete=models.PROTECT, related_name="tareas")
+    tarea = models.OneToOneField(Tarea, on_delete=models.PROTECT, related_name="vinculo_elemento")
+    configuracion = models.ForeignKey(ConfiguracionTareasTicket, on_delete=models.PROTECT, related_name="tareas_generadas")
+    requiere_evidencia = models.BooleanField(default=False)
+    # 4.G2D2 — qué EJECUCIÓN del bloque TAREAS_ELEMENTOS materializó esta tarea (identidad estable, nunca el
+    # nombre del bloque). Nula si la tarea se materializó fuera del flujo (operación de dominio directa).
+    instancia_etapa = models.ForeignKey(
+        "workflows.InstanciaEtapa", on_delete=models.PROTECT, null=True, blank=True, related_name="tareas_elementos"
+    )
+
+    class Meta:
+        ordering = ["elemento__orden", "pk"]
+        constraints = [
+            UniqueConstraint(fields=["elemento", "configuracion"], name="uq_tareaelemento_elemento_configuracion"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("El vínculo entre un elemento y su tarea no puede modificarse.")
+        if self.configuracion.parrilla_id != self.elemento.parrilla_id:
+            raise ValidationError("La configuración no corresponde a la parrilla de este elemento.")
+        if self.instancia_etapa_id is not None:
+            ejecucion = self.instancia_etapa
+            ticket = self.elemento.parrilla.ticket
+            if (
+                ejecucion.instancia_workflow_id != ticket.instancia_workflow_id
+                or ejecucion.bloque_operativo is None
+                or ejecucion.bloque_operativo.tipo != "TAREAS_ELEMENTOS"
+            ):
+                raise ValidationError("La ejecución indicada no es un bloque de tareas por elemento de este ticket.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("El vínculo entre un elemento y su tarea se conserva como historial.")
+
+    def __str__(self):
+        return f"{self.elemento} → {self.tarea}"

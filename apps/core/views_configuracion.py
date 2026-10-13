@@ -29,6 +29,7 @@ from apps.core.forms import (
     AreaForm,
     AsignacionRolForm,
     ConfiguracionSistemaForm,
+    EquipoForm,
     MembresiaForm,
     PermisoForm,
     RolForm,
@@ -43,6 +44,8 @@ from apps.core.models import (
     AsignacionRol,
     ConfiguracionSistema,
     Equipo,
+    EquipoArea,
+    EquipoUnidadNegocio,
     MiembroEquipo,
     Permiso,
     RolFuncional,
@@ -492,7 +495,44 @@ def _catalogo(clave):
             "editar": "core:configuracion_permiso", "relacion": None,
             "descripcion": "",
         }  # fmt: skip
+    if clave == "equipos":
+        # Los equipos se administran dentro de la pestaña Áreas (misma capacidad).
+        return {
+            "modelo": Equipo, "form": EquipoForm, "capacidad": "organizacion", "seccion": "areas",
+            "plural": "Áreas", "singular": "equipo", "nueva": "Nuevo equipo",
+            "lista": "core:configuracion_areas", "crear": "core:configuracion_equipo_crear",
+            "editar": "core:configuracion_equipo", "relacion": None,
+            "descripcion": "",
+        }  # fmt: skip
     raise Http404
+
+
+def _filas_equipos():
+    return Equipo.objects.annotate(
+        n_areas=Count("areas", filter=Q(areas__activo=True, areas__area__activo=True), distinct=True),
+        n_personas=Count(
+            "miembros", filter=Q(miembros__activo=True, miembros__usuario__is_active=True), distinct=True
+        ),
+    ).order_by("-activo", "nombre")
+
+
+def _sincronizar_miembros(equipo, seleccion, actor):
+    """Deja como miembros activos de `equipo` exactamente a `seleccion`. Retirar
+    cierra la vigencia (sin borrar) y un reingreso abre una membresía nueva: la
+    anterior, con sus fechas, es historia (RQF-019)."""
+    elegidos = {usuario.pk: usuario for usuario in seleccion}
+    hoy = timezone.localdate()
+    vigentes = set()
+    for membresia in MiembroEquipo.objects.filter(equipo=equipo, activo=True):
+        if membresia.usuario_id in elegidos:
+            vigentes.add(membresia.usuario_id)
+            continue
+        membresia.activo = False
+        membresia.fecha_fin = max(hoy, membresia.fecha_inicio)
+        _guardar(membresia, actor)
+    for pk, usuario in elegidos.items():
+        if pk not in vigentes:
+            _guardar(MiembroEquipo(equipo=equipo, usuario=usuario, fecha_inicio=hoy), actor)
 
 
 def _filas_catalogo(clave, modelo):
@@ -522,6 +562,8 @@ def catalogo_view(request, catalogo):
     _caps, contexto = _entrar(request, cat["capacidad"], cat["seccion"], f"{cat['plural']} — Configuración")
     filas, etiquetas = _filas_catalogo(catalogo, cat["modelo"])
     contexto.update({"cat": cat, "filas": filas, "etiquetas": etiquetas, "con_codigo": catalogo != "categorias"})
+    if catalogo == "areas":
+        contexto["equipos"] = _filas_equipos()
     return render(request, "configuracion/catalogo.html", contexto)
 
 
@@ -543,4 +585,28 @@ def catalogo_item_view(request, catalogo, pk=None):
         messages.success(request, f"«{guardado}» se guardó.")
         return redirect(cat["lista"])
     contexto.update({"cat": cat, "form": form, "instancia": instancia})
+    return render(request, "configuracion/catalogo_item.html", contexto)
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def equipo_view(request, pk=None):
+    """Alta y edición de un equipo de trabajo (CU-006), dentro de la pestaña
+    Áreas. Retirar un equipo es desactivarlo."""
+    cat = _catalogo("equipos")
+    _caps, contexto = _entrar(request, cat["capacidad"], cat["seccion"], "Equipos — Configuración")
+    equipo = get_object_or_404(Equipo, pk=pk) if pk else None
+    form = EquipoForm(request.POST or None, instance=equipo)
+    if request.method == "POST" and form.is_valid():
+        with transaction.atomic():
+            guardado = _guardar_formulario(form, request.user)
+            datos = form.cleaned_data
+            _sincronizar_relacion(EquipoArea, {"equipo": guardado}, "area", datos["areas"], request.user)
+            _sincronizar_relacion(
+                EquipoUnidadNegocio, {"equipo": guardado}, "unidad_negocio", datos["unidades"], request.user
+            )
+            _sincronizar_miembros(guardado, datos["miembros"], request.user)
+        messages.success(request, f"El equipo «{guardado}» se guardó.")
+        return redirect(cat["lista"])
+    contexto.update({"cat": cat, "form": form, "instancia": equipo})
     return render(request, "configuracion/catalogo_item.html", contexto)

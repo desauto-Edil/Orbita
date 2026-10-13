@@ -1,5 +1,5 @@
 {% extends "configuracion/base.html" %}
-{% comment %}Formulario compartido por Áreas, Unidades, Categorías y Permisos.{% endcomment %}
+{% comment %}Formulario compartido por Áreas, Unidades, Categorías, Permisos y Equipos.{% endcomment %}
 
 {% block config_miga %}
   <nav class="breadcrumb" aria-label="Ruta"><a href="{% url cat.lista %}">{{ cat.plural }}</a><span class="breadcrumb__separator" aria-hidden="true">/</span><span class="breadcrumb__current" aria-current="page">{% if instancia %}{{ instancia }}{% else %}{{ cat.nueva }}{% endif %}</span></nav>

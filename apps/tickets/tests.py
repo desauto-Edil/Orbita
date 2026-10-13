@@ -173,6 +173,9 @@ def _auditorias_de_ticket(ticket):
     )
 
 
+# Entregables que no necesitan estructura de elementos (ELEMENTOS, 4.G2C1, tiene sus propias pruebas).
+TIPOS_ENTREGABLE_SIMPLES = ["TEXTO", "ARCHIVO", "ENLACE", "CONFIRMACION"]
+
 class _MediaAisladaMixin:
     """Aísla `MEDIA_ROOT` en un directorio temporal propio de la clase —
     solo la usan las clases que efectivamente suben archivos
@@ -3171,7 +3174,9 @@ class _EscenarioEntregablesMixin:
             _otorgar_tickets_atender(usuario)
         self.servicio42, self.version42, _ = _crear_servicio_con_formulario(self.solicitante42, [])
         self.definiciones42 = {}
-        for orden, tipo in enumerate(DefinicionEntregable.Tipo.values):
+        # Los cuatro tipos simples. ELEMENTOS (4.G2C1) exige una estructura de elementos activa, columnas
+        # y revisores: se prueba en `EntregableDeConjuntoTests`.
+        for orden, tipo in enumerate(TIPOS_ENTREGABLE_SIMPLES):
             self.definiciones42[tipo] = DefinicionEntregable.objects.create(
                 servicio=self.servicio42, nombre=f"Salida {tipo}", tipo=tipo,
                 descripcion=f"Instrucciones {tipo}", obligatorio=True, orden=orden,
@@ -11768,3 +11773,2291 @@ class ProximaEjecucionProgramadaTests(_EscenarioProgramadoMixin, TestCase):
         programacion = self._programar(self.servicio, self.resp, dia=7, periodo="MES_SIGUIENTE", desde=date(2026, 10, 7))
         _, periodo, vencida = proxima_ejecucion(programacion, date(2026, 10, 7))
         self.assertEqual((periodo.etiqueta, vencida), ("Noviembre 2026", True))
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4.G2B1 — Elementos estructurados de un Proceso («parrilla»): definición opcional del
+# Proceso, snapshot por Ticket, filas con valores tipados. Sin revisión, tareas ni flujo.
+# ---------------------------------------------------------------------------
+
+from decimal import Decimal  # noqa: E402
+
+from apps.catalogo.models import DefinicionParrilla  # noqa: E402
+from apps.catalogo.parrilla import configurar_parrilla, desactivar_parrilla, errores_de_parrilla  # noqa: E402
+from apps.tickets import parrilla as parrilla_ops  # noqa: E402
+from apps.tickets.models import ElementoParrilla, ParrillaTicket, ValorElemento  # noqa: E402
+
+
+class _EscenarioParrillaMixin(_EscenarioProgramadoMixin):
+    COLUMNAS = (
+        ("Canal", "LISTA", {}),
+        ("Tema", "TEXTO", {"longitud_maxima": 20}),
+        ("Cantidad", "NUMERO", {"minimo": 1, "maximo": 10}),
+        ("Fecha", "FECHA", {}),
+        ("Urgente", "BOOLEANO", {}),
+    )
+
+    def _definir_parrilla(self, servicio, columnas=None):
+        """Activa la estructura de elementos del Proceso y deja su versión de columnas ACTIVA."""
+        definicion = configurar_parrilla(servicio, self.admin, nombre_elemento="Publicación")
+        version = definicion.formulario.versiones.get(estado="BORRADOR")
+        campos = {}
+        for orden, (etiqueta, tipo, configuracion, *extra) in enumerate(columnas or self.COLUMNAS):
+            campo = Campo.objects.create(
+                version=version, tipo=tipo, etiqueta=etiqueta, orden=orden, configuracion=configuracion,
+                obligatorio=bool(extra and extra[0]),  # 4to elemento opcional: ¿obligatoria?
+            )
+            if tipo in ("LISTA", "MULTILISTA"):
+                for i, (valor, nombre) in enumerate((("ig", "Instagram"), ("li", "LinkedIn"))):
+                    OpcionCampo.objects.create(campo=campo, valor=valor, etiqueta=nombre, orden=i)
+            campos[etiqueta] = campo
+        activar_version(definicion.formulario, version, self.admin)
+        definicion.refresh_from_db()
+        return definicion, campos
+
+    def _ticket_con_parrilla(self, nombre="Parrilla mensual", columnas=None, hoy=date(2026, 10, 7)):
+        servicio, resp = self._proceso(nombre, flujo="simple")
+        definicion, campos = self._definir_parrilla(servicio, columnas)
+        programacion = self._programar(servicio, resp, dia=1, periodo="MES_ACTUAL", desde=date(2020, 1, 1))
+        ticket = generar_ejecucion_programada(programacion, hoy=hoy).ticket
+        tomar_ticket(ticket, self.analista)
+        ticket.refresh_from_db()
+        return servicio, resp, definicion, campos, ticket
+
+
+class DefinicionParrillaTests(_EscenarioParrillaMixin, TestCase):
+    def setUp(self):
+        self._preparar_programado()
+
+    def test_un_servicio_no_puede_tener_definicion_de_parrilla(self):
+        servicio, _, _ = _crear_servicio_con_formulario(self.admin, [])  # tipo SERVICIO
+        columnas = Formulario.objects.create(nombre="Columnas")
+        with self.assertRaises(ValidationError):
+            DefinicionParrilla(servicio=servicio, formulario=columnas).save()
+        with self.assertRaises(ValidationError):
+            configurar_parrilla(servicio, self.admin, nombre_elemento="Fila")
+        self.assertFalse(DefinicionParrilla.objects.exists())
+
+    def test_un_proceso_puede_no_tenerla_y_puede_configurarla(self):
+        servicio, _ = self._proceso(flujo="simple")
+        self.assertFalse(DefinicionParrilla.objects.filter(servicio=servicio).exists())  # opcional
+        definicion = configurar_parrilla(servicio, self.admin, nombre_elemento="Publicación")
+        self.assertEqual((definicion.servicio, definicion.activa, definicion.nombre_elemento), (servicio, True, "Publicación"))
+        self.assertTrue(definicion.formulario.versiones.filter(numero=1, estado="BORRADOR").exists())
+        # Otra llamada renombra y no crea otro formulario ni otra definición.
+        formulario_id = definicion.formulario_id
+        configurar_parrilla(servicio, self.admin, nombre_elemento="Pieza")
+        definicion.refresh_from_db()
+        self.assertEqual((definicion.formulario_id, definicion.nombre_elemento), (formulario_id, "Pieza"))
+        desactivar_parrilla(servicio, self.admin)
+        definicion.refresh_from_db()
+        self.assertFalse(definicion.activa)
+        with self.assertRaises(IntegrityError), transaction.atomic():  # una por Proceso, también en la base
+            DefinicionParrilla.objects.bulk_create(
+                [DefinicionParrilla(servicio=servicio, formulario=Formulario.objects.create(nombre="Otro"))]
+            )
+        with self.assertRaises(PermissionDenied):
+            configurar_parrilla(servicio, self.solicitante, nombre_elemento="Fila")
+
+    def test_entrada_inicial_y_columnas_son_conceptos_independientes(self):
+        servicio, _ = self._proceso(flujo="simple")
+        definicion = configurar_parrilla(servicio, self.admin, nombre_elemento="Fila")
+        self.assertNotEqual(definicion.formulario_id, servicio.formulario_id)
+        with self.assertRaises(ValidationError):  # la entrada inicial no puede ser el formulario de columnas
+            DefinicionParrilla(servicio=servicio, formulario=servicio.formulario).save()
+        servicio.formulario = definicion.formulario  # ni al revés
+        with self.assertRaises(ValidationError):
+            servicio.full_clean()
+
+    def test_publicar_exige_que_las_columnas_esten_listas(self):
+        servicio, _ = self._proceso(flujo="simple")
+        configurar_parrilla(servicio, self.admin, nombre_elemento="Fila")
+        self.assertTrue(errores_de_parrilla(servicio))  # sin versión activa
+        with self.assertRaises(ValidationError):
+            from apps.catalogo.operaciones import validar_publicacion
+
+            validar_publicacion(servicio)
+
+
+class ParrillaTicketTests(_EscenarioParrillaMixin, TestCase):
+    def setUp(self):
+        self._preparar_programado()
+
+    def test_un_proceso_sin_estructura_conserva_el_comportamiento_anterior(self):
+        servicio, resp = self._proceso(flujo="simple")
+        programacion = self._programar(servicio, resp, dia=1, periodo="MES_ACTUAL", desde=date(2020, 1, 1))
+        ticket = generar_ejecucion_programada(programacion, hoy=date(2026, 10, 7)).ticket
+        self.assertFalse(ParrillaTicket.objects.exists())
+        self.assertIsNone(parrilla_ops.parrilla_de(ticket))
+        tomar_ticket(ticket, self.analista)
+        self._entrar(self.analista)
+        pagina = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        self.assertEqual(pagina.status_code, 200)
+        self.assertIsNone(pagina.context["parrilla"])
+        self.assertNotContains(pagina, 'id="elementos"')
+
+    def test_el_ticket_congela_la_version_activa_y_el_nombre(self):
+        _, _, definicion, campos, ticket = self._ticket_con_parrilla()
+        parrilla = ticket.parrilla
+        self.assertEqual(parrilla.formulario_version_id, definicion.formulario.version_activa_id)
+        self.assertEqual(parrilla.nombre_elemento, "Publicación")
+        self.assertEqual({c.etiqueta for c in parrilla_ops.columnas_de(parrilla)}, set(campos))
+        # Una sola por ticket y su estructura es inmutable.
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ParrillaTicket.objects.create(ticket=ticket, formulario_version=parrilla.formulario_version, nombre_elemento="X")
+        parrilla.nombre_elemento = "Otro"
+        with self.assertRaises(ValidationError):
+            parrilla.save()
+
+    def test_cambiar_la_definicion_despues_no_altera_un_ticket_existente(self):
+        servicio, resp, definicion, campos, ticket = self._ticket_con_parrilla()
+        original = ticket.parrilla.formulario_version_id
+        nueva = crear_nueva_version(definicion.formulario, self.admin)
+        Campo.objects.create(version=nueva, tipo="TEXTO", etiqueta="Notas", orden=9)
+        activar_version(definicion.formulario, nueva, self.admin)
+        configurar_parrilla(servicio, self.admin, nombre_elemento="Pieza")
+        ticket.parrilla.refresh_from_db()
+        self.assertEqual((ticket.parrilla.formulario_version_id, ticket.parrilla.nombre_elemento), (original, "Publicación"))
+        self.assertEqual(len(parrilla_ops.columnas_de(ticket.parrilla)), len(campos))
+        # Un ticket que nazca después sí toma la versión nueva.
+        siguiente = generar_ejecucion_programada(ProgramacionProceso.objects.get(servicio=servicio), hoy=date(2026, 11, 7))
+        self.assertEqual(siguiente.ticket.parrilla.formulario_version_id, nueva.pk)
+        self.assertEqual(siguiente.ticket.parrilla.nombre_elemento, "Pieza")
+
+
+class ElementosParrillaTests(_EscenarioParrillaMixin, TestCase):
+    def setUp(self):
+        self._preparar_programado()
+        _otorgar_permiso(self.admin, "formulario.administrar")
+        self.servicio, self.resp, self.definicion, self.campos, self.ticket = self._ticket_con_parrilla()
+
+    def _crear(self, **valores):
+        return parrilla_ops.crear_elemento(
+            self.ticket, self.analista, {self.campos[etiqueta]: v for etiqueta, v in valores.items()}
+        )
+
+    def test_se_pueden_crear_varias_filas_con_numero_y_orden_estables(self):
+        a = self._crear(Tema="Campaña A", Canal="ig", Cantidad="3", Fecha="2026-11-03", Urgente=True)
+        b = self._crear(Tema="Caso B", Canal="li")
+        c = self._crear()
+        self.assertEqual([(e.numero, e.orden) for e in (a, b, c)], [(1, 1), (2, 2), (3, 3)])
+        valores = {v.campo.etiqueta: v.valor for v in a.valores.select_related("campo")}
+        self.assertEqual(valores["Tema"], "Campaña A")
+        self.assertEqual(valores["Cantidad"], Decimal("3"))
+        self.assertEqual(valores["Fecha"], date(2026, 11, 3))
+        self.assertEqual((valores["Canal"], valores["Urgente"]), ("ig", True))
+        self.assertEqual([f["elemento"].numero for f in parrilla_ops.tabla(self.ticket, self.analista)["filas"]], [1, 2, 3])
+        self.assertEqual(ElementoParrilla.objects.filter(parrilla__ticket=self.ticket).count(), 3)
+
+    def test_un_campo_ajeno_a_la_version_congelada_se_rechaza(self):
+        otro_servicio, _ = self._proceso("Otro proceso", flujo="simple")
+        _, otros = self._definir_parrilla(otro_servicio)
+        ajeno = otros["Tema"]
+        with self.assertRaises(ValidationError):
+            parrilla_ops.crear_elemento(self.ticket, self.analista, {ajeno: "x"})
+        self.assertFalse(ElementoParrilla.objects.exists())  # nada quedó a medias
+        elemento = self._crear(Tema="ok")
+        with self.assertRaises(ValidationError):  # tampoco por la vía directa del modelo
+            ValorElemento(elemento=elemento, campo=ajeno, valor_texto="x").save()
+        # ARCHIVO no está soportado todavía en elementos.
+        servicio, _ = self._proceso("Con archivo", flujo="simple")
+        self._definir_parrilla(servicio, columnas=(("Pieza", "ARCHIVO", {}),))
+        self.assertTrue(any("archivo" in m for m in errores_de_parrilla(servicio)))
+
+    def test_la_validacion_tipada_reutiliza_las_estrategias_existentes(self):
+        invalidos = {"Cantidad": "50", "Canal": "tiktok", "Fecha": "no-es-fecha", "Tema": "x" * 21}
+        for etiqueta, crudo in invalidos.items():
+            with self.subTest(columna=etiqueta):
+                with self.assertRaises(ValidationError) as ctx:
+                    self._crear(**{etiqueta: crudo})
+                self.assertIn(etiqueta, " ".join(ctx.exception.messages))
+        self.assertFalse(ElementoParrilla.objects.exists())
+
+    def test_un_valor_puede_modificarse_durante_la_ejecucion_y_no_se_duplica(self):
+        elemento = self._crear(Tema="Borrador", Cantidad="2")
+        self.assertEqual(self.ticket.estado, Ticket.Estado.EN_ATENCION)  # no es BORRADOR
+        parrilla_ops.actualizar_valores(elemento, self.analista, {self.campos["Tema"]: "Definitivo"})
+        valores = elemento.valores.select_related("campo")
+        self.assertEqual({v.campo.etiqueta: v.valor for v in valores}["Tema"], "Definitivo")
+        self.assertEqual(valores.filter(campo=self.campos["Tema"]).count(), 1)
+        parrilla_ops.actualizar_valores(elemento, self.analista, {self.campos["Tema"]: ""})  # vacío = sin valor
+        self.assertFalse(elemento.valores.filter(campo=self.campos["Tema"]).exists())
+        self.assertTrue(RegistroAuditoria.objects.filter(modelo="tickets.elementoparrilla", object_id=elemento.pk).exists())
+        # Solo quien atiende, y mientras el ticket admita cambios.
+        with self.assertRaises(PermissionDenied):
+            parrilla_ops.actualizar_valores(elemento, self.solicitante, {self.campos["Tema"]: "x"})
+        Ticket.objects.filter(pk=self.ticket.pk).update(estado=Ticket.Estado.CANCELADO)
+        with self.assertRaises(ValidationError):
+            parrilla_ops.actualizar_valores(elemento, self.analista, {self.campos["Tema"]: "x"})
+        with self.assertRaises(ValidationError):
+            parrilla_ops.crear_elemento(self.ticket, self.analista)
+
+    def test_retirar_una_fila_es_logico_y_su_numero_no_se_reutiliza(self):
+        a, b = self._crear(Tema="A"), self._crear(Tema="B")
+        parrilla_ops.retirar_elemento(a, self.analista)
+        a.refresh_from_db()
+        self.assertIsNotNone(a.retirado_en)
+        self.assertEqual(a.retirado_por, self.analista)
+        self.assertTrue(ElementoParrilla.objects.filter(pk=a.pk).exists())  # sigue en la base con sus valores
+        self.assertEqual(a.valores.count(), 1)
+        self.assertEqual([e.pk for e in parrilla_ops.elementos_vigentes(self.ticket.parrilla)], [b.pk])
+        with self.assertRaises(ValidationError):
+            a.delete()
+        with self.assertRaises(ValidationError):
+            parrilla_ops.actualizar_valores(a, self.analista, {self.campos["Tema"]: "x"})
+        with self.assertRaises(ValidationError):  # retirar dos veces se rechaza (4.G2B2)
+            parrilla_ops.retirar_elemento(a, self.analista)
+        self.assertEqual(self._crear(Tema="C").numero, 3)
+
+    def test_un_solo_valor_por_elemento_y_campo_tambien_en_la_base(self):
+        elemento = self._crear(Tema="A")
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ValorElemento.objects.bulk_create([ValorElemento(elemento=elemento, campo=self.campos["Tema"], valor_texto="B")])
+        with self.assertRaises(IntegrityError), transaction.atomic():  # ni el mismo número ni la misma posición vigente
+            ElementoParrilla.objects.bulk_create([ElementoParrilla(parrilla=self.ticket.parrilla, numero=1, orden=9)])
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            ElementoParrilla.objects.bulk_create([ElementoParrilla(parrilla=self.ticket.parrilla, numero=9, orden=1)])
+
+    def test_ui_minima_en_el_ticket_y_editor_de_columnas_en_el_studio(self):
+        # Ticket: ver columnas, agregar, editar y retirar.
+        self._entrar(self.analista)
+        url_detalle = reverse("tickets:detalle", args=[self.ticket.pk])
+        self.assertContains(self.client.get(url_detalle), 'id="elementos"')
+        respuesta = self.client.post(
+            reverse("tickets:elemento_agregar", args=[self.ticket.pk]),
+            {f"campo_{self.campos['Tema'].pk}": "Campaña A", f"campo_{self.campos['Canal'].pk}": "ig"},
+        )
+        self.assertRedirects(respuesta, url_detalle + "#elementos", fetch_redirect_response=False)
+        elemento = ElementoParrilla.objects.get(parrilla__ticket=self.ticket)
+        pagina = self.client.get(url_detalle)
+        self.assertContains(pagina, "Campaña A")
+        self.assertContains(pagina, "Instagram")
+        self.client.post(
+            reverse("tickets:elemento_guardar", args=[self.ticket.pk, elemento.pk]),
+            {f"campo_{self.campos['Tema'].pk}": "Campaña B"},
+        )
+        self.assertContains(self.client.get(url_detalle), "Campaña B")
+        self.client.post(reverse("tickets:elemento_retirar", args=[self.ticket.pk, elemento.pk]))
+        self.assertContains(self.client.get(url_detalle), "1 retirado")
+        self._entrar(self.solicitante)  # sin permiso de consulta ni de edición
+        self.assertEqual(
+            self.client.post(reverse("tickets:elemento_agregar", args=[self.ticket.pk]), {}).status_code, 403
+        )
+        # Studio: la estructura se configura en la pestaña Formulario, con el editor de campos existente.
+        self._entrar(self.admin)
+        url_studio = reverse("catalogo:studio", args=[self.servicio.pk]) + "?tab=entrada&uso=parrilla"
+        pagina = self.client.get(url_studio)
+        self.assertContains(pagina, "Elementos del proceso")
+        self.assertContains(pagina, reverse("catalogo:studio_parrilla_version", args=[self.servicio.pk]))
+        self.client.post(reverse("catalogo:studio_parrilla_version", args=[self.servicio.pk]))
+        borrador = self.definicion.formulario.versiones.get(estado="BORRADOR")
+        self.client.post(
+            reverse("catalogo:studio_parrilla_campo_crear", args=[self.servicio.pk]),
+            {"campo-nuevo-tipo": "TEXTO", "campo-nuevo-etiqueta": "Formato", "campo-nuevo-orden": "7"},
+        )
+        self.assertTrue(borrador.campos.filter(etiqueta="Formato").exists())
+        self.assertFalse(Campo.objects.filter(version__formulario=self.servicio.formulario, etiqueta="Formato").exists())
+        self.client.post(
+            reverse("catalogo:studio_parrilla_campo_crear", args=[self.servicio.pk]),
+            {"campo-nuevo-tipo": "ARCHIVO", "campo-nuevo-etiqueta": "Pieza", "campo-nuevo-orden": "8"},
+        )
+        self.assertFalse(borrador.campos.filter(etiqueta="Pieza").exists())  # archivo: aún no soportado
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4.G2B2 — Operación de los elementos: obligatoriedad y completitud calculadas, retiro único,
+# representación determinista de valores y vista operable. Sin revisión, flujo ni tareas.
+# ---------------------------------------------------------------------------
+
+
+class OperacionElementosParrillaTests(_EscenarioParrillaMixin, TestCase):
+    COLUMNAS = (
+        ("Tema", "TEXTO", {}, True),
+        ("Responsable", "USUARIO", {}, True),
+        ("Entrega", "FECHA", {}, True),
+        ("Canal", "LISTA", {}),
+        ("Etiquetas", "MULTILISTA", {}),
+        ("Cantidad", "NUMERO", {}),
+        ("Urgente", "BOOLEANO", {}),
+    )
+
+    def setUp(self):
+        self._preparar_programado()
+        _otorgar_permiso(self.admin, "formulario.administrar")
+        self.servicio, self.resp, self.definicion, self.campos, self.ticket = self._ticket_con_parrilla()
+        self.persona = Usuario.objects.create_user(username="g2b2_persona", password=CLAVE_PRUEBA)
+
+    def _crear(self, **valores):
+        return parrilla_ops.crear_elemento(
+            self.ticket, self.analista, {self.campos[etiqueta]: v for etiqueta, v in valores.items()}
+        )
+
+    def _completa(self, **extra):
+        valores = {"Tema": "Campaña", "Responsable": self.persona.pk, "Entrega": "2026-11-10"}
+        valores.update(extra)
+        return self._crear(**valores)
+
+    def test_la_obligatoriedad_se_configura_en_las_columnas_sin_abrir_archivo(self):
+        servicio, _ = self._proceso("Con obligatorias", flujo="simple")
+        definicion, _ = self._definir_parrilla(servicio, columnas=(("Tema", "TEXTO", {}),))
+        self._entrar(self.admin)
+        self.client.post(reverse("catalogo:studio_parrilla_version", args=[servicio.pk]))
+        borrador = definicion.formulario.versiones.get(estado="BORRADOR")
+        self.client.post(
+            reverse("catalogo:studio_parrilla_campo_crear", args=[servicio.pk]),
+            {"campo-nuevo-tipo": "USUARIO", "campo-nuevo-etiqueta": "Responsable", "campo-nuevo-orden": "5",
+             "campo-nuevo-obligatorio": "on"},
+        )
+        self.assertTrue(borrador.campos.get(etiqueta="Responsable").obligatorio)
+        pagina = self.client.get(reverse("catalogo:studio", args=[servicio.pk]) + "?tab=entrada&uso=parrilla")
+        self.assertContains(pagina, "Obligatorio")
+        self.assertNotContains(pagina, 'value="ARCHIVO"')  # no se ofrece un tipo que aún no se admite
+        # Las columnas obligatorias de los elementos no son las del formulario de entrada del Proceso: la
+        # versión se activa sin la restricción de «campos obligatorios» de los Procesos programados.
+        self.client.post(reverse("catalogo:studio_parrilla_activar", args=[servicio.pk, borrador.pk]))
+        borrador.refresh_from_db()
+        self.assertEqual(borrador.estado, "ACTIVA")
+
+    def test_una_fila_puede_crearse_incompleta(self):
+        elemento = self._crear()  # sin ningún valor
+        self.assertEqual(ElementoParrilla.objects.filter(parrilla__ticket=self.ticket).count(), 1)
+        self.assertFalse(parrilla_ops.completitud_de(elemento).completo)
+
+    def test_la_completitud_detecta_los_obligatorios_faltantes(self):
+        elemento = self._crear(Tema="Campaña", Canal="ig")  # falta Responsable y Entrega
+        completitud = parrilla_ops.completitud_de(elemento)
+        self.assertFalse(completitud.completo)
+        self.assertEqual([c.etiqueta for c in completitud.faltantes], ["Responsable", "Entrega"])
+        self.assertEqual(completitud.invalidos, ())
+        self.assertEqual(completitud.pendientes, ["Responsable", "Entrega"])  # lo opcional no cuenta
+        parrilla_ops.actualizar_valores(elemento, self.analista, {self.campos["Entrega"]: "2026-11-10"})
+        self.assertEqual(parrilla_ops.completitud_de(elemento).pendientes, ["Responsable"])
+
+    def test_una_fila_completa_se_reconoce_y_un_valor_que_deja_de_ser_valido_la_revierte(self):
+        elemento = self._completa()
+        self.assertTrue(parrilla_ops.completitud_de(elemento).completo)
+        self.assertEqual(parrilla_ops.completitud_de(elemento).pendientes, [])
+        # Es calculada: no hay estado guardado y borrar un valor obligatorio la vuelve incompleta.
+        parrilla_ops.actualizar_valores(elemento, self.analista, {self.campos["Tema"]: ""})
+        self.assertEqual(parrilla_ops.completitud_de(elemento).pendientes, ["Tema"])
+        parrilla_ops.actualizar_valores(elemento, self.analista, {self.campos["Tema"]: "Otra"})
+        # Una persona desactivada después ya no es una referencia válida.
+        Usuario.objects.filter(pk=self.persona.pk).update(is_active=False)
+        completitud = parrilla_ops.completitud_de(elemento)
+        self.assertFalse(completitud.completo)
+        self.assertEqual([c.etiqueta for c, _ in completitud.invalidos], ["Responsable"])
+
+    def test_un_elemento_retirado_no_admite_modificaciones(self):
+        elemento = self._completa()
+        parrilla_ops.retirar_elemento(elemento, self.analista)
+        with self.assertRaises(ValidationError):
+            parrilla_ops.actualizar_valores(elemento, self.analista, {self.campos["Tema"]: "x"})
+        retirado = ElementoParrilla.objects.get(pk=elemento.pk)
+        with self.assertRaises(ValidationError):  # ni escribiendo por el modelo
+            ValorElemento(elemento=retirado, campo=self.campos["Cantidad"], valor_numero=Decimal("2")).save()
+        self.assertEqual(retirado.valores.count(), 3)
+        self.assertEqual(retirado.numero, 1)  # y conserva su número
+        self.assertEqual(self._crear().numero, 2)
+
+    def test_retirar_dos_veces_se_rechaza_sin_reescribir_el_retiro(self):
+        elemento = self._crear(Tema="A")
+        parrilla_ops.retirar_elemento(elemento, self.analista)
+        original = ElementoParrilla.objects.get(pk=elemento.pk)
+        with self.assertRaises(ValidationError):
+            parrilla_ops.retirar_elemento(elemento, self.analista)
+        posterior = ElementoParrilla.objects.get(pk=elemento.pk)
+        self.assertEqual((posterior.retirado_en, posterior.retirado_por_id), (original.retirado_en, self.analista.pk))
+
+    def test_un_campo_de_otra_version_se_sigue_rechazando(self):
+        elemento = self._completa()
+        nueva = crear_nueva_version(self.definicion.formulario, self.admin)
+        posterior = Campo.objects.create(version=nueva, tipo="TEXTO", etiqueta="Notas", orden=9)
+        activar_version(self.definicion.formulario, nueva, self.admin)
+        for operacion in (
+            lambda: parrilla_ops.actualizar_valores(elemento, self.analista, {posterior: "x"}),
+            lambda: parrilla_ops.crear_elemento(self.ticket, self.analista, {posterior.pk: "x"}),
+            lambda: parrilla_ops.representacion_de_valores(elemento, [posterior]),
+            lambda: ValorElemento(elemento=elemento, campo=posterior, valor_texto="x").save(),
+        ):
+            with self.assertRaises(ValidationError):
+                operacion()
+        self.assertEqual(ElementoParrilla.objects.count(), 1)  # nada quedó a medias
+
+    def test_la_representacion_de_valores_es_determinista(self):
+        a = self._completa(Cantidad="3", Canal="ig", Urgente=True)
+        b = parrilla_ops.crear_elemento(  # mismo contenido, cargado en otro orden y otra forma
+            self.ticket, self.analista,
+            {
+                self.campos["Urgente"]: True, self.campos["Cantidad"]: "3.0", self.campos["Canal"]: "ig",
+                self.campos["Entrega"]: "2026-11-10", self.campos["Responsable"]: self.persona.pk,
+                self.campos["Tema"]: "Campaña",
+            },
+        )
+        self.assertEqual(parrilla_ops.representacion_de_valores(a), parrilla_ops.representacion_de_valores(b))
+        subconjunto = [self.campos["Tema"], self.campos["Entrega"]]
+        self.assertEqual(
+            parrilla_ops.representacion_de_valores(a, subconjunto),
+            parrilla_ops.representacion_de_valores(b, list(reversed(subconjunto))),
+        )
+        self.assertEqual(
+            parrilla_ops.representacion_de_valores(a, subconjunto),
+            parrilla_ops.representacion_de_valores(b, [c.pk for c in subconjunto]),
+        )
+        # Un cambio fuera del subconjunto no la altera; uno dentro, sí; sin valor ≠ con valor.
+        parrilla_ops.actualizar_valores(a, self.analista, {self.campos["Cantidad"]: "9"})
+        self.assertEqual(
+            parrilla_ops.representacion_de_valores(a, subconjunto), parrilla_ops.representacion_de_valores(b, subconjunto)
+        )
+        self.assertNotEqual(parrilla_ops.representacion_de_valores(a), parrilla_ops.representacion_de_valores(b))
+        parrilla_ops.actualizar_valores(b, self.analista, {self.campos["Tema"]: ""})
+        self.assertNotEqual(
+            parrilla_ops.representacion_de_valores(a, subconjunto), parrilla_ops.representacion_de_valores(b, subconjunto)
+        )
+        # Una multiselección es un conjunto: su orden no cambia la representación.
+        c = self._completa(Etiquetas=["li", "ig"])
+        d = self._completa(Etiquetas=["ig", "li"])
+        self.assertEqual(
+            parrilla_ops.representacion_de_valores(c, [self.campos["Etiquetas"]]),
+            parrilla_ops.representacion_de_valores(d, [self.campos["Etiquetas"]]),
+        )
+        # La API de consulta para fases posteriores.
+        self.assertEqual(parrilla_ops.valores_de(a)["tema"], "Campaña")
+        self.assertEqual(len(parrilla_ops.elementos_para_ticket(self.ticket, self.analista)), 4)
+
+    def test_los_tickets_y_procesos_sin_estructura_siguen_funcionando(self):
+        servicio, resp = self._proceso("Sin estructura", flujo="simple")
+        programacion = self._programar(servicio, resp, dia=1, periodo="MES_ACTUAL", desde=date(2020, 1, 1))
+        ticket = generar_ejecucion_programada(programacion, hoy=date(2026, 10, 7)).ticket
+        tomar_ticket(ticket, self.analista)
+        self._definir_parrilla(servicio)  # el Proceso adopta la estructura DESPUÉS de nacer este ticket
+        self.assertIsNone(parrilla_ops.parrilla_de(ticket))
+        self.assertIsNone(parrilla_ops.tabla(ticket, self.analista))
+        self.assertEqual(parrilla_ops.elementos_para_ticket(ticket, self.analista), [])
+        with self.assertRaises(ValidationError):
+            parrilla_ops.crear_elemento(ticket, self.analista)
+        self.assertFalse(ParrillaTicket.objects.filter(ticket=ticket).exists())
+
+    def test_la_vista_distingue_filas_incompletas_completas_y_retiradas(self):
+        self._entrar(self.analista)
+        url = reverse("tickets:detalle", args=[self.ticket.pk])
+        self.client.post(
+            reverse("tickets:elemento_agregar", args=[self.ticket.pk]), {f"campo_{self.campos['Tema'].pk}": "Campaña A"}
+        )
+        pagina = self.client.get(url)
+        self.assertContains(pagina, "Incompleta")
+        self.assertContains(pagina, "Responsable, Entrega")  # qué falta
+        self.assertContains(pagina, "1 incompleta")
+        self.assertContains(pagina, '<abbr title="Obligatorio">*</abbr>', html=False)
+        elemento = ElementoParrilla.objects.get(parrilla__ticket=self.ticket)
+        self.client.post(
+            reverse("tickets:elemento_guardar", args=[self.ticket.pk, elemento.pk]),
+            {f"campo_{self.campos['Responsable'].pk}": str(self.persona.pk), f"campo_{self.campos['Entrega'].pk}": "2026-11-10"},
+        )
+        pagina = self.client.get(url)
+        self.assertContains(pagina, "Completa")
+        self.assertNotContains(pagina, "Incompleta")
+        self.assertEqual(pagina.context["parrilla"]["n_incompletas"], 0)
+        # Retirada: sale de las vigentes y pasa a la sección histórica, de solo lectura.
+        self.client.post(reverse("tickets:elemento_retirar", args=[self.ticket.pk, elemento.pk]))
+        self.client.post(reverse("tickets:elemento_retirar", args=[self.ticket.pk, elemento.pk]))  # repetir: solo avisa
+        tabla = self.client.get(url).context["parrilla"]
+        self.assertEqual((len(tabla["filas"]), len(tabla["retiradas"])), (0, 1))
+        pagina = self.client.get(url)
+        self.assertContains(pagina, 'id="elementos-retirados"')
+        self.assertNotContains(pagina, "Incompleta")
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4.G2C1 — Entregable por CONJUNTO de elementos y revisión individual. Un solo Ticket y una sola
+# parrilla; sin EsquemaAprobacion por fila, sin Tareas ni cambios en el motor.
+# ---------------------------------------------------------------------------
+
+from apps.catalogo.entregables import configurar_definicion_entregable  # noqa: E402
+from apps.catalogo.revision_elementos import columnas_disponibles, errores_de_conjuntos  # noqa: E402
+from apps.tickets import revision_elementos as revision_ops  # noqa: E402
+from apps.tickets.entregables import entregables_obligatorios_pendientes  # noqa: E402
+from apps.tickets.autorizacion import puede_revisar_conjunto  # noqa: E402
+from apps.tickets.models import ColumnaRevisadaEntregable, RevisionElemento  # noqa: E402
+
+
+class _EscenarioRevisionMixin(_EscenarioParrillaMixin):
+    COLUMNAS = (
+        ("Tema", "TEXTO", {}, True),
+        ("Responsable", "USUARIO", {}, True),
+        ("Arte", "TEXTO", {}),
+        ("Notas", "TEXTO_LARGO", {}),
+    )
+
+    def _preparar_revision(self):
+        self._preparar_programado()
+        self.revisor = Usuario.objects.create_user(username="g2c_revisor", password=CLAVE_PRUEBA)
+        self.otro = Usuario.objects.create_user(username="g2c_otro", password=CLAVE_PRUEBA)
+        self.persona = Usuario.objects.create_user(username="g2c_persona", password=CLAVE_PRUEBA)
+        self.miembro = Usuario.objects.create_user(username="g2c_miembro", password=CLAVE_PRUEBA)
+        self.equipo_revision = Equipo.objects.create(nombre="Equipo de revisión")
+        MiembroEquipo.objects.create(equipo=self.equipo_revision, usuario=self.miembro)
+
+    def _proceso_con_conjunto(
+        self, nombre="Parrilla revisada", *, columnas=("tema", "arte"), con_bloque=False, con_texto=False,
+        con_opcional=False,
+    ):
+        """Proceso con estructura de elementos, un entregable ELEMENTOS (revisan `self.revisor` y el
+        equipo de revisión) y, opcional, un entregable de texto y un bloque ENTREGABLE del flujo que lo
+        espera. Todo ANTES de que nazca el Ticket: es lo que el Ticket congela."""
+        servicio, responsable = self._proceso(nombre, flujo="simple")
+        definicion, campos = self._definir_parrilla(servicio)
+        if con_texto:
+            configurar_definicion_entregable(servicio, self.admin, nombre="Nota final", tipo="TEXTO", obligatorio=True)
+        if con_opcional:
+            configurar_definicion_entregable(servicio, self.admin, nombre="Nota opcional", tipo="TEXTO", obligatorio=False)
+        entregable = configurar_definicion_entregable(
+            servicio, self.admin, nombre="Piezas aprobadas", tipo="ELEMENTOS", obligatorio=True,
+            columnas_revisadas=list(columnas), revisores_usuarios=[self.revisor],
+            revisores_equipos=[self.equipo_revision],
+        )
+        if con_bloque:
+            from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo, crear_nueva_version_configuracion
+
+            # Una versión nueva NACE VACÍA (no clona sin `clonar_desde`): se rearma el flujo completo.
+            config = crear_nueva_version_configuracion(servicio, self.admin)
+            self._agregar(config, self.f_recepcion, BloqueOperativo.Tipo.ACTIVIDAD, "Atender", tipo_actor="RESPONSABLE_TICKET")
+            agregar_bloque_operativo(
+                config, self.admin, fase=self.f_recepcion, tipo=BloqueOperativo.Tipo.ENTREGABLE,
+                nombre="Conjunto aprobado", definicion_entregable=entregable,
+            )
+            self._activar(servicio, config)
+        return servicio, responsable, definicion, campos, entregable
+
+    def _ticket_con_conjunto(self, hoy=date(2026, 10, 7), **opciones):
+        servicio, responsable, definicion, campos, definicion_entregable = self._proceso_con_conjunto(**opciones)
+        programacion = self._programar(servicio, responsable, dia=1, periodo="MES_ACTUAL", desde=date(2020, 1, 1))
+        ticket = generar_ejecucion_programada(programacion, hoy=hoy).ticket
+        tomar_ticket(ticket, self.analista)
+        ticket.refresh_from_db()
+        self.servicio, self.definicion_estructura = servicio, definicion
+        self.campos, self.definicion_entregable = campos, definicion_entregable
+        return ticket, ticket.entregables.get(tipo="ELEMENTOS")
+
+    def _elemento(self, ticket, **valores):
+        return parrilla_ops.crear_elemento(ticket, self.analista, {self.campos[e]: v for e, v in valores.items()})
+
+    def _completo(self, ticket, tema="Reel", **extra):
+        return self._elemento(ticket, Tema=tema, Responsable=self.persona.pk, **extra)
+
+    def _editar(self, elemento, **valores):
+        return parrilla_ops.actualizar_valores(elemento, self.analista, {self.campos[e]: v for e, v in valores.items()})
+
+
+class EntregableDeConjuntoTests(_EscenarioRevisionMixin, TestCase):
+    def setUp(self):
+        self._preparar_revision()
+
+    def test_la_configuracion_exige_columnas_y_revisores_validos(self):
+        servicio, _ = self._proceso("Con estructura", flujo="simple")
+        self._definir_parrilla(servicio)
+        base = dict(nombre="Piezas", tipo="ELEMENTOS", columnas_revisadas=["tema"], revisores_usuarios=[self.revisor])
+        for cambio in (
+            {"columnas_revisadas": []},  # sin columnas
+            {"columnas_revisadas": ["no_existe"]},  # clave que la estructura no tiene
+            {"revisores_usuarios": []},  # sin quién revise
+        ):
+            with self.subTest(cambio=cambio), self.assertRaises(ValidationError):
+                configurar_definicion_entregable(servicio, self.admin, **{**base, **cambio})
+        self.revisor.is_active = False
+        self.revisor.save(update_fields=["is_active"])
+        with self.assertRaises(ValidationError):  # un revisor inactivo no sirve
+            configurar_definicion_entregable(servicio, self.admin, **base)
+        self.revisor.is_active = True
+        self.revisor.save(update_fields=["is_active"])
+        with self.assertRaises(PermissionDenied):
+            configurar_definicion_entregable(servicio, self.solicitante, **base)
+        sin_estructura, _ = self._proceso("Sin estructura", flujo="simple")
+        with self.assertRaises(ValidationError):
+            configurar_definicion_entregable(sin_estructura, self.admin, **base)
+        solo_servicio, _, _ = _crear_servicio_con_formulario(self.admin, [])
+        with self.assertRaises(ValidationError):
+            configurar_definicion_entregable(solo_servicio, self.admin, **base)
+        definicion = configurar_definicion_entregable(servicio, self.admin, **base)
+        self.assertEqual(list(definicion.columnas_revisadas.values_list("clave", flat=True)), ["tema"])
+        self.assertEqual(definicion.revisores.count(), 1)
+        self.assertEqual(errores_de_conjuntos(servicio), [])
+        self.assertNotIn("ARCHIVO", {c.tipo for c in columnas_disponibles(servicio)})
+        # Cambiar el tipo a uno distinto limpia la configuración de revisión.
+        configurar_definicion_entregable(servicio, self.admin, definicion=definicion, nombre="Piezas", tipo="TEXTO")
+        self.assertFalse(definicion.columnas_revisadas.exists() or definicion.revisores.exists())
+
+    def test_el_ticket_congela_las_columnas_revisadas_y_los_revisores(self):
+        ticket, entregable = self._ticket_con_conjunto()
+        columnas = revision_ops.columnas_revisadas_de(entregable)
+        self.assertEqual({c.clave for c in columnas}, {"tema", "arte"})
+        self.assertTrue(all(c.version_id == ticket.parrilla.formulario_version_id for c in columnas))
+        self.assertEqual(entregable.revisores.count(), 2)
+        # La configuración y la estructura cambian después: este Ticket conserva lo suyo.
+        configurar_definicion_entregable(
+            self.servicio, self.admin, definicion=self.definicion_entregable, nombre="Piezas aprobadas",
+            tipo="ELEMENTOS", columnas_revisadas=["tema"], revisores_usuarios=[self.otro],
+        )
+        nueva = crear_nueva_version(self.definicion_estructura.formulario, self.admin)
+        activar_version(self.definicion_estructura.formulario, nueva, self.admin)
+        self.assertEqual({c.clave for c in revision_ops.columnas_revisadas_de(entregable)}, {"tema", "arte"})
+        self.assertTrue(puede_revisar_conjunto(self.revisor, entregable))
+        self.assertFalse(puede_revisar_conjunto(self.otro, entregable))
+        # Una columna que no es de la versión congelada no puede ser «revisada» de este Ticket.
+        with self.assertRaises(ValidationError):
+            ColumnaRevisadaEntregable(entregable=entregable, campo=nueva.campos.get(clave="notas")).save()
+        siguiente = generar_ejecucion_programada(
+            ProgramacionProceso.objects.get(servicio=self.servicio), hoy=date(2026, 11, 7)
+        ).ticket
+        nuevo = siguiente.entregables.get(tipo="ELEMENTOS")
+        self.assertEqual([c.clave for c in revision_ops.columnas_revisadas_de(nuevo)], ["tema"])
+        self.assertTrue(puede_revisar_conjunto(self.otro, nuevo))
+
+    def test_cada_ticket_revisa_solo_sus_elementos(self):
+        ticket, entregable = self._ticket_con_conjunto()
+        otro_ticket = generar_ejecucion_programada(
+            ProgramacionProceso.objects.get(servicio=self.servicio), hoy=date(2026, 11, 7)
+        ).ticket
+        tomar_ticket(otro_ticket, self.analista)
+        otro_entregable = otro_ticket.entregables.get(tipo="ELEMENTOS")
+        propio, ajeno = self._completo(ticket), self._completo(otro_ticket)
+        with self.assertRaises(ValidationError):  # el elemento de un Ticket no se revisa en el entregable de otro
+            revision_ops.aprobar_elemento(otro_entregable, propio, self.revisor)
+        with self.assertRaises(ValidationError):  # ni por el modelo
+            RevisionElemento(
+                entregable=otro_entregable, elemento=propio, decision="APROBADA", revisor=self.revisor,
+                decidido_en=timezone.now(), huella="x", contenido="{}",
+            ).save()
+        revision_ops.aprobar_elemento(entregable, propio, self.revisor)
+        self.assertEqual(revision_ops.resumen_conjunto(entregable).aprobados, 1)
+        self.assertEqual(revision_ops.resumen_conjunto(otro_entregable).aprobados, 0)
+        self.assertEqual(revision_ops.estado_de(otro_entregable, ajeno), revision_ops.Estado.PENDIENTE)
+
+    def test_solo_los_revisores_configurados_revisan_y_no_el_responsable(self):
+        ticket, entregable = self._ticket_con_conjunto()
+        elemento = self._completo(ticket)
+        for quien in (self.analista, self.otro, self.solicitante):
+            with self.subTest(quien=quien.username):
+                with self.assertRaises(PermissionDenied):
+                    revision_ops.aprobar_elemento(entregable, elemento, quien)
+                with self.assertRaises(PermissionDenied):
+                    revision_ops.devolver_elemento(entregable, elemento, quien, "No")
+        with self.assertRaises(PermissionDenied):  # revisar no es editar
+            parrilla_ops.actualizar_valores(elemento, self.revisor, {self.campos["Tema"]: "Otro"})
+        revision_ops.aprobar_elemento(entregable, elemento, self.revisor)  # persona configurada
+        segundo = self._completo(ticket, "Post")
+        revision_ops.aprobar_elemento(entregable, segundo, self.miembro)  # miembro del equipo configurado
+        MiembroEquipo.objects.filter(usuario=self.miembro).update(activo=False)
+        tercero = self._completo(ticket, "Story")
+        with self.assertRaises(PermissionDenied):  # retirado del equipo, deja de poder
+            revision_ops.aprobar_elemento(entregable, tercero, self.miembro)
+        Ticket.objects.filter(pk=ticket.pk).update(estado=Ticket.Estado.CANCELADO)
+        with self.assertRaises(ValidationError):  # y un ticket cancelado ya no se revisa
+            revision_ops.aprobar_elemento(entregable, tercero, self.revisor)
+
+    def test_aprobacion_individual_y_progreso_n_de_n(self):
+        ticket, entregable = self._ticket_con_conjunto()
+        a, b, c = self._completo(ticket, "A"), self._completo(ticket, "B"), self._completo(ticket, "C")
+        resumen = revision_ops.resumen_conjunto(entregable)
+        self.assertEqual((resumen.total, resumen.aprobados, resumen.pendientes, resumen.devueltos), (3, 0, 3, 0))
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        resumen = revision_ops.resumen_conjunto(entregable)
+        self.assertEqual((resumen.progreso, resumen.pendientes), ("1/3", 2))
+        self.assertEqual(revision_ops.estado_de(entregable, b), revision_ops.Estado.PENDIENTE)
+        self.assertFalse(entregable.satisfecho)
+        revision_ops.aprobar_elemento(entregable, b, self.revisor)
+        revision_ops.aprobar_elemento(entregable, c, self.revisor)
+        self.assertEqual(revision_ops.resumen_conjunto(entregable).progreso, "3/3")
+        self.assertTrue(entregable.satisfecho)
+        with self.assertRaises(ValidationError):  # aprobar dos veces el mismo contenido no tiene sentido
+            revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        # Agregar una fila la incorpora al conjunto pendiente; incompleta, no se puede aprobar.
+        d = self._elemento(ticket, Arte="v1")
+        self.assertFalse(entregable.satisfecho)
+        self.assertEqual(revision_ops.resumen_conjunto(entregable).pendientes, 1)
+        with self.assertRaises(ValidationError):
+            revision_ops.aprobar_elemento(entregable, d, self.revisor)
+        self._editar(d, Tema="D")  # la persona responsable NO es una columna revisada: no hace falta
+        revision_ops.aprobar_elemento(entregable, d, self.revisor)
+        self.assertTrue(entregable.satisfecho)
+        self.assertEqual(revision_ops.resumen_conjunto(entregable).progreso, "4/4")
+
+    def test_la_devolucion_exige_observacion(self):
+        ticket, entregable = self._ticket_con_conjunto()
+        elemento = self._completo(ticket)
+        for vacia in ("", "   "):
+            with self.assertRaises(ValidationError):
+                revision_ops.devolver_elemento(entregable, elemento, self.revisor, vacia)
+        self.assertFalse(RevisionElemento.objects.exists())
+        revision_ops.devolver_elemento(entregable, elemento, self.revisor, "Falta el arte")
+        self.assertEqual(revision_ops.estado_de(entregable, elemento), revision_ops.Estado.DEVUELTA)
+        resumen = revision_ops.resumen_conjunto(entregable)
+        self.assertEqual((resumen.devueltos, resumen.pendientes, resumen.aprobados), (1, 0, 0))
+        self.assertFalse(entregable.satisfecho)
+        with self.assertRaises(ValidationError):  # ya devuelto: se espera la corrección
+            revision_ops.devolver_elemento(entregable, elemento, self.revisor, "Otra vez")
+        with self.assertRaises(ValidationError):
+            RevisionElemento(
+                entregable=entregable, elemento=elemento, decision="DEVUELTA", observacion="", revisor=self.revisor,
+                decidido_en=timezone.now(), huella="x", contenido="{}",
+            ).save()
+        with self.assertRaises(IntegrityError), transaction.atomic():  # y la base también lo exige
+            RevisionElemento.objects.bulk_create([RevisionElemento(
+                entregable=entregable, elemento=elemento, decision="DEVUELTA", observacion="", revisor=self.revisor,
+                decidido_en=timezone.now(), huella="x", contenido="{}",
+            )])
+
+    def test_corregir_invalida_solo_ese_elemento_y_permite_una_nueva_revision(self):
+        ticket, entregable = self._ticket_con_conjunto()
+        a, b = self._completo(ticket, "A"), self._completo(ticket, "B")
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        revision_ops.aprobar_elemento(entregable, b, self.revisor)
+        self.assertTrue(entregable.satisfecho)
+        self._editar(a, Tema="A corregido")  # columna REVISADA
+        self.assertEqual(revision_ops.estado_de(entregable, a), revision_ops.Estado.PENDIENTE)
+        self.assertEqual(revision_ops.estado_de(entregable, b), revision_ops.Estado.APROBADA)  # las demás filas conservan su decisión
+        self.assertEqual(revision_ops.resumen_conjunto(entregable).progreso, "1/2")
+        self.assertFalse(entregable.satisfecho)
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)  # nueva revisión, sin tocar la anterior
+        self.assertEqual(RevisionElemento.objects.filter(elemento=a).count(), 2)
+        self.assertTrue(entregable.satisfecho)
+        # Una devolución corregida también vuelve a pendiente y admite otra revisión.
+        revision_ops.devolver_elemento(entregable, b, self.revisor, "Ajusta el arte")
+        self._editar(b, Arte="v2")
+        self.assertEqual(revision_ops.estado_de(entregable, b), revision_ops.Estado.PENDIENTE)
+        revision_ops.aprobar_elemento(entregable, b, self.revisor)
+        self.assertEqual(RevisionElemento.objects.filter(elemento=b).count(), 3)
+
+    def test_cambiar_columnas_ajenas_no_invalida_la_aprobacion(self):
+        ticket, entregable = self._ticket_con_conjunto()
+        elemento = self._completo(ticket)
+        revision_ops.aprobar_elemento(entregable, elemento, self.revisor)
+        self._editar(elemento, Notas="Comentario interno", Responsable=self.otro.pk)  # no están entre las revisadas
+        self.assertEqual(revision_ops.estado_de(entregable, elemento), revision_ops.Estado.APROBADA)
+        self.assertTrue(entregable.satisfecho)
+        self.assertEqual(RevisionElemento.objects.filter(elemento=elemento).count(), 1)
+
+    def test_el_historial_es_inmutable_y_conserva_todas_las_decisiones(self):
+        ticket, entregable = self._ticket_con_conjunto()
+        elemento = self._completo(ticket, "Titulo inicial")
+        revision_ops.devolver_elemento(entregable, elemento, self.revisor, "Mal título")
+        self._editar(elemento, Tema="Titulo corregido")
+        revision_ops.aprobar_elemento(entregable, elemento, self.revisor)
+        historial = revision_ops.historial_de(entregable, elemento)
+        self.assertEqual([r.decision for r in historial], ["APROBADA", "DEVUELTA"])  # la más reciente primero
+        self.assertEqual((historial[1].revisor, historial[1].observacion), (self.revisor, "Mal título"))
+        self.assertNotEqual(historial[0].huella, historial[1].huella)
+        self.assertIn("Titulo corregido", historial[0].contenido)  # qué se revisó en cada decisión
+        self.assertIn("Titulo inicial", historial[1].contenido)
+        with self.assertRaises(ValidationError):
+            historial[0].observacion = "reescrita"
+            historial[0].save()
+        with self.assertRaises(ValidationError):
+            historial[0].delete()
+        self.assertEqual(RegistroAuditoria.objects.filter(modelo="tickets.revisionelemento").count(), 2)
+
+    def test_un_conjunto_vacio_no_se_satisface_y_retirar_excluye_del_agregado(self):
+        ticket, entregable = self._ticket_con_conjunto()
+        self.assertEqual(revision_ops.resumen_conjunto(entregable).total, 0)
+        self.assertFalse(entregable.satisfecho)  # vacío ≠ satisfecho
+        a, b = self._completo(ticket, "A"), self._completo(ticket, "B")
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        revision_ops.devolver_elemento(entregable, b, self.revisor, "No")
+        self.assertFalse(entregable.satisfecho)
+        parrilla_ops.retirar_elemento(b, self.analista)  # sale del agregado, conserva su historial
+        self.assertTrue(entregable.satisfecho)
+        self.assertEqual(revision_ops.resumen_conjunto(entregable).total, 1)
+        self.assertEqual(RevisionElemento.objects.filter(elemento=b).count(), 1)
+        with self.assertRaises(ValidationError):
+            revision_ops.aprobar_elemento(entregable, b, self.revisor)
+        parrilla_ops.retirar_elemento(a, self.analista)  # sin elementos vigentes vuelve a no estar satisfecho
+        self.assertFalse(entregable.satisfecho)
+        self.assertEqual(RevisionElemento.objects.count(), 2)
+
+    def test_el_flujo_consume_el_conjunto_y_luego_no_se_retiran_elementos(self):
+        ticket, entregable = self._ticket_con_conjunto(con_bloque=True)
+        self._completar_como(ticket, "Atender", self.analista)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.instancia_workflow.estado, "EN_ESPERA")  # espera el conjunto aprobado
+        a, b = self._completo(ticket, "A"), self._completo(ticket, "B")
+        parrilla_ops.retirar_elemento(b, self.analista)  # aún no consumido: se puede retirar
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)  # satisfecho → el bloque del flujo continúa
+        ticket.instancia_workflow.refresh_from_db()
+        self.assertEqual(ticket.instancia_workflow.estado, "COMPLETADA")
+        self.assertTrue(revision_ops.consumido_por_flujo(entregable))
+        with self.assertRaises(ValidationError):  # ya consumido: se bloquea conservadoramente
+            parrilla_ops.retirar_elemento(a, self.analista)
+        self.assertIsNone(ElementoParrilla.objects.get(pk=a.pk).retirado_en)
+
+    def test_otros_entregables_siguen_igual_y_la_ui_minima_revisa_en_una_sola_vista(self):
+        ticket, entregable = self._ticket_con_conjunto(con_texto=True)
+        texto = ticket.entregables.get(tipo="TEXTO")
+        self.assertIsNone(texto.resumen_conjunto)
+        self.assertFalse(texto.satisfecho)
+        registrar_resultado_entregable(texto, self.analista, "Listo")
+        self.assertTrue(EntregableTicket.objects.get(pk=texto.pk).satisfecho)
+        pendientes = [e.nombre for e in entregables_obligatorios_pendientes(ticket, self.analista)]
+        self.assertEqual(pendientes, ["Piezas aprobadas"])  # el conjunto vacío bloquea la entrega como cualquier obligatorio
+        a, b = self._completo(ticket, "A"), self._completo(ticket, "B")
+        url = reverse("tickets:revision_conjunto", args=[ticket.pk, entregable.pk])
+        self._entrar(self.analista)
+        detalle = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        self.assertContains(detalle, url)
+        pagina = self.client.get(url)
+        self.assertContains(pagina, "0/2")
+        self.assertNotContains(pagina, reverse("tickets:revision_aprobar", args=[ticket.pk, entregable.pk, a.pk]))
+        self.assertEqual(
+            self.client.post(reverse("tickets:revision_aprobar", args=[ticket.pk, entregable.pk, a.pk])).status_code, 302
+        )
+        self.assertEqual(revision_ops.resumen_conjunto(entregable).aprobados, 0)  # el responsable no aprueba
+        # El revisor llega al conjunto sin ganar acceso al resto del ticket.
+        self._entrar(self.revisor)
+        self.assertEqual(self.client.get(reverse("tickets:detalle", args=[ticket.pk])).status_code, 403)
+        pagina = self.client.get(url)
+        self.assertContains(pagina, reverse("tickets:revision_aprobar", args=[ticket.pk, entregable.pk, a.pk]))
+        self.client.post(reverse("tickets:revision_aprobar", args=[ticket.pk, entregable.pk, a.pk]))
+        self.client.post(reverse("tickets:revision_devolver", args=[ticket.pk, entregable.pk, b.pk]), {"observacion": ""})
+        self.assertEqual(revision_ops.estado_de(entregable, b), revision_ops.Estado.PENDIENTE)  # sin observación no devuelve
+        self.client.post(
+            reverse("tickets:revision_devolver", args=[ticket.pk, entregable.pk, b.pk]), {"observacion": "Falta el arte"}
+        )
+        pagina = self.client.get(url)
+        self.assertContains(pagina, "1/2")
+        self.assertContains(pagina, "Falta el arte")
+        self.assertContains(pagina, "Historial de revisión")
+        self._entrar(self.otro)  # sin relación con el ticket ni con la revisión
+        self.assertEqual(self.client.get(url).status_code, 403)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4.G2C2 — Entregables por conjunto durante la ejecución del Workflow: continuación por el
+# mecanismo existente, protección de lo consumido, revisión solo en su turno, bandeja de «Mi trabajo» y
+# regla de resolución de los Procesos. Sin bloques nuevos, tareas por elemento ni cambios al motor.
+# ---------------------------------------------------------------------------
+
+
+class _EscenarioConjuntoEnFlujoMixin(_EscenarioRevisionMixin):
+    def _ticket_esperando_el_conjunto(self, **opciones):
+        """Ticket cuyo flujo ya completó «Atender» y ahora ESPERA el conjunto aprobado."""
+        ticket, entregable = self._ticket_con_conjunto(con_bloque=True, **opciones)
+        self._completar_como(ticket, "Atender", self.analista)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.instancia_workflow.estado, "EN_ESPERA")
+        return ticket, entregable
+
+    def _estado_flujo(self, ticket):
+        ticket.instancia_workflow.refresh_from_db()
+        return ticket.instancia_workflow.estado
+
+    def _consumir(self, ticket, entregable):
+        """Aprueba dos elementos y deja que el flujo consuma el entregable. Devuelve (a, b)."""
+        a, b = self._completo(ticket, "A"), self._completo(ticket, "B")
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        revision_ops.aprobar_elemento(entregable, b, self.revisor)
+        self.assertEqual(self._estado_flujo(ticket), "COMPLETADA")
+        return a, b
+
+
+class ConjuntoEnElFlujoTests(_EscenarioConjuntoEnFlujoMixin, TestCase):
+    def setUp(self):
+        self._preparar_revision()
+
+    def test_aprobar_el_ultimo_elemento_continua_el_flujo_por_el_mecanismo_existente(self):
+        ticket, entregable = self._ticket_esperando_el_conjunto()
+        a, b = self._completo(ticket, "A"), self._completo(ticket, "B")
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        self.assertEqual(self._estado_flujo(ticket), "EN_ESPERA")  # falta uno: el flujo sigue esperando
+        revision_ops.aprobar_elemento(entregable, b, self.revisor)
+        self.assertEqual(self._estado_flujo(ticket), "COMPLETADA")
+        self.assertTrue(EntregableTicket.objects.get(pk=entregable.pk).satisfecho)
+        ejecucion = ticket.instancia_workflow.ejecuciones_etapa.filter(
+            bloque_operativo__definicion_entregable_id=entregable.definicion_id
+        ).get()
+        self.assertEqual(ejecucion.estado, "COMPLETADA")
+
+    def test_la_continuacion_es_idempotente(self):
+        from apps.workflows.integracion import continuar_por_entregable
+
+        ticket, entregable = self._ticket_esperando_el_conjunto()
+        self._consumir(ticket, entregable)
+        ejecuciones = ticket.instancia_workflow.ejecuciones_etapa.count()
+        revision_ops.avisar_flujo(ticket)  # un segundo aviso no encuentra espera alguna
+        revision_ops.avisar_flujo(ticket)
+        self.assertFalse(continuar_por_entregable(EntregableTicket.objects.get(pk=entregable.pk)))
+        self.assertEqual(ticket.instancia_workflow.ejecuciones_etapa.count(), ejecuciones)
+        self.assertEqual(self._estado_flujo(ticket), "COMPLETADA")
+        self.assertEqual(RevisionElemento.objects.filter(entregable=entregable).count(), 2)
+
+    def test_las_columnas_revisadas_de_un_conjunto_consumido_no_cambian_pero_las_ajenas_si(self):
+        ticket, entregable = self._ticket_esperando_el_conjunto()
+        a, _ = self._consumir(ticket, entregable)
+        with self.assertRaises(ValidationError) as contexto:
+            self._editar(a, Tema="Otro tema")
+        self.assertIn("consumió", " ".join(contexto.exception.messages))
+        with self.assertRaises(ValidationError):  # borrar también cambia lo consumido
+            self._editar(a, Tema="")
+        with self.assertRaises(ValidationError):  # y escribir donde no había
+            self._editar(a, Arte="v1")
+        self._editar(a, Tema="A")  # reenviar el mismo valor (como hace el formulario de edición) no es un cambio
+        self._editar(a, Notas="Comentario interno", Responsable=self.otro.pk)  # columnas ajenas: sí
+        self.assertEqual(parrilla_ops.valores_de(a)["notas"], "Comentario interno")
+        self.assertEqual(parrilla_ops.valores_de(a)["tema"], "A")
+        self.assertEqual(revision_ops.estado_de(entregable, a), revision_ops.Estado.APROBADA)
+        self.assertEqual(RevisionElemento.objects.filter(entregable=entregable).count(), 2)  # historial intacto
+
+    def test_no_se_agregan_ni_retiran_elementos_de_un_conjunto_consumido(self):
+        ticket, entregable = self._ticket_esperando_el_conjunto()
+        a, _ = self._consumir(ticket, entregable)
+        with self.assertRaises(ValidationError):
+            self._elemento(ticket, Tema="Tardío")
+        with self.assertRaises(ValidationError):
+            parrilla_ops.retirar_elemento(a, self.analista)
+        self.assertEqual(ElementoParrilla.objects.filter(parrilla__ticket=ticket).count(), 2)
+        self.assertIsNone(ElementoParrilla.objects.get(pk=a.pk).retirado_en)
+        self.assertEqual(revision_ops.resumen_conjunto(entregable).progreso, "2/2")
+
+    def test_corregir_antes_del_consumo_conserva_lo_aprobado_y_continua_solo_al_completar(self):
+        ticket, entregable = self._ticket_esperando_el_conjunto()
+        a, b, c = self._completo(ticket, "A"), self._completo(ticket, "B"), self._completo(ticket, "C")
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        revision_ops.aprobar_elemento(entregable, b, self.revisor)
+        revision_ops.devolver_elemento(entregable, c, self.revisor, "Falta el arte")
+        self.assertEqual(self._estado_flujo(ticket), "EN_ESPERA")
+        self._editar(c, Arte="v2")  # corrige lo devuelto
+        self._editar(a, Tema="A corregido")  # y alguien toca una columna revisada de otro elemento
+        self.assertEqual(revision_ops.estado_de(entregable, a), revision_ops.Estado.PENDIENTE)  # solo A se invalida
+        self.assertEqual(revision_ops.estado_de(entregable, b), revision_ops.Estado.APROBADA)
+        self.assertEqual(revision_ops.estado_de(entregable, c), revision_ops.Estado.PENDIENTE)
+        revision_ops.aprobar_elemento(entregable, c, self.revisor)
+        self.assertEqual(self._estado_flujo(ticket), "EN_ESPERA")  # A sigue pendiente: el agregado no cumple
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        self.assertEqual(self._estado_flujo(ticket), "COMPLETADA")
+        cuentas = {e.numero: RevisionElemento.objects.filter(elemento=e).count() for e in (a, b, c)}
+        self.assertEqual(cuentas, {1: 2, 2: 1, 3: 2})  # nada se reinició ni se sobrescribió
+
+    def test_no_se_revisa_por_adelantado_ni_un_conjunto_ya_consumido(self):
+        ticket, entregable = self._ticket_con_conjunto(con_bloque=True)  # el flujo sigue en «Atender»
+        a, b = self._completo(ticket, "A"), self._completo(ticket, "B")
+        with self.assertRaises(ValidationError) as contexto:
+            revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        self.assertIn("turno", " ".join(contexto.exception.messages))
+        self.assertFalse(RevisionElemento.objects.exists())
+        self._entrar(self.revisor)
+        url = reverse("tickets:revision_conjunto", args=[ticket.pk, entregable.pk])
+        pagina = self.client.get(url)
+        self.assertContains(pagina, 'id="motivo-bloqueo"')
+        self.assertNotContains(pagina, reverse("tickets:revision_aprobar", args=[ticket.pk, entregable.pk, a.pk]))
+        self._completar_como(ticket, "Atender", self.analista)  # llega su turno
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        revision_ops.aprobar_elemento(entregable, b, self.revisor)
+        self.assertEqual(self._estado_flujo(ticket), "COMPLETADA")
+        with self.assertRaises(ValidationError) as contexto:  # y consumido, ya no se toca
+            revision_ops.devolver_elemento(entregable, a, self.revisor, "Tarde")
+        self.assertIn("consumió", " ".join(contexto.exception.messages))
+
+    def test_en_el_turno_del_entregable_revisa_solo_el_revisor_y_edita_solo_el_responsable(self):
+        ticket, entregable = self._ticket_esperando_el_conjunto()
+        a = self._completo(ticket, "A")
+        for quien in (self.analista, self.solicitante, self.otro):  # ni el responsable ni el solicitante revisan
+            with self.assertRaises(PermissionDenied):
+                revision_ops.aprobar_elemento(entregable, a, quien)
+        with self.assertRaises(PermissionDenied):  # el revisor no edita
+            parrilla_ops.actualizar_valores(a, self.revisor, {self.campos["Notas"]: "x"})
+        revision_ops.aprobar_elemento(entregable, a, self.miembro)  # el equipo configurado también
+        self.assertEqual(revision_ops.estado_de(entregable, a), revision_ops.Estado.APROBADA)
+
+    def test_mi_trabajo_muestra_las_revisiones_pendientes_y_las_quita_al_completarse(self):
+        ticket, entregable = self._ticket_con_conjunto(con_bloque=True)
+        a, b = self._completo(ticket, "A"), self._completo(ticket, "B")
+        url = reverse("tickets:revision_conjunto", args=[ticket.pk, entregable.pk])
+        self._entrar(self.revisor)
+        self.assertNotContains(self.client.get(reverse("core:mi_trabajo")), url)  # aún no es su turno
+        self.assertEqual(revision_ops.revisiones_pendientes_para(self.revisor), [])
+        self._completar_como(ticket, "Atender", self.analista)
+        pagina = self.client.get(reverse("core:mi_trabajo"))
+        self.assertContains(pagina, url)
+        self.assertContains(pagina, "Piezas aprobadas")
+        self.assertContains(pagina, "0/2 aprobados")
+        self.assertContains(pagina, "Revisión de elementos")
+        self.assertEqual(self.client.get(reverse("core:mi_trabajo") + "?tab=revisiones").context["total_revisiones"], 1)
+        self._entrar(self.miembro)  # quien revisa por equipo la ve igual
+        self.assertContains(self.client.get(reverse("core:mi_trabajo")), url)
+        self._entrar(self.analista)  # el responsable no revisa: no la ve como revisión suya
+        self.assertEqual(self.client.get(reverse("core:mi_trabajo")).context["total_revisiones"], 0)
+        self._entrar(self.otro)
+        self.assertEqual(self.client.get(reverse("core:mi_trabajo")).context["total_revisiones"], 0)
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        revision_ops.devolver_elemento(entregable, b, self.revisor, "Ajusta")
+        self._entrar(self.revisor)
+        self.assertContains(self.client.get(reverse("core:mi_trabajo")), url)  # una devuelta sigue a la vista
+        revision_ops.aprobar_elemento(entregable, b, self.revisor)  # completado
+        self.assertEqual(revision_ops.revisiones_pendientes_para(self.revisor), [])
+        self.assertNotContains(self.client.get(reverse("core:mi_trabajo")), url)
+
+    def test_el_espacio_de_trabajo_muestra_el_conjunto_y_lo_que_hay_que_corregir(self):
+        ticket, entregable = self._ticket_esperando_el_conjunto()
+        a, b = self._completo(ticket, "A"), self._completo(ticket, "B")
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        revision_ops.devolver_elemento(entregable, b, self.revisor, "Falta el arte")
+        self._entrar(self.analista)
+        pagina = self.client.get(reverse("tickets:trabajo", args=[ticket.pk]))
+        self.assertContains(pagina, "Piezas aprobadas")
+        self.assertContains(pagina, "1/2")
+        self.assertContains(pagina, "Debes corregir información")
+        self.assertContains(pagina, "Falta el arte")
+        self.assertContains(pagina, reverse("tickets:revision_conjunto", args=[ticket.pk, entregable.pk]))
+
+    def test_un_proceso_no_se_resuelve_con_entregables_obligatorios_pendientes(self):
+        ticket, entregable = self._ticket_con_conjunto(con_opcional=True)  # sin bloque: el flujo termina con «Atender»
+        self._completar_como(ticket, "Atender", self.analista)
+        self.assertEqual(self._estado_flujo(ticket), "COMPLETADA")
+        with self.assertRaises(ValidationError) as contexto:  # el conjunto obligatorio (vacío) no está satisfecho
+            resolver_ticket(ticket, self.analista, "Listo")
+        self.assertIn("Piezas aprobadas", " ".join(contexto.exception.messages))
+        self.assertNotIn("Nota opcional", " ".join(contexto.exception.messages))  # los opcionales no bloquean
+        a = self._completo(ticket, "A")
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        resolver_ticket(ticket, self.analista, "Todo aprobado")
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.RESUELTO)
+
+
+class ResolucionSegunTipoConEntregablesTests(_MediaAisladaMixin, _EscenarioEntregablesMixin, TestCase):
+    def setUp(self):
+        self._preparar_entregables()
+
+    def test_la_regla_de_entregables_obligatorios_es_solo_de_los_procesos(self):
+        # `ticket42` es un Servicio con cuatro entregables obligatorios sin satisfacer.
+        self.assertEqual(self.ticket42.tipo, Ticket.Tipo.SERVICIO)
+        self.assertEqual(len(entregables_obligatorios_pendientes(self.ticket42, self.responsable42)), 4)
+        Ticket.objects.filter(pk=self.ticket42.pk).update(tipo=Ticket.Tipo.PROCESO)
+        with self.assertRaises(ValidationError) as contexto:
+            resolver_ticket(self.ticket42, self.responsable42, "Intento")
+        self.assertIn("Faltan entregables obligatorios", " ".join(contexto.exception.messages))
+        Ticket.objects.filter(pk=self.ticket42.pk).update(tipo=Ticket.Tipo.SERVICIO)
+        resolver_ticket(self.ticket42, self.responsable42, "Un Servicio se resuelve como antes")
+        self.ticket42.refresh_from_db()
+        self.assertEqual(self.ticket42.estado, Ticket.Estado.RESUELTO)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4.G1.5 — Cancelación coherente del Ticket: detiene su ejecución y el trabajo asociado
+# (Workflow, Tareas, aprobaciones, elementos y entregables) sin borrar historia, en una transacción.
+# ---------------------------------------------------------------------------
+
+from apps.aprobaciones.consultas import aprobaciones_pendientes_para as aprobaciones_pendientes_para_prueba  # noqa: E402
+from apps.aprobaciones.models import Aprobacion  # noqa: E402
+from apps.tareas.models import Tarea  # noqa: E402
+from apps.tickets.programadas import reconciliar_ejecuciones_programadas  # noqa: E402
+from apps.workflows.integracion import cancelar_ejecucion, completar_tarea_workflow  # noqa: E402
+from apps.workflows.models import EsquemaAprobacionWorkflow, InstanciaEtapa, InstanciaWorkflow, TareaWorkflow  # noqa: E402
+
+
+class CancelacionSinWorkflowTests(_MediaAisladaMixin, _EscenarioEntregablesMixin, TestCase):
+    def setUp(self):
+        self._preparar_entregables()
+
+    def test_cancelar_un_ticket_sin_workflow_es_transaccional_y_no_se_repite(self):
+        self.assertIsNone(self.ticket42.instancia_workflow_id)
+        antes = HistorialTicket.objects.filter(ticket=self.ticket42).count()
+        cancelar_ticket(self.ticket42, self.responsable42, "Ya no se necesita.")
+        self.ticket42.refresh_from_db()
+        self.assertEqual(self.ticket42.estado, Ticket.Estado.CANCELADO)
+        eventos = HistorialTicket.objects.filter(ticket=self.ticket42, tipo_evento=HistorialTicket.TipoEvento.CANCELADO)
+        self.assertEqual(eventos.count(), 1)
+        self.assertEqual((eventos.get().actor, eventos.get().datos["motivo"]), (self.responsable42, "Ya no se necesita."))
+        self.assertEqual(HistorialTicket.objects.filter(ticket=self.ticket42).count(), antes + 1)
+        with self.assertRaises(ValidationError):  # un segundo intento no repite nada
+            cancelar_ticket(self.ticket42, self.responsable42, "Otra vez")
+        self.assertEqual(eventos.count(), 1)
+        # Lo escrito se conserva y ya no se modifica: ningún entregable admite escritura.
+        with self.assertRaises(PermissionDenied):
+            registrar_resultado_entregable(self._entregable("TEXTO"), self.responsable42, "Tardío")
+
+    def test_un_ticket_resuelto_o_cerrado_no_se_cancela(self):
+        resolver_ticket(self.ticket42, self.responsable42, "Listo")
+        with self.assertRaises(ValidationError):
+            cancelar_ticket(self.ticket42, self.responsable42, "Tarde")
+        self.ticket42.refresh_from_db()
+        self.assertEqual(self.ticket42.estado, Ticket.Estado.RESUELTO)
+
+
+class CancelacionConWorkflowTests(_EscenarioConjuntoEnFlujoMixin, TestCase):
+    def setUp(self):
+        self._preparar_revision()
+
+    def _ticket_con_tarea_pendiente(self, **opciones):
+        ticket, entregable = self._ticket_con_conjunto(con_bloque=True, **opciones)
+        vinculo = TareaWorkflow.objects.get(instancia_etapa__instancia_workflow=ticket.instancia_workflow)
+        return ticket, entregable, vinculo.tarea
+
+    def _ticket_informe(self, nombre="Informe cancelable", hoy=date(2026, 10, 7)):
+        servicio, responsable = self._proceso(nombre, flujo="informe")
+        programacion = self._programar(servicio, responsable, dia=1, periodo="MES_ACTUAL", desde=date(2020, 1, 1))
+        ticket = generar_ejecucion_programada(programacion, hoy=hoy).ticket
+        tomar_ticket(ticket, self.analista)
+        ticket.refresh_from_db()
+        return servicio, programacion, ticket
+
+    def test_cancelar_con_workflow_activo_detiene_la_ejecucion_y_conserva_la_historia(self):
+        ticket, _, tarea = self._ticket_con_tarea_pendiente()
+        instancia = ticket.instancia_workflow
+        ejecuciones = list(instancia.ejecuciones_etapa.values_list("pk", "estado"))
+        cancelar_ticket(ticket, self.analista, "Se canceló el ciclo.")
+        instancia.refresh_from_db()
+        ticket.refresh_from_db()
+        self.assertEqual((ticket.estado, instancia.estado), (Ticket.Estado.CANCELADO, InstanciaWorkflow.Estado.CANCELADA))
+        # Las etapas ejecutadas no se borran ni se reescriben.
+        self.assertEqual(list(instancia.ejecuciones_etapa.values_list("pk", "estado")), ejecuciones)
+        self.assertTrue(
+            RegistroAuditoria.objects.filter(modelo="workflows.instanciaworkflow", object_id=instancia.pk).exists()
+        )
+        tarea.refresh_from_db()
+        self.assertEqual(tarea.estado, Tarea.Estado.CANCELADA)
+
+    def test_una_ejecucion_cancelada_no_continua_ni_se_reanuda(self):
+        from apps.workflows.integracion import continuar_por_entregable
+        from apps.workflows.motor import avanzar_instancia, reanudar_instancia
+
+        ticket, entregable, tarea = self._ticket_con_tarea_pendiente()
+        cancelar_ticket(ticket, self.analista, "Cancelado.")
+        instancia = ticket.instancia_workflow
+        ejecuciones = instancia.ejecuciones_etapa.count()
+        with self.assertRaises((ValidationError, ValueError)):  # la Tarea cancelada ya no se completa ni continúa el flujo
+            completar_tarea_workflow(tarea, self.analista)
+        with self.assertRaises(ValueError):
+            reanudar_instancia(instancia)
+        with self.assertRaises(ValueError):
+            avanzar_instancia(instancia)
+        self.assertFalse(continuar_por_entregable(EntregableTicket.objects.get(pk=entregable.pk)))
+        revision_ops.avisar_flujo(ticket)  # un aviso tardío no reactiva nada
+        self.assertEqual(self._estado_flujo(ticket), "CANCELADA")
+        self.assertEqual(instancia.ejecuciones_etapa.count(), ejecuciones)  # y no se generan tareas nuevas
+        tarea.refresh_from_db()
+        self.assertEqual(tarea.estado, Tarea.Estado.CANCELADA)
+
+    def test_las_tareas_pendientes_y_en_progreso_dejan_de_ser_ejecutables(self):
+        from apps.tareas.operaciones import iniciar_tarea, reasignar_tarea
+
+        ticket, _, tarea = self._ticket_con_tarea_pendiente()
+        propia = Tarea.objects.get(pk=tarea.pk)
+        iniciar_tarea(propia, self.analista)  # EN_PROGRESO
+        self.assertEqual(Tarea.objects.get(pk=tarea.pk).estado, Tarea.Estado.EN_PROGRESO)
+        cancelar_ticket(ticket, self.analista, "Cancelado.")
+        tarea.refresh_from_db()
+        self.assertEqual(tarea.estado, Tarea.Estado.CANCELADA)
+        for operacion in (
+            lambda: iniciar_tarea(tarea, self.analista),
+            lambda: reasignar_tarea(tarea, self.analista, usuario=self.otro),
+        ):
+            with self.assertRaises((ValidationError, PermissionDenied)):
+                operacion()
+        self.assertEqual(Tarea.objects.get(pk=tarea.pk).estado, Tarea.Estado.CANCELADA)
+        self.assertTrue(tarea.historial.filter(tipo_evento="CANCELADA", actor=self.analista).exists())
+
+    def test_las_tareas_completadas_se_conservan_y_lo_ajeno_no_se_toca(self):
+        ticket, entregable = self._ticket_esperando_el_conjunto()  # «Atender» ya está COMPLETADA
+        completada = TareaWorkflow.objects.get(instancia_etapa__instancia_workflow=ticket.instancia_workflow).tarea
+        independiente = Tarea.objects.create(titulo="Independiente", usuario_responsable=self.analista)
+        # Otro ticket del mismo proceso, con su propia tarea pendiente.
+        otro = generar_ejecucion_programada(
+            ProgramacionProceso.objects.get(servicio=self.servicio), hoy=date(2026, 11, 7)
+        ).ticket
+        tomar_ticket(otro, self.analista)
+        otra_tarea = TareaWorkflow.objects.get(instancia_etapa__instancia_workflow=otro.instancia_workflow).tarea
+        cancelar_ticket(ticket, self.analista, "Cancelado.")
+        completada.refresh_from_db()
+        self.assertEqual((completada.estado, completada.completada_por), (Tarea.Estado.COMPLETADA, self.analista))
+        self.assertEqual(Tarea.objects.get(pk=independiente.pk).estado, Tarea.Estado.PENDIENTE)
+        self.assertEqual(Tarea.objects.get(pk=otra_tarea.pk).estado, Tarea.Estado.PENDIENTE)
+        otro.refresh_from_db()
+        self.assertEqual((otro.estado, self._estado_flujo(otro)), (Ticket.Estado.EN_ATENCION, "EN_ESPERA"))
+
+    def test_las_aprobaciones_pendientes_dejan_de_admitir_decisiones_y_las_decididas_se_conservan(self):
+        from apps.workflows.integracion import resolver_aprobacion_workflow
+
+        servicio, programacion, ticket = self._ticket_informe()
+        self._completar_como(ticket, "Preparar informe", self.analista)
+        pendiente = self._aprobacion_vigente(ticket, "Aprobar informe")
+        self.assertEqual(pendiente.estado, Aprobacion.Estado.PENDIENTE)
+        self.assertTrue(aprobaciones_pendientes_para_prueba(self.aprobador).filter(pk=pendiente.pk).exists())
+        # Un segundo ticket del proceso: su aprobación se decide ANTES de cancelar.
+        segundo = generar_ejecucion_programada(programacion, hoy=date(2026, 11, 7)).ticket
+        tomar_ticket(segundo, self.analista)
+        self._completar_como(segundo, "Preparar informe", self.analista)
+        self._revisar(segundo, "APROBADA", nombre="Aprobar informe")
+        decidida = self._aprobacion_vigente(segundo, "Aprobar informe")
+        cancelar_ticket(ticket, self.analista, "Cancelado.")
+        cancelar_ticket(segundo, self.analista, "Cancelado.")
+        pendiente.refresh_from_db()
+        decidida.refresh_from_db()
+        self.assertEqual(pendiente.estado, Aprobacion.Estado.NO_REQUERIDA)
+        self.assertEqual((decidida.estado, decidida.decidido_por), (Aprobacion.Estado.APROBADA, self.aprobador))
+        self.assertIsNone(pendiente.esquema.resultado)  # nadie aprobó, rechazó ni devolvió
+        with self.assertRaises(ValidationError):  # una decisión tardía ya no entra
+            resolver_aprobacion_workflow(pendiente, self.aprobador, decision="APROBADA")
+        self.assertEqual(self._estado_flujo(ticket), "CANCELADA")
+        self.assertFalse(aprobaciones_pendientes_para_prueba(self.aprobador).filter(pk=pendiente.pk).exists())
+
+    def test_tras_cancelar_no_se_editan_elementos_ni_se_revisa_ni_se_entrega(self):
+        ticket, entregable = self._ticket_esperando_el_conjunto(con_texto=True)
+        a, b = self._completo(ticket, "A"), self._completo(ticket, "B")
+        revision_ops.aprobar_elemento(entregable, a, self.revisor)
+        valores = parrilla_ops.valores_de(a)
+        cancelar_ticket(ticket, self.analista, "Cancelado.")
+        operaciones = (
+            lambda: self._editar(a, Tema="Otro"),
+            lambda: self._elemento(ticket, Tema="Nuevo"),
+            lambda: parrilla_ops.retirar_elemento(b, self.analista),
+            lambda: revision_ops.aprobar_elemento(entregable, b, self.revisor),
+            lambda: revision_ops.devolver_elemento(entregable, b, self.revisor, "Tarde"),
+            lambda: registrar_resultado_entregable(ticket.entregables.get(tipo="TEXTO"), self.analista, "Tarde"),
+            lambda: entregar_ticket(ticket, self.analista),
+        )
+        for operacion in operaciones:
+            with self.assertRaises((ValidationError, PermissionDenied)):
+                operacion()
+        # Todo lo registrado se conserva.
+        self.assertEqual(parrilla_ops.valores_de(a), valores)
+        self.assertEqual(RevisionElemento.objects.filter(entregable=entregable).count(), 1)
+        self.assertEqual(ElementoParrilla.objects.filter(parrilla__ticket=ticket, retirado_en__isnull=True).count(), 2)
+        self.assertEqual(self._estado_flujo(ticket), "CANCELADA")  # y la última aprobación tardía no reactivó nada
+
+    def test_cancelar_dos_veces_o_la_ejecucion_dos_veces_no_repite_efectos(self):
+        ticket, _, tarea = self._ticket_con_tarea_pendiente()
+        cancelar_ticket(ticket, self.analista, "Cancelado.")
+        eventos = RegistroAuditoria.objects.count()
+        historial_tarea = tarea.historial.count()
+        with self.assertRaises(ValidationError):
+            cancelar_ticket(ticket, self.analista, "Otra vez")
+        cancelar_ejecucion(ticket.instancia_workflow, self.analista, motivo="Otra vez")  # directo: no hace nada
+        self.assertEqual(RegistroAuditoria.objects.count(), eventos)
+        self.assertEqual(tarea.historial.count(), historial_tarea)
+        self.assertEqual(
+            HistorialTicket.objects.filter(ticket=ticket, tipo_evento=HistorialTicket.TipoEvento.CANCELADO).count(), 1
+        )
+
+    def test_cancelar_una_ejecucion_programada_no_toca_su_programacion_ni_regenera_el_periodo(self):
+        ticket, _, _ = self._ticket_con_tarea_pendiente()
+        programacion = ProgramacionProceso.objects.get(servicio=self.servicio)
+        ejecucion = EjecucionProgramada.objects.get(ticket=ticket)
+        cancelar_ticket(ticket, self.analista, "Cancelado.")
+        programacion.refresh_from_db()
+        self.assertTrue(programacion.activa)
+        self.assertEqual(EjecucionProgramada.objects.get(pk=ejecucion.pk).ticket_id, ticket.pk)  # vínculo conservado
+        tickets = Ticket.objects.count()
+        self.assertIsNone(generar_ejecucion_programada(programacion, hoy=date(2026, 10, 7)))  # ese periodo ya existe
+        self.assertEqual(reconciliar_ejecuciones_programadas(hoy=date(2026, 10, 7))["generadas"], 0)
+        self.assertEqual(Ticket.objects.count(), tickets)
+        # El siguiente periodo sí se genera con normalidad.
+        self.assertIsNotNone(generar_ejecucion_programada(programacion, hoy=date(2026, 11, 7)))
+
+    def test_lo_cancelado_sale_de_las_bandejas_y_el_ticket_sigue_consultable(self):
+        ticket, entregable = self._ticket_esperando_el_conjunto()
+        a = self._completo(ticket, "A")
+        otro = generar_ejecucion_programada(
+            ProgramacionProceso.objects.get(servicio=self.servicio), hoy=date(2026, 11, 7)
+        ).ticket
+        tomar_ticket(otro, self.analista)  # su Tarea queda pendiente
+        self.assertEqual(len(revision_ops.revisiones_pendientes_para(self.revisor)), 1)
+        self._entrar(self.analista)
+        contexto = self.client.get(reverse("core:mi_trabajo")).context
+        self.assertEqual({t["ticket"].pk for t in contexto["tarjetas"]}, {ticket.pk, otro.pk})
+        self.assertIn("Pendiente", [f["estado"] for f in contexto["filas"]])
+        cancelar_ticket(ticket, self.analista, "Cancelado.")
+        cancelar_ticket(otro, self.analista, "Cancelado.")
+        self.assertEqual(revision_ops.revisiones_pendientes_para(self.revisor), [])
+        contexto = self.client.get(reverse("core:mi_trabajo")).context
+        self.assertEqual(contexto["tarjetas"], [])
+        self.assertNotIn("Cancelada", [f["estado"] for f in contexto["filas"]])
+        self.assertNotIn("Pendiente", [f["estado"] for f in contexto["filas"]])  # solo queda lo ya completado
+        for ver in ("para_tomar", "supervision"):
+            cola = self.client.get(reverse("tickets:cola") + f"?ver={ver}").context["tickets"]
+            self.assertFalse({t.pk for t in cola} & {ticket.pk, otro.pk})
+        self._entrar(self.revisor)
+        self.assertEqual(self.client.get(reverse("core:mi_trabajo")).context["total_revisiones"], 0)
+        # El Ticket cancelado se conserva visible para quien lo consulta, con su historial y valores.
+        self._entrar(self.analista)
+        detalle = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        self.assertEqual(detalle.status_code, 200)
+        self.assertContains(detalle, "Cancelado")
+        self.assertEqual(parrilla_ops.valores_de(a)["tema"], "A")
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4.G2D1 — Tareas por elemento: configuración en el Proceso, snapshot en el Ticket y
+# materialización explícita, transaccional e idempotente de una Tarea (`apps.tareas`) por elemento.
+# ---------------------------------------------------------------------------
+
+from datetime import datetime as _datetime, time as _time, timezone as _zona_utc  # noqa: E402
+
+from apps.catalogo.tareas_elemento import configurar_tareas_elemento, desactivar_tareas_elemento  # noqa: E402
+from apps.tareas.autorizacion import puede_iniciar_tarea  # noqa: E402
+from apps.tareas.operaciones import completar_tarea as completar_tarea_dominio  # noqa: E402
+from apps.tareas.operaciones import iniciar_tarea as iniciar_tarea_dominio  # noqa: E402
+from apps.tickets import tareas_elemento as tareas_ops  # noqa: E402
+from apps.tickets.models import TareaElemento  # noqa: E402
+from apps.catalogo.models import ConfiguracionTareasElemento  # noqa: E402
+
+
+class _EscenarioTareasElementoMixin(_EscenarioRevisionMixin):
+    COLUMNAS = (
+        ("Tema", "TEXTO", {}, True),
+        ("Detalle", "TEXTO_LARGO", {}),
+        ("Responsable", "USUARIO", {}, True),
+        ("Entrega", "FECHA", {}),
+        ("Cierre", "FECHA_HORA", {}),
+        ("Alterno", "TEXTO", {}),
+        ("Canal", "LISTA", {}),
+    )
+    CONFIG = {
+        "clave_titulo": "tema", "clave_descripcion": "detalle", "clave_responsable": "responsable",
+        "clave_fecha_limite": "entrega", "requiere_evidencia": True,
+    }
+
+    def _ticket_tareas(self, *, nombre="Parrilla con tareas", config=True, con_conjunto=False, hoy=date(2026, 10, 7), **cfg):
+        """Proceso con elementos (+ configuración de tareas y, opcional, un entregable de conjunto) y su
+        primer Ticket en atención. Deja `servicio`, `campos`, `programacion` y `entregable` en `self`."""
+        servicio, responsable = self._proceso(nombre, flujo="simple")
+        definicion, campos = self._definir_parrilla(servicio)
+        if con_conjunto:
+            configurar_definicion_entregable(
+                servicio, self.admin, nombre="Piezas aprobadas", tipo="ELEMENTOS", obligatorio=True,
+                columnas_revisadas=["tema"], revisores_usuarios=[self.revisor],
+            )
+        if config:
+            configurar_tareas_elemento(servicio, self.admin, **{**self.CONFIG, **cfg})
+        self.programacion = self._programar(servicio, responsable, dia=1, periodo="MES_ACTUAL", desde=date(2020, 1, 1))
+        ticket = generar_ejecucion_programada(self.programacion, hoy=hoy).ticket
+        tomar_ticket(ticket, self.analista)
+        ticket.refresh_from_db()
+        self.servicio, self.campos = servicio, campos
+        self.entregable = ticket.entregables.filter(tipo="ELEMENTOS").first()
+        return ticket
+
+    @staticmethod
+    def _generadas():
+        """Tareas que nacieron de un elemento (el flujo `simple` crea además su propia Tarea «Atender»)."""
+        return Tarea.objects.filter(vinculo_elemento__isnull=False).count()
+
+    def _el(self, ticket, tema="Reel", entrega=date(2026, 10, 20), responsable=None, **extra):
+        valores = {"Tema": tema, "Responsable": (responsable or self.persona).pk}
+        if entrega is not None:
+            valores["Entrega"] = entrega
+        valores.update(extra)
+        return parrilla_ops.crear_elemento(ticket, self.analista, {self.campos[e]: v for e, v in valores.items()})
+
+
+class ConfiguracionTareasElementoTests(_EscenarioTareasElementoMixin, TestCase):
+    def setUp(self):
+        self._preparar_revision()
+
+    def _proceso_con_estructura(self, nombre="Con estructura"):
+        servicio, _ = self._proceso(nombre, flujo="simple")
+        definicion, campos = self._definir_parrilla(servicio)
+        return servicio, definicion
+
+    def test_una_configuracion_valida_se_guarda_se_audita_y_se_puede_desactivar_desde_studio(self):
+        servicio, definicion = self._proceso_con_estructura()
+        with self.assertRaises(PermissionDenied):
+            configurar_tareas_elemento(servicio, self.solicitante, **self.CONFIG)
+        configuracion = configurar_tareas_elemento(servicio, self.admin, **self.CONFIG)
+        self.assertEqual(
+            (configuracion.definicion, configuracion.activa, configuracion.clave_titulo, configuracion.clave_descripcion,
+             configuracion.clave_responsable, configuracion.clave_fecha_limite, configuracion.requiere_evidencia),
+            (definicion, True, "tema", "detalle", "responsable", "entrega", True),
+        )
+        tipo = ContentType.objects.get_for_model(configuracion)
+        self.assertEqual(RegistroAuditoria.objects.filter(content_type=tipo, object_id=configuracion.pk).count(), 1)
+        # Descripción es opcional; reconfigurar actualiza la MISMA fila.
+        configurar_tareas_elemento(servicio, self.admin, **{**self.CONFIG, "clave_descripcion": "", "requiere_evidencia": False})
+        configuracion.refresh_from_db()
+        self.assertEqual((configuracion.clave_descripcion, configuracion.requiere_evidencia), ("", False))
+        self.assertEqual(type(configuracion).objects.count(), 1)
+        # Desactivar conserva la configuración; reconfigurar la reactiva.
+        desactivar_tareas_elemento(servicio, self.admin)
+        configuracion.refresh_from_db()
+        self.assertFalse(configuracion.activa)
+        # Studio: mismos controles y mismas reglas (el servidor decide).
+        _otorgar_permiso(self.admin, "formulario.administrar")
+        self.client.force_login(self.admin)
+        url = reverse("catalogo:studio_parrilla_tareas", args=[servicio.pk])
+        self.assertEqual(self.client.get(url).status_code, 405)
+        self.client.post(url, {**{k: v for k, v in self.CONFIG.items() if k != "requiere_evidencia"}, "requiere_evidencia": "on"})
+        configuracion.refresh_from_db()
+        self.assertTrue(configuracion.activa and configuracion.requiere_evidencia)
+        pagina = self.client.get(reverse("catalogo:studio", args=[servicio.pk]) + "?tab=entrada&uso=parrilla")
+        self.assertContains(pagina, "Tareas por elemento")
+        self.client.post(url, {"accion": "desactivar"})
+        configuracion.refresh_from_db()
+        self.assertFalse(configuracion.activa)
+
+    def test_una_configuracion_invalida_se_rechaza_y_no_deja_nada(self):
+        servicio, _ = self._proceso_con_estructura()
+        otro, _ = self._proceso("Otro proceso", flujo="simple")
+        self._definir_parrilla(otro, columnas=(("Ajena", "TEXTO", {}),))
+        invalidas = [
+            {"clave_titulo": "inexistente"},                  # no existe
+            {"clave_titulo": "ajena"},                        # columna de la estructura de OTRO proceso
+            {"clave_titulo": "responsable"},                  # título debe ser texto, no usuario
+            {"clave_descripcion": "entrega"},                 # descripción: texto, no fecha
+            {"clave_responsable": "tema"},                    # responsable debe ser usuario
+            {"clave_fecha_limite": "tema"},                   # fecha límite: fecha o fecha y hora
+            {"clave_fecha_limite": "canal"},                  # una lista no es fecha
+            {"clave_titulo": ""},                             # el título es obligatorio
+            {"clave_responsable": "", "clave_fecha_limite": ""},
+            {"clave_descripcion": "tema"},                    # la misma columna dos veces
+        ]
+        for cambio in invalidas:
+            with self.subTest(cambio=cambio), self.assertRaises(ValidationError):
+                configurar_tareas_elemento(servicio, self.admin, **{**self.CONFIG, **cambio})
+        self.assertFalse(ConfiguracionTareasElemento.objects.exists())
+        # FECHA y FECHA_HORA sirven; un Servicio o un Proceso sin elementos no pueden configurarlo.
+        configurar_tareas_elemento(servicio, self.admin, **{**self.CONFIG, "clave_fecha_limite": "cierre"})
+        sin_elementos, _ = self._proceso("Sin elementos", flujo="simple")
+        with self.assertRaises(ValidationError):
+            configurar_tareas_elemento(sin_elementos, self.admin, **self.CONFIG)
+        simple, _, _ = _crear_servicio_con_formulario(self.admin, [])
+        with self.assertRaises(ValidationError):
+            configurar_tareas_elemento(simple, self.admin, **self.CONFIG)
+        self.assertEqual(ConfiguracionTareasElemento.objects.count(), 1)
+
+    def test_el_ticket_congela_la_configuracion_y_las_tareas_existentes_no_cambian(self):
+        ticket = self._ticket_tareas()
+        congelada = tareas_ops.configuracion_de(ticket)
+        columnas = {c.clave: c for c in parrilla_ops.columnas_de(ticket.parrilla)}
+        self.assertEqual(congelada.parrilla, ticket.parrilla)
+        self.assertEqual(
+            (congelada.campo_titulo, congelada.campo_descripcion, congelada.campo_responsable,
+             congelada.campo_fecha_limite, congelada.requiere_evidencia),
+            (columnas["tema"], columnas["detalle"], columnas["responsable"], columnas["entrega"], True),
+        )
+        self.assertEqual((self._generadas(), TareaElemento.objects.count()), (0, 0))  # nacer no genera tareas
+        elemento = self._el(ticket)
+        vinculo = tareas_ops.materializar_tareas(ticket, self.analista).creadas[0]
+        with self.assertRaises(ValidationError):
+            congelada.requiere_evidencia = False
+            congelada.save()
+        # Studio cambia y se desactiva: el Ticket existente, su snapshot y su Tarea siguen igual.
+        configurar_tareas_elemento(
+            self.servicio, self.admin,
+            **{**self.CONFIG, "clave_titulo": "alterno", "clave_fecha_limite": "cierre", "requiere_evidencia": False},
+        )
+        with self.assertRaises(ValidationError):  # 4.G2D2: la columna que originó la tarea ya no cambia
+            parrilla_ops.actualizar_valores(elemento, self.analista, {self.campos["Tema"]: "Cambiado"})
+        parrilla_ops.actualizar_valores(elemento, self.analista, {self.campos["Alterno"]: "Libre"})
+        congelada.refresh_from_db()
+        vinculo.tarea.refresh_from_db()
+        self.assertEqual((congelada.campo_titulo, congelada.requiere_evidencia), (columnas["tema"], True))
+        self.assertEqual(vinculo.tarea.titulo, "Reel")
+        desactivar_tareas_elemento(self.servicio, self.admin)
+        self.assertEqual(tareas_ops.configuracion_de(ticket), congelada)
+        # El siguiente Ticket nace con lo vigente: sin generación (desactivada).
+        siguiente = generar_ejecucion_programada(self.programacion, hoy=date(2026, 11, 7)).ticket
+        self.assertIsNotNone(parrilla_ops.parrilla_de(siguiente))
+        self.assertIsNone(tareas_ops.configuracion_de(siguiente))
+        configurar_tareas_elemento(self.servicio, self.admin, **{**self.CONFIG, "clave_titulo": "alterno"})
+        tercero = generar_ejecucion_programada(self.programacion, hoy=date(2026, 12, 7)).ticket
+        self.assertEqual(tareas_ops.configuracion_de(tercero).campo_titulo.clave, "alterno")
+
+
+class MaterializacionDeTareasPorElementoTests(_EscenarioTareasElementoMixin, TestCase):
+    def setUp(self):
+        self._preparar_revision()
+
+    def test_genera_una_tarea_por_elemento_vigente_con_sus_datos_responsable_y_fecha(self):
+        ticket = self._ticket_tareas()
+        otra = Usuario.objects.create_user(username="g2d_otra", password=CLAVE_PRUEBA)
+        a = self._el(ticket, "Reel", Detalle="Guion uno")
+        b = self._el(ticket, "Carrusel", responsable=otra)
+        c = self._el(ticket, "Historia", entrega=date(2026, 11, 2))
+        resultado = tareas_ops.materializar_tareas(ticket, self.analista)
+        self.assertEqual((len(resultado.creadas), len(resultado.existentes)), (3, 0))
+        self.assertEqual(self._generadas(), 3)
+        por_numero = {v.elemento.numero: v for v in resultado.creadas}
+        tarea_a = por_numero[a.numero].tarea
+        self.assertEqual((tarea_a.titulo, tarea_a.descripcion, tarea_a.estado), ("Reel", "Guion uno", "PENDIENTE"))
+        self.assertEqual((tarea_a.origen, tarea_a.creada_por, tarea_a.usuario_responsable), ("MANUAL", self.analista, self.persona))
+        self.assertEqual(por_numero[b.numero].tarea.usuario_responsable, otra)
+        # FECHA → final del día LOCAL del proyecto.
+        final_del_dia = timezone.make_aware(_datetime.combine(date(2026, 10, 20), _time.max), timezone.get_current_timezone())
+        self.assertEqual(tarea_a.fecha_limite, final_del_dia)
+        self.assertEqual(timezone.localtime(por_numero[c.numero].tarea.fecha_limite).date(), date(2026, 11, 2))
+        # Una Tarea de apps.tareas común: elegible para su responsable, sin Workflow ni descripción inventada.
+        self.assertTrue(puede_iniciar_tarea(self.persona, tarea_a))
+        self.assertFalse(puede_iniciar_tarea(self.revisor, tarea_a))
+        self.assertFalse(TareaWorkflow.objects.filter(tarea__in=[v.tarea for v in resultado.creadas]).exists())
+        self.assertEqual(por_numero[b.numero].tarea.descripcion, "")
+        # Evidencia: solo se guarda (en el vínculo), nada se bloquea todavía.
+        self.assertTrue(all(v.requiere_evidencia for v in resultado.creadas))
+        # Auditoría del vínculo y de la Tarea.
+        tipo = ContentType.objects.get_for_model(TareaElemento)
+        for vinculo in resultado.creadas:
+            self.assertTrue(RegistroAuditoria.objects.filter(content_type=tipo, object_id=vinculo.pk, usuario=self.analista).exists())
+            self.assertTrue(
+                RegistroAuditoria.objects.filter(
+                    content_type=ContentType.objects.get_for_model(Tarea), object_id=vinculo.tarea_id,
+                    accion=RegistroAuditoria.Accion.CREAR,
+                ).exists()
+            )
+        # Sin actor: tareas de origen SISTEMA, sin inventar un creador.
+        ticket2 = generar_ejecucion_programada(self.programacion, hoy=date(2026, 11, 7)).ticket
+        tomar_ticket(ticket2, self.analista)
+        self._el(ticket2, "Mensual")
+        sistema = tareas_ops.materializar_tareas(ticket2).creadas[0].tarea
+        self.assertEqual((sistema.origen, sistema.creada_por), ("SISTEMA", None))
+
+    def test_fecha_y_hora_y_fechas_o_responsables_invalidos_se_rechazan(self):
+        ticket = self._ticket_tareas(clave_fecha_limite="cierre")
+        momento = _datetime(2026, 10, 21, 15, 30, tzinfo=_zona_utc.utc)
+        self._el(ticket, "Con hora", entrega=None, Cierre=momento)
+        self.assertEqual(tareas_ops.materializar_tareas(ticket, self.analista).creadas[0].tarea.fecha_limite, momento)
+        # Sin fecha, no hay tarea.
+        sin_fecha = self._el(ticket, "Sin fecha", entrega=None)
+        with self.assertRaisesMessage(ValidationError, "fecha límite"):
+            tareas_ops.materializar_tareas(ticket, self.analista)
+        parrilla_ops.retirar_elemento(sin_fecha, self.analista)
+        # Un valor que su columna ya no acepta (la fecha máxima cambió) tampoco.
+        self._el(ticket, "Pasada", entrega=None, Cierre=momento)
+        Campo.objects.filter(pk=self.campos["Cierre"].pk).update(configuracion={"fecha_maxima": "2026-10-01T00:00:00+00:00"})
+        with self.assertRaisesMessage(ValidationError, "fecha límite"):
+            tareas_ops.materializar_tareas(ticket, self.analista)
+        # Responsable: debe ser una persona activa.
+        Campo.objects.filter(pk=self.campos["Cierre"].pk).update(configuracion={})
+        inactiva = Usuario.objects.create_user(username="g2d_inactiva", password=CLAVE_PRUEBA)
+        ticket2 = generar_ejecucion_programada(self.programacion, hoy=date(2026, 11, 7)).ticket
+        tomar_ticket(ticket2, self.analista)
+        self._el(ticket2, "Con baja", responsable=inactiva)
+        Usuario.objects.filter(pk=inactiva.pk).update(is_active=False)
+        with self.assertRaisesMessage(ValidationError, "responsable"):
+            tareas_ops.materializar_tareas(ticket2, self.analista)
+        self.assertEqual(self._generadas(), 1)  # solo la válida del primer ticket
+
+    def test_es_idempotente_y_no_duplica_tareas(self):
+        ticket = self._ticket_tareas()
+        self._el(ticket, "A")
+        self._el(ticket, "B")
+        primera = tareas_ops.materializar_tareas(ticket, self.analista)
+        segunda = tareas_ops.materializar_tareas(ticket, self.analista)
+        self.assertEqual((len(primera.creadas), len(segunda.creadas), len(segunda.existentes)), (2, 0, 2))
+        self.assertEqual((self._generadas(), TareaElemento.objects.count()), (2, 2))
+        # Un elemento agregado después genera solo SU tarea; las anteriores no se tocan.
+        self._el(ticket, "C")
+        tercera = tareas_ops.materializar_tareas(ticket, self.analista)
+        self.assertEqual((len(tercera.creadas), len(tercera.existentes)), (1, 2))
+        self.assertEqual(self._generadas(), 3)
+        # La unicidad la garantiza la base: un segundo vínculo para el mismo elemento no existe.
+        vinculo = tercera.existentes[0]
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            TareaElemento.objects.create(
+                elemento=vinculo.elemento, tarea=Tarea.objects.create(titulo="Suelta"), configuracion=vinculo.configuracion
+            )
+        # El vínculo es historia: no se edita ni se elimina.
+        vinculo.requiere_evidencia = False
+        with self.assertRaises(ValidationError):
+            vinculo.save()
+        with self.assertRaises(ValidationError):
+            vinculo.delete()
+
+    def test_los_elementos_retirados_no_generan_tareas(self):
+        ticket = self._ticket_tareas(requiere_evidencia=False)
+        a, b, c = self._el(ticket, "A"), self._el(ticket, "B"), self._el(ticket, "C")
+        parrilla_ops.retirar_elemento(b, self.analista)
+        resultado = tareas_ops.materializar_tareas(ticket, self.analista)
+        self.assertEqual({v.elemento.numero for v in resultado.creadas}, {a.numero, c.numero})
+        self.assertFalse(TareaElemento.objects.filter(elemento=b).exists())
+        # Retirar uno que ya tiene tarea: no mientras esté abierta (4.G2D2); completada, conserva la tarea
+        # (historia) y no vuelve a generar nada.
+        with self.assertRaises(ValidationError):
+            parrilla_ops.retirar_elemento(a, self.analista)
+        completar_tarea_dominio(TareaElemento.objects.get(elemento=a).tarea, self.persona)
+        parrilla_ops.retirar_elemento(a, self.analista)
+        repetida = tareas_ops.materializar_tareas(ticket, self.analista)
+        self.assertEqual((len(repetida.creadas), [v.elemento.numero for v in repetida.existentes]), (0, [c.numero]))
+        self.assertEqual(TareaElemento.objects.filter(elemento=a).count(), 1)
+        self.assertEqual(self._generadas(), 2)
+        # Sin ningún elemento vigente no hay nada que generar.
+        completar_tarea_dominio(TareaElemento.objects.get(elemento=c).tarea, self.persona)
+        parrilla_ops.retirar_elemento(c, self.analista)
+        with self.assertRaises(ValidationError):
+            tareas_ops.materializar_tareas(ticket, self.analista)
+
+    def test_un_elemento_invalido_no_deja_una_generacion_parcial(self):
+        ticket = self._ticket_tareas()
+        self._el(ticket, "Uno")
+        segundo = self._el(ticket, "Dos", entrega=None)  # sin fecha límite
+        self._el(ticket, "Tres")
+        incompleto = parrilla_ops.crear_elemento(ticket, self.analista, {self.campos["Entrega"]: date(2026, 10, 30)})
+        with self.assertRaises(ValidationError) as contexto:
+            tareas_ops.materializar_tareas(ticket, self.analista)
+        mensajes = " ".join(contexto.exception.messages)
+        self.assertIn(f"#{segundo.numero}", mensajes)
+        self.assertIn(f"#{incompleto.numero}", mensajes)
+        self.assertNotIn("#1:", mensajes)
+        self.assertEqual((self._generadas(), TareaElemento.objects.count()), (0, 0))
+        self.assertFalse(Tarea.objects.filter(titulo__in=["Uno", "Tres"]).exists())
+        # Al corregirlos, la misma operación genera TODO.
+        parrilla_ops.actualizar_valores(segundo, self.analista, {self.campos["Entrega"]: date(2026, 10, 25)})
+        parrilla_ops.actualizar_valores(
+            incompleto, self.analista, {self.campos["Tema"]: "Cuatro", self.campos["Responsable"]: self.persona.pk}
+        )
+        self.assertEqual(len(tareas_ops.materializar_tareas(ticket, self.analista).creadas), 4)
+
+    def test_exige_el_conjunto_obligatorio_aprobado_y_vigente(self):
+        ticket = self._ticket_tareas(con_conjunto=True)
+        a = self._el(ticket, "A")
+        with self.assertRaisesMessage(ValidationError, "aprobado y vigente"):
+            tareas_ops.materializar_tareas(ticket, self.analista)  # nada aprobado todavía
+        self.assertEqual(self._generadas(), 0)
+        revision_ops.aprobar_elemento(self.entregable, a, self.revisor)
+        self.assertEqual(len(tareas_ops.materializar_tareas(ticket, self.analista).creadas), 1)
+        # Un elemento nuevo sin revisar vuelve a dejar el conjunto sin aprobar.
+        b = self._el(ticket, "B")
+        with self.assertRaisesMessage(ValidationError, "aprobado y vigente"):
+            tareas_ops.materializar_tareas(ticket, self.analista)
+        revision_ops.aprobar_elemento(self.entregable, b, self.revisor)
+        self.assertEqual(len(tareas_ops.materializar_tareas(ticket, self.analista).creadas), 1)
+        # Cambiar una columna REVISADA invalida la aprobación de ese elemento (huella): ya no está vigente.
+        c = self._el(ticket, "C")
+        revision_ops.aprobar_elemento(self.entregable, c, self.revisor)
+        parrilla_ops.actualizar_valores(c, self.analista, {self.campos["Tema"]: "C corregido"})
+        with self.assertRaisesMessage(ValidationError, "aprobado y vigente"):
+            tareas_ops.materializar_tareas(ticket, self.analista)
+        self.assertEqual(self._generadas(), 2)
+
+    def test_exige_un_proceso_con_elementos_configuracion_y_ticket_operativo(self):
+        # Proceso con elementos pero sin tareas por elemento: funciona como antes y no materializa.
+        sin_config = self._ticket_tareas(nombre="Sin configuración de tareas", config=False)
+        self._el(sin_config)
+        self.assertIsNone(tareas_ops.configuracion_de(sin_config))
+        with self.assertRaisesMessage(ValidationError, "no tiene configurada"):
+            tareas_ops.materializar_tareas(sin_config, self.analista)
+        # Proceso sin elementos.
+        servicio, responsable = self._proceso("Sin elementos", flujo="simple")
+        programacion = self._programar(servicio, responsable, dia=1, periodo="MES_ACTUAL", desde=date(2020, 1, 1))
+        liso = generar_ejecucion_programada(programacion, hoy=date(2026, 10, 7)).ticket
+        tomar_ticket(liso, self.analista)
+        with self.assertRaisesMessage(ValidationError, "no usa elementos"):
+            tareas_ops.materializar_tareas(liso, self.analista)
+        # Estados: solo un PROCESO radicado o en atención.
+        ticket = self._ticket_tareas(nombre="Con tareas por elemento")
+        self._el(ticket)
+        for estado in ("RESUELTO", "CERRADO"):
+            Ticket.objects.filter(pk=ticket.pk).update(estado=estado)
+            with self.subTest(estado=estado), self.assertRaisesMessage(ValidationError, "ya no admite"):
+                tareas_ops.materializar_tareas(ticket, self.analista)
+        # (Que sea un PROCESO no se prueba cambiando el tipo: la base lo impide en un Ticket programado.)
+        Ticket.objects.filter(pk=ticket.pk).update(estado="EN_ATENCION")
+        cancelar_ticket(ticket, self.analista, "Ya no se hará.")
+        with self.assertRaisesMessage(ValidationError, "ya no admite"):
+            tareas_ops.materializar_tareas(ticket, self.analista)
+        self.assertEqual(self._generadas(), 0)
+
+    def test_cancelar_el_ticket_detiene_las_tareas_abiertas_y_conserva_las_completadas(self):
+        ticket = self._ticket_tareas(requiere_evidencia=False)
+        self._el(ticket, "A")
+        self._el(ticket, "B")
+        self._el(ticket, "C")
+        vinculos = tareas_ops.materializar_tareas(ticket, self.analista).creadas
+        hecha, en_curso, pendiente = (v.tarea for v in vinculos)
+        iniciar_tarea_dominio(en_curso, self.persona)
+        completar_tarea_dominio(hecha, self.persona)
+        cancelar_ticket(ticket, self.analista, "Cancelado.")
+        for tarea in (hecha, en_curso, pendiente):
+            tarea.refresh_from_db()
+        self.assertEqual((hecha.estado, en_curso.estado, pendiente.estado), ("COMPLETADA", "CANCELADA", "CANCELADA"))
+        self.assertEqual(TareaElemento.objects.count(), 3)  # los vínculos se conservan
+        with self.assertRaises(ValidationError):
+            completar_tarea_dominio(pendiente, self.persona)
+        with self.assertRaises(ValidationError):
+            tareas_ops.materializar_tareas(ticket, self.analista)
+        self.assertEqual(self._generadas(), 3)
+
+
+# ---------------------------------------------------------------------------
+# Sprint 4.G2D2 — Ejecución de tareas por elemento: bloque TAREAS_ELEMENTOS del Workflow, espera y
+# continuación, evidencia obligatoria, protección de elementos, cancelación y resolución.
+# ---------------------------------------------------------------------------
+
+from apps.tareas.operaciones import adjuntar_evidencia_tarea  # noqa: E402
+from apps.tickets import trabajo as trabajo_ops  # noqa: E402
+from apps.workflows.integracion import continuar_por_tareas_elementos  # noqa: E402
+
+
+class _EscenarioBloqueTareasMixin(_EscenarioTareasElementoMixin):
+    def _ticket_con_bloque(self, *, nombre="Piezas con tareas", evidencia=False, con_conjunto=False, hoy=date(2026, 10, 7)):
+        """Proceso cuyo flujo es Atender → Tareas por elemento → Cierre, y su primer Ticket en atención. Los
+        elementos se agregan mientras «Atender» está abierta; completarla hace que el flujo llegue al bloque."""
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo, crear_nueva_version_configuracion
+
+        servicio, responsable = self._proceso(nombre, flujo="simple")
+        self._definir_parrilla(servicio)
+        if con_conjunto:
+            configurar_definicion_entregable(
+                servicio, self.admin, nombre="Piezas aprobadas", tipo="ELEMENTOS", obligatorio=True,
+                columnas_revisadas=["tema"], revisores_usuarios=[self.revisor],
+            )
+        configurar_tareas_elemento(servicio, self.admin, **{**self.CONFIG, "requiere_evidencia": evidencia})
+        config = crear_nueva_version_configuracion(servicio, self.admin)
+        ACT = BloqueOperativo.Tipo.ACTIVIDAD
+        self._agregar(config, self.f_recepcion, ACT, "Atender", tipo_actor="RESPONSABLE_TICKET")
+        agregar_bloque_operativo(
+            config, self.admin, fase=self.f_produccion, tipo=BloqueOperativo.Tipo.TAREAS_ELEMENTOS,
+            nombre="Tareas de piezas",
+        )
+        self._agregar(config, self.f_revision, ACT, "Cierre", tipo_actor="RESPONSABLE_TICKET")
+        self._activar(servicio, config)
+        programacion = self._programar(servicio, responsable, dia=1, periodo="MES_ACTUAL", desde=date(2020, 1, 1))
+        ticket = generar_ejecucion_programada(programacion, hoy=hoy).ticket
+        tomar_ticket(ticket, self.analista)
+        ticket.refresh_from_db()
+        self.servicio, self.programacion = servicio, programacion
+        self.campos = {c.etiqueta: c for c in parrilla_ops.columnas_de(ticket.parrilla)}
+        self.entregable = ticket.entregables.filter(tipo="ELEMENTOS").first()
+        return ticket
+
+    def _llegar_al_bloque(self, ticket, *temas):
+        """Agrega un elemento por tema y completa «Atender»: el flujo entra al bloque. Devuelve los elementos."""
+        elementos = [self._el(ticket, tema) for tema in temas]
+        self._completar_como(ticket, "Atender", self.analista)
+        ticket.refresh_from_db()
+        return elementos
+
+    def _instancia(self, ticket):
+        return InstanciaWorkflow.objects.get(pk=ticket.instancia_workflow_id)
+
+    def _ejecucion_bloque(self, ticket):
+        return self._instancia(ticket).ejecuciones_etapa.get(bloque_operativo__tipo="TAREAS_ELEMENTOS")
+
+    def _vinculos(self, ticket):
+        return list(
+            TareaElemento.objects.select_related("tarea", "elemento")
+            .filter(elemento__parrilla__ticket=ticket).order_by("elemento__numero")
+        )
+
+    def _completar(self, vinculo, usuario=None):
+        from apps.workflows.integracion import completar_tarea_workflow
+
+        return completar_tarea_workflow(Tarea.objects.get(pk=vinculo.tarea_id), usuario or self.persona)
+
+
+class BloqueTareasElementosTests(_MediaAisladaMixin, _EscenarioBloqueTareasMixin, TestCase):
+    def setUp(self):
+        self._preparar_revision()
+
+    def test_el_bloque_solo_existe_en_un_proceso_con_tareas_por_elemento_y_una_vez(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo, crear_nueva_version_configuracion
+
+        TAREAS = BloqueOperativo.Tipo.TAREAS_ELEMENTOS
+        servicio, _ = self._proceso("Sin tareas por elemento", flujo="simple")
+        self._definir_parrilla(servicio)
+        borrador = crear_nueva_version_configuracion(servicio, self.admin)
+        with self.assertRaisesMessage(ValidationError, "no tiene configuradas las tareas por elemento"):
+            agregar_bloque_operativo(borrador, self.admin, fase=self.f_recepcion, tipo=TAREAS, nombre="Tareas")
+        _otorgar_permiso(self.admin, "formulario.administrar")
+        self.client.force_login(self.admin)
+        url = reverse("catalogo:studio", args=[servicio.pk]) + "?tab=ejecucion"
+        self.assertNotContains(self.client.get(url), 'value="TAREAS_ELEMENTOS"')
+        configurar_tareas_elemento(servicio, self.admin, **self.CONFIG)
+        self.assertContains(self.client.get(url), 'value="TAREAS_ELEMENTOS"')
+        bloque = agregar_bloque_operativo(borrador, self.admin, fase=self.f_recepcion, tipo=TAREAS, nombre="Tareas")
+        self.assertEqual(bloque.tipo, "TAREAS_ELEMENTOS")
+        with self.assertRaisesMessage(ValidationError, "ya tiene un bloque"):
+            agregar_bloque_operativo(borrador, self.admin, fase=self.f_produccion, tipo=TAREAS, nombre="Otras")
+        # Mientras un bloque las use, no se apagan las tareas por elemento ni la estructura de elementos.
+        with self.assertRaises(ValidationError):
+            desactivar_tareas_elemento(servicio, self.admin)
+        with self.assertRaises(ValidationError):
+            desactivar_parrilla(servicio, self.admin)
+
+    def test_al_entrar_materializa_las_tareas_asociadas_a_la_ejecucion_y_espera(self):
+        ticket = self._ticket_con_bloque()
+        self.assertEqual(self._generadas(), 0)  # nacer no genera tareas
+        self._llegar_al_bloque(ticket, "A", "B", "C")
+        ejecucion = self._ejecucion_bloque(ticket)
+        self.assertEqual((ejecucion.estado, ejecucion.motivo_espera), ("EN_ESPERA", "ELEMENTOS"))
+        self.assertEqual(self._instancia(ticket).estado, "EN_ESPERA")
+        vinculos = self._vinculos(ticket)
+        self.assertEqual([v.tarea.titulo for v in vinculos], ["A", "B", "C"])
+        self.assertTrue(all(v.instancia_etapa_id == ejecucion.pk for v in vinculos))
+        self.assertTrue(all(v.tarea.estado == "PENDIENTE" and v.tarea.usuario_responsable == self.persona for v in vinculos))
+        self.assertFalse(TareaWorkflow.objects.filter(tarea__in=[v.tarea for v in vinculos]).exists())
+        self.assertEqual(ejecucion.resultado, {"total": 3, "completadas": 0})
+        # Las tareas están donde siempre: la bandeja de Mi trabajo de quien las atiende.
+        from apps.tareas.consultas import tareas_asignadas_a
+
+        self.assertTrue({v.tarea_id for v in vinculos} <= {t.pk for t in tareas_asignadas_a(self.persona)})
+
+    def test_reintentar_la_entrada_no_duplica_y_tras_consumir_no_se_generan_mas(self):
+        ticket = self._ticket_con_bloque()
+        self._llegar_al_bloque(ticket, "A", "B")
+        ejecucion = self._ejecucion_bloque(ticket)
+        for _ in range(2):  # reintentar la entrada al MISMO bloque
+            progreso = tareas_ops.entrar_al_bloque(ticket, ejecucion)
+            self.assertEqual((progreso.total, progreso.abiertas), (2, 2))
+        self.assertEqual(self._generadas(), 2)
+        for vinculo in self._vinculos(ticket):
+            self._completar(vinculo)
+        self.assertEqual(self._ejecucion_bloque(ticket).estado, "COMPLETADA")
+        self.assertTrue(tareas_ops.consumido_por_flujo(ticket))
+        # Un elemento nuevo ya no origina tarea: el flujo consumió el conjunto.
+        self._el(ticket, "Tardío")
+        with self.assertRaisesMessage(ValidationError, "consumió"):
+            tareas_ops.materializar_tareas(ticket, self.analista)
+        self.assertEqual(self._generadas(), 2)
+
+    def test_mientras_haya_tareas_abiertas_espera_y_muestra_el_progreso(self):
+        ticket = self._ticket_con_bloque()
+        self._llegar_al_bloque(ticket, "A", "B", "C")
+        a, b, c = self._vinculos(ticket)
+        self._completar(a)
+        iniciar_tarea_dominio(b.tarea, self.persona)
+        self.assertEqual(self._instancia(ticket).estado, "EN_ESPERA")  # no avanza solo
+        self.assertEqual(self._ejecucion_bloque(ticket).estado, "EN_ESPERA")
+        progreso = tareas_ops.progreso_de(ticket)
+        self.assertEqual((progreso.total, progreso.completadas, progreso.pendientes, progreso.en_progreso), (3, 1, 1, 1))
+        espacio = trabajo_ops.espacio(self.analista, ticket)
+        self.assertEqual(espacio["tareas_elemento"]["progreso"], progreso)
+        self.assertEqual(len(espacio["tareas_elemento"]["tareas"]), 3)
+        self.assertIn("1 de 3", espacio["trabajo_actual"]["pendiente"])
+        self.client.force_login(self.analista)
+        pagina = self.client.get(reverse("tickets:trabajo", args=[ticket.pk]))
+        self.assertContains(pagina, "1/3")
+        # El acceso a cada tarea lo decide la autorización de apps.tareas: su responsable la ve; quien solo
+        # supervisa el ticket ve el avance pero no entra a tareas ajenas.
+        propias = trabajo_ops.espacio(self.persona, ticket)["tareas_elemento"]["tareas"]
+        self.assertEqual({fila["accesible"] for fila in propias}, {True})
+        self.assertEqual({fila["accesible"] for fila in espacio["tareas_elemento"]["tareas"]}, {False})
+
+    def test_completar_la_ultima_continua_una_sola_vez_y_los_demas_bloques_no_cambian(self):
+        ticket = self._ticket_con_bloque()
+        self._llegar_al_bloque(ticket, "A", "B")
+        a, b = self._vinculos(ticket)
+        self._completar(a)
+        self.assertEqual(self._instancia(ticket).estado, "EN_ESPERA")
+        self._completar(b)
+        self.assertEqual(self._ejecucion_bloque(ticket).estado, "COMPLETADA")
+        publicado = self._instancia(ticket).contexto["resultados_bloques"]["tareas_elementos"]["tareas_de_piezas"]
+        self.assertEqual(publicado, {"total": 2, "completadas": 2})
+        # El motor siguió: «Cierre» (una Tarea del flujo de siempre) está esperando a su responsable.
+        cierre = TareaWorkflow.objects.get(instancia_etapa__bloque_operativo__nombre="Cierre").tarea
+        self.assertEqual(cierre.usuario_responsable, self.analista)
+        # Idempotente: un segundo aviso no encuentra la espera y no crea otra ejecución.
+        self.assertFalse(continuar_por_tareas_elementos(Tarea.objects.get(pk=b.tarea_id)))
+        self.assertEqual(self._instancia(ticket).ejecuciones_etapa.filter(bloque_operativo__nombre="Cierre").count(), 1)
+        # Los demás bloques y las Tareas independientes se comportan como siempre.
+        self._completar_como(ticket, "Cierre", self.analista)
+        self.assertEqual(self._instancia(ticket).estado, "COMPLETADA")
+        from apps.workflows.integracion import completar_tarea_workflow
+
+        with self.assertRaises(ValueError):
+            completar_tarea_workflow(Tarea.objects.create(titulo="Suelta"), self.persona)
+
+    def test_la_evidencia_obligatoria_se_exige_en_el_dominio(self):
+        ticket = self._ticket_con_bloque(evidencia=True)
+        self._llegar_al_bloque(ticket, "A", "B")
+        a, b = self._vinculos(ticket)
+        self.assertTrue(a.requiere_evidencia and a.tarea.requiere_evidencia)
+        for completar in (lambda: self._completar(a), lambda: completar_tarea_dominio(a.tarea, self.persona)):
+            with self.assertRaisesMessage(ValidationError, "evidencia"):
+                completar()
+        a.tarea.refresh_from_db()
+        self.assertEqual(a.tarea.estado, "PENDIENTE")
+        # Un archivo vacío no es evidencia válida.
+        with self.assertRaises(ValidationError):
+            adjuntar_evidencia_tarea(self.persona, SimpleUploadedFile("vacia.txt", b""), tarea=a.tarea)
+        with self.assertRaises(ValidationError):
+            self._completar(a)
+        # Con una evidencia real (propia o de un comentario) se completa; la otra tarea sigue exigiéndola.
+        adjuntar_evidencia_tarea(self.persona, SimpleUploadedFile("pieza.txt", b"contenido"), tarea=a.tarea)
+        self._completar(a)
+        a.tarea.refresh_from_db()
+        self.assertEqual(a.tarea.estado, "COMPLETADA")
+        with self.assertRaises(ValidationError):
+            self._completar(b)
+        self.assertEqual(self._instancia(ticket).estado, "EN_ESPERA")
+
+    def test_la_evidencia_opcional_no_cambia_el_comportamiento(self):
+        ticket = self._ticket_con_bloque(evidencia=False)
+        self._llegar_al_bloque(ticket, "A")
+        (a,) = self._vinculos(ticket)
+        self.assertFalse(a.requiere_evidencia or a.tarea.requiere_evidencia)
+        self._completar(a)
+        self.assertEqual(self._ejecucion_bloque(ticket).estado, "COMPLETADA")
+
+    def test_el_elemento_con_tarea_no_se_retira_abierto_y_sus_columnas_no_cambian(self):
+        ticket = self._ticket_con_bloque()
+        a, b = self._llegar_al_bloque(ticket, "A", "B")
+        va, vb = self._vinculos(ticket)
+        with self.assertRaisesMessage(ValidationError, "pendiente o en progreso"):
+            parrilla_ops.retirar_elemento(a, self.analista)
+        iniciar_tarea_dominio(va.tarea, self.persona)
+        with self.assertRaises(ValidationError):  # tampoco en progreso
+            parrilla_ops.retirar_elemento(a, self.analista)
+        # Las columnas que originaron la tarea no cambian; la misma entrega sí es aceptada; las demás, editables.
+        for columna, valor in (("Tema", "Otro"), ("Responsable", self.analista.pk), ("Entrega", date(2026, 12, 1)), ("Detalle", "x")):
+            with self.subTest(columna=columna), self.assertRaisesMessage(ValidationError, "de esta columna salió la tarea"):
+                parrilla_ops.actualizar_valores(a, self.analista, {self.campos[columna]: valor})
+        parrilla_ops.actualizar_valores(a, self.analista, {self.campos["Tema"]: "A", self.campos["Alterno"]: "libre"})
+        self.assertEqual(parrilla_ops.valores_de(a)["alterno"], "libre")
+        # La tarea y los valores conservan lo generado.
+        va.tarea.refresh_from_db()
+        self.assertEqual(va.tarea.titulo, "A")
+        # Completada la tarea, el elemento se puede retirar y todo queda como historia.
+        self._completar(va)
+        parrilla_ops.retirar_elemento(a, self.analista)
+        va.tarea.refresh_from_db()
+        self.assertEqual((va.tarea.estado, TareaElemento.objects.filter(elemento=a).count()), ("COMPLETADA", 1))
+        self.assertEqual(parrilla_ops.valores_de(a)["tema"], "A")
+        # Cambiar Studio no toca las tareas existentes.
+        configurar_tareas_elemento(self.servicio, self.admin, **{**self.CONFIG, "clave_titulo": "alterno"})
+        vb.tarea.refresh_from_db()
+        self.assertEqual(vb.tarea.titulo, "B")
+
+    def test_cancelar_el_ticket_detiene_la_espera_y_una_finalizacion_tardia_no_reactiva(self):
+        ticket = self._ticket_con_bloque()
+        self._llegar_al_bloque(ticket, "A", "B", "C")
+        a, b, c = self._vinculos(ticket)
+        self._completar(a)
+        independiente = Tarea.objects.create(titulo="Ajena", usuario_responsable=self.persona)
+        cancelar_ticket(ticket, self.analista, "Ya no se hará.")
+        self.assertEqual(self._instancia(ticket).estado, "CANCELADA")
+        estados = {v.elemento.numero: Tarea.objects.get(pk=v.tarea_id).estado for v in self._vinculos(ticket)}
+        self.assertEqual(estados, {1: "COMPLETADA", 2: "CANCELADA", 3: "CANCELADA"})
+        independiente.refresh_from_db()
+        self.assertEqual(independiente.estado, "PENDIENTE")
+        # Una finalización tardía no reactiva la ejecución ni crea el siguiente bloque.
+        with self.assertRaises(ValidationError):
+            self._completar(b)
+        self.assertFalse(continuar_por_tareas_elementos(Tarea.objects.get(pk=a.tarea_id)))
+        self.assertEqual(self._instancia(ticket).estado, "CANCELADA")
+        self.assertFalse(self._instancia(ticket).ejecuciones_etapa.filter(bloque_operativo__nombre="Cierre").exists())
+        with self.assertRaises(ValidationError):
+            tareas_ops.materializar_tareas(ticket, self.analista)
+
+    def test_un_proceso_no_se_resuelve_con_tareas_por_elemento_abiertas(self):
+        ticket = self._ticket_tareas(nombre="Resolver con tareas", requiere_evidencia=False)
+        a, b = self._el(ticket, "A"), self._el(ticket, "B")
+        self._completar_como(ticket, "Atender", self.analista)  # el flujo simple termina
+        tareas_ops.materializar_tareas(ticket, self.analista)
+        va, vb = self._vinculos(ticket)
+        self.assertEqual(self._instancia(ticket).estado, "COMPLETADA")
+        with self.assertRaisesMessage(ValidationError, "tareas por elemento"):
+            resolver_ticket(ticket, self.analista, "Listo.")
+        self._completar(va)
+        iniciar_tarea_dominio(vb.tarea, self.persona)
+        with self.assertRaisesMessage(ValidationError, "tareas por elemento"):  # en progreso también bloquea
+            resolver_ticket(ticket, self.analista, "Listo.")
+        self._completar(vb)
+        resolver_ticket(ticket, self.analista, "Listo.")
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, "RESUELTO")
+
+    def test_una_entrada_invalida_espera_la_correccion_sin_tareas_a_medias(self):
+        # 4.G2E: información corregible (un elemento sin fecha límite) no es un error técnico: el bloque NO genera
+        # ninguna tarea y el flujo espera la corrección en lugar de quedar en ERROR.
+        ticket = self._ticket_con_bloque(nombre="Entrada con error")
+        self._el(ticket, "Bueno")
+        self._el(ticket, "Sin fecha", entrega=None)
+        self._completar_como(ticket, "Atender", self.analista)
+        self.assertEqual(self._instancia(ticket).estado, "EN_ESPERA")
+        ejecucion = self._ejecucion_bloque(ticket)
+        self.assertEqual((ejecucion.estado, ejecucion.motivo_espera), ("EN_ESPERA", "ELEMENTOS"))
+        self.assertTrue(any("#2" in m for m in ejecucion.resultado["correccion"]["mensajes"]))
+        self.assertEqual((self._generadas(), TareaElemento.objects.count()), (0, 0))
+        # Con un conjunto obligatorio sin aprobar tampoco se materializa: espera su aprobación.
+        con_conjunto = self._ticket_con_bloque(nombre="Entrada con conjunto", con_conjunto=True)
+        self._llegar_al_bloque(con_conjunto, "A")
+        self.assertEqual(self._instancia(con_conjunto).estado, "EN_ESPERA")
+        mensajes = self._ejecucion_bloque(con_conjunto).resultado["correccion"]["mensajes"]
+        self.assertTrue(any("aprobado y vigente" in m for m in mensajes))
+        self.assertEqual(TareaElemento.objects.count(), 0)
+
+
+# --- 4.G2E — experiencia integral de Procesos -------------------------------------------------------
+
+from apps.workflows.integracion import reintentar_tareas_elementos  # noqa: E402
+
+
+class ExperienciaProcesoEnStudioTests(_EscenarioBloqueTareasMixin, TestCase):
+    """El Diseñador es uno solo: un Proceso explica cómo se relacionan sus piezas; un Servicio no cambia."""
+
+    def setUp(self):
+        self._preparar_revision()
+        _otorgar_permiso(self.admin, "formulario.administrar")
+        self.client.force_login(self.admin)
+
+    def _servicio_comun(self):
+        servicio, _campos, _definicion = self._servicio_e2()
+        return servicio
+
+    def test_el_formulario_separa_datos_de_inicio_y_elementos_y_el_basico_agrupa_responsables(self):
+        self._ticket_con_bloque(nombre="Studio proceso", con_conjunto=True)
+        base = reverse("catalogo:studio", args=[self.servicio.pk])
+        datos = self.client.get(base + "?tab=entrada")
+        self.assertContains(datos, "svc-dual")
+        self.assertContains(datos, "Datos de inicio")
+        self.assertContains(datos, "Elementos del proceso")
+        self.assertNotContains(datos, "Título de la tarea")  # el editor de columnas no se mezcla con los datos
+        elementos = self.client.get(base + "?tab=entrada&uso=parrilla")
+        for texto in ("Estructura activa", "Genera tareas", "Título de la tarea", "Responsable de la tarea",
+                      "Fecha límite de la tarea", "Se revisa en «Piezas aprobadas»", "Obligatorio"):
+            self.assertContains(elementos, texto)
+        # Básico: los responsables se configuran ahí y se vuelve a Básico.
+        general = self.client.get(base + "?tab=general")
+        self.assertContains(general, 'id="responsables-proceso"')
+        respuesta = self.client.post(
+            reverse("catalogo:studio_responsable_agregar", args=[self.servicio.pk]),
+            {"tipo_responsable": "USUARIO", "usuario": self.persona.pk, "tab": "general"},
+        )
+        self.assertRedirects(respuesta, base + "?tab=general", fetch_redirect_response=False)
+        # Un Servicio conserva su Studio: sin separación de formularios ni responsables en Básico.
+        comun = self._servicio_comun()
+        self.assertNotContains(self.client.get(reverse("catalogo:studio", args=[comun.pk]) + "?tab=entrada"), "svc-dual")
+        self.assertNotContains(self.client.get(reverse("catalogo:studio", args=[comun.pk]) + "?tab=general"), "responsables-proceso")
+
+    def test_la_salida_agrupa_entregables_y_revision_por_conjunto_con_sus_dependencias(self):
+        self._ticket_con_bloque(nombre="Salida proceso", con_conjunto=True)
+        salida = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]) + "?tab=salida")
+        for texto in ("Entregables del proceso", "Revisión por conjunto de elementos", "Cómo se relacionan",
+                      "Piezas aprobadas", "Revisa 1 columna", "Quién revisa",
+                      "las tareas por elemento solo se generan cuando el conjunto está aprobado"):
+            self.assertContains(salida, texto)
+        self.assertEqual([d.nombre for d in salida.context["definiciones_conjunto"]], ["Piezas aprobadas"])
+        self.assertEqual(salida.context["definiciones_proceso"], [])
+        comun = self.client.get(reverse("catalogo:studio", args=[self._servicio_comun().pk]) + "?tab=salida")
+        self.assertNotContains(comun, "Revisión por conjunto de elementos")
+
+    def test_el_flujo_de_un_proceso_muestra_orden_responsables_esperas_y_el_bloque_de_tareas(self):
+        self._ticket_con_bloque(nombre="Flujo proceso")
+        flujo = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]) + "?tab=ejecucion")
+        self.assertContains(flujo, "Recorrido de ejecución")
+        self.assertContains(flujo, "Genera una tarea por elemento y espera a que todas se completen")
+        self.assertContains(flujo, "Espera a que se complete la actividad")
+        pasos = flujo.context["recorrido_proceso"]
+        self.assertEqual([p["bloque"].nombre for p in pasos], ["Atender", "Tareas de piezas", "Cierre"])
+        self.assertEqual([p["numero"] for p in pasos], [1, 2, 3])
+        self.assertEqual(pasos[1]["tipo"], "Tareas por elemento")
+        comun = self.client.get(reverse("catalogo:studio", args=[self._servicio_comun().pk]) + "?tab=ejecucion")
+        self.assertNotContains(comun, "Recorrido de ejecución")
+
+    def test_publicar_resume_el_proceso_y_senala_la_seccion_de_cada_pendiente(self):
+        from apps.catalogo.operaciones import activar_servicio
+
+        self._ticket_con_bloque(nombre="Publicar proceso", con_conjunto=True)
+        pagina = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]) + "?tab=publicacion")
+        for texto in ("Resumen del proceso", "Modalidad de inicio", "Datos de inicio", "Elementos del proceso",
+                      "Entregables y revisiones", "Tareas por elemento", "Flujo asociado", "Programado"):
+            self.assertContains(pagina, texto)
+        self.assertEqual(pagina.context["errores_por_seccion"], [])
+        # Una estructura de elementos sin columnas activas es inconsistente: se señala DÓNDE corregirla y no
+        # se deja publicar.
+        incompleto, _ = self._proceso("Proceso incompleto", flujo="simple")
+        configurar_parrilla(incompleto, self.admin, nombre_elemento="Pieza")
+        pagina = self.client.get(reverse("catalogo:studio", args=[incompleto.pk]) + "?tab=publicacion")
+        grupos = pagina.context["errores_por_seccion"]
+        self.assertEqual([g["seccion"] for g in grupos], ["elementos"])
+        self.assertIn("uso=parrilla", grupos[0]["url"])
+        self.assertContains(pagina, "Formulario · elementos del proceso")
+        self.assertFalse(pagina.context["publicable"])
+        with self.assertRaises(ValidationError):
+            activar_servicio(incompleto, self.admin)
+
+
+class EspacioDeTrabajoDeProcesoTests(_MediaAisladaMixin, _EscenarioBloqueTareasMixin, TestCase):
+    def setUp(self):
+        self._preparar_revision()
+
+    def _aprobar_todo(self, ticket, *elementos):
+        for elemento in elementos:
+            revision_ops.aprobar_elemento(self.entregable, elemento, self.revisor, "Bien")
+
+    def test_un_proceso_organiza_elementos_entregables_tareas_e_historial_y_un_servicio_no_cambia(self):
+        ticket = self._ticket_con_bloque(nombre="Espacio proceso", con_conjunto=True, evidencia=True)
+        a, b = self._el(ticket, "A"), self._el(ticket, "B")
+        self._aprobar_todo(ticket, a, b)
+        self._completar_como(ticket, "Atender", self.analista)
+        self.client.force_login(self.analista)
+        pagina = self.client.get(reverse("tickets:trabajo", args=[ticket.pk]))
+        self.assertTrue(pagina.context["es_proceso"])
+        for ancla in ('id="elementos"', 'id="ws-entregables"', 'id="ws-tareas-elemento"', 'id="ws-historial"', "ws-secciones"):
+            self.assertContains(pagina, ancla)
+        resumen = pagina.context["resumen_proceso"]
+        self.assertEqual((resumen["elementos"], resumen["tareas"].total, resumen["tareas"].abiertas), (2, 2, 2))
+        self.assertEqual(pagina.context["conjuntos"][0].resumen_vigente.progreso, "2/2")
+        self.assertContains(pagina, "Requerida")  # la evidencia que cada tarea exige
+        # Un Servicio mantiene su espacio de siempre: sin secciones de proceso.
+        _servicio, _definicion, ticket_servicio = self._escenario_completo()
+        ticket_servicio = self._atender(ticket_servicio)
+        self.client.force_login(self.responsable)
+        comun = self.client.get(reverse("tickets:trabajo", args=[ticket_servicio.pk]))
+        self.assertFalse(comun.context["es_proceso"])
+        self.assertNotContains(comun, "ws-secciones")
+        self.assertNotContains(comun, 'id="ws-historial"')
+
+    def test_los_elementos_muestran_incompletos_devoluciones_observaciones_y_retirados_y_se_corrigen_ahi(self):
+        ticket = self._ticket_con_bloque(nombre="Elementos y revisión", con_conjunto=True)
+        a, b = self._el(ticket, "A"), self._el(ticket, "B")
+        incompleto = parrilla_ops.crear_elemento(ticket, self.analista, {self.campos["Tema"]: "C"})
+        d = self._el(ticket, "D")
+        parrilla_ops.retirar_elemento(d, self.analista)
+        revision_ops.devolver_elemento(self.entregable, a, self.revisor, "Cambia el tono")
+        espacio = trabajo_ops.espacio(self.analista, ticket)
+        parrilla = espacio["parrilla"]
+        filas = {f["elemento"].numero: f for f in parrilla["filas"]}
+        self.assertEqual(parrilla["n_incompletas"], 1)
+        self.assertEqual(filas[incompleto.numero]["completitud"].pendientes, ["Responsable"])
+        self.assertEqual(
+            (filas[a.numero]["revisiones"][0]["texto"], filas[a.numero]["revisiones"][0]["observacion"]),
+            ("Devuelta", "Cambia el tono"),
+        )
+        self.assertEqual(filas[b.numero]["revisiones"][0]["texto"], "Pendiente")
+        self.assertEqual(parrilla["n_retirados"], 1)
+        self.client.force_login(self.analista)
+        destino = reverse("tickets:trabajo", args=[ticket.pk])
+        pagina = self.client.get(destino)
+        for texto in ("Cambia el tono", "Retirados (1)", "Incompleta", "Devuelta"):
+            self.assertContains(pagina, texto)
+        # Corrección con la operación de siempre, volviendo al espacio de trabajo; la revisión se invalida
+        # solo en esa fila (misma huella que antes).
+        guardar = reverse("tickets:elemento_guardar", args=[ticket.pk, a.pk])
+        respuesta = self.client.post(guardar, {f"campo_{self.campos['Tema'].pk}": "A corregido", "next": destino})
+        self.assertRedirects(respuesta, destino, fetch_redirect_response=False)
+        self.assertEqual(parrilla_ops.valores_de(a)["tema"], "A corregido")
+        self.assertEqual(revision_ops.estado_de(self.entregable, a), "PENDIENTE")
+        # Un destino externo se ignora; y quien no atiende el ticket no corrige elementos.
+        externo = self.client.post(guardar, {f"campo_{self.campos['Tema'].pk}": "A otra vez", "next": "https://otro.example/"})
+        self.assertRedirects(
+            externo, reverse("tickets:detalle", args=[ticket.pk]) + "#elementos", fetch_redirect_response=False
+        )
+        self.client.force_login(self.persona)
+        self.client.post(guardar, {f"campo_{self.campos['Tema'].pk}": "Intruso", "next": destino})
+        self.assertEqual(parrilla_ops.valores_de(a)["tema"], "A otra vez")
+
+    def test_las_tareas_individuales_muestran_totales_responsable_fecha_evidencia_y_acceso(self):
+        ticket = self._ticket_con_bloque(nombre="Tareas individuales", evidencia=True)
+        self._llegar_al_bloque(ticket, "A", "B", "C")
+        va, vb, vc = self._vinculos(ticket)
+        iniciar_tarea_dominio(vb.tarea, self.persona)
+        adjuntar_evidencia_tarea(self.persona, SimpleUploadedFile("pieza.txt", b"contenido"), tarea=va.tarea)
+        self._completar(va)
+        espacio = trabajo_ops.espacio(self.analista, ticket)
+        tareas = espacio["tareas_elemento"]
+        progreso = tareas["progreso"]
+        self.assertEqual((progreso.total, progreso.completadas, progreso.pendientes, progreso.en_progreso), (3, 1, 1, 1))
+        primera, segunda, _tercera = tareas["tareas"]
+        self.assertEqual(primera["responsable"], self.persona.get_username())
+        self.assertEqual(timezone.localtime(primera["fecha_limite"]).date(), date(2026, 10, 20))
+        self.assertTrue(primera["requiere_evidencia"] and primera["con_evidencia"])
+        self.assertFalse(segunda["con_evidencia"])
+        self.assertEqual({fila["accesible"] for fila in tareas["tareas"]}, {False})  # la autorización es la de apps.tareas
+        propias = trabajo_ops.espacio(self.persona, ticket)["tareas_elemento"]["tareas"]
+        self.assertEqual({fila["accesible"] for fila in propias}, {True})
+        self.client.force_login(self.analista)
+        pagina = self.client.get(reverse("tickets:trabajo", args=[ticket.pk]))
+        for texto in ("20/10/2026", "Adjunta", "Requerida", "1/3"):
+            self.assertContains(pagina, texto)
+
+
+class RecuperacionDeTareasPorElementoTests(_MediaAisladaMixin, _EscenarioBloqueTareasMixin, TestCase):
+    def setUp(self):
+        self._preparar_revision()
+
+    def _con_elemento_sin_fecha(self, nombre):
+        ticket = self._ticket_con_bloque(nombre=nombre)
+        self._el(ticket, "Bueno")
+        invalido = self._el(ticket, "Sin fecha", entrega=None)
+        self._completar_como(ticket, "Atender", self.analista)
+        return ticket, invalido
+
+    def test_la_informacion_incompleta_no_es_un_error_tecnico_y_no_genera_tareas(self):
+        ticket, _ = self._con_elemento_sin_fecha("Recuperación sin error")
+        ejecucion = self._ejecucion_bloque(ticket)
+        self.assertEqual(self._instancia(ticket).estado, "EN_ESPERA")
+        self.assertEqual((ejecucion.estado, ejecucion.motivo_espera), ("EN_ESPERA", "ELEMENTOS"))
+        correccion = tareas_ops.correccion_pendiente(ejecucion)
+        self.assertTrue(any("#2" in mensaje for mensaje in correccion["mensajes"]))
+        self.assertEqual((self._generadas(), TareaElemento.objects.count()), (0, 0))
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, "EN_ATENCION")
+        # El espacio de trabajo dice qué corregir y ofrece el reintento a quien edita los elementos.
+        self.client.force_login(self.analista)
+        pagina = self.client.get(reverse("tickets:trabajo", args=[ticket.pk]))
+        for texto in ("Falta información para generar las tareas", "#2", "Reintentar generación de tareas"):
+            self.assertContains(pagina, texto)
+        self.assertTrue(pagina.context["panel"]["puede_reintentar"])
+        self.assertFalse(trabajo_ops.espacio(self.persona, ticket)["panel"]["puede_reintentar"])
+
+    def test_un_error_tecnico_sigue_siendo_error_y_no_se_confunde_con_una_correccion(self):
+        from unittest.mock import patch
+
+        ticket = self._ticket_con_bloque(nombre="Recuperación técnica")
+        self._el(ticket, "A")
+        with patch("apps.tickets.tareas_elemento.entrar_al_bloque", side_effect=RuntimeError("fallo inesperado")):
+            self._completar_como(ticket, "Atender", self.analista)
+        self.assertEqual(self._instancia(ticket).estado, "ERROR")
+        ejecucion = self._ejecucion_bloque(ticket)
+        self.assertEqual(ejecucion.error["tipo"], "TECNICO")
+        self.assertIsNone(tareas_ops.correccion_pendiente(ejecucion))
+
+    def test_corregir_con_las_operaciones_existentes_y_reintentar_genera_las_tareas_y_continua(self):
+        ticket, invalido = self._con_elemento_sin_fecha("Recuperación completa")
+        parrilla_ops.actualizar_valores(invalido, self.analista, {self.campos["Entrega"]: date(2026, 10, 25)})
+        self.client.force_login(self.analista)
+        url = reverse("tickets:reintentar_tareas", args=[ticket.pk])
+        destino = reverse("tickets:trabajo", args=[ticket.pk])
+        self.assertEqual(self.client.get(url).status_code, 405)
+        respuesta = self.client.post(url, {"next": destino})
+        self.assertRedirects(respuesta, destino, fetch_redirect_response=False)
+        self.assertTrue(any("Se generaron 2 tareas" in str(m) for m in get_messages(respuesta.wsgi_request)))
+        ejecucion = self._ejecucion_bloque(ticket)
+        self.assertEqual((ejecucion.estado, ejecucion.motivo_espera), ("EN_ESPERA", "ELEMENTOS"))
+        self.assertIsNone(tareas_ops.correccion_pendiente(ejecucion))
+        self.assertEqual(ejecucion.resultado, {"total": 2, "completadas": 0})
+        vinculos = self._vinculos(ticket)
+        self.assertEqual([v.tarea.titulo for v in vinculos], ["Bueno", "Sin fecha"])
+        self.assertTrue(all(v.instancia_etapa_id == ejecucion.pk for v in vinculos))
+        # Idempotente: otro reintento no duplica nada ni cambia el flujo.
+        otra = self.client.post(url, {"next": destino})
+        self.assertTrue(any("nada que reintentar" in str(m) for m in get_messages(otra.wsgi_request)))
+        self.assertEqual(self._generadas(), 2)
+        # Completar las tareas libera el bloque y el motor sigue por «Cierre».
+        for vinculo in vinculos:
+            self._completar(vinculo)
+        self.assertEqual(self._ejecucion_bloque(ticket).estado, "COMPLETADA")
+        self.assertTrue(self._instancia(ticket).ejecuciones_etapa.filter(bloque_operativo__nombre="Cierre").exists())
+
+    def test_reintentar_sin_corregir_conserva_la_espera_se_autoriza_y_no_reactiva_un_ticket_cancelado(self):
+        ticket, _ = self._con_elemento_sin_fecha("Recuperación pendiente")
+        primero = reintentar_tareas_elementos(ticket, self.analista)
+        self.assertTrue(primero.aplicado and primero.mensajes and not primero.continuo)
+        reintentar_tareas_elementos(ticket, self.analista)
+        ejecucion = self._ejecucion_bloque(ticket)
+        self.assertEqual(tareas_ops.correccion_pendiente(ejecucion)["reintentos"], 2)
+        self.assertEqual((self._generadas(), self._instancia(ticket).estado), (0, "EN_ESPERA"))
+        # Nada lo repite solo: sigue siendo la única ejecución del bloque.
+        self.assertEqual(self._instancia(ticket).ejecuciones_etapa.filter(bloque_operativo__tipo="TAREAS_ELEMENTOS").count(), 1)
+        for ajeno in (self.persona, self.otro):
+            with self.assertRaises(PermissionDenied):
+                reintentar_tareas_elementos(ticket, ajeno)
+        cancelar_ticket(ticket, self.analista, "Ya no se hará.")
+        with self.assertRaisesMessage(ValidationError, "cancelado"):
+            reintentar_tareas_elementos(ticket, self.analista)
+        self.assertEqual((self._instancia(ticket).estado, self._generadas()), ("CANCELADA", 0))
+
+    def test_completar_una_tarea_ya_existente_no_libera_un_bloque_que_espera_correccion(self):
+        ticket = self._ticket_con_bloque(nombre="Recuperación parcial")
+        self._el(ticket, "Primera")
+        tareas_ops.materializar_tareas(ticket, self.analista)  # una tarea generada por la primitiva, fuera del bloque
+        pendiente = self._el(ticket, "Sin fecha", entrega=None)
+        self._completar_como(ticket, "Atender", self.analista)
+        self.assertIsNotNone(tareas_ops.correccion_pendiente(self._ejecucion_bloque(ticket)))
+        (primera,) = self._vinculos(ticket)
+        self._completar(primera)  # la única tarea abierta: sin la guarda el flujo seguiría sin los demás elementos
+        self.assertEqual(self._ejecucion_bloque(ticket).estado, "EN_ESPERA")
+        self.assertFalse(self._instancia(ticket).ejecuciones_etapa.filter(bloque_operativo__nombre="Cierre").exists())
+        # Corregido y reintentado, genera solo lo que faltaba y el flujo continúa al completarse.
+        parrilla_ops.actualizar_valores(pendiente, self.analista, {self.campos["Entrega"]: date(2026, 10, 30)})
+        resultado = reintentar_tareas_elementos(ticket, self.analista)
+        self.assertEqual((resultado.aplicado, resultado.mensajes, resultado.continuo, resultado.generadas), (True, (), False, 1))
+        self._completar(self._vinculos(ticket)[1])
+        self.assertEqual(self._ejecucion_bloque(ticket).estado, "COMPLETADA")

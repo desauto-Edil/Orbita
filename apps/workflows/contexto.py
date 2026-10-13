@@ -79,7 +79,7 @@ INEXISTENTE = _Inexistente()
 
 # Ámbitos con resultados publicados por bloques (`resultados_bloques`). Sumar un
 # ámbito aquí basta: el resolutor y la API de publicación no necesitan otro cambio.
-AMBITOS_BLOQUE = frozenset({"aprobaciones", "entregables"})
+AMBITOS_BLOQUE = frozenset({"aprobaciones", "entregables", "tareas_elementos"})
 
 
 def construir_contexto_inicial(datos_iniciales):

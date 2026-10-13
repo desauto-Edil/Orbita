@@ -65,4 +65,4 @@ def tareas_vencidas(queryset=None):
     persistido). `queryset` permite acotar antes, p.ej.
     `tareas_vencidas(tareas_asignadas_a(usuario))`."""
     base = Tarea.objects.all() if queryset is None else queryset
-    return base.filter(fecha_limite__lt=timezone.now()).exclude(estado=Tarea.Estado.COMPLETADA)
+    return base.filter(fecha_limite__lt=timezone.now()).exclude(estado__in=Tarea.ESTADOS_CERRADOS)

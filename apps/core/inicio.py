@@ -207,7 +207,7 @@ def resumen_trabajo(usuario):
     nombre" (solo una señal discreta de "Todo al día")."""
     alcances = alcances_autorizados(usuario, "tickets.atender")
     acceso_cola = bool(alcances["global"] or alcances["areas"] or alcances["unidades_negocio"])
-    abiertas = ~Q(estado=Tarea.Estado.COMPLETADA)
+    abiertas = ~Q(estado__in=Tarea.ESTADOS_CERRADOS)
     tareas = tareas_asignadas_a(usuario).filter(abiertas).count()
     tareas_por_tomar = tareas_disponibles_para_tomar(usuario).filter(abiertas).count()
     aprobaciones = aprobaciones_pendientes_para(usuario).count()
@@ -261,7 +261,7 @@ def _eventos(usuario, hasta):
     eventos = []
     tareas = (
         tareas_asignadas_a(usuario)
-        .exclude(estado=Tarea.Estado.COMPLETADA)
+        .exclude(estado__in=Tarea.ESTADOS_CERRADOS)
         .filter(fecha_limite__isnull=False, fecha_limite__lt=hasta)
         .order_by("fecha_limite")[:LIMITE_EVENTOS]
     )

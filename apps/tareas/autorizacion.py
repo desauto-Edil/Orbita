@@ -103,7 +103,7 @@ def puede_tomar_tarea(usuario, tarea):
     `equipo_responsable` ya configurado puede tomarla para sí (mismo
     criterio que `usuario_es_responsable_configurado` en Tickets —
     RQF-077, "tareas del equipo")."""
-    if tarea.estado == Tarea.Estado.COMPLETADA or tarea.usuario_responsable_id is not None:
+    if tarea.estado in Tarea.ESTADOS_CERRADOS or tarea.usuario_responsable_id is not None:
         return False
     if usuario_tiene_permiso(usuario, PERMISO_GESTIONAR):
         return True
@@ -117,7 +117,7 @@ def puede_tomar_tarea(usuario, tarea):
 def puede_asignar_tarea(usuario, tarea):
     """ASIGNAR = asignar a un tercero una Tarea sin responsable directo
     todavía — función supervisora, exige `tareas.gestionar`."""
-    if tarea.estado == Tarea.Estado.COMPLETADA or tarea.usuario_responsable_id is not None:
+    if tarea.estado in Tarea.ESTADOS_CERRADOS or tarea.usuario_responsable_id is not None:
         return False
     return usuario_tiene_permiso(usuario, PERMISO_GESTIONAR)
 
@@ -126,7 +126,7 @@ def puede_reasignar_tarea(usuario, tarea):
     """REASIGNAR = cambiar responsable de una Tarea que ya lo tiene.
     `tareas.gestionar`, o el propio responsable actual entregando su
     Tarea (mismo criterio que `puede_reasignar` en Tickets)."""
-    if tarea.estado == Tarea.Estado.COMPLETADA:
+    if tarea.estado in Tarea.ESTADOS_CERRADOS:
         return False
     return usuario_tiene_permiso(usuario, PERMISO_GESTIONAR) or es_responsable_actual(usuario, tarea)
 
@@ -135,7 +135,7 @@ def puede_delegar_tarea(usuario, tarea):
     """DELEGAR — CU-022, actor "Gestor / Ejecutor autorizado": misma
     población que reasignar (`tareas.gestionar`, o el responsable directo
     delegando su propio trabajo)."""
-    if tarea.estado == Tarea.Estado.COMPLETADA:
+    if tarea.estado in Tarea.ESTADOS_CERRADOS:
         return False
     return usuario_tiene_permiso(usuario, PERMISO_GESTIONAR) or es_responsable_directo(usuario, tarea)
 
@@ -164,9 +164,9 @@ def puede_completar_tarea(usuario, tarea):
 
 def puede_comentar_tarea(usuario, tarea):
     """RQF-076 — creador o responsable actual, mientras la Tarea siga
-    abierta a interacción (no COMPLETADA), mismo criterio que
+    abierta a interacción (ni COMPLETADA ni CANCELADA), mismo criterio que
     `puede_comentar_ticket`."""
-    if tarea.estado == Tarea.Estado.COMPLETADA:
+    if tarea.estado in Tarea.ESTADOS_CERRADOS:
         return False
     return es_creadora(usuario, tarea) or es_responsable_actual(usuario, tarea)
 
@@ -176,6 +176,6 @@ def puede_crear_subtarea(usuario, tarea):
     ya, ella misma, una subtarea (V1: un solo nivel, W.5)."""
     if not tarea.permite_subtareas or tarea.tarea_padre_id is not None:
         return False
-    if tarea.estado == Tarea.Estado.COMPLETADA:
+    if tarea.estado in Tarea.ESTADOS_CERRADOS:
         return False
     return es_responsable_actual(usuario, tarea) or usuario_tiene_permiso(usuario, PERMISO_GESTIONAR)

@@ -2,49 +2,75 @@
   <header class="svc-section__head">
     <div>
       <p class="svc-kicker">Salida</p>
-      <h2>Entregables</h2>
-      <p>{% if proceso_programado %}Define qué produce cada ejecución de este proceso.{% else %}Define qué recibirá el solicitante al finalizar.{% endif %}</p>
+      <h2>{% if es_proceso %}Entregables y revisiones{% else %}Entregables{% endif %}</h2>
+      <p>{% if proceso_programado or es_proceso %}Define qué produce cada ejecución de este proceso y cómo se revisa.{% else %}Define qué recibirá el solicitante al finalizar.{% endif %}</p>
     </div>
     <button type="button" class="btn btn--primary" data-action="toggle-panel" data-target="panel-entregable-nuevo">Añadir entregable</button>
   </header>
 
-  {% if definiciones %}
+  {% if es_proceso %}
+    {# 4.G2E: en un Proceso la salida se organiza por lo que produce: entregables del proceso y revisión por conjunto de elementos. #}
+    <section class="svc-panel" id="entregables-del-proceso">
+      <div class="svc-panel__head">
+        <div>
+          <h3>Entregables del proceso</h3>
+          <p>Lo que se produce o confirma durante la ejecución: texto, enlace, archivo o confirmación.</p>
+        </div>
+      </div>
+      {% if definiciones_proceso %}
+        <div class="svc-object-grid">
+          {% for definicion in definiciones_proceso %}
+            {% include "catalogo/_studio_salida_definicion.html" with indice=forloop.counter %}
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="svc-empty">Sin entregables del proceso (opcional).</div>
+      {% endif %}
+    </section>
+
+    <section class="svc-panel" id="entregables-conjunto">
+      <div class="svc-panel__head">
+        <div>
+          <h3>Revisión por conjunto de elementos</h3>
+          <p>Cada elemento se aprueba o devuelve por separado; el conjunto queda satisfecho cuando todos están aprobados y completos.</p>
+        </div>
+        {% if hay_estructura %}<span class="svc-pill svc-pill--ok">Elementos activos</span>{% else %}<span class="svc-pill">Sin elementos activos</span>{% endif %}
+      </div>
+      {% if definiciones_conjunto %}
+        <div class="svc-object-grid">
+          {% for definicion in definiciones_conjunto %}
+            {% include "catalogo/_studio_salida_definicion.html" with indice=forloop.counter %}
+          {% endfor %}
+        </div>
+      {% elif hay_estructura %}
+        <div class="svc-empty">Todavía no hay revisión por conjunto. Añade un entregable de tipo «Revisión de elementos» para que los elementos se aprueben o devuelvan.</div>
+      {% else %}
+        <div class="svc-empty">La revisión por conjunto necesita elementos del proceso: actívalos en Formulario › Elementos del proceso.</div>
+      {% endif %}
+    </section>
+
+    {% if dependencias %}
+      <section class="svc-panel" id="dependencias-proceso">
+        <div class="svc-panel__head">
+          <div>
+            <h3>Cómo se relacionan</h3>
+            <p>Las columnas revisadas, los revisores y las tareas por elemento dependen unas de otras.</p>
+          </div>
+        </div>
+        <div class="svc-resumen-grid">
+          {% for item in dependencias %}
+            <article class="svc-resumen-card">
+              <h4>{{ item.titulo }}</h4>
+              {% for linea in item.lineas %}<p>{{ linea }}</p>{% endfor %}
+            </article>
+          {% endfor %}
+        </div>
+      </section>
+    {% endif %}
+  {% elif definiciones %}
     <div class="svc-object-grid">
       {% for definicion in definiciones %}
-        <article class="svc-object">
-          <div class="svc-object__main">
-            <span class="svc-object__index">0{{ forloop.counter }}</span>
-            <div>
-              <h3>{{ definicion.nombre }}</h3>
-              {% if definicion.descripcion %}<p>{{ definicion.descripcion }}</p>{% endif %}
-            </div>
-          </div>
-          <div class="svc-object__meta">
-            <span class="svc-tag">{{ definicion.get_tipo_display }}</span>
-            {% if definicion.obligatorio %}<span class="svc-tag svc-tag--accent">Obligatorio</span>{% endif %}
-          </div>
-          <div class="svc-row-actions">
-            <button type="button" class="btn btn--ghost btn--sm" data-action="toggle-panel" data-target="panel-entregable-{{ definicion.pk }}">Editar</button>
-            <form method="post" action="{% url 'catalogo:studio_entregable_retirar' servicio.pk definicion.pk %}">
-              {% csrf_token %}
-              <button type="submit" class="btn btn--ghost btn--sm">Retirar</button>
-            </form>
-          </div>
-
-          <div id="panel-entregable-{{ definicion.pk }}" class="svc-inline-editor" hidden>
-            <form method="post" action="{% url 'catalogo:studio_entregable_editar' servicio.pk definicion.pk %}" class="form">
-              {% csrf_token %}
-              <div class="svc-form-grid svc-form-grid--two">
-                <div class="field">{{ definicion.form_editar.nombre.label_tag }}{{ definicion.form_editar.nombre }}</div>
-                <div class="field">{{ definicion.form_editar.tipo.label_tag }}{{ definicion.form_editar.tipo }}</div>
-                <div class="field">{{ definicion.form_editar.descripcion.label_tag }}{{ definicion.form_editar.descripcion }}</div>
-                <div class="field">{{ definicion.form_editar.orden.label_tag }}{{ definicion.form_editar.orden }}</div>
-              </div>
-              <label class="choice">{{ definicion.form_editar.obligatorio }} {{ definicion.form_editar.obligatorio.label_tag }}</label>
-              <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar</button></div>
-            </form>
-          </div>
-        </article>
+        {% include "catalogo/_studio_salida_definicion.html" with indice=forloop.counter %}
       {% endfor %}
     </div>
   {% else %}
@@ -67,7 +93,20 @@
         <div class="field">{{ entregable_form_nuevo.orden.label_tag }}{{ entregable_form_nuevo.orden }}</div>
       </div>
       <label class="choice">{{ entregable_form_nuevo.obligatorio }} {{ entregable_form_nuevo.obligatorio.label_tag }}</label>
-      <div class="form-actions"><button type="submit" class="btn btn--primary">Agregar entregable</button></div>
+
+      <fieldset class="svc-subpanel" data-revision-elementos>
+        <legend>Solo para «Revisión de elementos»</legend>
+        {% if entregable_form_nuevo.hay_estructura %}
+          <div class="field">{{ entregable_form_nuevo.columnas_revisadas.label_tag }}{{ entregable_form_nuevo.columnas_revisadas }}</div>
+          <div class="svc-form-grid svc-form-grid--two">
+            <div class="field">{{ entregable_form_nuevo.revisores_usuarios.label_tag }}{{ entregable_form_nuevo.revisores_usuarios }}</div>
+            <div class="field">{{ entregable_form_nuevo.revisores_equipos.label_tag }}{{ entregable_form_nuevo.revisores_equipos }}</div>
+          </div>
+          <small class="text-muted">Cada elemento se aprueba o devuelve por separado. Quien aprueba no es, por serlo, el responsable del ticket.</small>
+        {% else %}
+          <small class="text-muted">Este proceso aún no tiene elementos estructurados con columnas: actívalos en la pestaña Formulario («Elementos del proceso»).</small>
+        {% endif %}
+      </fieldset>      <div class="form-actions"><button type="submit" class="btn btn--primary">Agregar entregable</button></div>
     </form>
   </article>
 

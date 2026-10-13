@@ -25,6 +25,7 @@ arquitectónica aprobada), nunca aquí.
 
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from apps.core.auditoria import registrar_evento
@@ -84,6 +85,7 @@ def crear_tarea(
     fecha_limite=None,
     permite_subtareas=False,
     tarea_padre=None,
+    requiere_evidencia=False,
 ):
     if origen == Tarea.Origen.SISTEMA and creada_por is not None:
         raise ValueError("origen=SISTEMA no admite creada_por (no se inventa un usuario técnico, W.9).")
@@ -98,6 +100,7 @@ def crear_tarea(
         fecha_limite=fecha_limite,
         permite_subtareas=permite_subtareas,
         tarea_padre=tarea_padre,
+        requiere_evidencia=requiere_evidencia,
     )
     registrar_evento(
         accion=RegistroAuditoria.Accion.CREAR,
@@ -186,7 +189,7 @@ def asignar_por_flujo(tarea, usuario, actor):
     decidió en el Ticket, queda en el historial y en la auditoría con quien actuó, y nunca
     pisa a un responsable existente."""
     tarea = Tarea.objects.select_for_update().get(pk=tarea.pk)
-    if tarea.estado == Tarea.Estado.COMPLETADA or tarea.usuario_responsable_id is not None:
+    if tarea.estado in Tarea.ESTADOS_CERRADOS or tarea.usuario_responsable_id is not None:
         return tarea
     usuario_anterior_id, equipo_anterior_id = tarea.usuario_responsable_id, tarea.equipo_responsable_id
     tarea.usuario_responsable = usuario
@@ -204,7 +207,7 @@ def asignar_por_flujo(tarea, usuario, actor):
 @transaction.atomic
 def reasignar_tarea(tarea, actor, *, usuario=None, equipo=None):
     tarea = Tarea.objects.select_for_update().get(pk=tarea.pk)
-    if tarea.estado == Tarea.Estado.COMPLETADA:
+    if tarea.estado in Tarea.ESTADOS_CERRADOS:
         raise ValidationError("No se puede reasignar una tarea ya completada.")
     if usuario is None and equipo is None:
         raise ValidationError("Debe indicar un usuario y/o un equipo para reasignar.")
@@ -249,7 +252,7 @@ def delegar_tarea(tarea, actor, *, delegado_a, desde, hasta, motivo=""):
     delegaciones con vigencias que se crucen dejarían sin resolver "quién
     es el delegado ahora mismo"."""
     tarea = Tarea.objects.select_for_update().get(pk=tarea.pk)
-    if tarea.estado == Tarea.Estado.COMPLETADA:
+    if tarea.estado in Tarea.ESTADOS_CERRADOS:
         raise ValidationError("No se puede delegar una tarea ya completada.")
     if not puede_delegar_tarea(actor, tarea):
         raise PermissionDenied("No tiene autorización para delegar esta tarea.")
@@ -295,6 +298,16 @@ def iniciar_tarea(tarea, actor):
     return tarea
 
 
+def tiene_evidencia(tarea):
+    """4.G2D2 — ¿la Tarea tiene al menos una evidencia válida (`AdjuntoTarea` con archivo y contenido), adjunta
+    a ella o a uno de sus comentarios?"""
+    return (
+        AdjuntoTarea.objects.filter(Q(tarea=tarea) | Q(comentario__tarea=tarea), tamano_bytes__gt=0)
+        .exclude(archivo="")
+        .exists()
+    )
+
+
 @transaction.atomic
 def completar_tarea(tarea, actor):
     """CU-021/RN-024. No conoce Workflow: si `tarea` es la principal de una
@@ -307,8 +320,10 @@ def completar_tarea(tarea, actor):
         raise ValidationError("Solo una tarea PENDIENTE o EN_PROGRESO puede completarse.")
     if not puede_completar_tarea(actor, tarea):
         raise PermissionDenied("No tiene autorización para completar esta tarea.")
-    if tarea.subtareas.exclude(estado=Tarea.Estado.COMPLETADA).exists():
+    if tarea.subtareas.exclude(estado__in=Tarea.ESTADOS_CERRADOS).exists():
         raise ValidationError("No se puede completar una tarea con subtareas pendientes (W.6).")
+    if tarea.requiere_evidencia and not tiene_evidencia(tarea):
+        raise ValidationError("Esta tarea exige al menos una evidencia adjunta para completarse.")
 
     estado_anterior = tarea.estado
     tarea.estado = Tarea.Estado.COMPLETADA
@@ -317,6 +332,26 @@ def completar_tarea(tarea, actor):
     tarea.save(update_fields=["estado", "completada_por", "completada_en", "actualizado_en"])
 
     _registrar_historial(tarea, HistorialTarea.TipoEvento.COMPLETADA, actor)
+    _auditar_cambio_estado(tarea, actor, estado_anterior)
+    return tarea
+
+
+@transaction.atomic
+def cancelar_tarea(tarea, actor, *, motivo=""):
+    """4.G1.5 — detiene una Tarea porque el trabajo que la originó (el Ticket) se canceló. Primitiva del
+    dominio dueño de la cancelación (sin `puede_*` interno, igual que `anular_esquema_aprobacion`): quien
+    llama ya autorizó. Una Tarea COMPLETADA se conserva tal cual y una ya CANCELADA no se toca (idempotente);
+    sus subtareas abiertas se cancelan con ella. No borra nada: queda el historial y la auditoría con quién
+    y por qué. Una Tarea CANCELADA deja de aparecer como trabajo pendiente y no admite ninguna acción."""
+    tarea = Tarea.objects.select_for_update().get(pk=tarea.pk)
+    if tarea.estado in Tarea.ESTADOS_CERRADOS:
+        return tarea
+    for subtarea in tarea.subtareas.exclude(estado__in=Tarea.ESTADOS_CERRADOS).order_by("pk"):
+        cancelar_tarea(subtarea, actor, motivo=motivo)
+    estado_anterior = tarea.estado
+    tarea.estado = Tarea.Estado.CANCELADA
+    tarea.save(update_fields=["estado", "actualizado_en"])
+    _registrar_historial(tarea, HistorialTarea.TipoEvento.CANCELADA, actor, motivo=(motivo or "").strip())
     _auditar_cambio_estado(tarea, actor, estado_anterior)
     return tarea
 

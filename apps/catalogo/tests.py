@@ -1474,15 +1474,17 @@ class DefinicionEntregableTests(TestCase):
         from apps.catalogo.entregables import configurar_definicion_entregable
         from apps.catalogo.models import DefinicionEntregable
 
+        # Los cuatro tipos simples; ELEMENTOS (4.G2C1) exige estructura de elementos, columnas y revisores.
+        simples = [t for t in DefinicionEntregable.Tipo.values if t != DefinicionEntregable.Tipo.ELEMENTOS]
         for tipo_catalogo in Servicio.Tipo.values:
             servicio = Servicio.objects.create(nombre=tipo_catalogo, tipo=tipo_catalogo, categoria=self.categoria)
             self.assertEqual(servicio.definiciones_entregables.count(), 0)
-            for orden, tipo in enumerate(DefinicionEntregable.Tipo.values):
+            for orden, tipo in enumerate(simples):
                 configurar_definicion_entregable(
                     servicio, self.actor, nombre=tipo, tipo=tipo, descripcion="Instrucciones",
                     obligatorio=orden % 2 == 0, orden=orden,
                 )
-            self.assertEqual(list(servicio.definiciones_entregables.values_list("tipo", flat=True)), list(DefinicionEntregable.Tipo.values))
+            self.assertEqual(list(servicio.definiciones_entregables.values_list("tipo", flat=True)), simples)
             self.assertEqual(list(servicio.definiciones_entregables.values_list("obligatorio", flat=True)), [True, False, True, False])
 
     def test_creacion_edicion_retiro_auditados_una_vez(self):

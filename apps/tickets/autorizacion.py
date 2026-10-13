@@ -74,7 +74,7 @@ from apps.aprobaciones.autorizacion import es_aprobador_directo, puede_aprobar
 from apps.catalogo.models import Servicio, ServicioResponsable
 from apps.core.autorizacion import alcances_autorizados
 from apps.core.models import MiembroEquipo
-from apps.tickets.models import ProrrogaTicket, Ticket, TicketContextoAtencion
+from apps.tickets.models import ProrrogaTicket, RevisorEntregable, Ticket, TicketContextoAtencion
 
 PERMISO_ATENDER = "tickets.atender"
 
@@ -323,6 +323,29 @@ def puede_escribir_entregables_finales(usuario, ticket):
         and ticket.usuario_responsable_id is not None
         and ticket.usuario_responsable_id == usuario.pk
     )
+
+
+def puede_editar_parrilla(usuario, ticket):
+    """4.G2B1: quién modifica los elementos estructurados de un Ticket de Proceso. Misma relación
+    que los entregables finales (responsable INDIVIDUAL de un ticket en atención): no crea rol,
+    permiso ni responsable alternativo. PROVISIONAL (4.G2B2): cuando los elementos se integren con el
+    Flujo, esta regla se sustituirá o complementará con reglas por etapa; hoy no hay bloqueo por etapa.
+    Las operaciones revalidan bajo lock."""
+    return puede_escribir_entregables_finales(usuario, ticket)
+
+
+def puede_revisar_conjunto(usuario, entregable):
+    """4.G2C1: quién REVISA los elementos de un entregable de conjunto. Es un permiso distinto del de
+    editar (`puede_editar_parrilla`): lo tiene quien el Proceso configuró como revisor —una persona o
+    un equipo del que es miembro activo— y que el Ticket congeló en `RevisorEntregable`. El responsable
+    del Ticket NO revisa por serlo. No mira el estado del Ticket: las operaciones lo revalidan bajo lock."""
+    if not (getattr(usuario, "is_authenticated", False) and getattr(usuario, "is_active", False)):
+        return False
+    revisores = RevisorEntregable.objects.filter(entregable_id=entregable.pk)
+    if revisores.filter(usuario_id=usuario.pk).exists():
+        return True
+    equipos = revisores.filter(equipo__isnull=False).values_list("equipo_id", flat=True)
+    return MiembroEquipo.objects.filter(equipo_id__in=list(equipos), usuario_id=usuario.pk, activo=True).exists()
 
 
 # --- 4.5 — Entrega formal al solicitante ---------------------------------

@@ -158,6 +158,15 @@ class InicioProcesoForm(forms.Form):
         return datos
 
 
+class ParrillaForm(forms.Form):
+    """4.G2B1 — cómo se llama cada elemento de la estructura repetible de un Proceso."""
+
+    nombre_elemento = forms.CharField(
+        max_length=60, label="Nombre de cada elemento", initial="Elemento",
+        help_text="Por ejemplo «Publicación» o «Actividad».",
+    )
+
+
 class ServicioCreacionForm(forms.Form):
     """4.4.1 — alta mínima de un Servicio/Proceso desde Studio. Solo lo
     necesario para existir como BORRADOR: nada de Workflow, Formulario,
@@ -353,6 +362,9 @@ TIPOS_BLOQUE_CHOICES = [
     ("DECISION", "Decisión"),
 ]
 
+# 4.G2D2 — único bloque extra: solo se ofrece en un Proceso que ya configuró sus tareas por elemento.
+TIPO_BLOQUE_TAREAS_ELEMENTOS = ("TAREAS_ELEMENTOS", "Tareas por elemento")
+
 # El flujo clásico (Etapas: Flujos reutilizables y servicios legacy) no tiene bloque
 # ENTREGABLE: un Flujo no pertenece a un Servicio y no tiene entregables que elegir.
 TIPOS_BLOQUE_LEGACY_CHOICES = [opcion for opcion in TIPOS_BLOQUE_CHOICES if opcion[0] != "ENTREGABLE"]
@@ -362,11 +374,12 @@ TIPOS_BLOQUE_DESCRIPCION = {
     "ENTREGABLE": "Un resultado definido del ticket debe estar completo para continuar.",
     "APROBACION": "Una persona o equipo debe revisar y tomar una decisión.",
     "DECISION": "El camino depende de una condición.",
+    "TAREAS_ELEMENTOS": "Cada elemento del ticket se convierte en una tarea; el flujo continúa cuando todas se completan.",
 }
 
 
 class BloqueGeneralForm(forms.Form):
-    tipo = forms.ChoiceField(choices=TIPOS_BLOQUE_CHOICES)
+    tipo = forms.ChoiceField(choices=[*TIPOS_BLOQUE_CHOICES, TIPO_BLOQUE_TAREAS_ELEMENTOS])
     nombre = forms.CharField(max_length=150)
     descripcion = forms.CharField(required=False, widget=forms.Textarea(attrs={"rows": 2}))
 
@@ -567,6 +580,27 @@ class DefinicionEntregableForm(forms.Form):
     tipo = forms.ChoiceField(choices=DefinicionEntregable.Tipo.choices)
     obligatorio = forms.BooleanField(required=False)
     orden = forms.IntegerField(initial=0, min_value=0)
+    # 4.G2C1 — solo para «Revisión de elementos»; el dominio exige columnas y revisores en ese tipo
+    # (`catalogo.revision_elementos.validar_configuracion`) y los ignora en los demás.
+    columnas_revisadas = forms.MultipleChoiceField(
+        required=False, choices=[], label="Columnas que se revisan",
+        widget=forms.CheckboxSelectMultiple,
+    )
+    revisores_usuarios = forms.ModelMultipleChoiceField(
+        queryset=Usuario.objects.filter(is_active=True).order_by("username"), required=False,
+        label="Revisan (personas)",
+    )
+    revisores_equipos = forms.ModelMultipleChoiceField(
+        queryset=Equipo.objects.filter(activo=True).order_by("nombre"), required=False, label="Revisan (equipos)",
+    )
+
+    def __init__(self, *args, servicio=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        from apps.catalogo.revision_elementos import columnas_disponibles
+
+        columnas = columnas_disponibles(servicio) if servicio is not None else []
+        self.fields["columnas_revisadas"].choices = [(c.clave, c.etiqueta) for c in columnas]
+        self.hay_estructura = bool(columnas)
 
 
 class TerminoServicioForm(forms.Form):

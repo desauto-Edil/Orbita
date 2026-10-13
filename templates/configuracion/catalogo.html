@@ -1,5 +1,5 @@
 {% extends "configuracion/base.html" %}
-{% comment %}Lista compartida por Áreas, Unidades y Categorías (`views_configuracion._catalogo`).{% endcomment %}
+{% comment %}Lista compartida por Áreas, Unidades y Categorías (`views_configuracion._catalogo`). La de Áreas añade debajo los equipos de trabajo (`equipos`).{% endcomment %}
 
 {% block config_titulo %}{{ cat.plural }}{% endblock %}
 {% block config_subtitulo %}{{ cat.descripcion }}{% endblock %}
@@ -40,5 +40,49 @@
       <p>Todavía no hay {{ cat.plural|lower }}.</p>
       <a class="btn btn--primary btn--sm" href="{% url cat.crear %}">{{ cat.nueva }}</a>
     </div>
+  {% endif %}
+
+  {% if equipos is not None %}
+    <section class="config-stack" aria-labelledby="cfg-equipos">
+      <div class="config-section-head">
+        <div>
+          <h2 id="cfg-equipos">Equipos</h2>
+          <p class="text-muted">Grupos de personas que atienden trabajo. Un equipo puede relacionarse con varias áreas.</p>
+        </div>
+        <a class="btn btn--secondary" href="{% url 'core:configuracion_equipo_crear' %}">{% include "components/icon.html" with name="plus" %}Nuevo equipo</a>
+      </div>
+      {% if equipos %}
+        <div class="table-shell">
+          <table class="table">
+            <thead>
+              <tr>
+                <th scope="col">Nombre</th>
+                <th scope="col" class="table__num">Áreas</th>
+                <th scope="col" class="table__num">Personas</th>
+                <th scope="col">Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for equipo in equipos %}
+                <tr>
+                  <td>
+                    <a class="config-link" href="{% url 'core:configuracion_equipo' equipo.pk %}">{{ equipo.nombre }}</a>
+                    {% if equipo.descripcion %}<span class="config-person__meta">{{ equipo.descripcion|truncatechars:90 }}</span>{% endif %}
+                  </td>
+                  <td class="table__num">{{ equipo.n_areas }}</td>
+                  <td class="table__num">{{ equipo.n_personas }}</td>
+                  <td>{% if equipo.activo %}<span class="badge badge--success badge--dot">Activo</span>{% else %}<span class="badge badge--dot">Inactivo</span>{% endif %}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty-state">
+          <p>Todavía no hay equipos.</p>
+          <a class="btn btn--primary btn--sm" href="{% url 'core:configuracion_equipo_crear' %}">Nuevo equipo</a>
+        </div>
+      {% endif %}
+    </section>
   {% endif %}
 {% endblock %}

@@ -82,6 +82,19 @@ def validar_publicacion(servicio):
 
     if programacion_activa_de(servicio) is not None:
         errores.extend(errores_de_compatibilidad(servicio))
+    # 4.G2B1: si el Proceso usa elementos estructurados, sus columnas deben estar listas (si no,
+    # el Ticket no podría congelarlas al nacer).
+    from apps.catalogo.parrilla import errores_de_parrilla
+
+    errores.extend(errores_de_parrilla(servicio))
+    # 4.G2C1: un entregable que revisa elementos necesita columnas vigentes y quién revise.
+    from apps.catalogo.revision_elementos import errores_de_conjuntos
+
+    errores.extend(errores_de_conjuntos(servicio))
+    # 4.G2D1: la configuración de tareas por elemento debe seguir siendo válida con la versión activa.
+    from apps.catalogo.tareas_elemento import errores_de_tareas_elemento
+
+    errores.extend(errores_de_tareas_elemento(servicio))
     if errores:
         raise ValidationError(errores)
 
@@ -166,6 +179,14 @@ def editar_servicio_general(servicio, actor, *, nombre, descripcion, categoria, 
         raise ValidationError(
             "Este proceso tiene una programación activa. Pásalo a «Manual» en Inicio antes de cambiarlo a servicio."
         )
+    if tipo != Servicio.Tipo.PROCESO:
+        from apps.catalogo.parrilla import definicion_activa_de
+
+        if definicion_activa_de(servicio) is not None:
+            raise ValidationError(
+                "Este proceso usa una estructura de elementos. Desactívala en la pestaña Formulario "
+                "antes de cambiarlo a servicio."
+            )
     anterior = _datos_generales(servicio)
     servicio.nombre = nombre
     servicio.descripcion = descripcion

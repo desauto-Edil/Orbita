@@ -14,6 +14,10 @@ from apps.core.models import (
     Area,
     AsignacionRol,
     ConfiguracionSistema,
+    Equipo,
+    EquipoArea,
+    EquipoUnidadNegocio,
+    MiembroEquipo,
     PerfilOrganizacional,
     Permiso,
     RolFuncional,
@@ -320,6 +324,54 @@ class UnidadNegocioForm(_CatalogoOrganizacionalForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["relacionadas"].label = "Áreas relacionadas"
+
+
+class EquipoForm(forms.ModelForm):
+    """Equipo de trabajo (CU-006): sus datos, las áreas y unidades con las que
+    se relaciona (transversal, sin jerarquía: RQF-020) y quiénes lo integran
+    (`MiembroEquipo`, con vigencia: RQF-019). Las relaciones las guarda la vista."""
+
+    areas = forms.ModelMultipleChoiceField(
+        queryset=None, required=False, widget=forms.CheckboxSelectMultiple, label="Áreas relacionadas"
+    )
+    unidades = forms.ModelMultipleChoiceField(
+        queryset=None, required=False, widget=forms.CheckboxSelectMultiple,
+        label="Unidades de negocio relacionadas",
+    )
+    miembros = forms.ModelMultipleChoiceField(
+        queryset=None, required=False, widget=forms.CheckboxSelectMultiple, label="Personas del equipo"
+    )
+
+    class Meta:
+        model = Equipo
+        fields = ("nombre", "descripcion", "activo")
+        labels = {"descripcion": "Descripción", "activo": "Equipo activo"}
+        help_texts = {"activo": "Un equipo inactivo no puede recibir trabajo nuevo; su historial se conserva."}
+        widgets = {"descripcion": _AREA_TEXTO}
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Lo activo, más lo que el equipo ya tiene aunque hoy esté inactivo
+        # (para no quitarlo en silencio al guardar).
+        for campo, modelo, relacion, fk, filtro, orden in (
+            ("areas", Area, EquipoArea, "area", Q(activo=True), ("nombre",)),
+            ("unidades", UnidadNegocio, EquipoUnidadNegocio, "unidad_negocio", Q(activo=True), ("nombre",)),
+            ("miembros", Usuario, MiembroEquipo, "usuario", Q(is_active=True), ("first_name", "username")),
+        ):
+            actuales = []
+            if self.instance.pk:
+                actuales = list(
+                    relacion.objects.filter(equipo=self.instance, activo=True).values_list(f"{fk}_id", flat=True)
+                )
+            self.fields[campo].queryset = modelo.objects.filter(filtro | Q(pk__in=actuales)).order_by(*orden)
+            self.fields[campo].initial = actuales
+        self.fields["miembros"].label_from_instance = lambda u: u.get_full_name() or u.get_username()
+
+    def clean_nombre(self):
+        nombre = self.cleaned_data["nombre"].strip()
+        if Equipo.objects.filter(nombre__iexact=nombre).exclude(pk=self.instance.pk).exists():
+            raise forms.ValidationError("Ya existe un equipo con ese nombre.")
+        return nombre
 
 
 def categoria_form():

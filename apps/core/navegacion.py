@@ -92,12 +92,17 @@ def _tiene_trabajo_personal(usuario):
 
     if aprobaciones_pendientes_para(usuario).exists():
         return True
+    # 4.G2C2: un conjunto de elementos que la persona debe revisar también es trabajo suyo.
+    from apps.tickets.revision_elementos import revisiones_pendientes_para
+
+    if revisiones_pendientes_para(usuario):
+        return True
     # 4.F3: los tickets que la persona atiende son su trabajo (no los que solicitó).
     if Ticket.objects.filter(usuario_responsable=usuario, estado=Ticket.Estado.EN_ATENCION).exists():
         return True
     return (
-        tareas_asignadas_a(usuario).exclude(estado=Tarea.Estado.COMPLETADA).exists()
-        or tareas_disponibles_para_tomar(usuario).exclude(estado=Tarea.Estado.COMPLETADA).exists()
+        tareas_asignadas_a(usuario).exclude(estado__in=Tarea.ESTADOS_CERRADOS).exists()
+        or tareas_disponibles_para_tomar(usuario).exclude(estado__in=Tarea.ESTADOS_CERRADOS).exists()
     )
 
 

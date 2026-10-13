@@ -1,27 +1,123 @@
 <section class="svc-section svc-section--form-builder">
+  {% if es_proceso %}
+    {# 4.G2E: dos formularios distintos, nunca en el mismo editor: lo que se responde al crear el ticket y la estructura de elementos que evoluciona durante la ejecución. #}
+    <nav class="svc-dual" aria-label="Formularios del proceso">
+      <a class="svc-dual__item{% if not es_parrilla %} is-active{% endif %}" href="{% url 'catalogo:studio' servicio.pk %}?tab=entrada"{% if not es_parrilla %} aria-current="page"{% endif %}>
+        <span class="svc-dual__kicker">Datos de inicio</span>
+        <strong>Lo que se responde al crear el ticket</strong>
+        <span class="svc-dual__estado">
+          {% if tarjetas_proceso.datos.version %}
+            <span class="svc-pill svc-pill--ok">v{{ tarjetas_proceso.datos.version.numero }} activa</span>
+            {{ tarjetas_proceso.datos.campos }} campo{{ tarjetas_proceso.datos.campos|pluralize }} · {{ tarjetas_proceso.datos.obligatorios }} obligatorio{{ tarjetas_proceso.datos.obligatorios|pluralize }}
+          {% else %}
+            <span class="svc-pill svc-pill--warn">Sin versión activa</span>
+          {% endif %}
+          {% if tarjetas_proceso.datos.borrador %}<span class="svc-pill">Borrador</span>{% endif %}
+        </span>
+      </a>
+      <a class="svc-dual__item{% if es_parrilla %} is-active{% endif %}" href="{% url 'catalogo:studio' servicio.pk %}?tab=entrada&amp;uso=parrilla"{% if es_parrilla %} aria-current="page"{% endif %}>
+        <span class="svc-dual__kicker">Elementos del proceso</span>
+        <strong>Filas que se completan, revisan y generan tareas</strong>
+        <span class="svc-dual__estado">
+          {% if tarjetas_proceso.elementos.usa %}
+            <span class="svc-pill svc-pill--ok">Activo</span>
+            «{{ tarjetas_proceso.elementos.nombre }}» ·
+            {% if tarjetas_proceso.elementos.version %}v{{ tarjetas_proceso.elementos.version.numero }} · {{ tarjetas_proceso.elementos.columnas }} columna{{ tarjetas_proceso.elementos.columnas|pluralize }} ({{ tarjetas_proceso.elementos.obligatorias }} obligatoria{{ tarjetas_proceso.elementos.obligatorias|pluralize }}){% else %}sin versión activa{% endif %}
+            {% if tarjetas_proceso.tareas.activa %}<span class="svc-pill">Genera tareas</span>{% endif %}
+            {% if tarjetas_proceso.revisiones %}<span class="svc-pill">Revisión por conjunto ({{ tarjetas_proceso.revisiones|length }})</span>{% endif %}
+          {% elif tarjetas_proceso.elementos.definicion %}
+            <span class="svc-pill">Desactivado</span>
+          {% else %}
+            <span class="svc-pill">No los usa (opcional)</span>
+          {% endif %}
+        </span>
+      </a>
+    </nav>
+  {% endif %}
   <header class="svc-section__head">
     <div>
-      <p class="svc-kicker">Entrada</p>
-      <h2>Formulario</h2>
-      <p>Información que deberá completar el solicitante.</p>
+      <p class="svc-kicker">{% if es_parrilla %}Estructura repetible{% else %}Entrada{% endif %}</p>
+      <h2>{% if es_parrilla %}Elementos del proceso{% else %}Formulario{% endif %}</h2>
+      <p>{% if es_parrilla %}Las columnas de cada fila que una ejecución de este proceso puede tener. Es opcional. Un responsable es una columna de tipo Usuario y una fecha, una columna de tipo Fecha. A diferencia de los datos de inicio, estas filas se agregan, corrigen, revisan y originan tareas mientras el ticket se ejecuta.{% elif es_proceso %}Información que se responde una sola vez al crear el ticket del proceso. Las filas que evolucionan durante la ejecución se configuran en «Elementos del proceso».{% else %}Información que deberá completar el solicitante.{% endif %}</p>
     </div>
     {% if version_entrada_borrador %}
-      <form method="post" action="{% url 'catalogo:studio_entrada_activar' servicio.pk version_entrada_borrador.pk %}">
+      <form method="post" action="{% url urls_editor.activar servicio.pk version_entrada_borrador.pk %}">
         {% csrf_token %}
         <button type="submit" class="btn btn--primary">Activar versión</button>
       </form>
     {% elif formulario %}
-      <form method="post" action="{% url 'catalogo:studio_entrada_version' servicio.pk %}">
+      <form method="post" action="{% url urls_editor.version servicio.pk %}">
         {% csrf_token %}
         <button type="submit" class="btn btn--primary">{% if version_entrada_activa %}Editar formulario{% else %}Empezar a configurar{% endif %}</button>
       </form>
     {% endif %}
   </header>
 
-  {% if formulario is None %}
+  {% if es_parrilla %}
+    <article class="svc-panel svc-panel--narrow" id="estructura-repetible">
+      <div class="svc-status-row">
+        {% if definicion and definicion.activa %}<span class="svc-pill svc-pill--ok">Estructura activa</span>{% elif definicion %}<span class="svc-pill">Estructura desactivada</span>{% else %}<span class="svc-pill">Sin estructura</span>{% endif %}
+        {% if tarjetas_proceso.tareas.activa %}<span class="svc-pill svc-pill--ok">Genera tareas</span>{% endif %}
+        {% for revision in tarjetas_proceso.revisiones %}<span class="svc-pill" title="Columnas revisadas: {{ revision.columnas|join:', ' }}">Revisión: {{ revision.definicion.nombre }}</span>{% endfor %}
+      </div>
+      {% if definicion and definicion.activa %}
+        <p>Cada ejecución de este proceso tendrá una lista de «{{ definicion.nombre_elemento }}» con las columnas de abajo. Los tickets ya creados conservan las columnas que tenían.</p>
+        <form method="post" action="{% url 'catalogo:studio_parrilla_configurar' servicio.pk %}" class="form svc-inline-form">
+          {% csrf_token %}
+          <div class="field">{{ form_parrilla.nombre_elemento.label_tag }}{{ form_parrilla.nombre_elemento }}</div>
+          <div class="form-actions">
+            <button type="submit" name="accion" value="guardar" class="btn btn--secondary">Guardar nombre</button>
+            <button type="submit" name="accion" value="desactivar" class="btn btn--ghost">Dejar de usar elementos</button>
+          </div>
+        </form>
+      {% else %}
+        <p>{% if definicion %}Este proceso dejó de usar elementos estructurados. Sus tickets nuevos no los tendrán.{% else %}Este proceso no usa elementos estructurados: sus tickets no tienen filas.{% endif %}</p>
+        <form method="post" action="{% url 'catalogo:studio_parrilla_configurar' servicio.pk %}" class="form svc-inline-form">
+          {% csrf_token %}
+          <div class="field">{{ form_parrilla.nombre_elemento.label_tag }}{{ form_parrilla.nombre_elemento }}</div>
+          <div class="form-actions"><button type="submit" name="accion" value="guardar" class="btn btn--primary">{% if definicion %}Volver a usar elementos{% else %}Usar elementos estructurados{% endif %}</button></div>
+        </form>
+      {% endif %}
+    </article>
+
+    {% if definicion and definicion.activa %}
+      <article class="svc-panel svc-panel--narrow" id="tareas-por-elemento">
+        <h3>Tareas por elemento</h3>
+        {% if tareas_config and tareas_config.activa %}
+          <p>Cada «{{ definicion.nombre_elemento|lower }}» puede originar una tarea con los datos de estas columnas. Los tickets ya creados conservan lo que tenían.</p>
+        {% else %}
+          <p>{% if tareas_config %}La generación de tareas está desactivada: los tickets nuevos no la ofrecen.{% else %}Opcional. Elige qué columna da cada dato de la tarea que originará cada {{ definicion.nombre_elemento|lower }}.{% endif %}</p>
+        {% endif %}
+        <form method="post" action="{% url 'catalogo:studio_parrilla_tareas' servicio.pk %}" class="form">
+          {% csrf_token %}
+          {% for destino in tareas_destinos %}
+            <div class="field">
+              <label for="tareas-{{ destino.atributo }}">Columna del {{ destino.nombre }}{% if not destino.obligatoria %} (opcional){% endif %}</label>
+              <select id="tareas-{{ destino.atributo }}" name="{{ destino.atributo }}">
+                <option value="">—</option>
+                {% for columna in destino.columnas %}
+                  <option value="{{ columna.clave }}"{% if columna.clave == destino.actual %} selected{% endif %}>{{ columna.etiqueta }}</option>
+                {% endfor %}
+              </select>
+            </div>
+          {% endfor %}
+          <label class="choice"><input type="checkbox" name="requiere_evidencia"{% if tareas_config and tareas_config.requiere_evidencia %} checked{% endif %}> La tarea pide evidencia</label>
+          <div class="form-actions">
+            <button type="submit" class="btn btn--primary">Guardar tareas por elemento</button>
+            {% if tareas_config and tareas_config.activa %}
+              <button type="submit" name="accion" value="desactivar" class="btn btn--ghost">Dejar de generar tareas</button>
+            {% endif %}
+          </div>
+        </form>
+      </article>
+    {% endif %}
+  {% endif %}
+
+  {% if es_parrilla and formulario is None %}
+  {% elif formulario is None %}
     <article class="svc-panel svc-panel--narrow">
       <div class="svc-empty">Este servicio todavía no tiene un formulario de entrada.</div>
-      <form method="post" action="{% url 'catalogo:studio_entrada_version' servicio.pk %}" class="form">
+      <form method="post" action="{% url urls_editor.version servicio.pk %}" class="form">
         {% csrf_token %}
         <div class="field">
           <label for="id_nombre">Nombre del formulario</label>
@@ -75,21 +171,22 @@
                   <span class="svc-field-row__order">0{{ forloop.counter }}</span>
                   <span class="svc-field-row__name">{{ campo.etiqueta }}</span>
                   <span class="svc-tag">{{ campo.get_tipo_display }}</span>
-                  {% if campo.clave %}<span class="svc-tag" title="Así se referencia en las decisiones de un flujo">formulario.{{ campo.clave }}</span>{% endif %}
+                  {% if campo.clave and not es_parrilla %}<span class="svc-tag" title="Así se referencia en las decisiones de un flujo">formulario.{{ campo.clave }}</span>{% endif %}
                   {% if campo.obligatorio %}<span class="svc-tag svc-tag--accent">Obligatorio</span>{% endif %}
+                  {% for uso in campo.usos %}<span class="svc-tag" title="Esta columna es usada por otra configuración del proceso">{{ uso }}</span>{% endfor %}
                   {% if campo.es_fecha_requerida %}<span class="svc-tag svc-tag--accent" title="Órbita compara esta fecha con el tiempo objetivo del servicio">Fecha requerida</span>{% endif %}
                 </div>
                 {% if editable_entrada %}
                   <div class="svc-row-actions">
                     <button type="button" class="btn btn--ghost btn--sm" data-action="toggle-panel" data-target="panel-campo-{{ campo.pk }}">Editar</button>
-                    <form method="post" action="{% url 'catalogo:studio_campo_eliminar' servicio.pk campo.pk %}">
+                    <form method="post" action="{% url urls_editor.campo_eliminar servicio.pk campo.pk %}">
                       {% csrf_token %}
                       <button type="submit" class="btn btn--ghost btn--sm">Eliminar</button>
                     </form>
                   </div>
 
                   <div id="panel-campo-{{ campo.pk }}" class="svc-inline-editor" hidden>
-                    <form method="post" action="{% url 'catalogo:studio_campo_editar' servicio.pk campo.pk %}" class="form">
+                    <form method="post" action="{% url urls_editor.campo_editar servicio.pk campo.pk %}" class="form">
                       {% csrf_token %}
                       <div class="svc-form-grid svc-form-grid--two">
                         <div class="field">{{ campo.form_editar.tipo.label_tag }}{{ campo.form_editar.tipo }}</div>
@@ -99,10 +196,13 @@
                         <div class="field">{{ campo.form_editar.orden.label_tag }}{{ campo.form_editar.orden }}</div>
                       </div>
                       <label class="choice">{{ campo.form_editar.obligatorio }} {{ campo.form_editar.obligatorio.label_tag }}</label>
+                      {% if es_parrilla %}<small class="text-muted">Una fila se puede guardar incompleta; se marca «Incompleta» hasta que tenga un valor aquí.</small>{% endif %}
+                      {% if not es_parrilla %}
                       <div class="field" data-solo-tipos="FECHA,FECHA_HORA"{% if campo.tipo != "FECHA" and campo.tipo != "FECHA_HORA" %} hidden{% endif %}>
                         <label class="choice">{{ campo.form_editar.es_fecha_requerida }} {{ campo.form_editar.es_fecha_requerida.label_tag }}</label>
                         <small class="text-muted">{{ campo.form_editar.es_fecha_requerida.help_text }}</small>
                       </div>
+                      {% endif %}
                       <div class="svc-form-grid svc-form-grid--three">
                         <div class="field">{{ campo.form_editar.longitud_maxima.label_tag }}{{ campo.form_editar.longitud_maxima }}</div>
                         <div class="field">{{ campo.form_editar.minimo.label_tag }}{{ campo.form_editar.minimo }}</div>
@@ -126,14 +226,14 @@
                           {% for opcion in campo.opciones.all %}
                             <li>
                               {{ opcion.etiqueta }} ({{ opcion.valor }})
-                              <form method="post" action="{% url 'catalogo:studio_opcion_eliminar' servicio.pk campo.pk opcion.pk %}">
+                              <form method="post" action="{% url urls_editor.opcion_eliminar servicio.pk campo.pk opcion.pk %}">
                                 {% csrf_token %}
                                 <button type="submit" class="btn btn--ghost btn--sm">Eliminar</button>
                               </form>
                             </li>
                           {% endfor %}
                         </ul>
-                        <form method="post" action="{% url 'catalogo:studio_opcion_crear' servicio.pk campo.pk %}" class="form svc-inline-form">
+                        <form method="post" action="{% url urls_editor.opcion_crear servicio.pk campo.pk %}" class="form svc-inline-form">
                           {% csrf_token %}
                           {{ campo.form_opcion_nueva.valor }} {{ campo.form_opcion_nueva.etiqueta }} {{ campo.form_opcion_nueva.orden }}
                           <button type="submit" class="btn btn--secondary">Agregar opción</button>
@@ -152,7 +252,7 @@
         {% if campo_form_nuevo %}
           <div id="panel-campo-nuevo" class="svc-inline-editor" hidden>
             <h3>Nuevo campo</h3>
-            <form method="post" action="{% url 'catalogo:studio_campo_crear' servicio.pk %}" class="form">
+            <form method="post" action="{% url urls_editor.campo_crear servicio.pk %}" class="form">
               {% csrf_token %}
               <div class="svc-form-grid svc-form-grid--two">
                 <div class="field">{{ campo_form_nuevo.tipo.label_tag }}{{ campo_form_nuevo.tipo }}</div>
@@ -162,10 +262,13 @@
                 <div class="field">{{ campo_form_nuevo.orden.label_tag }}{{ campo_form_nuevo.orden }}</div>
               </div>
               <label class="choice">{{ campo_form_nuevo.obligatorio }} {{ campo_form_nuevo.obligatorio.label_tag }}</label>
+              {% if es_parrilla %}<small class="text-muted">Una fila se puede guardar incompleta; se marca «Incompleta» hasta que tenga un valor aquí.</small>{% endif %}
+              {% if not es_parrilla %}
               <div class="field" data-solo-tipos="FECHA,FECHA_HORA" hidden>
                 <label class="choice">{{ campo_form_nuevo.es_fecha_requerida }} {{ campo_form_nuevo.es_fecha_requerida.label_tag }}</label>
                 <small class="text-muted">{{ campo_form_nuevo.es_fecha_requerida.help_text }}</small>
               </div>
+              {% endif %}
               <div class="svc-form-grid svc-form-grid--three">
                 <div class="field">{{ campo_form_nuevo.longitud_maxima.label_tag }}{{ campo_form_nuevo.longitud_maxima }}</div>
                 <div class="field">{{ campo_form_nuevo.minimo.label_tag }}{{ campo_form_nuevo.minimo }}</div>
@@ -186,7 +289,7 @@
       </article>
 
       <aside class="svc-preview svc-preview--form" aria-label="Vista previa del formulario">
-        <span class="svc-preview__eyebrow">Vista del solicitante</span>
+        <span class="svc-preview__eyebrow">{% if es_parrilla %}Columnas de cada elemento{% else %}Vista del solicitante{% endif %}</span>
         <h3>{{ servicio.nombre }}</h3>
         {% for campo in campos %}
           <div class="svc-fake-field">
@@ -202,7 +305,7 @@
       </aside>
     </div>
 
-    {% if editable_entrada and campos %}
+    {% if editable_entrada and campos and not es_parrilla %}
       <section class="svc-panel svc-panel--rules">
         <div class="svc-panel__head">
           <div>

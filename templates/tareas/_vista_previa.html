@@ -3,7 +3,8 @@
   <p class="work-preview__eyebrow">Tarea</p>
   <h2 class="work-preview__title">{{ tarea.titulo }}</h2>
   <p class="work-preview__badges">
-    <span class="badge badge--dot {% if tarea.estado == 'COMPLETADA' %}badge--success{% elif tarea.estado == 'EN_PROGRESO' %}badge--info{% else %}badge--warning{% endif %}">{{ tarea.get_estado_display }}</span>
+    <span class="badge badge--dot {% if tarea.estado == 'COMPLETADA' %}badge--success{% elif tarea.estado == 'CANCELADA' %}badge--danger
+              {% elif tarea.estado == 'EN_PROGRESO' %}badge--info{% else %}badge--warning{% endif %}">{{ tarea.get_estado_display }}</span>
     {% if vencida %}<span class="badge badge--danger">Vencida</span>{% endif %}
     {% if por_tomar %}<span class="badge">Disponible para tomar</span>{% endif %}
   </p>

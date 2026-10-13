@@ -140,7 +140,12 @@ def _crear_borrador_de_servicio(usuario, servicio, *, origen=Ticket.Origen.MANUA
     TicketServicio.objects.create(ticket=ticket, servicio=servicio, formulario_version=version)
     RespuestaFormulario.objects.create(ticket=ticket, formulario_version=version)
     from apps.tickets.entregables import materializar_entregables
+    from apps.tickets.parrilla import crear_parrilla_para_borrador
 
+    # 4.G2B1: si el Proceso usa elementos estructurados, este Ticket congela sus columnas; si no,
+    # no se crea nada. Va ANTES de los entregables: uno de revisión de elementos (4.G2C1) resuelve
+    # sus columnas contra la versión que acaba de congelarse.
+    crear_parrilla_para_borrador(ticket, servicio)
     materializar_entregables(ticket)
     ticket.entregables_materializados = True
     return ticket
@@ -789,6 +794,17 @@ def resolver_ticket(ticket, actor, descripcion, archivos=None):
         raise ValidationError("Este ticket se completa con una entrega formal al solicitante.")
     if _trabajo_interno_en_curso(ticket):
         raise ValidationError("El trabajo interno de este ticket todavía no ha terminado.")
+    # 4.G2C2: un PROCESO no se resuelve con entregables obligatorios pendientes (incluidos los de
+    # revisión de elementos). Los opcionales no bloquean. La política de entrega formal de los
+    # Servicios no cambia.
+    if ticket.tipo == Ticket.Tipo.PROCESO:
+        pendientes = [e.nombre for e in ticket.entregables.filter(obligatorio=True) if not e.satisfecho]
+        if pendientes:
+            raise ValidationError("Faltan entregables obligatorios: " + ", ".join(pendientes) + ".")
+        # 4.G2D2: tampoco con tareas por elemento pendientes o en progreso (los Servicios no cambian).
+        from apps.tickets import tareas_elemento
+
+        tareas_elemento.exigir_sin_tareas_abiertas(ticket)
     if ticket.solicitudes_informacion.filter(estado=SolicitudInformacion.Estado.PENDIENTE).exists():
         raise ValidationError(
             "No es posible resolver mientras existan solicitudes de información pendientes."
@@ -841,7 +857,28 @@ def cerrar_ticket(ticket, actor):
 def cancelar_ticket(ticket, actor, motivo):
     """CU-019/RQF-059 — RADICADO/EN_ATENCION → CANCELADO. Motivo
     obligatorio (V1 aprobado). No elimina físicamente el ticket — distinto
-    de `eliminar_borrador`, que solo aplica a BORRADOR."""
+    de `eliminar_borrador`, que solo aplica a BORRADOR.
+
+    4.G1.5 — cancelar es detener TODO lo que el Ticket puso en marcha, en una sola transacción:
+    - su ejecución de Workflow (`InstanciaWorkflow` → CANCELADA: nada la avanza, reanuda ni continúa);
+    - las Tareas del flujo abiertas y sus subtareas (→ CANCELADA; las completadas se conservan);
+    - las aprobaciones pendientes del flujo (se retiran; las decididas se conservan) y su prórroga pendiente;
+    - las Tareas generadas por elemento (4.G2D1) abiertas.
+    Sirve igual para Servicios y Procesos, manuales o programados. No toca la programación del Proceso ni
+    su `EjecucionProgramada` (el periodo cancelado no se vuelve a generar), ni borra valores, revisiones,
+    adjuntos ni historial. Si algo falla, no queda nada a medias. Un segundo intento sobre el mismo Ticket
+    se rechaza (ya no está RADICADO/EN_ATENCION) sin repetir ningún efecto.
+
+    Orden de locks: Tareas y aprobaciones de la ejecución → instancia → Ticket, el de los caminos del motor
+    que podrían llegar tarde; después de cancelar, ese camino encuentra la Tarea/aprobación/instancia cerrada."""
+    from apps.tickets import prorrogas, tareas_elemento
+    from apps.workflows.integracion import bloquear_ejecucion, cancelar_ejecucion
+
+    instancia_id = Ticket.objects.values_list("instancia_workflow_id", flat=True).get(pk=ticket.pk)
+    # 4.G2D1: las Tareas generadas por elemento se bloquean primero, como las del flujo.
+    tareas_elemento.bloquear_tareas_de_elementos(ticket.pk)
+    if instancia_id is not None:
+        bloquear_ejecucion(instancia_id)
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado not in (Ticket.Estado.RADICADO, Ticket.Estado.EN_ATENCION):
         raise ValidationError("Solo un ticket RADICADO o EN_ATENCION puede cancelarse.")
@@ -853,6 +890,12 @@ def cancelar_ticket(ticket, actor, motivo):
     estado_anterior = ticket.estado
     exigir_transicion(ticket, "CANCELAR")
     ticket.save()
+
+    if instancia_id is not None:
+        cancelar_ejecucion(InstanciaWorkflow(pk=instancia_id), actor, motivo=motivo)
+    # 4.G2D1: las Tareas por elemento abiertas también se detienen (las completadas se conservan).
+    tareas_elemento.cancelar_tareas_de_elementos(ticket, actor, motivo=motivo)
+    prorrogas.cancelar_prorroga_pendiente_del_ticket(ticket, actor, motivo="El ticket se canceló.")
 
     historial.registrar(
         ticket,

@@ -67,6 +67,12 @@ class Tarea(RegistroBase):
         PENDIENTE = "PENDIENTE", "Pendiente"
         EN_PROGRESO = "EN_PROGRESO", "En progreso"
         COMPLETADA = "COMPLETADA", "Completada"
+        # 4.G1.5 — la Tarea se detuvo porque el trabajo que la originó (el Ticket) se canceló. Terminal,
+        # igual que COMPLETADA: no se toma, inicia, completa, reasigna ni delega, y no es trabajo pendiente.
+        CANCELADA = "CANCELADA", "Cancelada"
+
+    # Estados terminales: la Tarea ya no es trabajo abierto (ni "pendiente" en ninguna bandeja).
+    ESTADOS_CERRADOS = ("COMPLETADA", "CANCELADA")
 
     class Origen(models.TextChoices):
         MANUAL = "MANUAL", "Manual"
@@ -100,6 +106,10 @@ class Tarea(RegistroBase):
     )
     completada_en = models.DateTimeField(null=True, blank=True)
     permite_subtareas = models.BooleanField(default=False)
+    # 4.G2D2 — la Tarea solo se puede completar con al menos una evidencia adjunta (`AdjuntoTarea`,
+    # RQF-076). Propiedad de la propia Tarea (como `permite_subtareas`): quien la crea decide si la exige y
+    # `operaciones.completar_tarea` la hace cumplir, sin que este dominio conozca quién la originó.
+    requiere_evidencia = models.BooleanField(default=False)
     tarea_padre = models.ForeignKey(
         "self", on_delete=models.PROTECT, null=True, blank=True, related_name="subtareas"
     )
@@ -255,6 +265,7 @@ class HistorialTarea(models.Model):
         DELEGADA = "DELEGADA", "Delegada"
         INICIADA = "INICIADA", "Iniciada"
         COMPLETADA = "COMPLETADA", "Completada"
+        CANCELADA = "CANCELADA", "Cancelada"
 
     tarea = models.ForeignKey(Tarea, on_delete=models.CASCADE, related_name="historial")
     tipo_evento = models.CharField(max_length=15, choices=TipoEvento.choices)

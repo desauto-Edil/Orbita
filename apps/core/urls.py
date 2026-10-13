@@ -30,6 +30,9 @@ urlpatterns = [
     path("configuracion/roles/", config.roles_view, name="configuracion_roles"),
     path("configuracion/roles/nuevo/", config.rol_view, name="configuracion_rol_crear"),
     path("configuracion/roles/<int:pk>/", config.rol_view, name="configuracion_rol"),
+    # Los equipos se administran dentro de la pestaña Áreas (`organizacion.administrar`).
+    path("configuracion/equipos/nuevo/", config.equipo_view, name="configuracion_equipo_crear"),
+    path("configuracion/equipos/<int:pk>/", config.equipo_view, name="configuracion_equipo"),
 ]
 
 # Catálogos que comparten lista y formulario (`views_configuracion._catalogo`).

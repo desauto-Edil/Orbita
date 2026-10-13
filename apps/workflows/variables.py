@@ -221,4 +221,11 @@ def referencias_disponibles(*, campos=(), bloques=()):
             lista.append(
                 (f"entregables.{bloque.clave}.satisfecho", f"Verdadero cuando se completó el entregable «{bloque.nombre}»")
             )
+        if bloque.tipo == "TAREAS_ELEMENTOS" and bloque.clave:
+            lista.append(
+                (f"tareas_elementos.{bloque.clave}.completadas", f"Tareas completadas del bloque «{bloque.nombre}»")
+            )
+            lista.append(
+                (f"tareas_elementos.{bloque.clave}.total", f"Total de tareas del bloque «{bloque.nombre}»")
+            )
     return lista

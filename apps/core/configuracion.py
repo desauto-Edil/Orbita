@@ -14,6 +14,7 @@ Secciones y la capacidad real que abre cada una (nunca un nombre de rol):
                      asignar o retirar roles en la ficha de cada persona)
   Roles y permisos   `permisos.administrar`      roles, permisos y asignaciones
   Áreas / Unidades   `organizacion.administrar`  catálogos organizacionales
+                     (los equipos de trabajo se administran dentro de Áreas)
   Categorías         `catalogo.administrar`      categorías del catálogo
 
 Todas en alcance GLOBAL. `is_superuser` abre las cuatro secciones de
@@ -76,7 +77,7 @@ SECCIONES = (
         "url_name": "core:configuracion_areas",
         "capacidad": "organizacion",
         "icono": "grid",
-        "descripcion": "Áreas de la organización y las unidades con las que se relacionan.",
+        "descripcion": "Áreas de la organización, sus equipos de trabajo y las unidades con las que se relacionan.",
     },
     {
         "clave": "unidades",

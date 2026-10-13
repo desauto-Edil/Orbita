@@ -23,6 +23,7 @@
             <a class="list-row__title" href="{% url 'tareas:detalle' fila.tarea.pk %}">{{ fila.tarea.titulo }}</a>
             <span class="badge
               {% if fila.tarea.estado == 'COMPLETADA' %}badge--success
+              {% elif fila.tarea.estado == 'CANCELADA' %}badge--danger
               {% elif fila.tarea.estado == 'EN_PROGRESO' %}badge--info
               {% else %}badge--warning{% endif %}">{{ fila.tarea.get_estado_display }}</span>
             <span class="text-muted">

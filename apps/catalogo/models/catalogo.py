@@ -1,3 +1,4 @@
+from django.core.exceptions import ValidationError
 from django.conf import settings
 from django.db import models
 from django.db.models import Q, UniqueConstraint
@@ -181,6 +182,17 @@ class Servicio(RegistroBase):
                 name="ck_servicio_politica_entrega_coherente",
             ),
         ]
+
+    def clean(self):
+        # 4.G2B1: la entrada inicial y las columnas de la estructura de elementos son dos usos
+        # independientes de `Formulario`; un mismo formulario no puede cumplir ambos.
+        if self.formulario_id is not None:
+            from apps.catalogo.models.parrilla import DefinicionParrilla
+
+            if DefinicionParrilla.objects.filter(formulario_id=self.formulario_id).exists():
+                raise ValidationError(
+                    "Ese formulario define las columnas de una estructura de elementos: no puede ser la entrada inicial."
+                )
 
     def __str__(self):
         return self.nombre
@@ -409,6 +421,10 @@ class DefinicionEntregable(RegistroBase):
         ARCHIVO = "ARCHIVO", "Archivo"
         ENLACE = "ENLACE", "Enlace"
         CONFIRMACION = "CONFIRMACION", "Confirmación"
+        # 4.G2C1: un entregable que controla un CONJUNTO de elementos de la estructura del Proceso
+        # (`DefinicionParrilla`) y registra una revisión por elemento. Sus columnas revisadas y sus
+        # revisores se configuran aparte (`catalogo.models.parrilla`).
+        ELEMENTOS = "ELEMENTOS", "Revisión de elementos"
 
     servicio = models.ForeignKey(Servicio, on_delete=models.CASCADE, related_name="definiciones_entregables")
     nombre = models.CharField(max_length=150)

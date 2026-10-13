@@ -114,6 +114,16 @@ def validar_configuracion_ejecucion(version):
                     f"El entregable {bloque.nombre} usa «{definicion.nombre}», que fue retirado: "
                     "los tickets nuevos ya no lo reciben."
                 )
+        elif bloque.tipo == BloqueOperativo.Tipo.TAREAS_ELEMENTOS:
+            from apps.catalogo.tareas_elemento import configuracion_activa_de, errores_de_tareas_elemento
+
+            if configuracion_activa_de(version.servicio) is None:
+                errores.append(
+                    f"El bloque {bloque.nombre} necesita las tareas por elemento del proceso, que no están configuradas "
+                    "o están desactivadas."
+                )
+            else:
+                errores.extend(f"El bloque {bloque.nombre}: {e}" for e in errores_de_tareas_elemento(version.servicio))
         elif bloque.tipo == BloqueOperativo.Tipo.ESPERA:
             # Histórico: una ESPERA ya configurada se sigue validando y ejecutando, pero no
             # puede crearse una nueva (ver `agregar_bloque_operativo`).
@@ -239,6 +249,15 @@ def agregar_bloque_operativo(
     version.exigir_editable()
     if fase.version_id != version.workflow_version_id:
         raise ValidationError("El bloque debe asociarse a una fase de la plantilla configurada.")
+    if tipo == BloqueOperativo.Tipo.TAREAS_ELEMENTOS:
+        # 4.G2D2: solo un Proceso que ya configuró sus tareas por elemento.
+        from apps.catalogo.tareas_elemento import configuracion_activa_de
+
+        if configuracion_activa_de(version.servicio) is None:
+            raise ValidationError(
+                "Este proceso no tiene configuradas las tareas por elemento: defínelas en la pestaña Formulario "
+                "(«Elementos del proceso») antes de agregar este bloque."
+            )
     if orden is None:
         ultimo = version.bloques.filter(fase=fase).aggregate(maximo=Max("orden"))["maximo"] or 0
         orden = ultimo + 1

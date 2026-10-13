@@ -17,6 +17,35 @@
     {% endif %}
   </header>
 
+  {% if es_proceso and resumen_proceso.tarjetas %}
+    <section class="svc-panel" id="resumen-proceso" aria-label="Resumen de la configuración del proceso">
+      <div class="svc-panel__head">
+        <div>
+          <h3>Resumen del proceso</h3>
+          <p>Cómo quedará configurado: modalidad, datos, elementos, revisiones, tareas y flujo.</p>
+        </div>
+      </div>
+      <div class="svc-resumen-grid">
+        {% for tarjeta in resumen_proceso.tarjetas %}
+          <article class="svc-resumen-card">
+            <h4>
+              {{ tarjeta.titulo }}
+              {% if tarjeta.estado == "ok" %}<span class="svc-pill svc-pill--ok">Listo</span>{% elif tarjeta.estado == "pendiente" %}<span class="svc-pill svc-pill--warn">Por completar</span>{% else %}<span class="svc-pill">Opcional</span>{% endif %}
+            </h4>
+            {% for linea in tarjeta.lineas %}<p>{{ linea }}</p>{% endfor %}
+            <a class="btn btn--ghost btn--sm" href="{% url 'catalogo:studio' servicio.pk %}?tab={{ tarjeta.seccion.2 }}{% if tarjeta.seccion.3 %}&amp;uso={{ tarjeta.seccion.3 }}{% endif %}">Ir a {{ tarjeta.seccion.1 }}</a>
+          </article>
+        {% endfor %}
+      </div>
+      {% if resumen_proceso.avisos %}
+        <div class="svc-alert svc-alert--warning" role="status">
+          <strong>Conviene revisar (no bloquea la publicación):</strong>
+          <ul>{% for aviso in resumen_proceso.avisos %}<li>{{ aviso }}</li>{% endfor %}</ul>
+        </div>
+      {% endif %}
+    </section>
+  {% endif %}
+
   <div class="svc-publish-grid">
     <article class="svc-panel svc-readiness">
       <div class="svc-panel__head">
@@ -39,9 +68,18 @@
       {% if errores %}
         <div class="svc-alert">
           <strong>Antes de publicar:</strong>
-          <ul>
-            {% for error in errores %}<li>{{ error }}</li>{% endfor %}
-          </ul>
+          {% if errores_por_seccion %}
+            {% for grupo in errores_por_seccion %}
+              <p class="svc-help">Corrígelo en <a href="{{ grupo.url }}">{{ grupo.etiqueta }}</a>:</p>
+              <ul>
+                {% for error in grupo.errores %}<li>{{ error }}</li>{% endfor %}
+              </ul>
+            {% endfor %}
+          {% else %}
+            <ul>
+              {% for error in errores %}<li>{{ error }}</li>{% endfor %}
+            </ul>
+          {% endif %}
         </div>
       {% endif %}
     </article>
@@ -74,40 +112,19 @@
   </div>
 
   <div class="svc-publish-grid svc-publish-grid--secondary">
+    {% if es_proceso %}
     <section class="svc-panel">
       <div class="svc-panel__head">
         <div>
-          <h3>Atención</h3>
-          <p>Personas o equipos que pueden atender tickets de este elemento.</p>
+          <h3>Responsables</h3>
+          <p>Quién atiende este proceso se configura en Básico.</p>
         </div>
+        <a class="btn btn--ghost btn--sm" href="{% url 'catalogo:studio' servicio.pk %}?tab=general">Ir a Básico</a>
       </div>
-      {% if responsables %}
-        <ul class="svc-compact-list">
-          {% for responsable in responsables %}
-            <li>
-              <span>{% if responsable.tipo_responsable == "USUARIO" %}{{ responsable.usuario }}{% else %}{{ responsable.equipo }}{% endif %}</span>
-              <span class="svc-tag">{{ responsable.get_tipo_responsable_display }}</span>
-              <form method="post" action="{% url 'catalogo:studio_responsable_retirar' servicio.pk responsable.pk %}">
-                {% csrf_token %}
-                <button type="submit" class="btn btn--ghost btn--sm">Retirar</button>
-              </form>
-            </li>
-          {% endfor %}
-        </ul>
-      {% else %}
-        <div class="svc-empty">Todavía no hay responsables configurados.</div>
-      {% endif %}
-
-      <form method="post" action="{% url 'catalogo:studio_responsable_agregar' servicio.pk %}" class="form svc-inline-form">
-        {% csrf_token %}
-        <div class="svc-form-grid svc-form-grid--three">
-          <div class="field">{{ form_responsable.tipo_responsable.label_tag }}{{ form_responsable.tipo_responsable }}</div>
-          <div class="field">{{ form_responsable.usuario.label_tag }}{{ form_responsable.usuario }}</div>
-          <div class="field">{{ form_responsable.equipo.label_tag }}{{ form_responsable.equipo }}</div>
-        </div>
-        <div class="form-actions"><button type="submit" class="btn btn--secondary">Agregar responsable</button></div>
-      </form>
     </section>
+    {% else %}
+    {% include "catalogo/_studio_responsables.html" with tab_origen="publicacion" %}
+    {% endif %}
 
     {% if not proceso_programado %}
     <section class="svc-panel">

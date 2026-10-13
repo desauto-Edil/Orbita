@@ -784,3 +784,55 @@
   margin: 0;
   font-size: var(--font-size-small);
 }
+
+/* --- Espacio de trabajo de un PROCESO (4.G2E): secciones y resumen --- */
+.ws-secciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-block: var(--space-3);
+}
+
+.ws-secciones a {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  text-decoration: none;
+}
+
+.ws-secciones a:hover,
+.ws-secciones a:focus-visible {
+  color: var(--text-primary);
+  border-color: var(--border-strong);
+}
+
+.ws-resumen {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));
+  gap: var(--space-3);
+  margin-block: var(--space-3);
+}
+
+.ws-dato {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+}
+
+.ws-dato__valor {
+  font-size: var(--text-xl);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.ws-dato__texto {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}

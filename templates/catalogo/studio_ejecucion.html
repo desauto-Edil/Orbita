@@ -256,6 +256,36 @@
         </div>
       </section>
 
+      {% if recorrido_proceso %}
+        <section class="svc-panel" id="recorrido-proceso">
+          <div class="svc-panel__head">
+            <div>
+              <h3>Recorrido de ejecución</h3>
+              <p>El orden en que se ejecutan los bloques, quién los atiende, qué esperan y adónde sigue el flujo.</p>
+            </div>
+          </div>
+          <ol class="svc-flow-steps">
+            {% for paso in recorrido_proceso %}
+              <li class="svc-flow-step">
+                <div class="svc-flow-step__head">
+                  <span class="svc-tag">{{ paso.numero }}</span>
+                  <strong>{{ paso.bloque.nombre }}</strong>
+                  <span class="svc-tag svc-tag--accent">{{ paso.tipo }}</span>
+                  <span class="svc-muted">{{ paso.fase }}</span>
+                </div>
+                <p class="svc-help">{{ paso.responsable }} · {{ paso.espera }}</p>
+                {% if paso.nota %}<p class="svc-help">{{ paso.nota }}</p>{% endif %}
+                {% if paso.rutas %}
+                  <ul class="svc-flow-step__rutas">
+                    {% for ruta in paso.rutas %}<li class="svc-tag{% if ruta.sin_conectar %} svc-pill--warn{% endif %}">{{ ruta.cuando }} → {{ ruta.destino }}</li>{% endfor %}
+                  </ul>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ol>
+        </section>
+      {% endif %}
+
       {% if variables_decision %}
         <datalist id="variables-decision">
           {% for referencia, descripcion in variables_decision %}<option value="{{ referencia }}">{{ descripcion }}</option>{% endfor %}
@@ -413,6 +443,8 @@
                               <div class="field">{{ form_entregable_nuevo.definicion.label_tag }}{{ form_entregable_nuevo.definicion }}</div>
                               <p class="svc-note">El flujo continuará cuando este entregable del ticket esté completado.</p>
                             {% endif %}
+                          {% elif codigo == "TAREAS_ELEMENTOS" %}
+                            <p class="svc-note">Usa las columnas elegidas en Formulario › Elementos del proceso › Tareas por elemento. El flujo espera a que todas las tareas estén completas.</p>
                           {% elif codigo == "APROBACION" %}
                             <div class="field">{{ form_aprobacion_nuevo.revisa.label_tag }}{{ form_aprobacion_nuevo.revisa }}</div>
                             <p class="svc-note">Opcional. Si eliges un entregable, quien aprueba verá qué está revisando. Solo aparecen los bloques de entregable ya agregados al flujo.</p>

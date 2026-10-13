@@ -43,6 +43,37 @@
     </div>
   </section>
 
+  {% if es_proceso %}
+    {# --- Proceso (4.G2E): secciones y resumen --- #}
+    <nav class="ws-secciones" aria-label="Secciones del proceso">
+      <a href="#ws-cabecera">Estado y etapa</a>
+      {% if resumen_proceso.tiene_elementos %}<a href="#elementos">Elementos</a>{% endif %}
+      <a href="#ws-entregables">Entregables y revisiones</a>
+      {% if tareas_configuradas %}<a href="#ws-tareas-elemento">Tareas individuales</a>{% endif %}
+      <a href="#ws-historial">Historial</a>
+    </nav>
+    <section class="ws-resumen" id="ws-resumen" aria-label="Resumen del proceso">
+      {% if resumen_proceso.tiene_elementos %}
+        <div class="ws-dato">
+          <span class="ws-dato__valor">{{ resumen_proceso.elementos }}</span>
+          <span class="ws-dato__texto">elemento{{ resumen_proceso.elementos|pluralize }} vigente{{ resumen_proceso.elementos|pluralize }}{% if resumen_proceso.incompletos %} · {{ resumen_proceso.incompletos }} incompleto{{ resumen_proceso.incompletos|pluralize }}{% endif %}{% if resumen_proceso.retirados %} · {{ resumen_proceso.retirados }} retirado{{ resumen_proceso.retirados|pluralize }}{% endif %}</span>
+        </div>
+      {% endif %}
+      {% for conjunto in conjuntos %}
+        <div class="ws-dato">
+          <span class="ws-dato__valor">{{ conjunto.resumen_vigente.progreso }}</span>
+          <span class="ws-dato__texto">aprobados en «{{ conjunto.nombre }}»{% if conjunto.resumen_vigente.devueltos %} · {{ conjunto.resumen_vigente.devueltos }} devuelto{{ conjunto.resumen_vigente.devueltos|pluralize }}{% endif %}</span>
+        </div>
+      {% endfor %}
+      {% if resumen_proceso.tareas %}
+        <div class="ws-dato">
+          <span class="ws-dato__valor">{{ resumen_proceso.tareas.completadas }}/{{ resumen_proceso.tareas.total }}</span>
+          <span class="ws-dato__texto">tareas completadas · {{ resumen_proceso.tareas.pendientes }} pendiente{{ resumen_proceso.tareas.pendientes|pluralize }} · {{ resumen_proceso.tareas.en_progreso }} en progreso</span>
+        </div>
+      {% endif %}
+    </section>
+  {% endif %}
+
   {% if not hay_flujo %}
     <section class="card"><p class="text-muted">Este ticket no tiene un flujo de trabajo asociado. Gestiónalo desde el <a href="{% url 'tickets:detalle' ticket.pk %}">detalle del ticket</a>.</p></section>
   {% else %}
@@ -140,6 +171,29 @@
               </ul>
             {% endif %}
             {% if panel.aprobacion %}<p><a class="btn btn--secondary" href="{% url 'aprobaciones:detalle' panel.aprobacion.pk %}">Abrir la aprobación</a></p>{% endif %}
+
+          {% elif panel.tipo == "TAREAS_ELEMENTOS" %}
+            {% if panel.correccion %}
+              <div class="alert alert--warning" role="status" id="ws-correccion">
+                <div class="alert__text">
+                  <strong>Falta información para generar las tareas.</strong>
+                  No se generó ninguna tarea y el ticket sigue en curso. Corrige lo indicado y vuelve a intentarlo:
+                  <ul>{% for mensaje in panel.correccion.mensajes %}<li>{{ mensaje }}</li>{% endfor %}</ul>
+                </div>
+              </div>
+              <div class="ws-acciones">
+                {% if panel.puede_reintentar %}
+                  <form method="post" action="{% url 'tickets:reintentar_tareas' ticket.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ ws_next }}"><button type="submit" class="btn btn--primary">Reintentar generación de tareas</button></form>
+                {% else %}
+                  <p class="text-muted">Solo quien atiende el ticket puede corregir los elementos y reintentar.</p>
+                {% endif %}
+                <a class="btn btn--ghost" href="#elementos">Ir a los elementos</a>
+              </div>
+              {% if panel.correccion.reintentos %}<p class="ws-nota">Reintentos sin éxito: {{ panel.correccion.reintentos }}. Nada se reintenta solo.</p>{% endif %}
+            {% else %}
+              <p class="ws-ahora__dato"><strong>{{ trabajo_actual.pendiente }}</strong></p>
+              <p class="ws-nota">Cada tarea está en Mi trabajo de quien la atiende. Cuando se complete la última, el flujo continúa solo.</p>
+            {% endif %}
           {% endif %}
         {% elif trabajo_actual %}
           <p>{{ trabajo_actual.nombre }}</p>
@@ -148,5 +202,69 @@
         {% endif %}
       </section>
     </div>
+  {% endif %}
+
+  {% if es_proceso %}
+    {# --- Elementos del proceso: la misma tabla operable del detalle, con la revisión de cada fila --- #}
+    {% include "tickets/_parrilla.html" %}
+
+    {# --- Entregables y revisiones --- #}
+    <section class="card" id="ws-entregables" aria-labelledby="ws-entregables-t">
+      <h2 id="ws-entregables-t" class="ws-sub">Entregables y revisiones</h2>
+      {% if entregables %}
+        <ul class="list-row-group">
+          {% for entregable in entregables %}
+            {% include "tickets/_entregable_item.html" with next_url=ws_next %}
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p class="text-muted">Este proceso no define entregables.</p>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {# --- Tareas individuales (4.G2D2 / 4.G2E): totales, responsable, fecha límite, evidencia y acceso --- #}
+  {% if tareas_elemento or tareas_configuradas %}
+    <section class="card" id="ws-tareas-elemento" aria-labelledby="ws-tareas-elemento-t">
+      <h2 id="ws-tareas-elemento-t" class="ws-sub">Tareas individuales</h2>
+      {% if tareas_elemento %}
+        <p class="ws-ahora__dato">
+          <strong>{{ tareas_elemento.progreso.completadas }}/{{ tareas_elemento.progreso.total }}</strong> completadas ·
+          {{ tareas_elemento.progreso.pendientes }} pendiente{{ tareas_elemento.progreso.pendientes|pluralize }} ·
+          {{ tareas_elemento.progreso.en_progreso }} en progreso
+        </p>
+        <div style="overflow-x:auto">
+          <table class="table">
+            <thead>
+              <tr><th>#</th><th>Tarea</th><th>Responsable</th><th>Fecha límite</th><th>Estado</th><th>Evidencia</th></tr>
+            </thead>
+            <tbody>
+              {% for fila in tareas_elemento.tareas %}
+                <tr>
+                  <td>{{ fila.elemento.numero }}{% if fila.elemento.retirado_en %} <span class="badge">Retirado</span>{% endif %}</td>
+                  <td>{% if fila.accesible %}<a href="{% url 'tareas:detalle' fila.tarea.pk %}">{{ fila.tarea.titulo }}</a>{% else %}{{ fila.tarea.titulo }}{% endif %}</td>
+                  <td>{{ fila.responsable|default:"Sin asignar" }}</td>
+                  <td>{% if fila.fecha_limite %}{{ fila.fecha_limite|date:"d/m/Y" }}{% else %}—{% endif %}</td>
+                  <td><span class="badge{% if fila.tarea.estado == "COMPLETADA" %} badge--success{% endif %}">{{ fila.tarea.get_estado_display }}</span></td>
+                  <td>
+                    {% if fila.requiere_evidencia %}
+                      {% if fila.con_evidencia %}<span class="badge badge--success">Adjunta</span>{% else %}<span class="badge badge--warning">Requerida</span>{% endif %}
+                    {% else %}<span class="text-muted">No requerida</span>{% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+        <p class="ws-nota">Cada tarea se atiende desde Mi trabajo de su responsable; aquí solo se consulta el avance.</p>
+      {% else %}
+        <p class="text-muted">Todavía no se generaron tareas: se crean una por elemento cuando el flujo llega al bloque «Tareas por elemento».</p>
+      {% endif %}
+    </section>
+  {% endif %}
+
+  {% if es_proceso %}
+    {# --- Historial y trazabilidad --- #}
+    <div id="ws-historial">{% include "tickets/_historial.html" %}</div>
   {% endif %}
 {% endblock %}

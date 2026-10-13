@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% comment %}
+  Revisión de los elementos de un entregable de conjunto (4.G2C1). Espera `ticket`, `servicio`,
+  `nombre_elemento` y `conjunto` (ver `apps/tickets/revision_elementos.py::vista_conjunto`). Una sola vista
+  para todos los elementos; no hay pantalla por elemento.
+{% endcomment %}
+
+{% block title %}{{ conjunto.entregable.nombre }} — {{ sistema.nombre }}{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'tickets:mis_tickets' %}">Mis tickets</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">{{ servicio.nombre }} · {{ ticket.codigo|default:"" }}</span>
+  </nav>
+
+  <section class="card" id="resumen-conjunto">
+    <h1>{{ conjunto.entregable.nombre }}</h1>
+    {% if conjunto.entregable.descripcion %}<p class="text-muted">{{ conjunto.entregable.descripcion }}</p>{% endif %}
+    <p>
+      {% if conjunto.entregable.satisfecho %}<span class="badge badge--success">Listo</span>{% else %}<span class="badge">Pendiente</span>{% endif %}
+      <strong>{{ conjunto.resumen.progreso }}</strong> aprobados ·
+      {{ conjunto.resumen.pendientes }} pendiente{{ conjunto.resumen.pendientes|pluralize }} ·
+      {{ conjunto.resumen.devueltos }} devuelto{{ conjunto.resumen.devueltos|pluralize }} ·
+      {{ conjunto.resumen.total }} en total
+    </p>
+    <p class="text-muted">
+      Columnas que se revisan:
+      {% for columna in conjunto.columnas %}{{ columna.etiqueta }}{% if columna.obligatorio %} <abbr title="Obligatorio">*</abbr>{% endif %}{% if not forloop.last %}, {% endif %}{% endfor %}.
+      Si cambia alguna de ellas después de revisarla, ese {{ nombre_elemento|lower }} vuelve a quedar pendiente; las demás columnas no afectan la revisión.
+    </p>
+    {% if conjunto.motivo_bloqueo %}
+      <p class="text-muted" id="motivo-bloqueo">{{ conjunto.motivo_bloqueo }}</p>
+    {% elif not conjunto.puede_revisar %}
+      <p class="text-muted">Solo las personas o equipos configurados como revisores pueden aprobar o devolver.</p>
+    {% endif %}
+    <p><a href="{% url 'tickets:detalle' ticket.pk %}#elementos">Volver al ticket</a></p>
+  </section>
+
+  {% if conjunto.filas %}
+    {% for fila in conjunto.filas %}
+      <section class="card" id="elemento-{{ fila.elemento.pk }}">
+        <h3>
+          {{ nombre_elemento }} #{{ fila.elemento.numero }}
+          <span class="badge {% if fila.estado == 'APROBADA' %}badge--success{% elif fila.estado == 'DEVUELTA' %}badge--danger{% else %}badge--warning{% endif %}">{{ fila.estado_texto }}</span>
+        </h3>
+        <ul class="list">
+          {% for celda in fila.celdas %}
+            <li><strong>{{ celda.campo.etiqueta }}:</strong> {{ celda.texto }}{% if celda.falta %} <span class="badge badge--warning">Falta</span>{% endif %}</li>
+          {% endfor %}
+        </ul>
+        {% if not fila.completitud.completo %}
+          <p class="text-muted">Incompleto: {{ fila.completitud.pendientes|join:", " }}.</p>
+        {% endif %}
+        {% if fila.cambio %}
+          <p class="text-muted">Cambió desde la última revisión: hace falta revisarlo de nuevo.</p>
+        {% endif %}
+        {% if fila.decision and fila.decision.observacion %}
+          <p><strong>Última observación</strong> ({{ fila.decision.revisor }}, {{ fila.decision.decidido_en|date:"d/m/Y H:i" }}): {{ fila.decision.observacion }}</p>
+        {% endif %}
+
+        {% if conjunto.puede_revisar %}
+          <form method="post" class="form">
+            {% csrf_token %}
+            <div class="field">
+              <label for="obs-{{ fila.elemento.pk }}">Observación (obligatoria al devolver)</label>
+              <textarea id="obs-{{ fila.elemento.pk }}" name="observacion" rows="2"></textarea>
+            </div>
+            {% if fila.puede_aprobar %}
+              <button type="submit" formaction="{% url 'tickets:revision_aprobar' ticket.pk conjunto.entregable.pk fila.elemento.pk %}" class="btn btn--primary btn--sm">Aprobar</button>
+            {% endif %}
+            {% if fila.puede_devolver %}
+              <button type="submit" formaction="{% url 'tickets:revision_devolver' ticket.pk conjunto.entregable.pk fila.elemento.pk %}" class="btn btn--ghost btn--sm">Devolver</button>
+            {% endif %}
+          </form>
+        {% endif %}
+
+        {% if fila.historial %}
+          <details>
+            <summary>Historial de revisión ({{ fila.historial|length }})</summary>
+            <ul class="list">
+              {% for revision in fila.historial %}
+                <li>
+                  <span class="badge {% if revision.decision == 'APROBADA' %}badge--success{% else %}badge--danger{% endif %}">{{ revision.get_decision_display }}</span>
+                  {{ revision.revisor }} — {{ revision.decidido_en|date:"d/m/Y H:i" }}
+                  {% if revision.observacion %}<br><span class="text-muted">{{ revision.observacion }}</span>{% endif %}
+                </li>
+              {% endfor %}
+            </ul>
+          </details>
+        {% endif %}
+      </section>
+    {% endfor %}
+  {% else %}
+    <section class="card">
+      <div class="empty-state"><p>Todavía no hay {{ nombre_elemento|lower }}s para revisar en este ticket. El entregable no estará listo hasta que haya al menos uno aprobado.</p></div>
+    </section>
+  {% endif %}
+{% endblock %}

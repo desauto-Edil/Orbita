@@ -216,18 +216,20 @@ def resolver_prorroga_por_aprobacion(aprobacion, actor, *, decision, observacion
     return prorroga
 
 
-@transaction.atomic
-def cancelar_prorroga(prorroga, actor, *, motivo=""):
-    """Cancela una solicitud PENDIENTE. Solo quien la solicitó (`PermissionDenied`
-    si no); una prórroga ya aprobada, rechazada o cancelada no se cancela
-    (`ValidationError`). No cambia la fecha vigente y retira la aprobación
-    pendiente para que el aprobador ya no la vea."""
-    ticket, prorroga = _bloquear(prorroga.pk)
-    if prorroga.solicitada_por_id != getattr(actor, "pk", None):
-        raise PermissionDenied("Solo quien solicitó la prórroga puede cancelarla.")
-    if prorroga.estado != ProrrogaTicket.Estado.PENDIENTE:
-        raise ValidationError("Solo puede cancelarse una prórroga pendiente.")
+def cancelar_prorroga_pendiente_del_ticket(ticket, actor, *, motivo=""):
+    """4.G1.5 — al cancelar el Ticket, su prórroga PENDIENTE (si la hay) se cancela con él y retira la
+    aprobación que esperaba, para que el aprobador ya no la vea. Lo llama `operaciones.cancelar_ticket`
+    con el Ticket ya bloqueado: no exige que `actor` sea quien la solicitó (quien cancela el Ticket decidió
+    por todo el trabajo asociado). No mueve la fecha vigente. `None` si no había ninguna."""
+    prorroga = ProrrogaTicket.objects.select_for_update().filter(
+        ticket=ticket, estado=ProrrogaTicket.Estado.PENDIENTE
+    ).first()
+    if prorroga is None:
+        return None
+    return _cerrar_como_cancelada(ticket, prorroga, actor, motivo)
 
+
+def _cerrar_como_cancelada(ticket, prorroga, actor, motivo):
     if prorroga.esquema_aprobacion_id is not None:
         anular_esquema_aprobacion(prorroga.esquema_aprobacion, actor)
     prorroga.estado = ProrrogaTicket.Estado.CANCELADA
@@ -245,3 +247,18 @@ def cancelar_prorroga(prorroga, actor, *, motivo=""):
         **_datos_historial(prorroga, observaciones=prorroga.observaciones_resolucion),
     )
     return prorroga
+
+
+@transaction.atomic
+def cancelar_prorroga(prorroga, actor, *, motivo=""):
+    """Cancela una solicitud PENDIENTE. Solo quien la solicitó (`PermissionDenied`
+    si no); una prórroga ya aprobada, rechazada o cancelada no se cancela
+    (`ValidationError`). No cambia la fecha vigente y retira la aprobación
+    pendiente para que el aprobador ya no la vea."""
+    ticket, prorroga = _bloquear(prorroga.pk)
+    if prorroga.solicitada_por_id != getattr(actor, "pk", None):
+        raise PermissionDenied("Solo quien solicitó la prórroga puede cancelarla.")
+    if prorroga.estado != ProrrogaTicket.Estado.PENDIENTE:
+        raise ValidationError("Solo puede cancelarse una prórroga pendiente.")
+
+    return _cerrar_como_cancelada(ticket, prorroga, actor, motivo)

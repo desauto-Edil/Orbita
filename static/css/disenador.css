@@ -3311,3 +3311,116 @@
     animation: none;
   }
 }
+
+/* --- 4.G2E: experiencia de Proceso en el Studio --- */
+.svc-dual {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.svc-dual__item {
+  display: grid;
+  gap: 6px;
+  padding: 16px 18px;
+  border: 1px solid rgba(23, 24, 27, 0.08);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.52);
+  color: #17181b;
+  text-decoration: none;
+  transition: background-color 180ms ease, box-shadow 180ms ease, border-color 180ms ease;
+}
+
+.svc-dual__item:hover,
+.svc-dual__item.is-active {
+  background: rgba(255, 255, 255, 0.86);
+  border-color: rgba(23, 24, 27, 0.16);
+  box-shadow: 0 10px 24px rgba(23, 24, 27, 0.09);
+}
+
+.svc-dual__kicker {
+  color: rgba(23, 24, 27, 0.58);
+  font-size: var(--font-size-small);
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.svc-dual__estado {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  color: rgba(23, 24, 27, 0.72);
+  font-size: var(--font-size-small);
+}
+
+.svc-resumen-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr));
+  gap: 14px;
+}
+
+.svc-resumen-card {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  padding: 16px 18px;
+  border: 1px solid rgba(23, 24, 27, 0.08);
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.svc-resumen-card h4 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+}
+
+.svc-resumen-card p {
+  margin: 0;
+  color: rgba(23, 24, 27, 0.72);
+}
+
+.svc-flow-steps {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.svc-flow-step {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid rgba(23, 24, 27, 0.08);
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.52);
+}
+
+.svc-flow-step__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.svc-flow-step__rutas {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+@media (max-width: 720px) {
+  .svc-dual {
+    grid-template-columns: 1fr;
+  }
+}

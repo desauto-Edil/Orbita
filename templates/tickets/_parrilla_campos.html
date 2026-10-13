@@ -1,0 +1,24 @@
+{% comment %}Controles de una fila (4.G2B1/4.G2B2). Espera `celdas`. La obligatoriedad solo se marca: no se exige al guardar.{% endcomment %}
+{% for celda in celdas %}
+  {% if celda.soportado %}
+    <div class="field">
+      <label>{{ celda.campo.etiqueta }}{% if celda.obligatorio %} <abbr title="Obligatorio">*</abbr>{% endif %}</label>
+      {% if celda.tipo == "TEXTO_LARGO" %}
+        <textarea name="campo_{{ celda.campo.pk }}" rows="3">{{ celda.valor }}</textarea>
+      {% elif celda.tipo == "BOOLEANO" %}
+        <label class="choice"><input type="checkbox" name="campo_{{ celda.campo.pk }}"{% if celda.marcado %} checked{% endif %}> Sí</label>
+      {% elif celda.tipo == "LISTA" or celda.tipo == "USUARIO" or celda.tipo == "AREA" or celda.tipo == "UNIDAD" %}
+        <select name="campo_{{ celda.campo.pk }}">
+          <option value="">—</option>
+          {% for valor, etiqueta, marcada in celda.opciones %}<option value="{{ valor }}"{% if marcada %} selected{% endif %}>{{ etiqueta }}</option>{% endfor %}
+        </select>
+      {% elif celda.tipo == "MULTILISTA" %}
+        <select name="campo_{{ celda.campo.pk }}" multiple size="4">
+          {% for valor, etiqueta, marcada in celda.opciones %}<option value="{{ valor }}"{% if marcada %} selected{% endif %}>{{ etiqueta }}</option>{% endfor %}
+        </select>
+      {% else %}
+        <input type="{{ celda.input_type }}" name="campo_{{ celda.campo.pk }}" value="{{ celda.valor }}"{% if celda.tipo == "NUMERO" %} step="any"{% endif %}>
+      {% endif %}
+    </div>
+  {% endif %}
+{% endfor %}

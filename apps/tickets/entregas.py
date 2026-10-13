@@ -77,7 +77,11 @@ def _congelar_resultados(entrega, entregables):
         resultado = ResultadoEntregaTicket.objects.create(
             entrega=entrega, entregable=entregable, nombre=entregable.nombre, tipo=entregable.tipo,
             obligatorio=entregable.obligatorio, orden=entregable.orden,
-            texto=entregable.texto if es_texto else "",
+            # 4.G2C1: de un conjunto de elementos se entrega el resumen de lo aprobado.
+            texto=(
+                f"{entregable.resumen_conjunto.aprobados} de {entregable.resumen_conjunto.total} elementos aprobados"
+                if entregable.tipo == DefinicionEntregable.Tipo.ELEMENTOS else (entregable.texto if es_texto else "")
+            ),
             enlace=entregable.enlace if es_enlace else "",
             confirmado_por=entregable.confirmado_por if es_confirmacion else None,
             confirmado_en=entregable.confirmado_en if es_confirmacion else None,

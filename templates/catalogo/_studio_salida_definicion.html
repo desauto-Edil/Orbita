@@ -1,0 +1,48 @@
+{% comment %}Una definición de salida con su editor (Studio › Salida). Espera `definicion`, `indice` y `servicio`.{% endcomment %}
+        <article class="svc-object">
+          <div class="svc-object__main">
+            <span class="svc-object__index">0{{ indice }}</span>
+            <div>
+              <h3>{{ definicion.nombre }}</h3>
+              {% if definicion.descripcion %}<p>{{ definicion.descripcion }}</p>{% endif %}
+            </div>
+          </div>
+          <div class="svc-object__meta">
+            <span class="svc-tag">{{ definicion.get_tipo_display }}</span>
+            {% if definicion.obligatorio %}<span class="svc-tag svc-tag--accent">Obligatorio</span>{% endif %}
+          </div>
+          <div class="svc-row-actions">
+            <button type="button" class="btn btn--ghost btn--sm" data-action="toggle-panel" data-target="panel-entregable-{{ definicion.pk }}">Editar</button>
+            <form method="post" action="{% url 'catalogo:studio_entregable_retirar' servicio.pk definicion.pk %}">
+              {% csrf_token %}
+              <button type="submit" class="btn btn--ghost btn--sm">Retirar</button>
+            </form>
+          </div>
+
+          <div id="panel-entregable-{{ definicion.pk }}" class="svc-inline-editor" hidden>
+            <form method="post" action="{% url 'catalogo:studio_entregable_editar' servicio.pk definicion.pk %}" class="form">
+              {% csrf_token %}
+              <div class="svc-form-grid svc-form-grid--two">
+                <div class="field">{{ definicion.form_editar.nombre.label_tag }}{{ definicion.form_editar.nombre }}</div>
+                <div class="field">{{ definicion.form_editar.tipo.label_tag }}{{ definicion.form_editar.tipo }}</div>
+                <div class="field">{{ definicion.form_editar.descripcion.label_tag }}{{ definicion.form_editar.descripcion }}</div>
+                <div class="field">{{ definicion.form_editar.orden.label_tag }}{{ definicion.form_editar.orden }}</div>
+              </div>
+              <label class="choice">{{ definicion.form_editar.obligatorio }} {{ definicion.form_editar.obligatorio.label_tag }}</label>
+
+              <fieldset class="svc-subpanel" data-revision-elementos>
+                <legend>Solo para «Revisión de elementos»</legend>
+                {% if definicion.form_editar.hay_estructura %}
+                  <div class="field">{{ definicion.form_editar.columnas_revisadas.label_tag }}{{ definicion.form_editar.columnas_revisadas }}</div>
+                  <div class="svc-form-grid svc-form-grid--two">
+                    <div class="field">{{ definicion.form_editar.revisores_usuarios.label_tag }}{{ definicion.form_editar.revisores_usuarios }}</div>
+                    <div class="field">{{ definicion.form_editar.revisores_equipos.label_tag }}{{ definicion.form_editar.revisores_equipos }}</div>
+                  </div>
+                  <small class="text-muted">Cada elemento se aprueba o devuelve por separado. Quien aprueba no es, por serlo, el responsable del ticket.</small>
+                {% else %}
+                  <small class="text-muted">Este proceso aún no tiene elementos estructurados con columnas: actívalos en la pestaña Formulario («Elementos del proceso»).</small>
+                {% endif %}
+              </fieldset>              <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar</button></div>
+            </form>
+          </div>
+        </article>

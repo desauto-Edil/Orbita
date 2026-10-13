@@ -25,6 +25,8 @@ from apps.core.redirecciones import volver_a
 from apps.tickets import entregables as entregables_ops
 from apps.tickets import entregas as entregas_ops
 from apps.tickets import direccionamiento, operaciones, plazos, prorrogas, seguimiento, solicitud
+from apps.tickets import parrilla as parrilla_ops
+from apps.tickets import revision_elementos as revision_ops
 from apps.tickets import trabajo as trabajo_ops
 from apps.tickets.autorizacion import (
     es_propietario_borrador,
@@ -46,6 +48,7 @@ from apps.tickets.autorizacion import (
     puede_resolver_prorroga,
     puede_resolver_ticket,
     puede_responder_entrega,
+    puede_revisar_conjunto,
     puede_revisar_entregable,
     puede_solicitar_informacion,
     puede_solicitar_prorroga,
@@ -632,6 +635,8 @@ def detalle_view(request, pk):
     contexto.update(_contexto_entrega(request.user, ticket))
     contexto.update(_contexto_prorrogas(request.user, ticket))
     contexto.update(_contexto_trabajo_actual(request.user, ticket))
+    # 4.G2B1: elementos estructurados (solo si el Proceso los usa).
+    contexto["parrilla"] = parrilla_ops.tabla(ticket, request.user)
     return render(request, "tickets/detalle.html", contexto)
 
 
@@ -735,10 +740,7 @@ def _contexto_entrega(usuario, ticket):
     puede_atender = puede_ver_en_cola(usuario, ticket)
     entregables, pendientes = [], []
     if puede_atender:
-        entregables = list(ticket.entregables.prefetch_related("archivos"))
-        for entregable in entregables:
-            entregable.archivos_vigentes = [a for a in entregable.archivos.all() if a.retirado_en is None]
-            entregable.operable_ahora = trabajo_ops.entregable_operable_ahora(ticket, entregable)
+        entregables = trabajo_ops.entregables_anotados(ticket)
         pendientes = [e for e in entregables if e.obligatorio and not e.satisfecho]
     entregas = list(
         ticket.entregas.select_related("entregada_por", "resuelta_por")
@@ -928,6 +930,159 @@ def reabrir_view(request, pk):
     else:
         messages.success(request, "Ticket reabierto.")
     return redirect("tickets:detalle", pk=pk)
+
+
+def _volver_a_elementos(request, pk):
+    """Vuelve a la pantalla de origen (`next`, solo destinos internos: p. ej. el espacio de trabajo del
+    proceso) o, por defecto, a los elementos del detalle."""
+    destino = request.POST.get("next") or ""
+    if destino.startswith("/"):
+        return volver_a(request, "tickets:detalle", pk)
+    return redirect(f"{reverse('tickets:detalle', args=[pk])}#elementos")
+
+
+@login_required
+@require_POST
+def elemento_agregar_view(request, pk):
+    """4.G2B1 — agrega una fila a la parrilla del Ticket con los valores del formulario."""
+    ticket = get_object_or_404(Ticket, pk=pk)
+    if not puede_consultar_ticket(request.user, ticket):
+        raise PermissionDenied
+    parrilla = parrilla_ops.parrilla_de(ticket)
+    try:
+        if parrilla is None:
+            raise ValidationError("Este ticket no usa elementos estructurados.")
+        valores = parrilla_ops.valores_desde_post(request.POST, parrilla_ops.columnas_de(parrilla))
+        parrilla_ops.crear_elemento(ticket, request.user, valores)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, f"{parrilla.nombre_elemento} agregado.")
+    return _volver_a_elementos(request, pk)
+
+
+@login_required
+@require_POST
+def elemento_guardar_view(request, pk, elemento_id):
+    """4.G2B1 — modifica los valores de una fila vigente."""
+    ticket = get_object_or_404(Ticket, pk=pk)
+    if not puede_consultar_ticket(request.user, ticket):
+        raise PermissionDenied
+    elemento = get_object_or_404(parrilla_ops.ElementoParrilla, pk=elemento_id, parrilla__ticket=ticket)
+    try:
+        columnas = parrilla_ops.columnas_de(elemento.parrilla)
+        parrilla_ops.actualizar_valores(
+            elemento, request.user, parrilla_ops.valores_desde_post(request.POST, columnas)
+        )
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, f"#{elemento.numero} actualizado.")
+    return _volver_a_elementos(request, pk)
+
+
+@login_required
+@require_POST
+def elemento_retirar_view(request, pk, elemento_id):
+    """4.G2B1 — retira (lógicamente) una fila de la parrilla."""
+    ticket = get_object_or_404(Ticket, pk=pk)
+    if not puede_consultar_ticket(request.user, ticket):
+        raise PermissionDenied
+    elemento = get_object_or_404(parrilla_ops.ElementoParrilla, pk=elemento_id, parrilla__ticket=ticket)
+    try:
+        parrilla_ops.retirar_elemento(elemento, request.user)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, f"#{elemento.numero} retirado.")
+    return _volver_a_elementos(request, pk)
+
+
+@login_required
+@require_POST
+def reintentar_tareas_view(request, pk):
+    """4.G2E — reintento EXPLÍCITO de la generación de tareas por elemento cuando el bloque quedó esperando
+    una corrección de información. La operación autoriza (responsable individual), revalida bajo lock y es
+    idempotente; aquí solo se traduce su resultado."""
+    from apps.workflows.integracion import reintentar_tareas_elementos
+
+    ticket = get_object_or_404(Ticket, pk=pk)
+    if not puede_consultar_ticket(request.user, ticket):
+        raise PermissionDenied
+    try:
+        resultado = reintentar_tareas_elementos(ticket, request.user)
+    except (PermissionDenied, ValidationError, ValueError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        if resultado.mensajes:
+            messages.warning(
+                request, "Todavía hay información por corregir antes de generar las tareas. Revisa el detalle."
+            )
+        elif resultado.continuo:
+            messages.success(request, "Las tareas se generaron y no queda ninguna pendiente: el flujo continuó.")
+        elif resultado.aplicado:
+            messages.success(
+                request,
+                f"Se generaron {resultado.generadas} tarea{'s' if resultado.generadas != 1 else ''} por elemento.",
+            )
+        else:
+            messages.info(request, "No hay nada que reintentar: la generación de tareas ya no espera correcciones.")
+    return volver_a(request, "tickets:trabajo", pk)
+
+
+def _entregable_de_conjunto_o_404(pk, entregable_id):
+    ticket = get_object_or_404(Ticket, pk=pk)
+    entregable = get_object_or_404(EntregableTicket, pk=entregable_id, ticket=ticket, tipo="ELEMENTOS")
+    return ticket, entregable
+
+
+@login_required
+@require_GET
+def revision_conjunto_view(request, pk, entregable_id):
+    """4.G2C1 — revisión de TODOS los elementos de un entregable de conjunto en una sola vista: N/N,
+    estado de cada elemento, columnas revisadas, observaciones, aprobar/devolver e historial. La ve quien
+    puede consultar el ticket o quien está configurado como revisor del entregable (sin ganar acceso al
+    resto del ticket); las acciones las autoriza el dominio."""
+    ticket, entregable = _entregable_de_conjunto_o_404(pk, entregable_id)
+    if not (puede_consultar_ticket(request.user, ticket) or puede_revisar_conjunto(request.user, entregable)):
+        raise PermissionDenied
+    return render(request, "tickets/revision_conjunto.html", {
+        "ticket": ticket,
+        "servicio": ticket.detalle_servicio.servicio,
+        "nombre_elemento": getattr(getattr(ticket, "parrilla", None), "nombre_elemento", "Elemento"),
+        "conjunto": revision_ops.vista_conjunto(entregable, request.user, ticket),
+        "titulo_pagina": f"{entregable.nombre} — {ticket.codigo or ticket.pk}",
+    })
+
+
+def _decidir_revision(request, pk, entregable_id, elemento_id, devolver):
+    ticket, entregable = _entregable_de_conjunto_o_404(pk, entregable_id)
+    if not (puede_consultar_ticket(request.user, ticket) or puede_revisar_conjunto(request.user, entregable)):
+        raise PermissionDenied
+    elemento = get_object_or_404(parrilla_ops.ElementoParrilla, pk=elemento_id, parrilla__ticket=ticket)
+    observacion = request.POST.get("observacion", "")
+    try:
+        if devolver:
+            revision_ops.devolver_elemento(entregable, elemento, request.user, observacion)
+        else:
+            revision_ops.aprobar_elemento(entregable, elemento, request.user, observacion)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, f"#{elemento.numero} {'devuelto' if devolver else 'aprobado'}.")
+    return redirect(f"{reverse('tickets:revision_conjunto', args=[pk, entregable_id])}#elemento-{elemento_id}")
+
+
+@login_required
+@require_POST
+def revision_aprobar_view(request, pk, entregable_id, elemento_id):
+    return _decidir_revision(request, pk, entregable_id, elemento_id, devolver=False)
+
+
+@login_required
+@require_POST
+def revision_devolver_view(request, pk, entregable_id, elemento_id):
+    return _decidir_revision(request, pk, entregable_id, elemento_id, devolver=True)
 
 
 @login_required

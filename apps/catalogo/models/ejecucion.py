@@ -78,11 +78,14 @@ class BloqueOperativo(RegistroBase):
         ESPERA = "ESPERA", "Espera"
         DECISION = "DECISION", "Decision"
         ENTREGABLE = "ENTREGABLE", "Entregable"
+        # 4.G2D2 — solo en un Proceso con tareas por elemento configuradas: convierte los elementos del
+        # Ticket en Tareas (`apps.tareas`) y espera a que se completen.
+        TAREAS_ELEMENTOS = "TAREAS_ELEMENTOS", "Tareas por elemento"
 
     # Vocabulario V1 que un administrador puede crear: ESPERA queda fuera. Es una regla
     # de dominio (`configuracion_ejecucion.agregar_bloque_operativo`), no una restricción
     # de `choices`, para no impedir cargar registros históricos.
-    TIPOS_CONFIGURABLES = ("ACTIVIDAD", "ENTREGABLE", "APROBACION", "DECISION")
+    TIPOS_CONFIGURABLES = ("ACTIVIDAD", "ENTREGABLE", "APROBACION", "DECISION", "TAREAS_ELEMENTOS")
     # Entregables que una aprobación puede REVISAR (4.E2): los que tienen un contenido que
     # revisar y volver a entregar corregido. Una CONFIRMACION no tiene nada que revisar.
     TIPOS_ENTREGABLE_REVISABLES = ("TEXTO", "ENLACE", "ARCHIVO")
@@ -138,10 +141,23 @@ class BloqueOperativo(RegistroBase):
             raise ValidationError("El bloque debe pertenecer a una fase de la version de Workflow configurada.")
         self._validar_definicion_entregable()
         self._validar_entregable_revisado()
+        self._validar_tareas_elementos()
         if self.clave:
             repetida = BloqueOperativo.objects.filter(version_id=self.version_id, clave=self.clave).exclude(pk=self.pk)
             if repetida.exists():
                 raise ValidationError({"clave": "Ya existe otro bloque con esa clave en esta configuracion."})
+
+    def _validar_tareas_elementos(self):
+        """4.G2D2 — TAREAS_ELEMENTOS solo existe en un Proceso y a lo sumo una vez por configuración (una
+        segunda visita a ESE bloque en un ciclo reutiliza las mismas tareas, nunca otro bloque). Que la
+        configuración de tareas por elemento del Proceso esté activa se exige al agregarlo y al publicar."""
+        if self.tipo != self.Tipo.TAREAS_ELEMENTOS:
+            return
+        servicio = self.version.servicio
+        if servicio.tipo != "PROCESO" or servicio.es_ticket_general:
+            raise ValidationError("Las tareas por elemento solo existen en un proceso.")
+        if BloqueOperativo.objects.filter(version_id=self.version_id, tipo=self.tipo).exclude(pk=self.pk).exists():
+            raise ValidationError("El flujo ya tiene un bloque de tareas por elemento.")
 
     def _validar_definicion_entregable(self):
         if self.tipo == self.Tipo.ENTREGABLE:

@@ -83,7 +83,7 @@ def _mensaje_error(exc):
 
 
 def _es_vencida(tarea, ahora):
-    return tarea.fecha_limite is not None and tarea.fecha_limite < ahora and tarea.estado != Tarea.Estado.COMPLETADA
+    return tarea.fecha_limite is not None and tarea.fecha_limite < ahora and tarea.estado not in Tarea.ESTADOS_CERRADOS
 
 
 @login_required
@@ -250,7 +250,7 @@ def completar_view(request, pk):
     if not puede_completar_tarea(request.user, tarea):
         raise PermissionDenied
     try:
-        if hasattr(tarea, "vinculo_workflow"):
+        if hasattr(tarea, "vinculo_workflow") or hasattr(tarea, "vinculo_elemento"):
             completar_tarea_workflow(tarea, request.user)
         else:
             operaciones.completar_tarea(tarea, request.user)

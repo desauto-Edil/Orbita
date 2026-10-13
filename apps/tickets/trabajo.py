@@ -15,7 +15,7 @@ bloque (la regla vive aquí para que vistas y pruebas la compartan).
 """
 
 from apps.tickets import seguimiento
-from apps.tickets.autorizacion import puede_escribir_entregables_finales
+from apps.tickets.autorizacion import puede_editar_parrilla, puede_escribir_entregables_finales
 from apps.tickets.models import Ticket
 from apps.workflows.models import (
     EsquemaAprobacionWorkflow,
@@ -26,7 +26,7 @@ from apps.workflows.models import (
 
 TIPOS_BLOQUE = {
     "ACTIVIDAD": "Actividad", "ENTREGABLE": "Entregable", "APROBACION": "Aprobación", "DECISION": "Decisión",
-    "ESPERA": "Espera",
+    "ESPERA": "Espera", "TAREAS_ELEMENTOS": "Tareas por elemento",
 }
 
 # Estado de un bloque dentro de la fase actual (derivado de las ejecuciones reales).
@@ -56,6 +56,9 @@ def contexto_trabajo_actual(usuario, ticket):
     from apps.tareas.autorizacion import puede_consultar_tarea
 
     instancia = ticket.instancia_workflow
+    if instancia.estado == InstanciaWorkflow.Estado.CANCELADA:
+        # 4.G1.5: el Ticket se canceló; sus etapas quedan como historia, no como trabajo por hacer.
+        return {"trabajo_actual": None, "trabajo_interno_en_curso": False}
     ultima = (
         instancia.ejecuciones_etapa.select_related("bloque_operativo", "etapa", "fase_workflow")
         .order_by("-orden")
@@ -109,6 +112,19 @@ def contexto_trabajo_actual(usuario, ticket):
             trabajo["pendiente"] = (
                 f"Falta entregar «{entregable.nombre}»." if entregable is not None else "Falta un entregable."
             )
+        elif motivo == InstanciaEtapa.MotivoEspera.ELEMENTOS:
+            from apps.tickets import tareas_elemento
+
+            correccion = tareas_elemento.correccion_pendiente(ultima)
+            if correccion:
+                # 4.G2E: no es un error técnico: falta información por corregir y un reintento explícito.
+                trabajo["correccion"] = correccion
+                trabajo["pendiente"] = "Hay información por corregir antes de generar las tareas por elemento."
+            else:
+                progreso = tareas_elemento.progreso_de(ticket)
+                trabajo["pendiente"] = (
+                    f"Van {progreso.completadas} de {progreso.total} tareas por elemento completadas."
+                )
         else:
             trabajo["pendiente"] = "En espera programada."
     return {"trabajo_actual": trabajo, "trabajo_interno_en_curso": en_curso}
@@ -138,6 +154,16 @@ def entregable_operable_ahora(ticket, entregable):
         and ultima.bloque_operativo is not None
         and ultima.bloque_operativo.definicion_entregable_id == entregable.definicion_id
     )
+
+
+def entregables_anotados(ticket):
+    """Los entregables del Ticket con lo que necesitan las pantallas (`_entregable_item.html`): archivos
+    vigentes y si el flujo ya permite escribirlos. Compartido por el detalle y el espacio de trabajo."""
+    entregables = list(ticket.entregables.prefetch_related("archivos"))
+    for entregable in entregables:
+        entregable.archivos_vigentes = [a for a in entregable.archivos.all() if a.retirado_en is None]
+        entregable.operable_ahora = entregable_operable_ahora(ticket, entregable)
+    return entregables
 
 
 def _pasada_actual(ejecuciones, fase_id):
@@ -175,7 +201,14 @@ def _bloques_de_la_fase(instancia, ejecuciones, fase):
         else:
             situacion = PENDIENTE
         detalle = ""
-        if situacion == COMPLETADO and bloque.tipo == "DECISION":
+        if situacion == ACTUAL and bloque.tipo == "TAREAS_ELEMENTOS":
+            from apps.tickets import tareas_elemento
+
+            detalle = (
+                "Información por corregir" if tareas_elemento.correccion_pendiente(ejecucion)
+                else "Esperando que se completen las tareas"
+            )
+        elif situacion == COMPLETADO and bloque.tipo == "DECISION":
             detalle = "Condición evaluada"
         elif situacion == COMPLETADO and bloque.tipo == "APROBACION" and ejecucion.transicion_bloque_tomada_id:
             detalle = ejecucion.transicion_bloque_tomada.get_resultado_aprobacion_display() or ""
@@ -220,6 +253,13 @@ def espacio(usuario, ticket):
     fase actual y el panel de lo que hay que hacer ahora."""
     contexto = {"hay_flujo": ticket.instancia_workflow_id is not None, "progreso": None, "bloques": [], "panel": None}
     contexto.update(contexto_trabajo_actual(usuario, ticket))
+    # 4.G2D2: tareas generadas por los elementos del Ticket (totales por estado y acceso a cada una).
+    from apps.tickets import tareas_elemento
+
+    contexto["tareas_elemento"] = tareas_elemento.resumen_para_ticket(usuario, ticket)
+    contexto["es_proceso"] = False
+    if ticket.tipo == Ticket.Tipo.PROCESO:
+        _contexto_proceso(usuario, ticket, contexto)
     if not contexto["hay_flujo"]:
         return contexto
     instancia = ticket.instancia_workflow
@@ -252,7 +292,70 @@ def espacio(usuario, ticket):
     elif trabajo["tipo_codigo"] == "APROBACION":
         panel["participaciones"] = trabajo.get("participaciones", [])
         panel["aprobacion"] = trabajo["aprobacion"]
+    elif trabajo["tipo_codigo"] == "TAREAS_ELEMENTOS":
+        # 4.G2E: si falta información corregible se explica qué y se ofrece el reintento explícito (solo a
+        # quien edita los elementos); la operación vuelve a autorizar y a validar bajo lock.
+        panel["correccion"] = trabajo.get("correccion")
+        panel["puede_reintentar"] = bool(trabajo.get("correccion")) and puede_editar_parrilla(usuario, ticket)
     contexto["panel"] = panel
+    return contexto
+
+
+# --- Ticket de PROCESO (4.G2E) --------------------------------------------------------------------
+
+
+def _contexto_proceso(usuario, ticket, contexto):
+    """Lo que añade el espacio de trabajo de un PROCESO a la composición común: elementos con su estado de
+    revisión, entregables y revisiones, y la línea de tiempo. Solo LEE: cada acción es la operación de
+    dominio de siempre (editar/retirar un elemento, revisar, completar una tarea, reintentar)."""
+    from apps.tickets import parrilla as parrilla_ops
+    from apps.tickets import revision_elementos as revision_ops
+
+    entregables = entregables_anotados(ticket)
+    conjuntos = [e for e in entregables if e.tipo == "ELEMENTOS"]
+    estados = {}
+    for conjunto in conjuntos:
+        evaluados, resumen = revision_ops.evaluar(conjunto)
+        conjunto.resumen_vigente = resumen
+        conjunto.motivo_no_revisable = revision_ops.motivo_no_revisable(conjunto)
+        estados[conjunto.pk] = {s.elemento.pk: s for s in evaluados}
+
+    parrilla = parrilla_ops.tabla(ticket, usuario)
+    if parrilla is not None:
+        for fila in parrilla["filas"]:
+            revisiones = []
+            for conjunto in conjuntos:
+                estado = estados[conjunto.pk].get(fila["elemento"].pk)
+                if estado is None:
+                    continue
+                devuelta = estado.estado == revision_ops.Estado.DEVUELTA and estado.decision is not None
+                revisiones.append({
+                    "entregable": conjunto, "estado": estado.estado, "texto": estado.estado.label,
+                    "observacion": estado.decision.observacion if devuelta else "",
+                    "cambio": estado.cambio_desde_la_decision,
+                })
+            fila["revisiones"] = revisiones
+        parrilla["con_revision"] = bool(conjuntos)
+
+    from apps.tickets import tareas_elemento as tareas_ops
+
+    tareas = contexto.get("tareas_elemento")
+    contexto.update({
+        "es_proceso": True,
+        "tareas_configuradas": tareas_ops.configuracion_de(ticket) is not None,
+        "parrilla": parrilla,
+        "entregables": entregables,
+        "conjuntos": conjuntos,
+        "puede_escribir_entregables": puede_escribir_entregables_finales(usuario, ticket),
+        "historial": ticket.historial.select_related("actor").all(),
+        "resumen_proceso": {
+            "elementos": len(parrilla["filas"]) if parrilla else 0,
+            "incompletos": parrilla["n_incompletas"] if parrilla else 0,
+            "retirados": parrilla["n_retirados"] if parrilla else 0,
+            "tiene_elementos": parrilla is not None,
+            "tareas": tareas["progreso"] if tareas else None,
+        },
+    })
     return contexto
 
 

@@ -101,6 +101,7 @@ class MotivoEspera:
     TAREA = "TAREA"
     APROBACION = "APROBACION"
     ENTREGABLE = "ENTREGABLE"
+    ELEMENTOS = "ELEMENTOS"
 
 
 @dataclass
@@ -473,11 +474,61 @@ class EstrategiaEntregable(EstrategiaSinConfiguracion):
         )
 
 
+class EstrategiaTareasElementos(EstrategiaSinConfiguracion):
+    """4.G2D2 — el bloque TAREAS_ELEMENTOS convierte los elementos vigentes del Ticket en Tareas
+    (`apps.tickets.tareas_elemento`, que reutiliza `apps.tareas`) y espera a que todas se completen. No crea
+    un Workflow por elemento ni un sistema de tareas propio: el motor solo recibe CONTINUAR o
+    ESPERAR/`motivo_espera=ELEMENTOS`, igual contrato que TAREA o ENTREGABLE (RN-021).
+
+    - Al entrar genera las Tareas que falten (idempotente: reintentar la entrada al bloque no duplica) y
+      las asocia a ESTA ejecución del bloque.
+    - Con alguna Tarea abierta → `ESPERAR`; la libera `apps.workflows.integracion.completar_tarea_workflow`
+      cuando se completa la última (revalidando el conjunto bajo el lock de la instancia).
+    - Sin trabajo pendiente → `CONTINUAR` y el motor publica `tareas_elementos.<clave>.completadas|total`.
+    - 4.G2E — información corregible (fila incompleta, responsable no válido, conjunto sin aprobar, sin
+      elementos) → NO es un error: `ESPERAR` con `resultado["correccion"]` y sin tareas (la materialización
+      es atómica). Quien atiende corrige con las operaciones de siempre y reintenta de forma explícita
+      (`integracion.reintentar_tareas_elementos`); nada se reintenta solo.
+    - Un requisito definitivo (Ticket sin configuración, cancelado, ya consumido) → `ERROR` funcional
+      controlado. Una excepción inesperada la registra el motor como error técnico.
+
+    Imports locales: `apps.tickets` importa el motor, no al revés a nivel de módulo."""
+
+    ejecutable = True
+
+    def ejecutar(self, instancia_etapa, contexto):
+        from apps.tickets import tareas_elemento
+
+        ticket = ResolutorVariables(getattr(instancia_etapa, "instancia_workflow", None), contexto).ticket
+        if ticket is None:
+            return ResultadoEjecucionEtapa(
+                estado=ResultadoEjecucion.ERROR, mensaje_error="Este bloque necesita una ejecución vinculada a un Ticket."
+            )
+        try:
+            progreso = tareas_elemento.entrar_al_bloque(ticket, instancia_etapa)
+        except tareas_elemento.RequisitoPorCorregir as exc:
+            return ResultadoEjecucionEtapa(
+                estado=ResultadoEjecucion.ESPERAR, motivo_espera=MotivoEspera.ELEMENTOS,
+                datos=tareas_elemento.datos_de_correccion(ticket, exc.messages),
+            )
+        except ValidationError as exc:
+            return ResultadoEjecucionEtapa(estado=ResultadoEjecucion.ERROR, mensaje_error=" ".join(exc.messages))
+        datos = {"total": progreso.total, "completadas": progreso.completadas}
+        if progreso.abiertas:
+            return ResultadoEjecucionEtapa(
+                estado=ResultadoEjecucion.ESPERAR, motivo_espera=MotivoEspera.ELEMENTOS, datos=datos
+            )
+        return ResultadoEjecucionEtapa(
+            estado=ResultadoEjecucion.CONTINUAR, datos=datos, resultado_bloque=("tareas_elementos", datos),
+        )
+
+
 ESTRATEGIAS_POR_TIPO = {
     "INICIO": EstrategiaInicio(),
     "TAREA": EstrategiaTarea(),
     "APROBACION": EstrategiaAprobacion(),
     "ENTREGABLE": EstrategiaEntregable(),
+    "TAREAS_ELEMENTOS": EstrategiaTareasElementos(),
     "CONDICION": EstrategiaCondicion(),
     "ESPERA": EstrategiaEspera(),
     "TICKET": EstrategiaSinConfiguracion(),

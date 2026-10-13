@@ -48,13 +48,20 @@ def materializar_entregables(ticket):
     if ticket.entregables_materializados:
         return list(ticket.entregables.all())
     servicio = Servicio.objects.select_for_update().get(pk=ticket.detalle_servicio.servicio_id)
+    from apps.tickets.revision_elementos import materializar_conjunto
+
     nuevos = []
     for definicion in servicio.definiciones_entregables.filter(activo=True):
-        nuevos.append(EntregableTicket.objects.create(
+        entregable = EntregableTicket.objects.create(
             ticket=ticket, definicion=definicion, nombre=definicion.nombre,
             descripcion=definicion.descripcion, tipo=definicion.tipo,
             obligatorio=definicion.obligatorio, orden=definicion.orden,
-        ))
+        )
+        if definicion.tipo == DefinicionEntregable.Tipo.ELEMENTOS:
+            # 4.G2C1: congela también las columnas revisadas y los revisores (requiere la parrilla
+            # del Ticket, que `_crear_borrador_de_servicio` ya creó).
+            materializar_conjunto(entregable, definicion)
+        nuevos.append(entregable)
     ticket.entregables_materializados = True
     ticket.save(update_fields=["entregables_materializados", "actualizado_en"])
     if nuevos:

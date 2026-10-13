@@ -1,0 +1,35 @@
+{% comment %}Responsables del Servicio/Proceso (Studio). Espera `servicio`, `responsables`, `form_responsable` y `tab_origen` (la sección a la que se vuelve).{% endcomment %}
+    <section class="svc-panel">
+      <div class="svc-panel__head">
+        <div>
+          <h3>Atención</h3>
+          <p>Personas o equipos que atienden los tickets de este {{ servicio.get_tipo_display|lower }}.</p>
+        </div>
+      </div>
+      {% if responsables %}
+        <ul class="svc-compact-list">
+          {% for responsable in responsables %}
+            <li>
+              <span>{% if responsable.tipo_responsable == "USUARIO" %}{{ responsable.usuario }}{% else %}{{ responsable.equipo }}{% endif %}</span>
+              <span class="svc-tag">{{ responsable.get_tipo_responsable_display }}</span>
+              <form method="post" action="{% url 'catalogo:studio_responsable_retirar' servicio.pk responsable.pk %}">
+                {% csrf_token %}<input type="hidden" name="tab" value="{{ tab_origen }}">
+                <button type="submit" class="btn btn--ghost btn--sm">Retirar</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="svc-empty">Todavía no hay responsables configurados.</div>
+      {% endif %}
+
+      <form method="post" action="{% url 'catalogo:studio_responsable_agregar' servicio.pk %}" class="form svc-inline-form">
+        {% csrf_token %}<input type="hidden" name="tab" value="{{ tab_origen }}">
+        <div class="svc-form-grid svc-form-grid--three">
+          <div class="field">{{ form_responsable.tipo_responsable.label_tag }}{{ form_responsable.tipo_responsable }}</div>
+          <div class="field">{{ form_responsable.usuario.label_tag }}{{ form_responsable.usuario }}</div>
+          <div class="field">{{ form_responsable.equipo.label_tag }}{{ form_responsable.equipo }}</div>
+        </div>
+        <div class="form-actions"><button type="submit" class="btn btn--secondary">Agregar responsable</button></div>
+      </form>
+    </section>

@@ -1,0 +1,117 @@
+{% comment %}
+  Elementos estructurados del ticket (4.G2B1/4.G2B2). Espera `parrilla` (ver `apps/tickets/parrilla.py::tabla`).
+  Vista operable: columnas (las obligatorias van marcadas), filas vigentes con su completitud, agregar, editar
+  y retirar. Los elementos retirados van aparte, solo lectura. Sin revisión ni aprobación todavía.
+{% endcomment %}
+{% if parrilla %}
+<section class="card" id="elementos">
+  <h3>{{ parrilla.nombre_elemento }}s</h3>
+  <p class="text-muted">
+    {{ parrilla.filas|length }} vigente{{ parrilla.filas|length|pluralize }}{% if parrilla.n_retirados %} · {{ parrilla.n_retirados }} retirado{{ parrilla.n_retirados|pluralize }}{% endif %}{% if parrilla.n_incompletas %} · {{ parrilla.n_incompletas }} incompleta{{ parrilla.n_incompletas|pluralize }}{% endif %}
+  </p>
+  {% if parrilla.hay_obligatorias %}
+    <p class="text-muted"><abbr title="Obligatorio">*</abbr> Las columnas marcadas son obligatorias: puedes guardar una fila incompleta y terminarla después.</p>
+  {% endif %}
+
+  {% if parrilla.filas %}
+    <div style="overflow-x:auto">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>#</th>
+            {% for columna in parrilla.columnas %}<th>{{ columna.etiqueta }}{% if columna.obligatorio %} <abbr title="Obligatorio">*</abbr>{% endif %}</th>{% endfor %}
+            <th>Estado</th>
+            {% if parrilla.con_revision %}<th>Revisión</th>{% endif %}
+            {% if parrilla.puede_editar %}<th></th>{% endif %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for fila in parrilla.filas %}
+            <tr{% if not fila.completitud.completo %} data-incompleta{% endif %}>
+              <td>{{ fila.elemento.numero }}</td>
+              {% for celda in fila.celdas %}<td>{% if celda.soportado %}{{ celda.texto }}{% if celda.faltante %} <span class="badge badge--warning">Falta</span>{% endif %}{% else %}<span class="text-muted">Archivo: aún no disponible</span>{% endif %}</td>{% endfor %}
+              <td>
+                {% if fila.completitud.completo %}
+                  <span class="badge badge--success">Completa</span>
+                {% else %}
+                  <span class="badge badge--warning" title="Pendiente: {{ fila.completitud.pendientes|join:', ' }}">Incompleta</span>
+                  <small class="text-muted">{{ fila.completitud.pendientes|join:", " }}</small>
+                {% endif %}
+              </td>
+              {% if parrilla.con_revision %}
+                <td>
+                  {% for revision in fila.revisiones %}
+                    <div>
+                      <span class="badge{% if revision.estado == 'APROBADA' %} badge--success{% elif revision.estado == 'DEVUELTA' %} badge--warning{% endif %}" title="{{ revision.entregable.nombre }}">{{ revision.texto }}</span>
+                      {% if revision.cambio %}<small class="text-muted">cambió desde la última decisión</small>{% endif %}
+                      {% if revision.observacion %}<div class="text-muted">«{{ revision.observacion }}»</div>{% endif %}
+                    </div>
+                  {% empty %}<span class="text-muted">—</span>{% endfor %}
+                </td>
+              {% endif %}
+              {% if parrilla.puede_editar %}
+                <td>
+                  <details>
+                    <summary>Editar</summary>
+                    <form method="post" action="{% url 'tickets:elemento_guardar' ticket.pk fila.elemento.pk %}" class="form">
+                      {% csrf_token %}{% if ws_next %}<input type="hidden" name="next" value="{{ ws_next }}">{% endif %}
+                      {% include "tickets/_parrilla_campos.html" with celdas=fila.celdas %}
+                      <button type="submit" class="btn btn--primary btn--sm">Guardar</button>
+                    </form>
+                    <form method="post" action="{% url 'tickets:elemento_retirar' ticket.pk fila.elemento.pk %}">
+                      {% csrf_token %}{% if ws_next %}<input type="hidden" name="next" value="{{ ws_next }}">{% endif %}
+                      <button type="submit" class="btn btn--ghost btn--sm">Retirar</button>
+                    </form>
+                  </details>
+                </td>
+              {% endif %}
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty-state"><p>Todavía no hay {{ parrilla.nombre_elemento|lower }}s en este ticket.</p></div>
+  {% endif %}
+
+  {% if parrilla.puede_editar %}
+    <details>
+      <summary>Agregar {{ parrilla.nombre_elemento|lower }}</summary>
+      <form method="post" action="{% url 'tickets:elemento_agregar' ticket.pk %}" class="form">
+        {% csrf_token %}{% if ws_next %}<input type="hidden" name="next" value="{{ ws_next }}">{% endif %}
+        {% include "tickets/_parrilla_campos.html" with celdas=parrilla.celdas_nuevas %}
+        <button type="submit" class="btn btn--primary btn--sm">Agregar</button>
+      </form>
+    </details>
+  {% elif ticket.estado == "EN_ATENCION" or ticket.estado == "RADICADO" %}
+    <p class="text-muted">Solo quien atiende el ticket (responsable individual) puede modificar los elementos.</p>
+  {% endif %}
+
+  {% if parrilla.retiradas %}
+    <details id="elementos-retirados">
+      <summary>Retirados ({{ parrilla.retiradas|length }})</summary>
+      <p class="text-muted">Quedan en el historial del ticket; ya no se pueden modificar.</p>
+      <div style="overflow-x:auto">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>#</th>
+              {% for columna in parrilla.columnas %}<th>{{ columna.etiqueta }}</th>{% endfor %}
+              <th>Retirado</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for fila in parrilla.retiradas %}
+              <tr>
+                <td>{{ fila.elemento.numero }}</td>
+                {% for celda in fila.celdas %}<td>{% if celda.soportado %}{{ celda.texto }}{% else %}—{% endif %}</td>{% endfor %}
+                <td>{{ fila.elemento.retirado_en|date:"d/m/Y H:i" }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </details>
+  {% endif %}
+</section>
+{% endif %}

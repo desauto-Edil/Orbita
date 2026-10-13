@@ -36,6 +36,43 @@ urlpatterns = [
         "<int:pk>/studio/general/prorroga/",
         studio.studio_prorroga_guardar_view, name="studio_prorroga_guardar",
     ),
+    # Estructura de elementos de un Proceso (4.G2B1): mismo editor de campos, formulario propio
+    path(
+        "<int:pk>/studio/parrilla/configurar/",
+        studio.studio_parrilla_configurar_view, name="studio_parrilla_configurar",
+    ),
+    path(
+        "<int:pk>/studio/parrilla/tareas/",
+        studio.studio_parrilla_tareas_view, name="studio_parrilla_tareas",
+    ),
+    path(
+        "<int:pk>/studio/parrilla/version/",
+        studio.studio_entrada_version_view, {"uso": "parrilla"}, name="studio_parrilla_version",
+    ),
+    path(
+        "<int:pk>/studio/parrilla/version/<int:version_id>/activar/",
+        studio.studio_entrada_activar_view, {"uso": "parrilla"}, name="studio_parrilla_activar",
+    ),
+    path(
+        "<int:pk>/studio/parrilla/campos/nuevo/",
+        studio.studio_campo_guardar_view, {"uso": "parrilla"}, name="studio_parrilla_campo_crear",
+    ),
+    path(
+        "<int:pk>/studio/parrilla/campos/<int:campo_id>/editar/",
+        studio.studio_campo_guardar_view, {"uso": "parrilla"}, name="studio_parrilla_campo_editar",
+    ),
+    path(
+        "<int:pk>/studio/parrilla/campos/<int:campo_id>/eliminar/",
+        studio.studio_campo_eliminar_view, {"uso": "parrilla"}, name="studio_parrilla_campo_eliminar",
+    ),
+    path(
+        "<int:pk>/studio/parrilla/campos/<int:campo_id>/opciones/nueva/",
+        studio.studio_opcion_guardar_view, {"uso": "parrilla"}, name="studio_parrilla_opcion_crear",
+    ),
+    path(
+        "<int:pk>/studio/parrilla/campos/<int:campo_id>/opciones/<int:opcion_id>/eliminar/",
+        studio.studio_opcion_eliminar_view, {"uso": "parrilla"}, name="studio_parrilla_opcion_eliminar",
+    ),
     # Entrada
     path("<int:pk>/studio/entrada/version/", studio.studio_entrada_version_view, name="studio_entrada_version"),
     path(

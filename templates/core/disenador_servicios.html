@@ -36,9 +36,14 @@
         — <a href="{% url 'core:disenador_servicio' ticket_general.servicio.pk %}">Configurar formulario, tiempo objetivo, prórroga y entrega</a>
       </p>
       {% if ticket_general.problemas and not ticket_general.habilitado %}
-        <ul class="plain-list">
-          {% for problema in ticket_general.problemas %}<li class="text-muted">{{ problema }}</li>{% endfor %}
-        </ul>
+        <div class="alert alert--warning" role="status">
+          <div>
+            <strong>Para habilitarlo falta:</strong>
+            <ul>
+              {% for problema in ticket_general.problemas %}<li>{{ problema }}</li>{% endfor %}
+            </ul>
+          </div>
+        </div>
       {% endif %}
       <form method="post" action="{% url 'catalogo:ticket_general_habilitar' %}" class="form">
         {% csrf_token %}
@@ -92,7 +97,7 @@
       {% else %}
         <p class="text-muted">Aún no hay destinos.</p>
       {% endif %}
-      <details class="work-fold">
+      <details class="work-fold"{% if not ticket_general.destinos %} open{% endif %}>
         <summary>Agregar destino</summary>
         <form method="post" action="{% url 'catalogo:ticket_general_destino_crear' %}" class="form">
           {% csrf_token %}

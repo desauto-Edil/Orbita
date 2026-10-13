@@ -126,6 +126,12 @@
     </section>
   {% endif %}
 
+  {% if es_proceso %}
+    <div id="responsables-proceso">
+      {% include "catalogo/_studio_responsables.html" with tab_origen="general" %}
+    </div>
+  {% endif %}
+
   <section class="svc-panel svc-panel--time">
     <div class="svc-panel__head">
       <div>

@@ -48,6 +48,7 @@ from apps.aprobaciones.consultas import aprobaciones_pendientes_para
 from apps.aprobaciones.models import Aprobacion
 from apps.catalogo import busqueda
 from apps.core import disenador, inicio
+from apps.tickets import revision_elementos as revision_ops
 from apps.tickets import trabajo as trabajo_ops
 from apps.tareas.consultas import tareas_asignadas_a, tareas_disponibles_para_tomar
 from apps.tareas.models import Tarea
@@ -206,6 +207,8 @@ def necesidad_view(request):
 def _clase_badge_tarea(estado):
     if estado == Tarea.Estado.COMPLETADA:
         return "success"
+    if estado == Tarea.Estado.CANCELADA:
+        return "danger"
     if estado == Tarea.Estado.EN_PROGRESO:
         return "info"
     return "warning"
@@ -233,7 +236,7 @@ def _fila_tarea(tarea, ahora):
     """Representación de presentación mínima (3.UI.5, punto 4) — no una
     nueva entidad de dominio: nada de esto se persiste ni se reutiliza
     fuera del render de `mi_trabajo.html`."""
-    pendiente = tarea.estado != Tarea.Estado.COMPLETADA
+    pendiente = tarea.estado not in Tarea.ESTADOS_CERRADOS
     return {
         "tipo": "tarea",
         "titulo": tarea.titulo,
@@ -266,6 +269,28 @@ def _fila_aprobacion(aprobacion):
     }
 
 
+def _fila_revision(revision):
+    """4.G2C2 — un conjunto de elementos que la persona debe revisar. Es una fila de presentación de la
+    misma bandeja (no una tarea por elemento): lleva a la pantalla de revisión del entregable."""
+    entregable, ticket, resumen = revision["entregable"], revision["ticket"], revision["resumen"]
+    return {
+        "tipo": "revision",
+        "titulo": f"{entregable.nombre} · {ticket.codigo or ticket.pk}",
+        "detalle": revision["servicio"].nombre,
+        "estado": f"{resumen.progreso} aprobados",
+        "estado_clase": "warning",
+        "pendientes": resumen.pendientes,
+        "devueltos": resumen.devueltos,
+        "fecha_relevante": None,
+        "vencida": False,
+        "por_tomar": False,
+        "responsable": "",
+        "url": reverse("tickets:revision_conjunto", args=[ticket.pk, entregable.pk]),
+        "vista_url": "",  # sin vista previa: la fila abre directamente la revisión
+        "creado_en": ticket.radicado_en or entregable.creado_en,
+    }
+
+
 MI_TRABAJO_POR_PAGINA = 30
 MI_TRABAJO_TICKETS = 24
 
@@ -288,7 +313,7 @@ def mi_trabajo_view(request):
     SQL, no un ajuste de presentación después de construir los dicts.
     """
     tab = request.GET.get("tab")
-    if tab not in ("todo", "tareas", "aprobaciones"):
+    if tab not in ("todo", "tareas", "aprobaciones", "revisiones"):
         tab = "todo"
 
     usuario = request.user
@@ -303,6 +328,7 @@ def mi_trabajo_view(request):
             Q(pk__in=tareas_asignadas_a(usuario).values("pk"))
             | Q(pk__in=tareas_disponibles_para_tomar(usuario).values("pk"))
         )
+        .exclude(estado=Tarea.Estado.CANCELADA)  # 4.G1.5: lo cancelado no es trabajo
         .select_related("usuario_responsable", "equipo_responsable")
         .order_by("-creado_en")
     )
@@ -319,13 +345,19 @@ def mi_trabajo_view(request):
     ahora = timezone.now()
     filas_tareas = [_fila_tarea(tarea, ahora) for tarea in tareas_qs]
     filas_aprobaciones = [_fila_aprobacion(aprobacion) for aprobacion in aprobaciones_qs]
+    # 4.G2C2: revisiones de conjuntos de elementos asignadas a la persona (misma bandeja).
+    filas_revisiones = [_fila_revision(r) for r in revision_ops.revisiones_pendientes_para(usuario)]
 
     if tab == "tareas":
         filas = filas_tareas
     elif tab == "aprobaciones":
         filas = filas_aprobaciones
+    elif tab == "revisiones":
+        filas = filas_revisiones
     else:
-        filas = sorted(filas_tareas + filas_aprobaciones, key=lambda fila: fila["creado_en"], reverse=True)
+        filas = sorted(
+            filas_tareas + filas_aprobaciones + filas_revisiones, key=lambda fila: fila["creado_en"], reverse=True
+        )
 
     # Con mucho trabajo acumulado la lista se pagina: la pantalla nunca crece
     # sin límite. Los totales de las pestañas siguen siendo los reales.
@@ -335,11 +367,12 @@ def mi_trabajo_view(request):
         "filas": pagina.object_list,
         "pagina": pagina,
         "tarjetas": tarjetas,
-        "total": len(filas_tareas) + len(filas_aprobaciones),
+        "total": len(filas_tareas) + len(filas_aprobaciones) + len(filas_revisiones),
         # Directo de las listas ya construidas — ninguna consulta adicional
         # solo para contar (punto 11).
         "total_tareas": len(filas_tareas),
         "total_aprobaciones": len(filas_aprobaciones),
+        "total_revisiones": len(filas_revisiones),
         "titulo_pagina": "Mi trabajo",
     }
     return render(request, "core/mi_trabajo.html", contexto)

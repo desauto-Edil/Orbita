@@ -10,16 +10,21 @@ from .catalogo import (
 from .ticket_general import ConfiguracionTicketGeneral, DestinoTicketGeneral
 from .ejecucion import BloqueOperativo, ConfiguracionEjecucionVersion, TransicionBloqueOperativo
 from .formularios import Campo, Formulario, FormularioVersion, OpcionCampo, ReglaCondicional
+from .parrilla import ColumnaRevisadaDefinicion, ConfiguracionTareasElemento, DefinicionParrilla, RevisorDefinicion
 from .programacion import ProgramacionProceso
 
 __all__ = [
     "BloqueOperativo",
     "Categoria",
+    "ColumnaRevisadaDefinicion",
+    "ConfiguracionTareasElemento",
     "ConfiguracionEjecucionVersion",
     "ConfiguracionTicketGeneral",
     "DefinicionEntregable",
+    "DefinicionParrilla",
     "DestinoTicketGeneral",
     "ProgramacionProceso",
+    "RevisorDefinicion",
     "TerminoServicio",
     "TransicionBloqueOperativo",
     "Servicio",

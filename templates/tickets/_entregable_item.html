@@ -12,7 +12,25 @@
             </div>
             {% if entregable.descripcion %}<p class="text-muted">{{ entregable.descripcion }}</p>{% endif %}
 
-            {% if entregable.tipo == "TEXTO" or entregable.tipo == "ENLACE" %}
+            {% if entregable.tipo == "ELEMENTOS" %}
+              {% with resumen=entregable.resumen_conjunto %}
+                <p><strong>{{ resumen.progreso }}</strong> aprobados · {{ resumen.pendientes }} pendiente{{ resumen.pendientes|pluralize }} · {{ resumen.devueltos }} devuelto{{ resumen.devueltos|pluralize }}</p>
+                {% if resumen.total == 0 %}<p class="text-muted">Aún no hay elementos: agrégalos para que puedan revisarse.</p>{% endif %}
+              {% endwith %}
+              {% with a_corregir=entregable.elementos_a_corregir %}
+                {% if a_corregir %}
+                  <div class="alert alert--warning" role="status" id="a-corregir-{{ entregable.pk }}">
+                    <div class="alert__text">
+                      <strong>Debes corregir información:</strong> la revisión devolvió {{ a_corregir|length }} elemento{{ a_corregir|length|pluralize }}.
+                      <ul>{% for item in a_corregir %}<li>#{{ item.numero }}: {{ item.observacion }}</li>{% endfor %}</ul>
+                      <a href="{% if next_url %}#elementos{% else %}{% url 'tickets:detalle' ticket.pk %}#elementos{% endif %}">Ir a los elementos</a>
+                    </div>
+                  </div>
+                {% endif %}
+              {% endwith %}
+              {% if entregable.motivo_no_revisable %}<p class="text-muted">{{ entregable.motivo_no_revisable }}</p>{% endif %}
+              <p><a class="btn btn--secondary btn--sm" href="{% url 'tickets:revision_conjunto' ticket.pk entregable.pk %}">Revisar elementos</a></p>
+            {% elif entregable.tipo == "TEXTO" or entregable.tipo == "ENLACE" %}
               {% if puede_escribir_entregables and entregable.operable_ahora %}
                 <form method="post" action="{% url 'tickets:entregable_resultado' ticket.pk entregable.pk %}" class="form">
                   {% csrf_token %}{% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
@@ -63,7 +81,7 @@
                 </form>
               {% endif %}
             {% endif %}
-          {% if not entregable.operable_ahora and puede_escribir_entregables %}
+          {% if not entregable.operable_ahora and puede_escribir_entregables and entregable.tipo != "ELEMENTOS" %}
   <p class="text-muted">Se podrá completar cuando el flujo llegue a este paso.</p>
 {% endif %}
 </li>

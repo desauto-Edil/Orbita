@@ -378,6 +378,10 @@ class InstanciaWorkflow(RegistroBase):
         EN_ESPERA = "EN_ESPERA", "En espera"
         COMPLETADA = "COMPLETADA", "Completada"
         ERROR = "ERROR", "Error"
+        # 4.G1.5 — la ejecución se detuvo porque el Ticket se canceló. Terminal: ninguna operación del
+        # motor (avanzar, reanudar, continuar una espera) actúa sobre una instancia que no esté
+        # EN_EJECUCION / EN_ESPERA, así que un aviso tardío no la reactiva. Conserva etapas y resultados.
+        CANCELADA = "CANCELADA", "Cancelada"
 
     workflow_version = models.ForeignKey(
         WorkflowVersion, on_delete=models.PROTECT, related_name="instancias"
@@ -466,6 +470,8 @@ class InstanciaEtapa(RegistroBase):
         TAREA = "TAREA", "Tarea"
         APROBACION = "APROBACION", "Aprobación"
         ENTREGABLE = "ENTREGABLE", "Entregable"
+        # 4.G2D2 — bloque TAREAS_ELEMENTOS: espera a que se completen las Tareas generadas por los elementos.
+        ELEMENTOS = "ELEMENTOS", "Tareas por elemento"
 
     instancia_workflow = models.ForeignKey(
         InstanciaWorkflow, on_delete=models.CASCADE, related_name="ejecuciones_etapa"
