@@ -14061,3 +14061,308 @@ class RecuperacionDeTareasPorElementoTests(_MediaAisladaMixin, _EscenarioBloqueT
         self.assertEqual((resultado.aplicado, resultado.mensajes, resultado.continuo, resultado.generadas), (True, (), False, 1))
         self._completar(self._vinculos(ticket)[1])
         self.assertEqual(self._ejecucion_bloque(ticket).estado, "COMPLETADA")
+
+
+# --- 4.G3A — consistencia de operaciones concurrentes -------------------------------------------------
+#
+# Hilos REALES con su propia conexión contra PostgreSQL (`TransactionTestCase`: lo ocurrido se confirma de
+# verdad). Sin sleeps de sincronización: un hilo queda detenido DENTRO de su operación con `threading.Event`
+# mientras tiene sus locks, el otro arranca y el test espera a que PostgreSQL lo reporte bloqueado
+# (`pg_stat_activity`, con límite de tiempo) antes de soltar al primero. Un interbloqueo aparecería como
+# `OperationalError` en alguno de los dos hilos.
+
+import importlib  # noqa: E402
+import time  # noqa: E402
+from unittest.mock import patch as _patch  # noqa: E402
+
+from django.db import OperationalError  # noqa: E402
+
+
+class ConcurrenciaDeOperacionesDelFlujoTests(_EscenarioBloqueTareasMixin, TransactionTestCase):
+    def setUp(self):
+        self._preparar_revision()
+
+    # --- utilidades de sincronización ---------------------------------------------------------------
+
+    def _lanzar(self, funcion, resultados, clave, salida=None):
+        def trabajar():
+            try:
+                if salida is not None:
+                    salida.wait(timeout=20)
+                resultados[clave] = ("ok", funcion())
+            except Exception as exc:  # noqa: BLE001 — el test inspecciona el resultado de cada hilo
+                resultados[clave] = ("error", exc)
+            finally:
+                connection.close()
+
+        hilo = threading.Thread(target=trabajar, daemon=True)
+        hilo.start()
+        return hilo
+
+    def _terminar(self, *hilos):
+        for hilo in hilos:
+            hilo.join(timeout=60)
+            self.assertFalse(hilo.is_alive(), "Un hilo quedó bloqueado: posible interbloqueo.")
+
+    def _esperar_un_bloqueo(self, limite=10.0):
+        """Espera (con límite) a que PostgreSQL reporte alguna sesión esperando un lock."""
+        fin = time.monotonic() + limite
+        with connection.cursor() as cursor:
+            while time.monotonic() < fin:
+                cursor.execute(
+                    "SELECT count(*) FROM pg_stat_activity "
+                    "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+                )
+                if cursor.fetchone()[0] >= 1:
+                    return True
+                time.sleep(0.02)
+        return False
+
+    def _pausar(self, objetivo, dentro, seguir, *, despues):
+        """`patch` de `objetivo` ("modulo.funcion") que deja la operación detenida —con los locks que ya
+        tomó— hasta que el test suelte `seguir`."""
+        ruta, nombre = objetivo.rsplit(".", 1)
+        original = getattr(importlib.import_module(ruta), nombre)
+
+        def pausada(*args, **kwargs):
+            if not despues:
+                dentro.set()
+                seguir.wait(timeout=30)
+            resultado = original(*args, **kwargs)
+            if despues:
+                dentro.set()
+                seguir.wait(timeout=30)
+            return resultado
+
+        return _patch(objetivo, new=pausada)
+
+    def _carrera(self, primera, segunda, objetivo, *, despues):
+        """`primera` se detiene en `objetivo` con sus locks; `segunda` arranca y se bloquea; al soltarla
+        terminan las dos. Devuelve `{"primera": (...), "segunda": (...)}`."""
+        dentro, seguir, resultados = threading.Event(), threading.Event(), {}
+        with self._pausar(objetivo, dentro, seguir, despues=despues):
+            hilo_a = self._lanzar(primera, resultados, "primera")
+            self.assertTrue(dentro.wait(timeout=30), "La primera operación no llegó al punto de pausa.")
+            hilo_b = self._lanzar(segunda, resultados, "segunda")
+            self._esperar_un_bloqueo()
+            seguir.set()
+            self._terminar(hilo_a, hilo_b)
+        return resultados
+
+    def _sin_interbloqueo(self, resultados):
+        for clave, (estado, valor) in resultados.items():
+            if estado == "error":
+                self.assertNotIsInstance(valor, OperationalError, f"{clave}: interbloqueo o fallo de BD: {valor}")
+
+    def _tareas_abiertas(self, ticket):
+        ids = list(
+            TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow_id=ticket.instancia_workflow_id)
+            .values_list("tarea_id", flat=True)
+        ) + list(
+            TareaElemento.objects.filter(elemento__parrilla__ticket=ticket).values_list("tarea_id", flat=True)
+        )
+        return Tarea.objects.filter(pk__in=ids).exclude(estado__in=Tarea.ESTADOS_CERRADOS).count()
+
+    def _tarea_del_bloque(self, ticket, nombre):
+        return TareaWorkflow.objects.get(
+            instancia_etapa__instancia_workflow_id=ticket.instancia_workflow_id,
+            instancia_etapa__bloque_operativo__nombre=nombre,
+        ).tarea
+
+    def _ticket_radicado_sin_tomar(self, nombre):
+        servicio, responsable = self._proceso(nombre, flujo="simple")
+        programacion = self._programar(servicio, responsable, dia=1, periodo="MES_ACTUAL", desde=date(2020, 1, 1))
+        ticket = generar_ejecucion_programada(programacion, hoy=date(2026, 10, 7)).ticket
+        ticket.refresh_from_db()
+        return ticket
+
+    def _con_correccion_ya_resuelta(self, nombre):
+        """Ticket cuyo bloque TAREAS_ELEMENTOS espera una corrección que YA se hizo (falta reintentar)."""
+        ticket = self._ticket_con_bloque(nombre=nombre)
+        self._el(ticket, "Bueno")
+        invalido = self._el(ticket, "Sin fecha", entrega=None)
+        self._completar_como(ticket, "Atender", self.analista)
+        parrilla_ops.actualizar_valores(invalido, self.analista, {self.campos["Entrega"]: date(2026, 10, 25)})
+        self.assertEqual(self._generadas(), 0)
+        return ticket
+
+    # --- tomar el Ticket × cancelarlo ------------------------------------------------------------------
+
+    def test_tomar_y_cancelar_el_ticket_a_la_vez_no_se_bloquean_ni_dejan_estados_incoherentes(self):
+        ticket = self._ticket_radicado_sin_tomar("Concurrencia tomar y cancelar")
+        pk = ticket.pk
+        tarea = self._tarea_del_bloque(ticket, "Atender")
+        self.assertIsNone(tarea.usuario_responsable_id)  # sin dueño hasta que alguien toma el Ticket
+
+        resultados = self._carrera(
+            lambda: tomar_ticket(Ticket.objects.get(pk=pk), self.analista),
+            lambda: cancelar_ticket(Ticket.objects.get(pk=pk), self.analista, "Ya no se hará."),
+            # Detenida con el Ticket tomado y ANTES de entregar las tareas pendientes: con el orden anterior
+            # (Ticket → Tarea) cancelar ya tenía la Tarea y se esperaban mutuamente.
+            "apps.tickets.operaciones.entregar_tareas_pendientes_al_responsable", despues=False,
+        )
+        self._sin_interbloqueo(resultados)
+        self.assertEqual(resultados["primera"][0], "ok", resultados["primera"])
+        self.assertEqual(resultados["segunda"][0], "ok", resultados["segunda"])
+        ticket.refresh_from_db()
+        tarea.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.CANCELADO)
+        self.assertEqual(ticket.usuario_responsable_id, self.analista.pk)  # tomó antes de que se cancelara
+        self.assertEqual(self._instancia(ticket).estado, "CANCELADA")
+        self.assertEqual((tarea.estado, tarea.usuario_responsable_id), ("CANCELADA", self.analista.pk))
+        self.assertEqual(self._tareas_abiertas(ticket), 0)
+
+    # --- completar una Tarea × cancelar el Ticket --------------------------------------------------------
+
+    def test_completar_una_tarea_y_cancelar_despues_cancela_incluso_lo_que_el_flujo_creo(self):
+        ticket = self._ticket_con_bloque(nombre="Concurrencia completar y cancelar")
+        self._el(ticket, "A")
+        self._el(ticket, "B")
+        atender = self._tarea_del_bloque(ticket, "Atender")
+        pk = ticket.pk
+
+        resultados = self._carrera(
+            lambda: completar_tarea_workflow(Tarea.objects.get(pk=atender.pk), self.analista),
+            lambda: cancelar_ticket(Ticket.objects.get(pk=pk), self.analista, "Ya no se hará."),
+            # Detenida con la Tarea ya completada y la instancia tomada: el flujo avanzará, entrará al bloque
+            # de tareas por elemento y las creará; la cancelación espera y luego las encuentra.
+            "apps.workflows.integracion.completar_tarea", despues=True,
+        )
+        self._sin_interbloqueo(resultados)
+        self.assertEqual((resultados["primera"][0], resultados["segunda"][0]), ("ok", "ok"), resultados)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.CANCELADO)
+        self.assertEqual(self._instancia(ticket).estado, "CANCELADA")
+        vinculos = TareaElemento.objects.filter(elemento__parrilla__ticket=ticket)
+        self.assertEqual(vinculos.count(), 2)  # las creó el flujo antes de cancelarse…
+        self.assertEqual(self._tareas_abiertas(ticket), 0)  # …y ninguna quedó activa
+        atender.refresh_from_db()
+        self.assertEqual(atender.estado, "COMPLETADA")
+
+    def test_cancelar_primero_hace_que_completar_la_tarea_se_rechace_sin_reactivar_la_instancia(self):
+        ticket = self._ticket_con_bloque(nombre="Concurrencia cancelar y completar")
+        self._el(ticket, "A")
+        atender = self._tarea_del_bloque(ticket, "Atender")
+        pk = ticket.pk
+
+        resultados = self._carrera(
+            lambda: cancelar_ticket(Ticket.objects.get(pk=pk), self.analista, "Ya no se hará."),
+            lambda: completar_tarea_workflow(Tarea.objects.get(pk=atender.pk), self.analista),
+            "apps.workflows.integracion.cancelar_ejecucion", despues=True,
+        )
+        self._sin_interbloqueo(resultados)
+        self.assertEqual(resultados["primera"][0], "ok", resultados["primera"])
+        self.assertEqual(resultados["segunda"][0], "error")
+        self.assertIsInstance(resultados["segunda"][1], ValidationError)
+        ticket.refresh_from_db()
+        atender.refresh_from_db()
+        self.assertEqual((ticket.estado, atender.estado), (Ticket.Estado.CANCELADO, "CANCELADA"))
+        instancia = self._instancia(ticket)
+        self.assertEqual(instancia.estado, "CANCELADA")  # nada la reactivó
+        self.assertFalse(instancia.ejecuciones_etapa.filter(bloque_operativo__tipo="TAREAS_ELEMENTOS").exists())
+        self.assertEqual((TareaElemento.objects.count(), self._tareas_abiertas(ticket)), (0, 0))
+
+    # --- materializar / reintentar -----------------------------------------------------------------------
+
+    def test_dos_materializaciones_simultaneas_no_duplican_tareas(self):
+        ticket = self._ticket_tareas(nombre="Concurrencia materializar", requiere_evidencia=False)
+        for tema in ("A", "B", "C"):
+            self._el(ticket, tema)
+        pk = ticket.pk
+        barrera, resultados = threading.Barrier(2), {}
+
+        def materializar():
+            barrera.wait(timeout=20)
+            return tareas_ops.materializar_tareas(Ticket.objects.get(pk=pk), self.analista)
+
+        hilos = [self._lanzar(materializar, resultados, clave) for clave in ("a", "b")]
+        self._terminar(*hilos)
+        self._sin_interbloqueo(resultados)
+        self.assertEqual({e for e, _ in resultados.values()}, {"ok"}, resultados)
+        creadas = sum(len(r.creadas) for _, r in resultados.values())
+        self.assertEqual(creadas, 3)  # entre las dos, cada elemento generó UNA tarea
+        self.assertEqual(TareaElemento.objects.count(), 3)
+        self.assertEqual(self._generadas(), 3)
+        self.assertEqual(TareaElemento.objects.values("elemento", "configuracion").distinct().count(), 3)
+
+    def test_reintentar_y_cancelar_el_ticket_a_la_vez_no_dejan_tareas_activas(self):
+        ticket = self._con_correccion_ya_resuelta("Concurrencia reintentar y cancelar")
+        pk = ticket.pk
+
+        resultados = self._carrera(
+            lambda: reintentar_tareas_elementos(Ticket.objects.get(pk=pk), self.analista),
+            lambda: cancelar_ticket(Ticket.objects.get(pk=pk), self.analista, "Ya no se hará."),
+            # Detenido con las tareas ya generadas (sin confirmar) y la instancia tomada.
+            "apps.tickets.tareas_elemento.entrar_al_bloque", despues=True,
+        )
+        self._sin_interbloqueo(resultados)
+        self.assertEqual((resultados["primera"][0], resultados["segunda"][0]), ("ok", "ok"), resultados)
+        self.assertEqual(resultados["primera"][1].generadas, 2)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.CANCELADO)
+        self.assertEqual(self._instancia(ticket).estado, "CANCELADA")
+        self.assertEqual(TareaElemento.objects.count(), 2)
+        self.assertEqual(self._tareas_abiertas(ticket), 0)
+
+    def test_cancelar_primero_hace_que_reintentar_se_rechace_sin_generar_tareas(self):
+        ticket = self._con_correccion_ya_resuelta("Concurrencia cancelar y reintentar")
+        pk = ticket.pk
+
+        resultados = self._carrera(
+            lambda: cancelar_ticket(Ticket.objects.get(pk=pk), self.analista, "Ya no se hará."),
+            lambda: reintentar_tareas_elementos(Ticket.objects.get(pk=pk), self.analista),
+            "apps.workflows.integracion.cancelar_ejecucion", despues=True,
+        )
+        self._sin_interbloqueo(resultados)
+        self.assertEqual(resultados["primera"][0], "ok", resultados["primera"])
+        self.assertEqual(resultados["segunda"][0], "error")
+        self.assertIsInstance(resultados["segunda"][1], ValidationError)
+        ticket.refresh_from_db()
+        self.assertEqual(ticket.estado, Ticket.Estado.CANCELADO)
+        self.assertEqual(self._instancia(ticket).estado, "CANCELADA")
+        self.assertEqual((TareaElemento.objects.count(), self._tareas_abiertas(ticket)), (0, 0))
+
+    # --- idempotencia ante repeticiones simultáneas ---------------------------------------------------------
+
+    def test_dos_reintentos_simultaneos_generan_una_sola_vez(self):
+        ticket = self._con_correccion_ya_resuelta("Concurrencia doble reintento")
+        pk = ticket.pk
+        barrera, resultados = threading.Barrier(2), {}
+
+        def reintentar():
+            barrera.wait(timeout=20)
+            return reintentar_tareas_elementos(Ticket.objects.get(pk=pk), self.analista)
+
+        hilos = [self._lanzar(reintentar, resultados, clave) for clave in ("a", "b")]
+        self._terminar(*hilos)
+        self._sin_interbloqueo(resultados)
+        self.assertEqual({e for e, _ in resultados.values()}, {"ok"}, resultados)
+        aplicados = [r for _, r in resultados.values() if r.aplicado]
+        self.assertEqual(len(aplicados), 1)  # el otro ya no encontró nada que reintentar
+        self.assertEqual(aplicados[0].generadas, 2)
+        self.assertEqual((TareaElemento.objects.count(), self._generadas()), (2, 2))
+        ejecucion = self._ejecucion_bloque(ticket)
+        self.assertEqual((ejecucion.estado, ejecucion.resultado), ("EN_ESPERA", {"total": 2, "completadas": 0}))
+
+    def test_completar_dos_veces_a_la_vez_la_misma_tarea_continua_el_flujo_una_sola_vez(self):
+        ticket = self._ticket_con_bloque(nombre="Concurrencia doble completar")
+        self._el(ticket, "A")
+        self._el(ticket, "B")
+        atender = self._tarea_del_bloque(ticket, "Atender")
+        barrera, resultados = threading.Barrier(2), {}
+
+        def completar():
+            barrera.wait(timeout=20)
+            return completar_tarea_workflow(Tarea.objects.get(pk=atender.pk), self.analista)
+
+        hilos = [self._lanzar(completar, resultados, clave) for clave in ("a", "b")]
+        self._terminar(*hilos)
+        self._sin_interbloqueo(resultados)
+        estados = sorted(e for e, _ in resultados.values())
+        self.assertEqual(estados, ["error", "ok"], resultados)
+        perdedor = next(v for e, v in resultados.values() if e == "error")
+        self.assertIsInstance(perdedor, ValidationError)
+        instancia = self._instancia(ticket)
+        self.assertEqual(instancia.ejecuciones_etapa.filter(bloque_operativo__tipo="TAREAS_ELEMENTOS").count(), 1)
+        self.assertEqual((TareaElemento.objects.count(), self._generadas()), (2, 2))
+        self.assertEqual(instancia.estado, "EN_ESPERA")

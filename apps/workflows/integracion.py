@@ -15,7 +15,20 @@ aquí, del lado integrador:
 Cada función pública corre en una única transacción — "Tarea COMPLETADA/
 Aprobación decidida pero Workflow no avanzó" queda estructuralmente
 imposible (todo o nada). Sin `signals`, sin Domain Events/Observer todavía
-(ese patrón está atado a Sprint 7 en `CLAUDE.md`, no se adelanta aquí)."""
+(ese patrón está atado a Sprint 7 en `CLAUDE.md`, no se adelanta aquí).
+
+ORDEN DE LOCKS (4.G3A). La `InstanciaWorkflow` es la COMPUERTA de su ejecución: todo lo que se crea,
+reasigna, completa o cancela dentro de ella lo hace con su fila bloqueada, y toda operación que toma más
+de un lock de una ejecución empieza por ella. Orden único:
+
+    InstanciaWorkflow → Ticket → ParrillaTicket/ElementoParrilla → Tarea(s) y Aprobación(es) → InstanciaEtapa
+
+Se omiten los niveles que una operación no necesita, pero nunca se invierte el orden entre los que usa.
+Una operación que solo toca UNA Tarea (iniciar, tomar, delegar, completar sin flujo) no toma otro lock tras
+ella, así que no puede cruzarse. `completar_tarea_workflow` y `resolver_aprobacion_workflow` bloquean la
+instancia ANTES de la Tarea/Aprobación (resuelta por lectura sin lock: el vínculo no cambia); la
+cancelación bloquea la instancia, el Ticket y solo entonces el trabajo de la ejecución, y calcula qué
+trabajo hay YA con la compuerta cerrada (nada nuevo puede aparecer entre medias)."""
 
 from dataclasses import dataclass
 
@@ -33,6 +46,29 @@ from apps.workflows.models import EsquemaAprobacionWorkflow, InstanciaEtapa, Ins
 from apps.workflows.motor import continuar_espera_externa
 
 
+def bloquear_instancia(instancia_id):
+    """Primer lock de toda operación que toma más de un lock de una ejecución (ver el docstring del módulo).
+    Devuelve la `InstanciaWorkflow` bloqueada. Debe llamarse dentro de una transacción."""
+    return InstanciaWorkflow.objects.select_for_update().get(pk=instancia_id)
+
+
+def _instancia_id_de_tarea(tarea):
+    """Id de la `InstanciaWorkflow` de una Tarea del flujo o generada por un elemento, o `None` si no
+    pertenece a una ejecución. Lectura SIN lock: el vínculo es inmutable."""
+    instancia_id = (
+        TareaWorkflow.objects.filter(tarea_id=tarea.pk)
+        .values_list("instancia_etapa__instancia_workflow_id", flat=True).first()
+    )
+    if instancia_id is not None:
+        return instancia_id
+    from apps.tickets.models import TareaElemento
+
+    return (
+        TareaElemento.objects.filter(tarea_id=tarea.pk)
+        .values_list("elemento__parrilla__ticket__instancia_workflow_id", flat=True).first()
+    )
+
+
 @transaction.atomic
 def completar_tarea_workflow(tarea, actor):
     """Única forma correcta de completar la Tarea principal que una Etapa
@@ -46,6 +82,11 @@ def completar_tarea_workflow(tarea, actor):
     consecuencia directa y buscada del esquema (1 ejecución TAREA → 1
     Tarea, W.6: "solo completar la Tarea principal vinculada al Workflow
     puede producir continuación")."""
+    # 4.G3A: la instancia ANTES que la Tarea (que bloquea `completar_tarea`): cancelar el Ticket, tomarlo o
+    # materializar tareas bloquean la instancia primero, y así no se cruzan con esta finalización.
+    instancia_id = _instancia_id_de_tarea(tarea)
+    if instancia_id is not None:
+        bloquear_instancia(instancia_id)
     vinculo = TareaWorkflow.objects.filter(tarea=tarea).select_related("instancia_etapa").first()
     if vinculo is None and hasattr(tarea, "vinculo_elemento"):
         # 4.G2D2: una Tarea generada por un elemento no tiene su propio bloque; si es la última del conjunto,
@@ -260,6 +301,13 @@ def resolver_aprobacion_workflow(aprobacion, actor, *, decision, observacion="")
     es una de 3 etiquetas cerradas — RN-021, la resolución de la
     transición es responsabilidad de este módulo integrador, nunca del
     motor)."""
+    # 4.G3A: la instancia ANTES que la Aprobación (la cancelación la toma primero): ver el docstring del módulo.
+    instancia_id = (
+        EsquemaAprobacionWorkflow.objects.filter(esquema_id=aprobacion.esquema_id)
+        .values_list("instancia_etapa__instancia_workflow_id", flat=True).first()
+    )
+    if instancia_id is not None:
+        bloquear_instancia(instancia_id)
     aprobacion, esquema = resolver_aprobacion(aprobacion, actor, decision=decision, observacion=observacion)
     if esquema.resultado is None:
         return aprobacion, esquema
@@ -343,13 +391,11 @@ def continuar_por_entregable(entregable):
 # --- 4.G1.5 — Cancelación coherente de la ejecución ------------------------------------------------
 
 
-def bloquear_ejecucion(instancia_id):
-    """Toma los locks de una ejecución COMPLETA antes de cancelarla, en el mismo orden en que ya los
-    toman los caminos que la mueven: las Tareas y las aprobaciones (completar una Tarea y decidir una
-    aprobación bloquean primero su propia fila) y DESPUÉS la instancia (`continuar_espera_externa`); el
-    Ticket va a continuación, como en el motor (instancia → ticket). Así una finalización o decisión tardía
-    simultánea espera a la cancelación (y luego no encuentra nada que hacer) en lugar de cruzarse con ella.
-    Devuelve la `InstanciaWorkflow` bloqueada. Debe llamarse dentro de una transacción."""
+def bloquear_trabajo_de_ejecucion(instancia_id):
+    """Bloquea las Tareas (y subtareas) y las aprobaciones que la ejecución creó, ordenadas por pk. Exige que
+    la instancia YA esté bloqueada por esta transacción (`bloquear_instancia`): con la compuerta cerrada el
+    conjunto no cambia mientras se bloquea, y quien complete una Tarea o decida una aprobación a la vez
+    espera a la instancia (ver el docstring del módulo). Debe llamarse dentro de una transacción."""
     tareas_ids = list(
         TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow_id=instancia_id).values_list("tarea_id", flat=True)
     )
@@ -365,7 +411,17 @@ def bloquear_ejecucion(instancia_id):
     if esquemas_ids:
         list(EsquemaAprobacion.objects.select_for_update().filter(pk__in=esquemas_ids).order_by("pk"))
         list(Aprobacion.objects.select_for_update().filter(esquema_id__in=esquemas_ids).order_by("pk"))
-    return InstanciaWorkflow.objects.select_for_update().get(pk=instancia_id)
+
+
+def bloquear_ejecucion(instancia_id):
+    """Toma los locks de una ejecución COMPLETA antes de cancelarla, en el orden único del módulo: la instancia
+    (compuerta) y DESPUÉS sus Tareas y aprobaciones. Antes de 4.G3A el trabajo se bloqueaba primero y la
+    instancia después, lo que dejaba una ventana: una Tarea creada entre medias (p. ej. por una
+    materialización) se bloqueaba con la instancia ya tomada, en sentido contrario al de quien la completa.
+    Devuelve la `InstanciaWorkflow` bloqueada. Debe llamarse dentro de una transacción."""
+    instancia = bloquear_instancia(instancia_id)
+    bloquear_trabajo_de_ejecucion(instancia_id)
+    return instancia
 
 
 @transaction.atomic

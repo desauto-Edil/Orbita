@@ -440,6 +440,21 @@ def radicar_ticket(ticket, actor):
     return ticket_original
 
 
+def _bloquear_instancia_del_ticket(ticket_pk):
+    """4.G3A — primer lock de las operaciones del Ticket que, ya con su fila tomada, tocan Tareas o
+    aprobaciones de su flujo (`tomar_ticket`, `asignar_ticket`, `cancelar_ticket`): la INSTANCIA de su
+    ejecución, que es la compuerta (orden `InstanciaWorkflow → Ticket → Tarea`, ver
+    `apps.workflows.integracion`). Sin ella tomar el Ticket bloqueaba Ticket → Tarea, justo al revés de
+    cancelar o completar una Tarea, y dos de ellas a la vez se esperaban entre sí. Devuelve el id de la
+    instancia, o `None` si el Ticket no tiene flujo."""
+    from apps.workflows.integracion import bloquear_instancia
+
+    instancia_id = Ticket.objects.values_list("instancia_workflow_id", flat=True).get(pk=ticket_pk)
+    if instancia_id is not None:
+        bloquear_instancia(instancia_id)
+    return instancia_id
+
+
 @transaction.atomic
 def tomar_ticket(ticket, actor):
     """CU-017/RQF-056 — TOMAR es autoasignación; no existe una operación
@@ -447,7 +462,11 @@ def tomar_ticket(ticket, actor):
     bloquea la fila antes de revalidar: si dos usuarios intentan tomar el
     mismo ticket a la vez, el segundo, al re-leer bajo el lock, ve
     `usuario_responsable` ya poblado y falla con `ValidationError` en vez
-    de sobrescribir al primero."""
+    de sobrescribir al primero.
+
+    4.G3A: antes del Ticket se bloquea la instancia de su flujo (orden único `instancia → Ticket → Tarea`):
+    entregar las Tareas «para el responsable del ticket» toma sus filas después del Ticket."""
+    _bloquear_instancia_del_ticket(ticket.pk)
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.usuario_responsable_id is not None:
         raise ValidationError("Este ticket ya tiene un responsable asignado.")
@@ -503,7 +522,8 @@ def asignar_ticket(ticket, actor, *, usuario=None, equipo=None):
     ejecutada por un tercero en vez de autoasignación; asignar solo
     `equipo` no cambia el estado. Un ticket que ya tiene
     `usuario_responsable` se reasigna con `reasignar_ticket`, no con esta
-    función."""
+    función. 4.G3A: bloquea la instancia antes que el Ticket, igual que `tomar_ticket`."""
+    _bloquear_instancia_del_ticket(ticket.pk)
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado != Ticket.Estado.RADICADO:
         raise ValidationError("Solo un ticket RADICADO sin responsable puede asignarse por esta vía.")
@@ -869,16 +889,15 @@ def cancelar_ticket(ticket, actor, motivo):
     adjuntos ni historial. Si algo falla, no queda nada a medias. Un segundo intento sobre el mismo Ticket
     se rechaza (ya no está RADICADO/EN_ATENCION) sin repetir ningún efecto.
 
-    Orden de locks: Tareas y aprobaciones de la ejecución → instancia → Ticket, el de los caminos del motor
-    que podrían llegar tarde; después de cancelar, ese camino encuentra la Tarea/aprobación/instancia cerrada."""
+    Orden de locks (4.G3A, el único del proyecto; ver `apps.workflows.integracion`): instancia → Ticket →
+    Tareas y aprobaciones de la ejecución (flujo y elementos). Con la instancia tomada primero nada nuevo
+    puede aparecer mientras se bloquea el trabajo (materializar, reintentar y el motor la toman antes), y
+    completar una Tarea, decidir una aprobación o tomar el Ticket a la vez esperan a la instancia; después
+    de cancelar encuentran la Tarea/aprobación/instancia cerrada y no la reactivan."""
     from apps.tickets import prorrogas, tareas_elemento
-    from apps.workflows.integracion import bloquear_ejecucion, cancelar_ejecucion
+    from apps.workflows.integracion import bloquear_trabajo_de_ejecucion, cancelar_ejecucion
 
-    instancia_id = Ticket.objects.values_list("instancia_workflow_id", flat=True).get(pk=ticket.pk)
-    # 4.G2D1: las Tareas generadas por elemento se bloquean primero, como las del flujo.
-    tareas_elemento.bloquear_tareas_de_elementos(ticket.pk)
-    if instancia_id is not None:
-        bloquear_ejecucion(instancia_id)
+    instancia_id = _bloquear_instancia_del_ticket(ticket.pk)
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado not in (Ticket.Estado.RADICADO, Ticket.Estado.EN_ATENCION):
         raise ValidationError("Solo un ticket RADICADO o EN_ATENCION puede cancelarse.")
@@ -886,6 +905,11 @@ def cancelar_ticket(ticket, actor, motivo):
         raise PermissionDenied("No tiene autorización para cancelar este ticket.")
     if not motivo or not motivo.strip():
         raise ValidationError("El motivo de cancelación no puede estar vacío.")
+    # Ya validado: recién ahora se bloquea el trabajo que se va a cancelar (Tareas del flujo, aprobaciones y
+    # Tareas generadas por elemento, 4.G2D1), siempre después de la instancia y del Ticket.
+    if instancia_id is not None:
+        bloquear_trabajo_de_ejecucion(instancia_id)
+    tareas_elemento.bloquear_tareas_de_elementos(ticket.pk)
 
     estado_anterior = ticket.estado
     exigir_transicion(ticket, "CANCELAR")

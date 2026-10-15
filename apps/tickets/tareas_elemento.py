@@ -135,8 +135,10 @@ class ResultadoMaterializacion:
 
 
 def _bloquear(ticket_id):
-    """Locks de la operación, en el orden del motor y de los entregables: instancia de Workflow (si hay) →
-    Ticket → parrilla. Así una cancelación o una finalización simultánea esperan y luego se revalida."""
+    """Locks de la operación, en el orden único del proyecto (4.G3A, `workflows.integracion`): instancia de
+    Workflow (si hay) → Ticket → parrilla. Quien cancele el Ticket, complete una Tarea o lo tome a la vez
+    espera a la instancia, y luego se revalida (un Ticket cancelado no admite generar tareas). Esta
+    operación no toma locks de Tareas existentes: solo inserta, así que no puede cruzarse con ellos."""
     instancia_id = Ticket.objects.values_list("instancia_workflow_id", flat=True).get(pk=ticket_id)
     if instancia_id is not None:
         InstanciaWorkflow.objects.select_for_update().get(pk=instancia_id)
@@ -471,9 +473,10 @@ def resumen_para_ticket(usuario, ticket):
 
 
 def bloquear_tareas_de_elementos(ticket_id):
-    """Toma el lock de las Tareas generadas por elemento (y sus subtareas) antes de cancelar el Ticket, con el
-    mismo criterio que `workflows.integracion.bloquear_ejecucion`: las Tareas primero. Dentro de una
-    transacción."""
+    """Toma el lock de las Tareas generadas por elemento (y sus subtareas) antes de cancelar el Ticket. Orden
+    único del proyecto (4.G3A, ver `workflows.integracion`): llamarla DESPUÉS de bloquear la instancia y el
+    Ticket; con la compuerta cerrada, materializar y reintentar no pueden crear tareas mientras tanto, así que
+    el conjunto no cambia. Dentro de una transacción."""
     ids = list(
         TareaElemento.objects.filter(elemento__parrilla__ticket_id=ticket_id).values_list("tarea_id", flat=True)
     )
