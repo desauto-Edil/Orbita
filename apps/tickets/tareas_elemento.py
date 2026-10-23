@@ -103,8 +103,11 @@ def congelar_configuracion(parrilla, servicio):
             "Las tareas por elemento de este proceso usan columnas que la estructura de elementos activa no "
             "tiene o no son compatibles: " + ", ".join(faltan) + "."
         )
+    # Bloque 3.1: solo las columnas editables que existen en la versión congelada (la publicación ya lo exige).
+    editables = [c for c in configuracion.columnas_editables or [] if c in campos]
     return ConfiguracionTareasTicket.objects.create(
-        parrilla=parrilla, requiere_evidencia=configuracion.requiere_evidencia, **elegidos
+        parrilla=parrilla, requiere_evidencia=configuracion.requiere_evidencia, columnas_editables=editables,
+        **elegidos
     )
 
 
@@ -269,9 +272,10 @@ def materializar_tareas(ticket, actor=None, *, instancia_etapa=None):
     ticket, parrilla = _bloquear(ticket.pk)
     configuracion = _exigir_requisitos(ticket, parrilla)
 
-    from apps.tickets.parrilla import columnas_de, elementos_vigentes
+    from apps.tickets.parrilla import columnas_de, elementos_en_alcance
 
-    vigentes = list(elementos_vigentes(parrilla))
+    # Fase 2: un ítem excluido o rechazado ya no origina tarea.
+    vigentes = list(elementos_en_alcance(parrilla))
     if not vigentes:
         raise RequisitoPorCorregir("Este ticket no tiene elementos vigentes de los que generar tareas.")
     ya = {
@@ -489,3 +493,13 @@ def cancelar_tareas_de_elementos(ticket, actor, *, motivo=""):
     completadas se conservan; nada se borra). Antes: `bloquear_tareas_de_elementos`."""
     for vinculo in tareas_de(ticket).order_by("tarea_id"):
         cancelar_tarea(vinculo.tarea, actor, motivo=motivo)
+
+
+def cancelar_tarea_de_elemento(elemento, actor, *, motivo=""):
+    """Fase 2 — el ítem salió del alcance: su Tarea por elemento ABIERTA ya no corresponde y pasa a CANCELADA
+    (una completada se conserva; nada se borra). Debe llamarse con el Ticket y el ítem bloqueados. Devuelve las
+    Tareas canceladas."""
+    canceladas = []
+    for vinculo in _vinculos_abiertos({"elemento_id": elemento.pk}).select_related("tarea").order_by("tarea_id"):
+        canceladas.append(cancelar_tarea(vinculo.tarea, actor, motivo=motivo))
+    return canceladas

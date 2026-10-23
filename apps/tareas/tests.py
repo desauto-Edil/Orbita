@@ -909,3 +909,102 @@ class CompletarTareaWorkflowIntegracionTests(TestCase):
         self.assertEqual(instancia.estado, _InstanciaWorkflow.Estado.EN_ESPERA)
         tarea_principal.refresh_from_db()
         self.assertEqual(tarea_principal.estado, Tarea.Estado.PENDIENTE)
+
+
+class ListaVerificacionTareaTests(TestCase):
+    """Fase 1 (modelo configurable de procesos) — lista de verificación y fecha prevista de una Tarea."""
+
+    def setUp(self):
+        self.tarea, self.responsable = _crear_tarea_con_responsable(
+            verificaciones=[("Revisar datos", True), ("Avisar al equipo", False), ("Adjuntar soporte", True)],
+        )
+        self.items = list(self.tarea.verificaciones.order_by("orden"))
+
+    def _marcar(self, item, marcado=True, actor=None):
+        from apps.tareas.operaciones import marcar_verificacion
+
+        return marcar_verificacion(item, actor or self.responsable, marcado=marcado)
+
+    def test_crear_copia_los_items_en_orden(self):
+        self.assertEqual(
+            [(i.orden, i.texto, i.obligatorio, i.marcado) for i in self.items],
+            [(1, "Revisar datos", True, False), (2, "Avisar al equipo", False, False), (3, "Adjuntar soporte", True, False)],
+        )
+
+    def test_un_item_sin_texto_se_rechaza(self):
+        with self.assertRaises(ValidationError):
+            _crear_tarea_simple(verificaciones=[("  ", True)])
+
+    def test_no_se_completa_con_obligatorios_pendientes_y_los_opcionales_no_bloquean(self):
+        self._marcar(self.items[0])
+        with self.assertRaisesMessage(ValidationError, "Adjuntar soporte"):
+            completar_tarea(self.tarea, self.responsable)
+        self.tarea.refresh_from_db()
+        self.assertEqual(self.tarea.estado, Tarea.Estado.PENDIENTE)
+        self._marcar(self.items[2])
+        completar_tarea(self.tarea, self.responsable)  # «Avisar al equipo» es opcional
+        self.tarea.refresh_from_db()
+        self.assertEqual(self.tarea.estado, Tarea.Estado.COMPLETADA)
+
+    def test_marcar_deja_actor_fecha_historial_y_auditoria(self):
+        item = self._marcar(self.items[0])
+        self.assertTrue(item.marcado)
+        self.assertEqual(item.marcado_por, self.responsable)
+        self.assertIsNotNone(item.marcado_en)
+        evento = self.tarea.historial.get(tipo_evento=HistorialTarea.TipoEvento.VERIFICACION)
+        self.assertEqual(evento.datos, {"item_id": item.pk, "texto": "Revisar datos", "marcado": True})
+        self.assertTrue(
+            RegistroAuditoria.objects.filter(modelo="tareas.itemverificaciontarea", object_id=item.pk).exists()
+        )
+
+    def test_desmarcar_y_repetir_el_mismo_valor_no_duplica(self):
+        self._marcar(self.items[0])
+        self._marcar(self.items[0])  # sin cambio
+        self._marcar(self.items[0], marcado=False)
+        self.items[0].refresh_from_db()
+        self.assertFalse(self.items[0].marcado)
+        self.assertEqual(self.tarea.historial.filter(tipo_evento=HistorialTarea.TipoEvento.VERIFICACION).count(), 2)
+
+    def test_solo_marca_quien_puede_completar(self):
+        otro = Usuario.objects.create_user("verif_otro", password=CLAVE_PRUEBA)
+        with self.assertRaises(PermissionDenied):
+            self._marcar(self.items[0], actor=otro)
+
+    def test_una_tarea_cerrada_no_admite_marcas(self):
+        for item in (self.items[0], self.items[2]):
+            self._marcar(item)
+        completar_tarea(self.tarea, self.responsable)
+        with self.assertRaises(ValidationError):
+            self._marcar(self.items[1])
+
+    def test_la_fecha_prevista_se_guarda_y_es_informativa(self):
+        prevista = timezone.now() + timedelta(days=2)
+        tarea, responsable = _crear_tarea_con_responsable(fecha_prevista=prevista)
+        self.assertEqual(tarea.fecha_prevista, prevista)
+        self.assertIsNone(tarea.fecha_limite)
+        completar_tarea(tarea, responsable)  # no bloquea nada
+
+    def test_la_vista_muestra_y_marca_la_lista(self):
+        self.client.login(username=self.responsable.username, password=CLAVE_PRUEBA)
+        respuesta = self.client.get(reverse("tareas:detalle", args=[self.tarea.pk]))
+        self.assertContains(respuesta, "Lista de verificación")
+        self.assertContains(respuesta, "Avisar al equipo")
+        self.assertTrue(respuesta.context["puede_marcar_verificacion"])
+        url = reverse("tareas:verificar", args=[self.tarea.pk, self.items[0].pk])
+        self.assertEqual(self.client.get(url).status_code, 405)
+        self.client.post(url, {"marcado": "1"})
+        self.items[0].refresh_from_db()
+        self.assertTrue(self.items[0].marcado)
+
+    def test_la_vista_rechaza_un_item_de_otra_tarea_y_a_quien_no_puede_completar(self):
+        otra, _ = _crear_tarea_con_responsable(verificaciones=[("Ajeno", True)])
+        ajeno = otra.verificaciones.get()
+        self.client.login(username=self.responsable.username, password=CLAVE_PRUEBA)
+        self.assertEqual(
+            self.client.post(reverse("tareas:verificar", args=[self.tarea.pk, ajeno.pk]), {"marcado": "1"}).status_code,
+            404,
+        )
+        intruso = Usuario.objects.create_user("verif_intruso", password=CLAVE_PRUEBA)
+        self.client.login(username=intruso.username, password=CLAVE_PRUEBA)
+        url = reverse("tareas:verificar", args=[self.tarea.pk, self.items[0].pk])
+        self.assertEqual(self.client.post(url, {"marcado": "1"}).status_code, 403)

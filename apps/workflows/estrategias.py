@@ -102,6 +102,9 @@ class MotivoEspera:
     APROBACION = "APROBACION"
     ENTREGABLE = "ENTREGABLE"
     ELEMENTOS = "ELEMENTOS"
+    RECORRIDO = "RECORRIDO"
+    GRUPO = "GRUPO"
+    GACETA = "GACETA"
 
 
 @dataclass
@@ -336,12 +339,13 @@ class EstrategiaTarea(EstrategiaSinConfiguracion):
         config = getattr(etapa, "configuracion_tarea", None)
         usuario_responsable = None
         equipo_responsable = None
+        instancia = getattr(instancia_etapa, "instancia_workflow", None)
         if config is not None:
             try:
                 usuario_responsable, equipo_responsable = resolver_actor(
-                    config.tipo_responsable, instancia=instancia_etapa.instancia_workflow,
+                    config.tipo_responsable, instancia=instancia,
                     usuario=config.usuario_responsable, equipo=config.equipo_responsable,
-                    permite_vacio=True,
+                    permite_vacio=True, columna=getattr(config, "columna", ""),
                 )
             except ValidationError as exc:
                 if (
@@ -350,16 +354,40 @@ class EstrategiaTarea(EstrategiaSinConfiguracion):
                     and any("todavía no tiene un responsable individual" in mensaje for mensaje in exc.messages)
                 ):
                     usuario_responsable, equipo_responsable = None, None
+                elif config.tipo_responsable == "COLUMNA":
+                    # Fase 2: el ítem no tiene (o no tiene válido) el responsable de su columna. Es un dato por
+                    # corregir: detiene SOLO este recorrido, con un mensaje claro, y se reintenta al corregirlo.
+                    return ResultadoEjecucionEtapa(estado=ResultadoEjecucion.ERROR, mensaje_error=" ".join(exc.messages))
                 else:
                     raise
 
+        ampliacion = getattr(config, "ampliacion", None) if config is not None else None
+        extra = {}
+        if ampliacion is not None:
+            # Fase 1 — solo un bloque de configuración por fases trae esta ampliación (las Etapas
+            # LEGACY no la tienen y crean la Tarea como siempre).
+            from apps.catalogo import actividades
+
+            datos, _errores = actividades.normalizar(ampliacion)
+            # Fase 2: una fecha puede salir de un campo del formulario o de una columna del ítem.
+            resolutor = ResolutorVariables(instancia, contexto)
+            fecha_prevista, fecha_limite = actividades.fechas_desde(
+                ampliacion, timezone.now(), resolver=resolutor.resolver
+            )
+            extra = {
+                "fecha_prevista": fecha_prevista,
+                "fecha_limite": fecha_limite,
+                "requiere_evidencia": datos["requiere_evidencia"],
+                "verificaciones": [(item["texto"], item["obligatorio"]) for item in datos["verificacion"]],
+            }
         tarea = crear_tarea(
-            titulo=etapa.nombre,
+            titulo=_titulo_con_item(etapa.nombre, instancia),
             descripcion=etapa.descripcion,
             origen=Tarea.Origen.SISTEMA,
             usuario_responsable=usuario_responsable,
             equipo_responsable=equipo_responsable,
             permite_subtareas=config.permite_subtareas if config is not None else False,
+            **extra,
         )
         TareaWorkflow.objects.create(tarea=tarea, instancia_etapa=instancia_etapa)
 
@@ -368,6 +396,19 @@ class EstrategiaTarea(EstrategiaSinConfiguracion):
             motivo_espera=MotivoEspera.TAREA,
             datos={"tarea_id": tarea.pk},
         )
+
+
+def _titulo_con_item(nombre, instancia):
+    """Fase 2: el trabajo de un recorrido por ítem dice de qué ítem es («Revisar pieza — Pieza #3»)."""
+    elemento_id = getattr(instancia, "elemento_id", None)
+    if elemento_id is None:
+        return nombre
+    from apps.tickets.models import ElementoParrilla
+
+    elemento = ElementoParrilla.objects.select_related("parrilla").filter(pk=elemento_id).first()
+    if elemento is None:
+        return nombre
+    return f"{nombre} — {elemento.parrilla.nombre_elemento or 'Ítem'} #{elemento.numero}"[:200]
 
 
 class EstrategiaAprobacion(EstrategiaSinConfiguracion):
@@ -397,10 +438,17 @@ class EstrategiaAprobacion(EstrategiaSinConfiguracion):
         configuracion = etapa.configuracion_aprobacion
         participantes = []
         for participante in configuracion.participantes.order_by("orden"):
-            usuario, equipo = resolver_actor(
-                participante.tipo_aprobador, instancia=instancia_etapa.instancia_workflow,
-                usuario=participante.usuario, equipo=participante.equipo,
-            )
+            try:
+                usuario, equipo = resolver_actor(
+                    participante.tipo_aprobador, instancia=instancia_etapa.instancia_workflow,
+                    usuario=participante.usuario, equipo=participante.equipo,
+                    columna=getattr(participante, "columna", ""),
+                )
+            except ValidationError as exc:
+                if participante.tipo_aprobador != "COLUMNA":
+                    raise
+                # Fase 2: mismo tratamiento que una actividad por columna (dato del ítem por corregir).
+                return ResultadoEjecucionEtapa(estado=ResultadoEjecucion.ERROR, mensaje_error=" ".join(exc.messages))
             participantes.append((
                 Aprobacion.TipoAprobador.USUARIO if usuario is not None else Aprobacion.TipoAprobador.EQUIPO,
                 usuario if usuario is not None else equipo,
@@ -410,6 +458,9 @@ class EstrategiaAprobacion(EstrategiaSinConfiguracion):
             modo=configuracion.modo,
             politica=configuracion.politica or None,
             participantes=participantes,
+            # Fase 2 — decisiones permitidas (las Etapas LEGACY no tienen estos atributos: lo de siempre).
+            permite_exclusion=bool(getattr(configuracion, "permite_exclusion", False)),
+            justificacion_al_aprobar=bool(getattr(configuracion, "justificacion_al_aprobar", False)),
         )
         EsquemaAprobacionWorkflow.objects.create(esquema=esquema, instancia_etapa=instancia_etapa)
 
@@ -523,12 +574,77 @@ class EstrategiaTareasElementos(EstrategiaSinConfiguracion):
         )
 
 
+class EstrategiaContenedor(EstrategiaSinConfiguracion):
+    """Fase 2 — GRUPO_ACTIVIDADES y RECORRIDO_ITEMS. Al entrar, lanza las subinstancias que corresponden
+    (`apps.workflows.recorridos.lanzar`: una por actividad general y, en un recorrido, una por ítem en el
+    alcance) y espera a que todas terminen. No hay otro motor: cada subinstancia avanza con el mismo, con su
+    propio punto activo, y la última que termina libera este bloque (`recorridos.evaluar_espera`).
+
+    - Todas terminadas (o nada que recorrer y nada pendiente) → `CONTINUAR`; el motor publica el resumen
+      (`recorridos.<clave>.*` / `grupos.<clave>.*`).
+    - Alguna en curso → `ESPERAR` con su motivo (RECORRIDO / GRUPO).
+    - Configuración imposible (colección inexistente en el Ticket) → `ERROR` funcional controlado."""
+
+    ejecutable = True
+
+    def __init__(self, *, motivo, ambito):
+        self.motivo = motivo
+        self.ambito = ambito
+
+    def ejecutar(self, instancia_etapa, contexto):
+        from apps.workflows import recorridos
+
+        try:
+            recorridos.lanzar(instancia_etapa)
+        except ValidationError as exc:
+            return ResultadoEjecucionEtapa(estado=ResultadoEjecucion.ERROR, mensaje_error=" ".join(exc.messages))
+        progreso = recorridos.progreso(instancia_etapa)
+        if progreso.terminado:
+            return ResultadoEjecucionEtapa(
+                estado=ResultadoEjecucion.CONTINUAR, datos=progreso.datos(),
+                resultado_bloque=(self.ambito, progreso.datos()),
+            )
+        return ResultadoEjecucionEtapa(
+            estado=ResultadoEjecucion.ESPERAR, motivo_espera=self.motivo, datos=progreso.datos()
+        )
+
+
+class EstrategiaGaceta(EstrategiaSinConfiguracion):
+    """Fase 3 — bloque GACETA (solo configuración por fases): abre la gaceta del ticket, presenta sus ítems si se
+    configuró y, si debe esperar, queda EN_ESPERA (motivo GACETA) hasta que la gaceta se resuelva
+    (`apps.gacetas.integracion.continuar_por_gaceta`). No es el único ingreso de ítems a la gaceta. Se registra
+    con una clave propia (`GACETA_BLOQUE`) para no habilitar la etapa GACETA del modo LEGACY."""
+
+    ejecutable = True
+
+    def ejecutar(self, instancia_etapa, contexto):
+        from apps.gacetas import integracion
+
+        ticket = ResolutorVariables(getattr(instancia_etapa, "instancia_workflow", None), contexto).ticket
+        if ticket is None:
+            return ResultadoEjecucionEtapa(
+                estado=ResultadoEjecucion.ERROR, mensaje_error="Este bloque necesita una ejecución vinculada a un Ticket."
+            )
+        bloque = getattr(_definicion(instancia_etapa), "bloque", None)
+        try:
+            esperar, datos = integracion.entrar_al_bloque(ticket, bloque)
+        except ValidationError as exc:
+            return ResultadoEjecucionEtapa(estado=ResultadoEjecucion.ERROR, mensaje_error=" ".join(exc.messages))
+        if esperar:
+            return ResultadoEjecucionEtapa(estado=ResultadoEjecucion.ESPERAR, motivo_espera=MotivoEspera.GACETA, datos=datos)
+        return ResultadoEjecucionEtapa(estado=ResultadoEjecucion.CONTINUAR, datos=datos, resultado_bloque=("gacetas", datos))
+
+
 ESTRATEGIAS_POR_TIPO = {
     "INICIO": EstrategiaInicio(),
     "TAREA": EstrategiaTarea(),
     "APROBACION": EstrategiaAprobacion(),
     "ENTREGABLE": EstrategiaEntregable(),
     "TAREAS_ELEMENTOS": EstrategiaTareasElementos(),
+    "GRUPO_ACTIVIDADES": EstrategiaContenedor(motivo=MotivoEspera.GRUPO, ambito="grupos"),
+    "RECORRIDO_ITEMS": EstrategiaContenedor(motivo=MotivoEspera.RECORRIDO, ambito="recorridos"),
+    # Fase 3: clave propia del bloque (no "GACETA", que es la etapa LEGACY aún no ejecutable).
+    "GACETA_BLOQUE": EstrategiaGaceta(),
     "CONDICION": EstrategiaCondicion(),
     "ESPERA": EstrategiaEspera(),
     "TICKET": EstrategiaSinConfiguracion(),

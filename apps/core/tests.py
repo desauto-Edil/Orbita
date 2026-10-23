@@ -940,6 +940,13 @@ class ApplicationShellTests(TestCase):
         # pero el catálogo —único punto de partida para crear un ticket— no
         # puede quedar huérfano: Mis tickets enlaza a él y el buscador de
         # necesidades de Inicio (V1) cae en él cuando no hay JavaScript.
+        from apps.catalogo.models import Categoria, Servicio
+
+        # Inicio enlaza al catálogo («Ver todo») cuando hay algo visible que explorar.
+        Servicio.objects.create(
+            nombre="Visible", categoria=Categoria.objects.create(nombre="General"), activo=True,
+            alcance_visibilidad=Servicio.AlcanceVisibilidad.PUBLICO_INTERNO,
+        )
         self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
         self.assertContains(self.client.get(reverse("tickets:mis_tickets")), "Nuevo ticket")
         for vista in ("core:inicio", "tickets:mis_tickets"):
@@ -1447,12 +1454,17 @@ class NavegacionGlobalTests(TestCase):
         self.assertIn(reverse("core:logout"), menu)
         self.assertIn("Cerrar sesión", menu)
 
-    def test_header_no_contiene_navegacion_de_modulos(self):
+    def test_navegacion_de_modulos_solo_en_el_centro_de_la_barra(self):
+        # 4.B: una sola navegación global flotante superior. Los destinos de módulo viven SOLO en su zona central
+        # (`<nav class="dock">`); identidad/búsqueda y notificaciones/usuario no enlazan módulos.
         _otorgar_permiso_nav(self.usuario, "tickets.atender")
         contenido = self._get().content.decode()
         header = contenido.split('<header class="app-header">')[1].split("</header>")[0]
+        destinos = header.split('<nav class="dock"')[1].split("</nav>")[0]
+        resto = header.replace(destinos, "")
+        self.assertIn(reverse("tickets:mis_tickets"), destinos)
         for vista in ("tickets:mis_tickets", "tickets:cola", "catalogo:lista", "core:mi_trabajo"):
-            self.assertNotIn(reverse(vista), header)
+            self.assertNotIn(reverse(vista), resto)
 
     def test_hay_un_solo_dock_y_ningun_sidebar(self):
         contenido = self._get().content.decode()
@@ -1965,7 +1977,8 @@ class DisenadorTests(TestCase):
     # --- helpers ---
 
     def _flujo(self, nombre, *, publicado=True, en_diseno=False):
-        flujo = self.Workflow.objects.create(nombre=nombre)
+        # D3: la biblioteca del Diseñador son plantillas de fases.
+        flujo = self.Workflow.objects.create(nombre=nombre, modo=self.Workflow.Modo.PLANTILLA_FASES)
         numero = 1
         if publicado:
             version = self.WorkflowVersion.objects.create(
@@ -2141,14 +2154,19 @@ class DisenadorTests(TestCase):
     def test_las_pantallas_heredadas_vuelven_al_disenador(self):
         self._con("catalogo.administrar", "workflows.administrar")
         flujo = self._flujo("Flujo")
+        # La vista técnica solo muestra flujos LEGACY: a una plantilla de fases la lleva al lienzo.
+        tecnico = self.Workflow.objects.create(nombre="Técnico", modo=self.Workflow.Modo.LEGACY_EJECUTABLE)
         servicio = self._servicio("Servicio")
+        self.assertRedirects(
+            self.client.get(reverse("workflows:detalle", args=[flujo.pk])), reverse("flujos:lienzo", args=[flujo.pk])
+        )
         destinos = [
             reverse("catalogo:studio_lista"),
             reverse("catalogo:studio_crear"),
             reverse("catalogo:studio", args=[servicio.pk]),
             reverse("workflows:lista"),
             reverse("workflows:crear"),
-            reverse("workflows:detalle", args=[flujo.pk]),
+            reverse("workflows:detalle", args=[tecnico.pk]),
             reverse("flujos:nuevo"),
             reverse("flujos:lienzo", args=[flujo.pk]),
         ]

@@ -94,7 +94,33 @@ def errores_de_claves(campos_por_clave, claves, *, contexto=""):
     return errores
 
 
-def validar_configuracion(servicio, **claves):
+def errores_de_editables(campos_por_clave, claves, editables, *, contexto=""):
+    """Bloque 3.1 — las columnas que el responsable de la tarea puede editar en su elemento existen en la
+    versión y no son las que originan la Tarea (esas no cambian mientras la Tarea está abierta)."""
+    errores = []
+    origen = {clave for clave in claves.values() if clave}
+    for clave in editables or []:
+        campo = campos_por_clave.get(clave)
+        if campo is None:
+            errores.append(f"La columna editable «{clave}» no existe en la estructura de elementos{contexto}.")
+        elif clave in origen:
+            errores.append(
+                f"La columna «{campo.etiqueta}» origina la tarea: no puede editarla quien la realiza."
+            )
+    return errores
+
+
+def _editables_limpias(editables):
+    from apps.catalogo.actividades import columnas_editables
+
+    errores = []
+    limpias = columnas_editables(list(editables or []), errores)
+    if errores:
+        raise ValidationError(errores)
+    return limpias
+
+
+def validar_configuracion(servicio, columnas_editables=(), **claves):
     """Reglas de la configuración. Lanza `ValidationError`; devuelve las claves limpias."""
     if servicio.tipo != Servicio.Tipo.PROCESO or servicio.es_ticket_general:
         raise ValidationError("Solo un Proceso puede generar tareas a partir de sus elementos.")
@@ -107,7 +133,9 @@ def validar_configuracion(servicio, **claves):
     if version is None:
         raise ValidationError("La estructura de elementos todavía no tiene columnas.")
     limpias = _claves(**claves)
-    errores = errores_de_claves({c.clave: c for c in version.campos.all()}, limpias)
+    campos = {c.clave: c for c in version.campos.all()}
+    errores = errores_de_claves(campos, limpias)
+    errores += errores_de_editables(campos, limpias, _editables_limpias(columnas_editables))
     if errores:
         raise ValidationError(errores)
     return limpias
@@ -116,21 +144,25 @@ def validar_configuracion(servicio, **claves):
 @transaction.atomic
 def configurar_tareas_elemento(
     servicio, actor, *, clave_titulo, clave_responsable, clave_fecha_limite, clave_descripcion="",
-    requiere_evidencia=False,
+    requiere_evidencia=False, columnas_editables=(),
 ):
     """Crea o actualiza la configuración (y la deja ACTIVA). Solo afecta a los Tickets que nazcan
-    después: cada Ticket conserva la copia que congeló."""
+    después: cada Ticket conserva la copia que congeló. `columnas_editables` (Bloque 3.1): claves de las
+    columnas que el responsable de la Tarea abierta puede editar en su elemento."""
     _exigir_administracion(actor)
     servicio = Servicio.objects.select_for_update().get(pk=servicio.pk)
     limpias = validar_configuracion(
         servicio, clave_titulo=clave_titulo, clave_descripcion=clave_descripcion,
         clave_responsable=clave_responsable, clave_fecha_limite=clave_fecha_limite,
+        columnas_editables=columnas_editables,
     )
+    editables = _editables_limpias(columnas_editables)
     definicion = DefinicionParrilla.objects.select_for_update().get(servicio=servicio)
     configuracion = ConfiguracionTareasElemento.objects.select_for_update().filter(definicion=definicion).first()
     if configuracion is None:
         configuracion = ConfiguracionTareasElemento.objects.create(
-            definicion=definicion, activa=True, requiere_evidencia=bool(requiere_evidencia), **limpias
+            definicion=definicion, activa=True, requiere_evidencia=bool(requiere_evidencia),
+            columnas_editables=editables, **limpias
         )
         registrar_evento(
             accion=RegistroAuditoria.Accion.CREAR, instancia=configuracion,
@@ -142,6 +174,7 @@ def configurar_tareas_elemento(
     for atributo, valor in limpias.items():
         setattr(configuracion, atributo, valor)
     configuracion.requiere_evidencia = bool(requiere_evidencia)
+    configuracion.columnas_editables = editables
     configuracion.activa = True
     configuracion.save()
     nuevo = serializar(configuracion)
@@ -214,9 +247,9 @@ def errores_de_tareas_elemento(servicio):
     version = definicion.formulario.version_activa
     if version is None or version.estado != "ACTIVA":
         return []  # lo señala `errores_de_parrilla`
-    errores = errores_de_claves(
-        {c.clave: c for c in version.campos.all()}, claves_de(configuracion), contexto=" activa"
-    )
+    campos = {c.clave: c for c in version.campos.all()}
+    errores = errores_de_claves(campos, claves_de(configuracion), contexto=" activa")
+    errores += errores_de_editables(campos, claves_de(configuracion), configuracion.columnas_editables, contexto=" activa")
     return [f"Tareas por elemento: {e}" for e in errores]
 
 
@@ -226,5 +259,7 @@ def errores_de_version_para_tareas(servicio, version):
     configuracion = configuracion_activa_de(servicio)
     if configuracion is None:
         return []
-    errores = errores_de_claves({c.clave: c for c in version.campos.all()}, claves_de(configuracion))
+    campos = {c.clave: c for c in version.campos.all()}
+    errores = errores_de_claves(campos, claves_de(configuracion))
+    errores += errores_de_editables(campos, claves_de(configuracion), configuracion.columnas_editables)
     return [f"Tareas por elemento: {e}" for e in errores]

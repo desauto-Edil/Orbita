@@ -40,7 +40,14 @@ from apps.tareas.autorizacion import (
     puede_reasignar_tarea,
     puede_tomar_tarea,
 )
-from apps.tareas.models import AdjuntoTarea, ComentarioTarea, DelegacionTarea, HistorialTarea, Tarea
+from apps.tareas.models import (
+    AdjuntoTarea,
+    ComentarioTarea,
+    DelegacionTarea,
+    HistorialTarea,
+    ItemVerificacionTarea,
+    Tarea,
+)
 
 
 def _registrar_historial(tarea, tipo_evento, actor, **datos):
@@ -66,7 +73,7 @@ def _auditar_cambio_estado(tarea, actor, estado_anterior):
     registrar_evento(
         accion=RegistroAuditoria.Accion.ACTUALIZAR,
         instancia=tarea,
-        origen=RegistroAuditoria.Origen.USUARIO,
+        origen=RegistroAuditoria.Origen.USUARIO if actor is not None else RegistroAuditoria.Origen.SISTEMA,
         usuario=actor,
         datos_anteriores={"estado": estado_anterior},
         datos_nuevos={"estado": tarea.estado},
@@ -86,7 +93,11 @@ def crear_tarea(
     permite_subtareas=False,
     tarea_padre=None,
     requiere_evidencia=False,
+    fecha_prevista=None,
+    verificaciones=(),
 ):
+    """`verificaciones`: lista de verificación de la Tarea, pares `(texto, obligatorio)` en orden; se
+    copian a `ItemVerificacionTarea` (la Tarea no depende de la configuración que la originó)."""
     if origen == Tarea.Origen.SISTEMA and creada_por is not None:
         raise ValueError("origen=SISTEMA no admite creada_por (no se inventa un usuario técnico, W.9).")
 
@@ -101,7 +112,13 @@ def crear_tarea(
         permite_subtareas=permite_subtareas,
         tarea_padre=tarea_padre,
         requiere_evidencia=requiere_evidencia,
+        fecha_prevista=fecha_prevista,
     )
+    for orden, (texto, obligatorio) in enumerate(verificaciones, start=1):
+        texto = (texto or "").strip()
+        if not texto:
+            raise ValidationError("Cada ítem de la lista de verificación necesita un texto.")
+        ItemVerificacionTarea.objects.create(tarea=tarea, orden=orden, texto=texto, obligatorio=bool(obligatorio))
     registrar_evento(
         accion=RegistroAuditoria.Accion.CREAR,
         instancia=tarea,
@@ -308,6 +325,41 @@ def tiene_evidencia(tarea):
     )
 
 
+def verificaciones_obligatorias_pendientes(tarea):
+    return list(tarea.verificaciones.filter(obligatorio=True, marcado=False).order_by("orden", "pk"))
+
+
+@transaction.atomic
+def marcar_verificacion(item, actor, *, marcado):
+    """Marca o desmarca un ítem de la lista de verificación. Lo puede hacer quien puede completar la
+    Tarea, mientras siga abierta (después la lista es historia). Repetir el mismo valor no hace nada."""
+    tarea = Tarea.objects.select_for_update().get(pk=item.tarea_id)
+    item = ItemVerificacionTarea.objects.select_for_update().get(pk=item.pk)
+    if tarea.estado not in (Tarea.Estado.PENDIENTE, Tarea.Estado.EN_PROGRESO):
+        raise ValidationError("La lista de verificación solo se marca mientras la tarea está abierta.")
+    if not puede_completar_tarea(actor, tarea):
+        raise PermissionDenied("No tiene autorización para marcar la lista de verificación de esta tarea.")
+    marcado = bool(marcado)
+    if item.marcado == marcado:
+        return item
+    item.marcado = marcado
+    item.marcado_por = actor
+    item.marcado_en = timezone.now()
+    item.save(update_fields=["marcado", "marcado_por", "marcado_en"])
+    _registrar_historial(
+        tarea, HistorialTarea.TipoEvento.VERIFICACION, actor, item_id=item.pk, texto=item.texto, marcado=marcado
+    )
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR,
+        instancia=item,
+        origen=RegistroAuditoria.Origen.USUARIO,
+        usuario=actor,
+        datos_anteriores={"marcado": not marcado},
+        datos_nuevos={"marcado": marcado},
+    )
+    return item
+
+
 @transaction.atomic
 def completar_tarea(tarea, actor):
     """CU-021/RN-024. No conoce Workflow: si `tarea` es la principal de una
@@ -324,6 +376,11 @@ def completar_tarea(tarea, actor):
         raise ValidationError("No se puede completar una tarea con subtareas pendientes (W.6).")
     if tarea.requiere_evidencia and not tiene_evidencia(tarea):
         raise ValidationError("Esta tarea exige al menos una evidencia adjunta para completarse.")
+    pendientes = verificaciones_obligatorias_pendientes(tarea)
+    if pendientes:
+        raise ValidationError(
+            "Falta marcar en la lista de verificación: " + "; ".join(item.texto for item in pendientes) + "."
+        )
 
     estado_anterior = tarea.estado
     tarea.estado = Tarea.Estado.COMPLETADA

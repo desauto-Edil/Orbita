@@ -74,6 +74,18 @@ def _otorgar_permiso(usuario, codigo, *, nombre_rol=None):
     return rol
 
 
+def _con_ruta_de_atencion(*servicios):
+    """Bloque 2: publicar exige que alguien pueda iniciar (visibilidad) y atender (`tickets.atender`) lo publicado.
+    Deja a los `servicios` como PÚBLICO INTERNO y asegura que alguien tenga `tickets.atender` GLOBAL."""
+    atiende, creado = Usuario.objects.get_or_create(username="ruta_atencion_global")
+    if creado:
+        _permiso_get_or_create(atiende, "tickets.atender", "Rol ruta de atención global")
+    for servicio in servicios:
+        Servicio.objects.filter(pk=servicio.pk).update(alcance_visibilidad=Servicio.AlcanceVisibilidad.PUBLICO_INTERNO)
+        servicio.alcance_visibilidad = Servicio.AlcanceVisibilidad.PUBLICO_INTERNO
+    return atiende
+
+
 class CatalogoTests(TestCase):
     """CU-010 Gestionar catálogo de servicios (RQF-029/030/031, RN-002)."""
 
@@ -1270,6 +1282,7 @@ class PublicacionCatalogoTests(TestCase):
         version = crear_nueva_version(self.formulario, self.actor)
         activar_version(self.formulario, version, self.actor)
         self.formulario.refresh_from_db()
+        _con_ruta_de_atencion()
 
     def _crear(self, **datos):
         return Servicio.objects.create(
@@ -1766,6 +1779,7 @@ class EjecucionConfigurableTests(TestCase):
         self.servicio = Servicio.objects.create(
             nombre="Diseño", categoria=self.categoria, formulario=self.formulario, activo=False,
         )
+        _con_ruta_de_atencion(self.servicio)
         self.version = ejecucion.preparar_ejecucion(self.servicio, self.actor)
         self.inicio = self.version.etapas.get(tipo="INICIO")
         self.fin = self.version.etapas.get(tipo="FIN")
@@ -1921,6 +1935,7 @@ class EjecucionConfigurableTests(TestCase):
         from apps.workflows.models import WorkflowVersion
 
         simple = Servicio.objects.create(nombre="Simple", categoria=self.categoria, formulario=self.formulario, activo=False)
+        _con_ruta_de_atencion(simple)
         self.assertTrue(activar_servicio(simple, self.actor).activo)
         with self.assertRaises(ValidationError):
             activar_servicio(self.servicio, self.actor)
@@ -2093,7 +2108,8 @@ class StudioTests(TestCase):
     def test_tab_invalido_cae_en_general(self):
         self._login_admin()
         respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "no-existe"})
-        self.assertContains(respuesta, 'breadcrumb__current">General')
+        # El breadcrumb muestra el nombre del servicio; la sección mostrada es la general.
+        self.assertEqual(respuesta.context["tab"], "general")
 
     def test_studio_lista_requiere_permiso_y_lista_servicios_reales(self):
         self.client.login(username="studio_sin_permiso", password=CLAVE_PRUEBA)
@@ -2413,6 +2429,7 @@ class StudioTests(TestCase):
         self.servicio.save()
         version = crear_nueva_version(self.servicio.formulario, self.administrador)
         activar_version(self.servicio.formulario, version, self.administrador)
+        _con_ruta_de_atencion(self.servicio)
         respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "publicacion"})
         # Solo el botón de este formulario: el header global (V0) trae controles
         # deshabilitados a propósito (búsqueda/notificaciones "próximamente").
@@ -2531,7 +2548,7 @@ class StudioCierreFuncionalTests(TestCase):
         self._login_admin()
         respuesta = self._crear()
         servicio = Servicio.objects.get(nombre="Nuevo desde Studio")
-        self.assertRedirects(respuesta, f"{reverse('catalogo:studio', args=[servicio.pk])}?tab=general")
+        self.assertRedirects(respuesta, f"{reverse('catalogo:studio', args=[servicio.pk])}?tab=general&asistente=1")
         self.assertEqual(servicio.tipo, Servicio.Tipo.SERVICIO)
         self.assertFalse(servicio.activo)
         self.assertEqual(servicio.alcance_visibilidad, Servicio.AlcanceVisibilidad.RESTRINGIDO)
@@ -2630,7 +2647,7 @@ class StudioCierreFuncionalTests(TestCase):
         self._login_admin()
         respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "general"})
         self.assertNotContains(respuesta, "Conceder acceso")
-        self.assertContains(respuesta, "público interno")
+        self.assertContains(respuesta, "Público interno")
 
     def test_conceder_visibilidad_por_usuario_area_y_unidad(self):
         self._login_admin()
@@ -2835,12 +2852,22 @@ class StudioCierreFuncionalTests(TestCase):
         self.assertContains(respuesta, "Público interno")
         self.assertContains(respuesta, "Visibilidad configurada")
 
-    def test_publicacion_no_exige_responsables_ni_concesiones_regla_de_dominio_intacta(self):
+    def test_publicacion_exige_acceso_y_quien_atienda_pero_no_un_responsable_individual(self):
+        # Bloque 2: restringido sin concesiones y sin nadie que pueda atenderlo no se publica por accidente.
         self.servicio.formulario = Formulario.objects.create(nombre="Entrada cierre")
         self.servicio.save()
         version = crear_nueva_version(self.servicio.formulario, self.admin)
         activar_version(self.servicio.formulario, version, self.admin)
         self._login_admin()
+        pagina = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "publicacion"})
+        self.assertFalse(pagina.context["publicable"])
+        self.assertContains(pagina, "Nadie puede iniciarlo")
+        self.assertContains(pagina, "Nadie puede atenderlo")
+        self.client.post(reverse("catalogo:studio_publicar", args=[self.servicio.pk]))
+        self.servicio.refresh_from_db()
+        self.assertFalse(self.servicio.activo)
+        # Con acceso y alguien con alcance global para atenderlo, se publica sin responsables configurados.
+        _con_ruta_de_atencion(self.servicio)
         self.client.post(reverse("catalogo:studio_publicar", args=[self.servicio.pk]))
         self.servicio.refresh_from_db()
         self.assertTrue(self.servicio.activo)
@@ -2863,6 +2890,7 @@ class StudioCierreFuncionalTests(TestCase):
             reverse("catalogo:studio_responsable_agregar", args=[servicio.pk]),
             {"tipo_responsable": "EQUIPO", "equipo": self.equipo.pk},
         )
+        _con_ruta_de_atencion()  # el equipo aún no tiene miembros: lo atiende quien tiene alcance global
         self.client.post(reverse("catalogo:studio_publicar", args=[servicio.pk]))
         servicio.refresh_from_db()
         self.assertTrue(servicio.activo)
@@ -3342,52 +3370,19 @@ class StudioPoliticaEntregaTests(TestCase):
             self.assertEqual(respuesta.status_code, 200, tab)
 
 
-class StudioWorkflowCompartidoTests(TestCase):
-    """4.6 — Un Workflow puede ser reutilizado por varios Servicios/Procesos.
-
-    Studio permite crear ejecución propia o elegir una existente (compartida);
-    si es compartida se advierte con quién; el usuario puede cancelar, crear
-    copia (desvincula solo a ese elemento) o modificar el compartido (con
-    confirmación reforzada antes de publicar). Vincular y modificar son
-    permisos independientes. Compartir NO comparte `InstanciaWorkflow` y los
-    Tickets iniciados conservan su `WorkflowVersion`."""
-
-    def setUp(self):
-        from apps.workflows import versionamiento
-        from apps.workflows.models import WorkflowVersion
-
+class _EscenarioCompartidoMixin:
+    def _preparar_usuarios(self):
         self.admin = Usuario.objects.create_user("compartido_admin", password=CLAVE_PRUEBA)
         _otorgar_permiso(self.admin, "catalogo.administrar", nombre_rol="Rol cat admin comp")
         _otorgar_permiso(self.admin, "workflows.administrar", nombre_rol="Rol wf admin comp")
         self.categoria = Categoria.objects.create(nombre="Compartidos")
         self.client.login(username="compartido_admin", password=CLAVE_PRUEBA)
 
-        # Servicio "origen": su flujo (A → B → FIN) se publica y es el compartible.
-        self.origen = Servicio.objects.create(nombre="Servicio origen", categoria=self.categoria, activo=False)
-        self.client.post(reverse("catalogo:studio_ejecucion_configurar", args=[self.origen.pk]))
-        self.origen.refresh_from_db()
-        for nombre in ("Diseñar pieza", "Revisar pieza"):
-            self._crear_actividad(self.origen, nombre)
-        version = self.origen.workflow.versiones.get(estado=WorkflowVersion.Estado.BORRADOR)
-        versionamiento.activar_version(self.origen.workflow, version, self.admin)
-        self.workflow = self.origen.workflow
-
-        self.destino = Servicio.objects.create(nombre="Servicio destino", categoria=self.categoria, activo=False)
-
-    # --- helpers ---
-
     def _usuario_con(self, username, *codigos):
         usuario = Usuario.objects.create_user(username, password=CLAVE_PRUEBA)
         for codigo in codigos:
             _otorgar_permiso(usuario, codigo, nombre_rol=f"Rol {codigo} {username}")
         return usuario
-
-    def _crear_actividad(self, servicio, nombre):
-        return self.client.post(
-            reverse("catalogo:studio_bloque_crear", args=[servicio.pk]),
-            {"nuevo-tipo": "ACTIVIDAD", "nuevo-nombre": nombre, "nuevo-descripcion": "",
-             "nuevo-config-tipo_actor": "SOLICITANTE"},
-        )
 
     def _pagina(self, servicio=None, tab="ejecucion", **params):
         params["tab"] = tab
@@ -3411,49 +3406,73 @@ class StudioWorkflowCompartidoTests(TestCase):
     def _publicar(self, servicio=None, **datos):
         return self.client.post(reverse("catalogo:studio_publicar", args=[(servicio or self.destino).pk]), datos)
 
-    def _nombres_etapas(self, version):
-        return sorted(version.etapas.values_list("nombre", flat=True))
+
+class StudioWorkflowCompartidoTests(_EscenarioCompartidoMixin, TestCase):
+    """4.6 / D3 — Un Flujo (plantilla de FASES publicada) puede ser reutilizado por varios
+    Servicios/Procesos.
+
+    Studio permite crear un flujo nuevo en el Diseñador o elegir uno existente (compartido); si es
+    compartido se advierte con quién; el elemento puede crear una copia propia (desvincula solo a ese
+    elemento). Desde D3 los BLOQUES viven en la configuración de cada Servicio/Proceso: configurar la
+    ejecución de uno NO modifica el flujo compartido; el flujo (sus fases) se modifica y publica solo en
+    el Diseñador de Flujos, con sus confirmaciones (`DisenadorFlujosTests`). Vincular y modificar son
+    permisos independientes. Compartir NO comparte `InstanciaWorkflow` y los Tickets iniciados
+    conservan su `WorkflowVersion`."""
+
+    def setUp(self):
+        from apps.workflows import fases as fases_ops
+        from apps.workflows.versionamiento import activar_version as activar_workflow
+
+        self._preparar_usuarios()
+        # Flujo compartible: plantilla de fases publicada (Recepción → Revisión), usada por «Servicio origen».
+        self.workflow = fases_ops.crear_plantilla_fases(self.admin, nombre="Atención compartida")
+        version = self.workflow.versiones.get(numero=1)
+        recepcion = fases_ops.agregar_fase(version, self.admin, nombre="Recepción")
+        revision = fases_ops.agregar_fase(version, self.admin, nombre="Revisión")
+        fases_ops.conectar_fases(recepcion, revision, self.admin)
+        activar_workflow(self.workflow, version, self.admin)
+        self.workflow.refresh_from_db()
+        self.origen = Servicio.objects.create(
+            nombre="Servicio origen", categoria=self.categoria, activo=False, workflow=self.workflow
+        )
+        self.destino = Servicio.objects.create(nombre="Servicio destino", categoria=self.categoria, activo=False)
+
+    def _nombres_fases(self, version):
+        return list(version.fases.order_by("orden", "pk").values_list("nombre", flat=True))
 
     def _destino_vinculado(self):
         self._vincular()
         self.destino.refresh_from_db()
         return self.destino
 
-    # --- 2. Crear propia o elegir existente (con vista previa) ---
+    # --- 2. Crear uno nuevo o elegir existente (con vista previa) ---
 
     def test_sin_ejecucion_se_ofrecen_las_dos_opciones(self):
         respuesta = self._pagina()
-        self.assertContains(respuesta, "Empezar desde cero")
-        self.assertContains(respuesta, "Usar un flujo existente")
-        self.assertContains(respuesta, "Servicio origen")
+        self.assertContains(respuesta, "Crear nuevo flujo")
+        self.assertContains(respuesta, "Usar flujo existente")
+        self.assertContains(respuesta, "Atención compartida")
 
     def test_solo_se_ofrecen_flujos_con_version_activa(self):
-        solo_borrador = Servicio.objects.create(nombre="Solo borrador", categoria=self.categoria, activo=False)
-        self.client.post(reverse("catalogo:studio_ejecucion_configurar", args=[solo_borrador.pk]))
-        solo_borrador.refresh_from_db()
+        from apps.workflows import fases as fases_ops
+
+        solo_borrador = fases_ops.crear_plantilla_fases(self.admin, nombre="Solo borrador")
         ofrecidos = [p.pk for p in self._pagina().context["plantillas"]]
         self.assertIn(self.workflow.pk, ofrecidos)
-        self.assertNotIn(solo_borrador.workflow_id, ofrecidos)
+        self.assertNotIn(solo_borrador.pk, ofrecidos)
 
-    def test_vista_previa_muestra_las_etapas_y_no_vincula_nada(self):
+    def test_vista_previa_muestra_las_fases_y_no_vincula_nada(self):
         respuesta = self._pagina(plantilla=self.workflow.pk)
-        self.assertContains(respuesta, "Etapas de «")
-        self.assertContains(respuesta, "Diseñar pieza")
-        self.assertContains(respuesta, "Revisar pieza")
-        self.assertContains(respuesta, "Usar este flujo")
+        self.assertContains(respuesta, "Recorrido de Atención compartida")
+        self.assertContains(respuesta, "Recepción")
+        self.assertContains(respuesta, "Revisión")
         self.destino.refresh_from_db()
         self.assertIsNone(self.destino.workflow_id)
 
     def test_plantilla_inexistente_en_la_vista_previa_se_ignora(self):
         respuesta = self._pagina(plantilla="999999")
         self.assertEqual(respuesta.status_code, 200)
-        self.assertNotContains(respuesta, "Usar este flujo")
-
-    def test_empezar_desde_cero_sigue_creando_un_workflow_propio(self):
-        self._configurar()
-        self.destino.refresh_from_db()
-        self.assertIsNotNone(self.destino.workflow_id)
-        self.assertNotEqual(self.destino.workflow_id, self.workflow.pk)
+        self.assertIsNone(respuesta.context["plantilla_elegida"])
 
     # --- 1. Reutilización: el Workflow se comparte ---
 
@@ -3478,11 +3497,11 @@ class StudioWorkflowCompartidoTests(TestCase):
 
     def test_no_permite_vincular_dos_veces_ni_un_flujo_sin_version_activa(self):
         from apps.catalogo.ejecucion import vincular_ejecucion
-        from apps.workflows import versionamiento
+        from apps.workflows import fases as fases_ops
 
         self._vincular()
         otro = Servicio.objects.create(nombre="Otro destino", categoria=self.categoria, activo=False)
-        sin_activa = versionamiento.crear_workflow(self.admin, nombre="Nunca publicado")
+        sin_activa = fases_ops.crear_plantilla_fases(self.admin, nombre="Nunca publicado")
         with self.assertRaises(ValidationError):
             vincular_ejecucion(otro, self.admin, sin_activa)
         otro.refresh_from_db()
@@ -3490,6 +3509,14 @@ class StudioWorkflowCompartidoTests(TestCase):
         self._vincular(workflow_id=sin_activa.pk)  # ya vinculado: se rechaza sin romper
         self.destino.refresh_from_db()
         self.assertEqual(self.destino.workflow_id, self.workflow.pk)
+
+    def test_no_se_vincula_un_flujo_legacy(self):
+        from apps.catalogo.ejecucion import vincular_ejecucion
+        from apps.workflows.tests import _crear_workflow_lineal_activo
+
+        legacy, _ = _crear_workflow_lineal_activo(self.admin)
+        with self.assertRaises(ValidationError):
+            vincular_ejecucion(self.destino, self.admin, legacy)
 
     def test_entrada_invalida_al_vincular_no_rompe(self):
         for valor in ("abc", "", "999999"):
@@ -3499,11 +3526,14 @@ class StudioWorkflowCompartidoTests(TestCase):
 
     # --- 5. Advertencia de servicios vinculados ---
 
-    def test_flujo_compartido_advierte_con_quien_se_comparte(self):
+    def test_flujo_compartido_no_ocupa_espacio_con_quien_se_comparte(self):
+        # 4.B: el Studio ya no lista con quién se comparte el flujo (el dato sigue en el contexto para las
+        # confirmaciones de modificar un flujo LEGACY compartido).
         self._destino_vinculado()
         respuesta = self._pagina()
-        self.assertContains(respuesta, "Este flujo se comparte con otros elementos")
-        self.assertContains(respuesta, "Servicio origen")
+        self.assertNotContains(respuesta, "Este flujo se comparte")
+        self.assertNotContains(respuesta, "Compartido con")
+        self.assertNotContains(respuesta, "Ver plantilla de fases")
         self.assertEqual([s.pk for s in respuesta.context["compartido_con"]], [self.origen.pk])
 
     def test_flujo_propio_no_muestra_advertencia(self):
@@ -3511,68 +3541,41 @@ class StudioWorkflowCompartidoTests(TestCase):
         self.assertNotContains(respuesta, "Este flujo se comparte")
         self.assertEqual(respuesta.context["compartido_con"], [])
 
-    def test_workflows_avanzados_muestra_quienes_lo_usan(self):
+    def test_el_lienzo_del_flujo_muestra_quienes_lo_usan(self):
         self._destino_vinculado()
-        respuesta = self.client.get(reverse("workflows:detalle", args=[self.workflow.pk]))
-        self.assertContains(respuesta, "Usado por")
+        respuesta = self.client.get(reverse("workflows:detalle", args=[self.workflow.pk]), follow=True)
+        self.assertEqual(respuesta.redirect_chain[-1][0], reverse("flujos:lienzo", args=[self.workflow.pk]))
+        self.assertContains(respuesta, "Usado en")
         self.assertContains(respuesta, "Servicio destino")
 
-    # --- 6/8. Modificar compartido: confirmación antes de abrir borrador y de publicar ---
+    # --- 6/8. Configurar un servicio con flujo compartido no modifica el flujo ---
 
-    def test_modificar_compartido_exige_confirmacion_para_abrir_borrador(self):
+    def test_configurar_la_ejecucion_no_abre_borrador_del_flujo_compartido(self):
+        from apps.catalogo.models import ConfiguracionEjecucionVersion
         from apps.workflows.models import WorkflowVersion
 
         self._destino_vinculado()
-        self._configurar(confirmo=False)
+        self._configurar()  # sin confirmación: solo prepara la configuración propia del destino
         self.assertFalse(self.workflow.versiones.filter(estado=WorkflowVersion.Estado.BORRADOR).exists())
-        self._configurar(confirmo=True)
-        self.assertTrue(self.workflow.versiones.filter(estado=WorkflowVersion.Estado.BORRADOR).exists())
+        self.assertTrue(
+            ConfiguracionEjecucionVersion.objects.filter(
+                servicio=self.destino, estado=ConfiguracionEjecucionVersion.Estado.BORRADOR
+            ).exists()
+        )
+        self.assertFalse(ConfiguracionEjecucionVersion.objects.filter(servicio=self.origen).exists())
 
-    def test_modificar_un_flujo_propio_no_pide_confirmacion(self):
-        from apps.workflows.models import WorkflowVersion
-
-        self._configurar(self.origen, confirmo=False)
-        self.assertTrue(self.workflow.versiones.filter(estado=WorkflowVersion.Estado.BORRADOR).exists())
-
-    def test_publicar_un_flujo_compartido_exige_confirmacion_reforzada(self):
+    def test_publicar_un_servicio_con_flujo_compartido_no_toca_el_flujo(self):
         from unittest import mock
 
-        from apps.workflows.models import WorkflowVersion
-
         self._destino_vinculado()
-        self._configurar(confirmo=True)
-        self.workflow.refresh_from_db()
         activa = self.workflow.version_activa_id
-        with mock.patch("apps.catalogo.ejecucion.activar_servicio", side_effect=lambda s, a: s):
-            # Sin casilla / sin nombre / nombre incorrecto: no se publica.
+        with mock.patch("apps.catalogo.studio.activar_servicio", side_effect=lambda s, a: s) as activar:
             self._publicar()
-            self._publicar(confirmo_compartido="1")
-            self._publicar(confirmo_compartido="1", confirmacion_nombre="otro nombre")
-            self.workflow.refresh_from_db()
-            self.assertEqual(self.workflow.version_activa_id, activa)
-            self.assertTrue(self.workflow.versiones.filter(estado=WorkflowVersion.Estado.BORRADOR).exists())
-            # Casilla + nombre exacto del flujo: se publica.
-            self._publicar(confirmo_compartido="1", confirmacion_nombre=self.workflow.nombre)
-            self.workflow.refresh_from_db()
-            self.assertNotEqual(self.workflow.version_activa_id, activa)
-
-    def test_el_dominio_rechaza_publicar_compartido_sin_confirmar(self):
-        from apps.catalogo.ejecucion import publicar_ejecucion
-
-        self._destino_vinculado()
-        self._configurar(confirmo=True)
-        version = self.workflow.versiones.get(estado="BORRADOR")
-        with self.assertRaises(ValidationError):
-            publicar_ejecucion(self.destino, version, self.admin)
-
-    def test_la_pagina_de_publicacion_pide_confirmacion_solo_si_hay_impacto(self):
-        self._destino_vinculado()
-        self._configurar(confirmo=True)
-        self.assertContains(self._pagina(tab="publicacion"), "Esta publicación afecta a otros elementos")
-        # Servicio con flujo propio: sin confirmación reforzada.
-        solo = Servicio.objects.create(nombre="Solo propio", categoria=self.categoria, activo=False)
-        self._configurar(solo)
-        self.assertNotContains(self._pagina(solo, tab="publicacion"), "Esta publicación afecta a otros elementos")
+        activar.assert_called_once()
+        self.workflow.refresh_from_db()
+        self.assertEqual(self.workflow.version_activa_id, activa)
+        self.assertEqual(self.workflow.versiones.count(), 1)
+        self.assertNotContains(self._pagina(tab="publicacion"), "Esta publicación afecta a otros elementos")
 
     # --- 6/7. Crear copia: desvincula únicamente al elemento que inició la acción ---
 
@@ -3593,24 +3596,26 @@ class StudioWorkflowCompartidoTests(TestCase):
         self._copia()
         self.destino.refresh_from_db()
         copia = self.destino.workflow
+        self.assertEqual(copia.modo, self.workflow.modo)
         self.assertEqual(copia.version_activa.estado, WorkflowVersion.Estado.ACTIVA)
-        self.assertEqual(
-            self._nombres_etapas(copia.version_activa), self._nombres_etapas(self.workflow.version_activa)
-        )
+        self.assertEqual(self._nombres_fases(copia.version_activa), self._nombres_fases(self.workflow.version_activa))
         self.assertFalse(copia.versiones.filter(estado=WorkflowVersion.Estado.BORRADOR).exists())
         self.workflow.refresh_from_db()
         self.assertEqual(self.workflow.version_activa_id, activa_original)
         self.assertEqual(self.workflow.versiones.count(), 1)
 
     def test_editar_la_copia_no_toca_el_original(self):
+        from apps.catalogo.ejecucion import preparar_borrador_de_flujo
+        from apps.workflows import fases as fases_ops
+
         self._destino_vinculado()
         self._copia()
-        self._configurar()  # flujo ya propio: sin confirmación
-        self._crear_actividad(self.destino, "Paso propio")
         self.destino.refresh_from_db()
-        propio = self.destino.workflow.versiones.get(estado="BORRADOR")
-        self.assertIn("Paso propio", self._nombres_etapas(propio))
-        self.assertNotIn("Paso propio", self._nombres_etapas(self.workflow.version_activa))
+        # La copia ya la usa el destino: abrir su borrador también se confirma.
+        borrador = preparar_borrador_de_flujo(self.destino.workflow, self.admin, confirmar_compartido=True)
+        fases_ops.agregar_fase(borrador, self.admin, nombre="Fase propia")
+        self.assertIn("Fase propia", self._nombres_fases(borrador))
+        self.assertNotIn("Fase propia", self._nombres_fases(self.workflow.version_activa))
         self.assertEqual(self.workflow.versiones.count(), 1)
 
     def test_la_copia_audita_su_origen(self):
@@ -3631,23 +3636,27 @@ class StudioWorkflowCompartidoTests(TestCase):
     # --- 9/10/12. Permisos independientes, sin asignación automática ---
 
     def test_vincular_no_concede_modificar(self):
+        from apps.workflows.models import WorkflowVersion
+
         self._usuario_con("solo_vincula", "catalogo.administrar", "workflows.vincular")
         self.client.login(username="solo_vincula", password=CLAVE_PRUEBA)
         # Puede elegir un flujo existente...
-        self.assertContains(self._pagina(), "Usar un flujo existente")
+        pagina = self._pagina()
+        self.assertContains(pagina, "Usar flujo existente")
+        self.assertNotContains(pagina, "Crear nuevo flujo")
         self.assertEqual(self._vincular().status_code, 302)
         self.destino.refresh_from_db()
         self.assertEqual(self.destino.workflow_id, self.workflow.pk)
-        # ...pero no modificarlo, copiarlo ni crear uno propio.
-        self.assertEqual(self._configurar(confirmo=True).status_code, 403)
+        # ...pero no configurar su ejecución, copiarlo ni crear uno nuevo.
+        self.assertEqual(self._configurar().status_code, 403)
         self.assertEqual(self._copia().status_code, 403)
         otro = Servicio.objects.create(nombre="Otro", categoria=self.categoria, activo=False)
-        self.assertEqual(self._configurar(otro).status_code, 403)
-        respuesta = self._pagina()
-        self.assertNotContains(respuesta, "Editar ejecución")
-        self.assertNotContains(respuesta, "Crear copia propia")
-        self.assertContains(respuesta, "No tienes autorización para modificar flujos")
-        self.assertFalse(self.workflow.versiones.filter(estado="BORRADOR").exists())
+        self.assertEqual(
+            self.client.post(reverse("catalogo:studio_ejecucion_crear_flujo", args=[otro.pk]), {"nombre": "No"}).status_code,
+            403,
+        )
+        self.assertNotContains(self._pagina(), "Crear copia del flujo")
+        self.assertFalse(self.workflow.versiones.filter(estado=WorkflowVersion.Estado.BORRADOR).exists())
 
     def test_administrar_workflows_implica_poder_vincular(self):
         self.assertEqual(self._vincular().status_code, 302)
@@ -3657,7 +3666,7 @@ class StudioWorkflowCompartidoTests(TestCase):
     def test_sin_permiso_de_vincular_no_se_ve_ni_se_usa(self):
         self._usuario_con("solo_catalogo_comp", "catalogo.administrar")
         self.client.login(username="solo_catalogo_comp", password=CLAVE_PRUEBA)
-        self.assertNotContains(self._pagina(), "Usar un flujo existente")
+        self.assertNotContains(self._pagina(), "Usar flujo existente")
         self.assertEqual(self._vincular().status_code, 403)
         self.destino.refresh_from_db()
         self.assertIsNone(self.destino.workflow_id)
@@ -3683,7 +3692,87 @@ class StudioWorkflowCompartidoTests(TestCase):
         self.assertContains(self.client.get(reverse("core:inicio")), "Diseñador")
         self.assertEqual(self.client.get(reverse("workflows:lista")).status_code, 403)
 
-    # --- 3/4/13. Instancias independientes y versión conservada (Memento ya existente) ---
+
+class StudioWorkflowCompartidoLegacyTests(_EscenarioCompartidoMixin, TestCase):
+    """Compatibilidad: un Workflow LEGACY (cadena ejecutable de etapas, anterior a D3) que ya comparten
+    varios Servicios sigue protegido en Studio: abrir un borrador exige confirmación y publicarlo,
+    confirmación reforzada (casilla + nombre exacto). Ya no se puede VINCULAR un flujo legacy; estas
+    situaciones vienen de datos históricos."""
+
+    def setUp(self):
+        from apps.workflows import versionamiento
+        from apps.workflows.models import WorkflowVersion
+
+        self._preparar_usuarios()
+        # Servicio "origen": su flujo legacy (A → B → FIN), publicado.
+        self.origen = Servicio.objects.create(nombre="Servicio origen", categoria=self.categoria, activo=False)
+        self.client.post(reverse("catalogo:studio_ejecucion_configurar", args=[self.origen.pk]))
+        self.origen.refresh_from_db()
+        for nombre in ("Diseñar pieza", "Revisar pieza"):
+            self.client.post(
+                reverse("catalogo:studio_bloque_crear", args=[self.origen.pk]),
+                {"nuevo-tipo": "ACTIVIDAD", "nuevo-nombre": nombre, "nuevo-descripcion": "",
+                 "nuevo-config-tipo_actor": "SOLICITANTE"},
+            )
+        version = self.origen.workflow.versiones.get(estado=WorkflowVersion.Estado.BORRADOR)
+        versionamiento.activar_version(self.origen.workflow, version, self.admin)
+        self.workflow = self.origen.workflow
+        # Dato histórico: otro servicio comparte ese mismo flujo legacy.
+        self.destino = Servicio.objects.create(
+            nombre="Servicio destino", categoria=self.categoria, activo=False, workflow=self.workflow
+        )
+
+    def test_el_flujo_de_origen_es_legacy(self):
+        self.assertEqual(self.workflow.modo, self.workflow.Modo.LEGACY_EJECUTABLE)
+        self.assertEqual(
+            sorted(self.workflow.version_activa.etapas.exclude(tipo__in=["INICIO", "FIN"]).values_list("nombre", flat=True)),
+            ["Diseñar pieza", "Revisar pieza"],
+        )
+
+    def test_modificar_compartido_exige_confirmacion_para_abrir_borrador(self):
+        from apps.workflows.models import WorkflowVersion
+
+        self._configurar(confirmo=False)
+        self.assertFalse(self.workflow.versiones.filter(estado=WorkflowVersion.Estado.BORRADOR).exists())
+        self._configurar(confirmo=True)
+        self.assertTrue(self.workflow.versiones.filter(estado=WorkflowVersion.Estado.BORRADOR).exists())
+
+    def test_publicar_un_flujo_compartido_exige_confirmacion_reforzada(self):
+        from unittest import mock
+
+        from apps.workflows.models import WorkflowVersion
+
+        self._configurar(confirmo=True)
+        self.workflow.refresh_from_db()
+        activa = self.workflow.version_activa_id
+        with mock.patch("apps.catalogo.ejecucion.activar_servicio", side_effect=lambda s, a: s):
+            # Sin casilla / sin nombre / nombre incorrecto: no se publica.
+            self._publicar()
+            self._publicar(confirmo_compartido="1")
+            self._publicar(confirmo_compartido="1", confirmacion_nombre="otro nombre")
+            self.workflow.refresh_from_db()
+            self.assertEqual(self.workflow.version_activa_id, activa)
+            self.assertTrue(self.workflow.versiones.filter(estado=WorkflowVersion.Estado.BORRADOR).exists())
+            # Casilla + nombre exacto del flujo: se publica.
+            self._publicar(confirmo_compartido="1", confirmacion_nombre=self.workflow.nombre)
+            self.workflow.refresh_from_db()
+            self.assertNotEqual(self.workflow.version_activa_id, activa)
+
+    def test_el_dominio_rechaza_publicar_compartido_sin_confirmar(self):
+        from apps.catalogo.ejecucion import publicar_ejecucion
+
+        self._configurar(confirmo=True)
+        version = self.workflow.versiones.get(estado="BORRADOR")
+        with self.assertRaises(ValidationError):
+            publicar_ejecucion(self.destino, version, self.admin)
+
+    def test_la_pagina_de_publicacion_pide_confirmacion_solo_si_hay_impacto(self):
+        self._configurar(confirmo=True)
+        self.assertContains(self._pagina(tab="publicacion"), "Esta publicación afecta a otros elementos")
+        # Servicio con flujo legacy propio: sin confirmación reforzada.
+        solo = Servicio.objects.create(nombre="Solo propio", categoria=self.categoria, activo=False)
+        self._configurar(solo)
+        self.assertNotContains(self._pagina(solo, tab="publicacion"), "Esta publicación afecta a otros elementos")
 
     def test_compartir_no_comparte_instancias_y_los_tickets_conservan_su_version(self):
         from apps.workflows.models import Etapa, InstanciaWorkflow, WorkflowVersion
@@ -3714,7 +3803,7 @@ class StudioWorkflowCompartidoTests(TestCase):
             self.assertEqual(instancia.workflow_version_id, version1.pk)
         version1.refresh_from_db()
         self.assertEqual(version1.estado, WorkflowVersion.Estado.HISTORICA)
-        self.assertNotIn("Hito nuevo en v2", self._nombres_etapas(version1))
+        self.assertNotIn("Hito nuevo en v2", sorted(version1.etapas.values_list("nombre", flat=True)))
         with self.assertRaises(ValidationError):
             version1.exigir_editable()
 
@@ -3743,9 +3832,10 @@ def _permiso_get_or_create(usuario, codigo, nombre_rol):
 
 class DisenadorFlujosTests(TestCase):
     def setUp(self):
-        from apps.workflows.models import Etapa, TransicionEtapa, Workflow, WorkflowVersion
+        from apps.workflows.models import Etapa, FaseWorkflow, TransicionFaseWorkflow, Workflow, WorkflowVersion
 
-        self.Etapa, self.Transicion, self.Workflow, self.Version = Etapa, TransicionEtapa, Workflow, WorkflowVersion
+        self.Etapa, self.Workflow, self.Version = Etapa, Workflow, WorkflowVersion
+        self.Fase, self.TransicionFase = FaseWorkflow, TransicionFaseWorkflow
         # Diseña flujos SIN poder configurar el catálogo: la independencia es el punto.
         self.diseñador = Usuario.objects.create_user("d2_disenador", password=CLAVE_PRUEBA)
         _permiso_get_or_create(self.diseñador, "workflows.administrar", "Rol D2 administrar flujos")
@@ -3755,22 +3845,41 @@ class DisenadorFlujosTests(TestCase):
         self.client.login(username="d2_disenador", password=CLAVE_PRUEBA)
 
     # --- helpers ---
+    # D3: un Flujo es una plantilla de FASES; los bloques viven en cada Servicio/Proceso.
 
     def _crear_flujo(self, nombre="Flujo de prueba"):
         respuesta = self.client.post(reverse("flujos:nuevo"), {"nombre": nombre, "descripcion": "Descripción"})
         self.assertEqual(respuesta.status_code, 302, respuesta.content[:300])
         return self.Workflow.objects.get(nombre=nombre)
 
-    def _bloque(self, workflow, nombre, tipo="ACTIVIDAD"):
-        datos = {"nuevo-tipo": tipo, "nuevo-nombre": nombre, "nuevo-descripcion": ""}
-        if tipo == "ACTIVIDAD":
-            datos["nuevo-config-tipo_actor"] = "SOLICITANTE"
-        return self.client.post(reverse("flujos:bloque_crear", args=[workflow.pk]), datos)
+    def _fase(self, workflow, nombre):
+        return self.client.post(
+            reverse("flujos:fase_crear", args=[workflow.pk]),
+            {"fase-nueva-nombre": nombre, "fase-nueva-descripcion": "", "fase-nueva-orden": ""},
+        )
 
-    def _flujo_publicado(self, nombre="Flujo publicado", bloques=("Diseñar pieza", "Revisar pieza")):
+    def _conectar(self, workflow, origen, destino):
+        return self.client.post(
+            reverse("flujos:fase_conectar", args=[workflow.pk, origen.pk]),
+            {
+                f"fase-{origen.pk}-transicion-fase_destino": destino.pk,
+                f"fase-{origen.pk}-transicion-nombre": "",
+                f"fase-{origen.pk}-transicion-prioridad": "0",
+            },
+        )
+
+    def _fases_en_cadena(self, workflow, nombres):
+        for nombre in nombres:
+            self._fase(workflow, nombre)
+        version = workflow.versiones.get(estado=self.Version.Estado.BORRADOR)
+        fases = list(self.Fase.objects.filter(version=version).order_by("orden", "pk"))
+        for origen, destino in zip(fases, fases[1:]):
+            self._conectar(workflow, origen, destino)
+        return fases
+
+    def _flujo_publicado(self, nombre="Flujo publicado", fases=("Planeación", "Ejecución")):
         workflow = self._crear_flujo(nombre)
-        for bloque in bloques:
-            self._bloque(workflow, bloque)
+        self._fases_en_cadena(workflow, fases)
         self.client.post(reverse("flujos:publicar", args=[workflow.pk]))
         workflow.refresh_from_db()
         self.assertIsNotNone(workflow.version_activa_id, "el flujo debería haberse publicado")
@@ -3782,18 +3891,20 @@ class DisenadorFlujosTests(TestCase):
     def _versiones(self, workflow):
         return {v.numero: v.estado for v in workflow.versiones.all()}
 
+    def _nombres_de_fases(self, version):
+        return list(version.fases.order_by("orden", "pk").values_list("nombre", flat=True))
+
     # --- crear ---
 
     def test_crear_un_flujo_no_necesita_servicio_ni_permiso_de_catalogo(self):
         servicios_antes = Servicio.objects.count()
         workflow = self._crear_flujo("Atención general")
+        self.assertEqual(workflow.modo, self.Workflow.Modo.PLANTILLA_FASES)
         self.assertEqual(self._versiones(workflow), {1: self.Version.Estado.BORRADOR})
         version = workflow.versiones.get()
-        self.assertEqual(
-            sorted(version.etapas.values_list("tipo", flat=True)),
-            ["FIN", "INICIO"],
-        )
-        self.assertEqual(self.Transicion.objects.filter(etapa_origen__version=version).count(), 1)
+        # Nace vacío: sin fases y sin bloques ejecutables (D3).
+        self.assertFalse(version.fases.exists())
+        self.assertFalse(version.etapas.exists())
         self.assertEqual(Servicio.objects.count(), servicios_antes)  # nada se creó ni se vinculó
 
     def test_el_nuevo_flujo_se_abre_en_su_lienzo(self):
@@ -3835,15 +3946,16 @@ class DisenadorFlujosTests(TestCase):
 
     def test_quien_solo_consulta_no_ve_ni_puede_usar_las_acciones_de_edicion(self):
         workflow = self._crear_flujo()
-        self._bloque(workflow, "Paso uno")
+        self._fase(workflow, "Fase uno")
         self.client.login(username="d2_lector", password=CLAVE_PRUEBA)
         respuesta = self.client.get(reverse("flujos:lienzo", args=[workflow.pk]))
-        self.assertContains(respuesta, "Paso uno")
+        self.assertContains(respuesta, "Fase uno")
         self.assertFalse(respuesta.context["editable_ejecucion"])
-        for nombre in ("publicar", "preparar", "copia", "datos"):
+        for nombre in ("publicar", "preparar", "copia", "datos", "fase_crear"):
             self.assertNotContains(respuesta, reverse(f"flujos:{nombre}", args=[workflow.pk]), msg_prefix=nombre)
             self.assertEqual(self.client.post(reverse(f"flujos:{nombre}", args=[workflow.pk])).status_code, 403, nombre)
-        self.assertEqual(self._bloque(workflow, "No debería").status_code, 403)
+        self.assertEqual(self._fase(workflow, "No debería").status_code, 403)
+        self.assertEqual(self._nombres_de_fases(workflow.versiones.get()), ["Fase uno"])
 
     def test_el_diseñador_resalta_su_navegacion_en_el_lienzo(self):
         workflow = self._crear_flujo()
@@ -3851,23 +3963,8 @@ class DisenadorFlujosTests(TestCase):
         self.assertEqual(respuesta.context["nav_item_activo"], "core:disenador")
 
     def test_workspace_visual_muestra_fases_conectores_e_inspector(self):
-        from apps.workflows.models import FaseWorkflow
-
         workflow = self._crear_flujo("Flujo visual")
-        for nombre in ("Planeacion", "Proceso"):
-            self.client.post(
-                reverse("flujos:fase_crear", args=[workflow.pk]),
-                {"fase-nueva-nombre": nombre, "fase-nueva-descripcion": "", "fase-nueva-orden": ""},
-            )
-        planeacion, proceso = FaseWorkflow.objects.filter(version__workflow=workflow).order_by("orden")
-        self.client.post(
-            reverse("flujos:fase_conectar", args=[workflow.pk, planeacion.pk]),
-            {
-                f"fase-{planeacion.pk}-transicion-fase_destino": proceso.pk,
-                f"fase-{planeacion.pk}-transicion-nombre": "",
-                f"fase-{planeacion.pk}-transicion-prioridad": "0",
-            },
-        )
+        self._fases_en_cadena(workflow, ("Planeacion", "Proceso"))
 
         respuesta = self.client.get(reverse("flujos:lienzo", args=[workflow.pk]))
         self.assertContains(respuesta, "Canvas de fases")
@@ -3880,58 +3977,83 @@ class DisenadorFlujosTests(TestCase):
         self.assertContains(respuesta, "Versiones")
         self.assertContains(respuesta, "Usado en")
 
-    # --- diseñar bloques (mismos manejadores que Studio) ---
+    # --- diseñar fases ---
 
-    def test_los_bloques_se_agregan_conectados_y_sin_servicio(self):
+    def test_las_fases_se_agregan_en_orden_y_sin_servicio(self):
         workflow = self._crear_flujo()
-        self._bloque(workflow, "Diseñar pieza")
-        self._bloque(workflow, "Revisar pieza")
+        planeacion, ejecucion = self._fases_en_cadena(workflow, ("Planeación", "Ejecución"))
         respuesta = self.client.get(reverse("flujos:lienzo", args=[workflow.pk]))
-        self.assertEqual([f["etapa"].nombre for f in respuesta.context["bloques"]], ["Diseñar pieza", "Revisar pieza"])
-        # INICIO → Diseñar → Revisar → FIN
-        self.assertEqual(self.Transicion.objects.filter(etapa_origen__version__workflow=workflow).count(), 3)
-
-    def test_eliminar_un_bloque_lineal_deja_el_flujo_continuo(self):
-        workflow = self._crear_flujo()
-        self._bloque(workflow, "A")
-        self._bloque(workflow, "B")
-        a = self.Etapa.objects.get(version__workflow=workflow, nombre="A")
-        self.client.post(reverse("flujos:bloque_eliminar", args=[workflow.pk, a.pk]))
-        respuesta = self.client.get(reverse("flujos:lienzo", args=[workflow.pk]))
-        self.assertEqual([f["etapa"].nombre for f in respuesta.context["bloques"]], ["B"])
-        self.assertEqual(self.Transicion.objects.filter(etapa_origen__version__workflow=workflow).count(), 2)
-
-    def test_editar_un_bloque_actualiza_su_nombre(self):
-        workflow = self._crear_flujo()
-        self._bloque(workflow, "Original")
-        bloque = self.Etapa.objects.get(version__workflow=workflow, nombre="Original")
-        self.client.post(
-            reverse("flujos:bloque_editar", args=[workflow.pk, bloque.pk]),
-            {f"bloque-{bloque.pk}-editar-nombre": "Renombrado", f"bloque-{bloque.pk}-editar-descripcion": "",
-             f"bloque-{bloque.pk}-config-tipo_actor": "SOLICITANTE"},
+        self.assertEqual([f["fase"].nombre for f in respuesta.context["fases"]], ["Planeación", "Ejecución"])
+        self.assertTrue(respuesta.context["fases"][0]["es_inicial"])
+        self.assertTrue(respuesta.context["fases"][1]["es_final"])
+        self.assertEqual(
+            list(self.TransicionFase.objects.filter(fase_origen__version__workflow=workflow).values_list(
+                "fase_origen", "fase_destino"
+            )),
+            [(planeacion.pk, ejecucion.pk)],
         )
-        bloque.refresh_from_db()
-        self.assertEqual(bloque.nombre, "Renombrado")
+        self.assertFalse(Servicio.objects.filter(workflow=workflow).exists())
 
-    def test_un_bloque_de_otro_flujo_no_se_puede_tocar_desde_este(self):
+    def test_eliminar_una_fase(self):
+        workflow = self._crear_flujo()
+        a, b = self._fases_en_cadena(workflow, ("A", "B"))
+        self.client.post(reverse("flujos:fase_eliminar", args=[workflow.pk, a.pk]))
+        self.assertEqual(self._nombres_de_fases(workflow.versiones.get()), ["B"])
+        self.assertFalse(self.TransicionFase.objects.filter(fase_origen__version__workflow=workflow).exists())
+
+    def test_desconectar_fases_deja_auditoria(self):
+        workflow = self._crear_flujo()
+        self._fases_en_cadena(workflow, ("A", "B"))
+        transicion = self.TransicionFase.objects.get(fase_origen__version__workflow=workflow)
+        self.client.post(reverse("flujos:fase_desconectar", args=[workflow.pk, transicion.pk]))
+        self.assertFalse(self.TransicionFase.objects.filter(pk=transicion.pk).exists())
+        self.assertTrue(
+            RegistroAuditoria.objects.filter(
+                accion=RegistroAuditoria.Accion.ELIMINAR, object_id=transicion.pk,
+                modelo="workflows.transicionfaseworkflow",
+            ).exists()
+        )
+
+    def test_editar_una_fase_actualiza_su_nombre(self):
+        workflow = self._crear_flujo()
+        self._fase(workflow, "Original")
+        fase = self.Fase.objects.get(version__workflow=workflow, nombre="Original")
+        self.client.post(
+            reverse("flujos:fase_editar", args=[workflow.pk, fase.pk]),
+            {f"fase-{fase.pk}-editar-nombre": "Renombrada", f"fase-{fase.pk}-editar-descripcion": "",
+             f"fase-{fase.pk}-editar-orden": ""},
+        )
+        fase.refresh_from_db()
+        self.assertEqual(fase.nombre, "Renombrada")
+
+    def test_una_fase_de_otro_flujo_no_se_puede_tocar_desde_este(self):
         uno = self._crear_flujo("Uno")
         otro = self._crear_flujo("Otro")
-        self._bloque(otro, "Ajeno")
-        ajeno = self.Etapa.objects.get(version__workflow=otro, nombre="Ajeno")
-        self.client.post(reverse("flujos:bloque_eliminar", args=[uno.pk, ajeno.pk]))
-        self.assertTrue(self.Etapa.objects.filter(pk=ajeno.pk).exists())
+        self._fase(otro, "Ajena")
+        ajena = self.Fase.objects.get(version__workflow=otro, nombre="Ajena")
+        respuesta = self.client.post(reverse("flujos:fase_eliminar", args=[uno.pk, ajena.pk]))
+        self.assertEqual(respuesta.status_code, 404)
+        self.assertTrue(self.Fase.objects.filter(pk=ajena.pk).exists())
+
+    def test_las_rutas_de_bloques_del_editor_anterior_no_crean_nada(self):
+        workflow = self._crear_flujo()
+        respuesta = self.client.post(
+            reverse("flujos:bloque_crear", args=[workflow.pk]),
+            {"nuevo-tipo": "ACTIVIDAD", "nuevo-nombre": "Bloque", "nuevo-config-tipo_actor": "SOLICITANTE"},
+        )
+        self.assertRedirects(respuesta, reverse("flujos:lienzo", args=[workflow.pk]))
+        self.assertFalse(self.Etapa.objects.filter(version__workflow=workflow).exists())
 
     def test_una_version_publicada_no_se_edita(self):
         from django.core.exceptions import ValidationError
 
-        from apps.catalogo.ejecucion import agregar_bloque_en_flujo
+        from apps.workflows.fases import agregar_fase
 
         workflow = self._flujo_publicado()
         with self.assertRaises(ValidationError):
-            agregar_bloque_en_flujo(
-                workflow, workflow.version_activa, self.diseñador, tipo="ACTIVIDAD", nombre="Tarde",
-                tipo_actor="SOLICITANTE",
-            )
+            agregar_fase(workflow.version_activa, self.diseñador, nombre="Tarde")
+        self.assertEqual(self._fase(workflow, "Tarde").status_code, 302)
+        self.assertEqual(self._nombres_de_fases(workflow.version_activa), ["Planeación", "Ejecución"])
 
     def test_las_operaciones_de_un_flujo_exigen_que_la_version_sea_suya(self):
         from django.core.exceptions import ValidationError
@@ -3957,7 +4079,7 @@ class DisenadorFlujosTests(TestCase):
 
     def test_publicar_activa_la_version_sin_tocar_ningun_servicio(self):
         workflow = self._crear_flujo("A publicar")
-        self._bloque(workflow, "Paso")
+        self._fase(workflow, "Única")
         servicio = self._servicio_usando(workflow)
         # Primera publicación: nadie cambia, no exige confirmación reforzada.
         self.client.post(reverse("flujos:publicar", args=[workflow.pk]))
@@ -3970,10 +4092,19 @@ class DisenadorFlujosTests(TestCase):
 
     def test_un_flujo_incompleto_no_se_publica_y_dice_que_falta(self):
         workflow = self._crear_flujo("Incompleto")
-        self._bloque(workflow, "Decide", tipo="DECISION")  # decisión sin condiciones ni salida
+        self._fase(workflow, "Suelta uno")
+        self._fase(workflow, "Suelta dos")  # dos fases sin conectar: dos iniciales y dos finales
         respuesta = self.client.get(reverse("flujos:lienzo", args=[workflow.pk]))
         self.assertFalse(respuesta.context["publicable"])
         self.assertTrue(respuesta.context["errores_publicacion"])
+        self.client.post(reverse("flujos:publicar", args=[workflow.pk]))
+        workflow.refresh_from_db()
+        self.assertIsNone(workflow.version_activa_id)
+
+    def test_un_flujo_sin_fases_no_se_publica(self):
+        workflow = self._crear_flujo("Vacío")
+        respuesta = self.client.get(reverse("flujos:lienzo", args=[workflow.pk]))
+        self.assertFalse(respuesta.context["publicable"])
         self.client.post(reverse("flujos:publicar", args=[workflow.pk]))
         workflow.refresh_from_db()
         self.assertIsNone(workflow.version_activa_id)
@@ -3991,6 +4122,9 @@ class DisenadorFlujosTests(TestCase):
         self.assertEqual(self._versiones(workflow), {1: self.Version.Estado.ACTIVA, 2: self.Version.Estado.BORRADOR})
         workflow.refresh_from_db()
         self.assertEqual(workflow.version_activa_id, version_activa)  # el borrador no afecta a nadie
+        # El borrador nace como copia de la activa.
+        borrador = workflow.versiones.get(numero=2)
+        self.assertEqual(self._nombres_de_fases(borrador), ["Planeación", "Ejecución"])
         servicio.refresh_from_db()
         self.assertEqual(servicio.workflow_id, workflow.pk)
 
@@ -4032,20 +4166,25 @@ class DisenadorFlujosTests(TestCase):
     def test_crear_copia_es_independiente_y_no_cambia_a_nadie(self):
         original = self._flujo_publicado("Original")
         servicio = self._servicio_usando(original)
-        etapas_originales = original.versiones.get().etapas.count()
+        fases_originales = self._nombres_de_fases(original.versiones.get())
 
         respuesta = self.client.post(reverse("flujos:copia", args=[original.pk]), {"nombre": "Mi copia"})
         copia = self.Workflow.objects.get(nombre="Mi copia")
         self.assertRedirects(respuesta, reverse("flujos:lienzo", args=[copia.pk]))
         self.assertNotEqual(copia.pk, original.pk)
+        self.assertEqual(copia.modo, original.modo)
         self.assertEqual(self._versiones(copia), {1: self.Version.Estado.BORRADOR})
-        self.assertEqual(copia.versiones.get().etapas.count(), etapas_originales)
+        self.assertEqual(self._nombres_de_fases(copia.versiones.get()), fases_originales)
+        self.assertEqual(
+            self.TransicionFase.objects.filter(fase_origen__version__workflow=copia).count(),
+            self.TransicionFase.objects.filter(fase_origen__version__workflow=original).count(),
+        )
 
         # El original y su servicio no cambian; modificar la copia no toca al original.
         servicio.refresh_from_db()
         self.assertEqual(servicio.workflow_id, original.pk)
-        self._bloque(copia, "Solo en la copia")
-        self.assertEqual(original.versiones.get().etapas.count(), etapas_originales)
+        self._fase(copia, "Solo en la copia")
+        self.assertEqual(self._nombres_de_fases(original.versiones.get()), fases_originales)
         self.assertEqual(self._versiones(original), {1: self.Version.Estado.ACTIVA})
 
     def test_la_copia_sin_nombre_usa_uno_por_defecto(self):
@@ -4071,12 +4210,11 @@ class DisenadorFlujosTests(TestCase):
         respuesta = self.client.get(reverse("flujos:lienzo", args=[workflow.pk]))
         self.assertEqual(sorted(s.nombre for s in respuesta.context["usado_por"]), ["Servicio dos", "Servicio uno"])
         self.assertContains(respuesta, "Servicio uno")
-        self.assertContains(respuesta, "afectará a sus tickets")
         self.assertEqual([v.numero for v in respuesta.context["versiones"]], [1])
 
     def test_las_acciones_solo_aceptan_post(self):
         workflow = self._crear_flujo()
-        for nombre in ("datos", "preparar", "publicar", "copia", "bloque_crear"):
+        for nombre in ("datos", "preparar", "publicar", "copia", "fase_crear"):
             self.assertEqual(self.client.get(reverse(f"flujos:{nombre}", args=[workflow.pk])).status_code, 405, nombre)
 
     def test_exigen_autenticacion(self):
@@ -4159,14 +4297,16 @@ class DisenadorServiciosD3Tests(TestCase):
         self.assertEqual(flujo["estado"], "optional")
         self.assertContains(respuesta, "Sin flujo")
 
-    def test_proceso_sin_flujo_requiere_atencion_y_no_publica(self):
+    def test_proceso_sin_flujo_queda_sin_configurar_y_no_publica(self):
         from apps.catalogo.operaciones import validar_publicacion
 
         self.client.login(username="d3_configurador", password=CLAVE_PRUEBA)
         proceso = self._servicio("Proceso sin flujo", tipo=Servicio.Tipo.PROCESO)
         respuesta = self.client.get(reverse("catalogo:studio", args=[proceso.pk]), {"tab": "ejecucion"})
         flujo = next(s for s in respuesta.context["secciones"] if s["clave"] == "ejecucion")
-        self.assertEqual(flujo["estado"], "attention")
+        # Bloque 2: falta una pieza obligatoria (no hay nada configurado): «Sin configurar», y no se publica.
+        self.assertEqual(flujo["estado"], "empty")
+        self.assertEqual(flujo["texto"], "Necesita un flujo")
         with self.assertRaises(ValidationError):
             validar_publicacion(proceso)
 
@@ -4191,6 +4331,7 @@ class DisenadorServiciosD3Tests(TestCase):
         workflow = self._flujo_publicado()
         servicio = self._servicio("Publica con flujo", workflow=workflow)
         self._activar_configuracion_operativa(servicio)
+        _con_ruta_de_atencion(servicio)
         self.client.login(username="d3_vincula", password=CLAVE_PRUEBA)
         respuesta = self.client.post(reverse("catalogo:studio_publicar", args=[servicio.pk]))
         self.assertEqual(respuesta.status_code, 302)
@@ -4231,8 +4372,8 @@ class DisenadorServiciosD3Tests(TestCase):
         respuesta = self.client.get(reverse("catalogo:studio", args=[servicio.pk]), {"tab": "ejecucion"})
 
         flujo = next(s for s in respuesta.context["secciones"] if s["clave"] == "ejecucion")
-        self.assertEqual(flujo["texto"], "Lista para activar")
-        self.assertContains(respuesta, "Activar configuracion")
+        self.assertEqual(flujo["texto"], "Lista para activar al publicar")
+        self.assertContains(respuesta, "Activar configuración")
 
     def test_copia_contextual_solo_cambia_el_vinculo_del_servicio_actual(self):
         workflow = self._flujo_publicado("Compartido D3")
@@ -5879,12 +6020,18 @@ class StudioBloqueEntregableTests(_EscenarioBloqueEntregableCatalogoMixin, TestC
         self.assertEqual(respuesta.status_code, 200)
         self.assertEqual(
             [codigo for codigo, _, _ in respuesta.context["bloques_disponibles"]],
-            ["ACTIVIDAD", "ENTREGABLE", "APROBACION", "DECISION"],
+            # Fase 2: «Actividades en paralelo» se ofrece siempre; «Recorrido por ítem», solo en un proceso
+            # con colecciones (este Servicio no las tiene).
+            ["ACTIVIDAD", "ENTREGABLE", "APROBACION", "DECISION", "GRUPO_ACTIVIDADES"],
         )
+        # Fase 4.A/4.B: el alta es por intención («¿Qué necesitas que suceda?»); cada fase ofrece el menú de
+        # intenciones en su inspector y cada opción tiene UN formulario de alta (con la fase elegible).
         for fase in (self.fase, self.fase_dos):
-            for codigo in ("ACTIVIDAD", "ENTREGABLE", "APROBACION", "DECISION"):
-                self.assertContains(respuesta, f'id="panel-nuevo-{fase.pk}-{codigo}"')
-            self.assertNotContains(respuesta, f'id="panel-nuevo-{fase.pk}-ESPERA"')
+            self.assertContains(respuesta, f'data-fase-agregar="{fase.pk}"')
+            self.assertContains(respuesta, f'id="inspector-fase-{fase.pk}"')
+        for codigo in ("tarea", "resultado", "aprobacion", "decision"):
+            self.assertContains(respuesta, f'id="inspector-nuevo-{codigo}"')
+        self.assertNotContains(respuesta, 'id="inspector-nuevo-espera"')
 
     def test_el_selector_solo_ofrece_los_entregables_activos_del_servicio(self):
         from apps.catalogo.entregables import retirar_definicion_entregable
@@ -6998,3 +7145,308 @@ class StudioFechaRequeridaTests(TestCase):
         )
         campo.refresh_from_db()
         self.assertFalse(campo.es_fecha_requerida)
+
+
+class StudioActividadAmpliadaTests(_EscenarioBloqueEntregableCatalogoMixin, TestCase):
+    """Fase 1 (modelo configurable de procesos) — ACTIVIDAD con plazos, evidencia y lista de verificación:
+    se configura en el mismo bloque del Studio, se valida al guardar y al publicar."""
+
+    def setUp(self):
+        self._preparar_escenario_entregable()
+        _otorgar_permiso(self.actor, "workflows.administrar")
+        formulario = Formulario.objects.create(nombre="Entrada Studio actividad")
+        entrada = crear_nueva_version(formulario, self.actor)
+        activar_version(formulario, entrada, self.actor)
+        self.servicio.formulario = formulario
+        self.servicio.activo = False
+        self.servicio.save(update_fields=["formulario", "activo", "actualizado_en"])
+        self.version = self._version()
+        self.client.login(username="bloque_clave", password=CLAVE_PRUEBA)
+
+    def _crear(self, nombre="Preparar", **extra):
+        datos = {
+            "fase_id": self.fase.pk, "nuevo-tipo": "ACTIVIDAD", "nuevo-nombre": nombre, "nuevo-descripcion": "",
+            "nuevo-config-tipo_actor": "SOLICITANTE",
+        }
+        datos.update({f"nuevo-config-{k}": v for k, v in extra.items()})
+        return self.client.post(reverse("catalogo:studio_bloque_crear", args=[self.servicio.pk]), datos)
+
+    def test_studio_guarda_plazos_evidencia_y_verificacion(self):
+        self._crear(
+            plazo_previsto_cantidad="2", plazo_previsto_unidad="DIAS",
+            plazo_limite_cantidad="5", plazo_limite_unidad="DIAS", plazo_habiles="on", requiere_evidencia="on",
+            verificacion_obligatoria="Revisar soporte\n\nConfirmar datos", verificacion_opcional="Avisar",
+        )
+        bloque = self.version.bloques.get(nombre="Preparar")
+        self.assertEqual(bloque.configuracion["plazo_previsto"], {"cantidad": 2, "unidad": "DIAS"})
+        self.assertEqual(bloque.configuracion["plazo_limite"], {"cantidad": 5, "unidad": "DIAS"})
+        self.assertTrue(bloque.configuracion["plazo_habiles"])
+        self.assertTrue(bloque.configuracion["requiere_evidencia"])
+        self.assertEqual(
+            bloque.configuracion["verificacion"],
+            [
+                {"texto": "Revisar soporte", "obligatorio": True},
+                {"texto": "Confirmar datos", "obligatorio": True},
+                {"texto": "Avisar", "obligatorio": False},
+            ],
+        )
+        self.assertEqual(bloque.configuracion["tipo_actor"], "SOLICITANTE")
+
+    def test_la_edicion_muestra_lo_guardado(self):
+        self._crear(plazo_limite_cantidad="4", plazo_limite_unidad="HORAS", verificacion_opcional="Avisar")
+        bloque = self.version.bloques.get(nombre="Preparar")
+        respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "ejecucion"})
+        # Fase 4.A: las fechas están a la vista y evidencia/verificación, en «Opciones avanzadas».
+        self.assertContains(respuesta, "Plazo desde que llega la actividad")
+        self.assertContains(respuesta, "Opciones avanzadas: evidencia, verificación y subtareas")
+        fila = next(
+            f for item in respuesta.context["fases_configuracion"] for f in item["bloques"] if f["bloque"].pk == bloque.pk
+        )
+        inicial = fila["form_configurar"].initial
+        self.assertEqual((inicial["plazo_limite_cantidad"], inicial["plazo_limite_unidad"]), (4, "HORAS"))
+        self.assertEqual(inicial["verificacion_opcional"], "Avisar")
+
+    def test_la_fecha_prevista_no_puede_superar_la_limite(self):
+        respuesta = self._crear(
+            plazo_previsto_cantidad="3", plazo_previsto_unidad="DIAS",
+            plazo_limite_cantidad="2", plazo_limite_unidad="DIAS",
+        )
+        self.assertFalse(self.version.bloques.filter(nombre="Preparar").exists())
+        self.assertIn("después de la fecha límite", " ".join(str(m) for m in get_messages_de(respuesta)))
+
+    def test_el_dominio_rechaza_una_configuracion_invalida(self):
+        from apps.catalogo.configuracion_ejecucion import agregar_bloque_operativo, validar_configuracion_ejecucion
+
+        with self.assertRaises(ValidationError):
+            agregar_bloque_operativo(
+                self.version, self.actor, fase=self.fase, tipo="ACTIVIDAD", nombre="Mal",
+                configuracion={"tipo_actor": "SOLICITANTE", "plazo_limite": {"cantidad": 0, "unidad": "DIAS"}},
+            )
+        # Un registro inconsistente que llegue por otra vía se detecta al publicar.
+        BloqueOperativo.objects.create(
+            version=self.version, fase=self.fase, tipo="ACTIVIDAD", nombre="Inconsistente", orden=99,
+            configuracion={"tipo_actor": "SOLICITANTE", "verificacion": [{"texto": ""}]},
+        )
+        self.assertTrue(any("Inconsistente" in e for e in validar_configuracion_ejecucion(self.version)))
+
+    def test_una_configuracion_anterior_sin_ampliacion_sigue_siendo_valida(self):
+        from apps.catalogo.actividades import errores_de_actividad
+
+        self.assertEqual(errores_de_actividad({"tipo_actor": "SOLICITANTE", "permite_subtareas": True}), [])
+
+
+# ---------------------------------------------------------------------------
+# Fase 2 (modelo configurable de procesos) — Studio: recorrido por ítem, actividades en
+# paralelo, bloques contenidos, responsable desde columna, fechas desde un dato,
+# decisiones permitidas, cierre automático del alcance y datos de inicio.
+# ---------------------------------------------------------------------------
+
+
+class StudioRecorridosTests(_EscenarioBloqueEntregableCatalogoMixin, TestCase):
+    def setUp(self):
+        from apps.catalogo.models import Campo
+        from apps.catalogo.parrilla import configurar_parrilla
+
+        self._preparar_escenario_entregable()
+        _otorgar_permiso(self.actor, "workflows.administrar")
+        _otorgar_permiso(self.actor, "formulario.administrar")
+        formulario = Formulario.objects.create(nombre="Entrada Studio recorridos")
+        entrada = crear_nueva_version(formulario, self.actor)
+        Campo.objects.create(version=entrada, tipo="FECHA", etiqueta="Fecha de lanzamiento", orden=1)
+        activar_version(formulario, entrada, self.actor)
+        self.servicio.formulario = formulario
+        self.servicio.tipo = "PROCESO"
+        self.servicio.activo = False
+        self.servicio.save(update_fields=["formulario", "tipo", "activo", "actualizado_en"])
+        self.definicion = configurar_parrilla(self.servicio, self.actor, nombre_elemento="Pieza")
+        columnas = self.definicion.formulario.versiones.get(estado="BORRADOR")
+        Campo.objects.create(version=columnas, tipo="USUARIO", etiqueta="Responsable", orden=1)
+        Campo.objects.create(version=columnas, tipo="EQUIPO", etiqueta="Equipo", orden=2)
+        Campo.objects.create(version=columnas, tipo="FECHA", etiqueta="Entrega", orden=3)
+        activar_version(self.definicion.formulario, columnas, self.actor)
+        self.definicion.refresh_from_db()
+        self.version = self._version()
+        self.client.login(username="bloque_clave", password=CLAVE_PRUEBA)
+
+    def _crear(self, tipo, nombre, **extra):
+        datos = {"fase_id": self.fase.pk, "nuevo-tipo": tipo, "nuevo-nombre": nombre, "nuevo-descripcion": ""}
+        datos.update(extra)
+        return self.client.post(reverse("catalogo:studio_bloque_crear", args=[self.servicio.pk]), datos)
+
+    def _recorrido(self):
+        self._crear(
+            "RECORRIDO_ITEMS", "Por pieza", **{
+                "nuevo-config-coleccion": self.definicion.clave,
+                "nuevo-config-condicion_variable": "item.responsable",
+                "nuevo-config-condicion_operador": "NO_ESTA_VACIO",
+                "nuevo-config-espera_alcance_cerrado": "on",
+            },
+        )
+        return self.version.bloques.get(nombre="Por pieza")
+
+    def _pagina(self):
+        return self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "ejecucion"})
+
+    def test_se_ofrecen_los_contenedores_y_se_configura_el_recorrido_sin_json(self):
+        disponibles = [codigo for codigo, _e, _d in self._pagina().context["bloques_disponibles"]]
+        self.assertIn("GRUPO_ACTIVIDADES", disponibles)
+        self.assertIn("RECORRIDO_ITEMS", disponibles)
+        bloque = self._recorrido()
+        self.assertEqual(bloque.tipo, "RECORRIDO_ITEMS")
+        self.assertEqual(
+            bloque.configuracion,
+            {
+                "coleccion": self.definicion.clave, "incorporar_nuevos": False, "espera_alcance_cerrado": True,
+                "condicion_ingreso": {"variable": "item.responsable", "operador": "NO_ESTA_VACIO", "valor": ""},
+            },
+        )
+
+    def test_un_servicio_sin_colecciones_no_ofrece_el_recorrido(self):
+        Servicio.objects.filter(pk=self.servicio.pk).update(tipo="SERVICIO")
+        disponibles = [codigo for codigo, _e, _d in self._pagina().context["bloques_disponibles"]]
+        self.assertNotIn("RECORRIDO_ITEMS", disponibles)
+        self.assertIn("GRUPO_ACTIVIDADES", disponibles)
+
+    def test_agregar_una_actividad_dentro_del_recorrido_con_responsable_y_fecha_de_columna(self):
+        caja = self._recorrido()
+        self._crear(
+            "ACTIVIDAD", "Producir", **{
+                "contenedor_id": caja.pk, "rama": "ITEM",
+                "nuevo-config-tipo_actor": "COLUMNA", "nuevo-config-columna": "responsable",
+                "nuevo-config-fecha_limite_campo": "item.entrega",
+                "nuevo-config-exige_datos_inicio": "on",
+            },
+        )
+        bloque = self.version.bloques.get(nombre="Producir")
+        self.assertEqual((bloque.contenedor_id, bloque.rama, bloque.fase_id), (caja.pk, "ITEM", caja.fase_id))
+        self.assertEqual(bloque.configuracion["tipo_actor"], "COLUMNA")
+        self.assertEqual(bloque.configuracion["columna"], "responsable")
+        self.assertEqual(bloque.configuracion["fecha_limite_campo"], "item.entrega")
+        self.assertTrue(bloque.configuracion["exige_datos_inicio"])
+        pagina = self._pagina()
+        principales = [f["bloque"].pk for item in pagina.context["fases_configuracion"] for f in item["bloques"]]
+        self.assertNotIn(bloque.pk, principales)  # se muestra dentro de su contenedor
+        fila = next(f for item in pagina.context["fases_configuracion"] for f in item["bloques"] if f["bloque"].pk == caja.pk)
+        self.assertEqual([c["bloque"].pk for c in fila["contenidos"]], [bloque.pk])
+        self.assertContains(pagina, "Para cada ítem")
+
+    def test_la_fecha_puede_venir_del_formulario_de_inicio(self):
+        self._crear(
+            "ACTIVIDAD", "Preparar lanzamiento", **{
+                "nuevo-config-tipo_actor": "SOLICITANTE", "nuevo-config-fecha_prevista_campo": "formulario.fecha_de_lanzamiento",
+            },
+        )
+        bloque = self.version.bloques.get(nombre="Preparar lanzamiento")
+        self.assertEqual(bloque.configuracion["fecha_prevista_campo"], "formulario.fecha_de_lanzamiento")
+
+    def test_aprobacion_por_item_con_aprobador_de_columna_y_exclusion(self):
+        caja = self._recorrido()
+        self._crear(
+            "APROBACION", "Revisar", **{
+                "contenedor_id": caja.pk, "rama": "ITEM", "nuevo-config-cantidad": "1",
+                "nuevo-participantes-0-tipo": "COLUMNA", "nuevo-participantes-0-columna": "responsable",
+                "nuevo-config-permite_exclusion": "on", "nuevo-config-justificacion_al_aprobar": "on",
+            },
+        )
+        bloque = self.version.bloques.get(nombre="Revisar")
+        self.assertEqual(
+            bloque.configuracion["participantes"],
+            [{"tipo": "COLUMNA", "usuario_id": None, "equipo_id": None, "columna": "responsable"}],
+        )
+        self.assertTrue(bloque.configuracion["permite_exclusion"])
+        self.assertTrue(bloque.configuracion["justificacion_al_aprobar"])
+        fila = next(
+            c for item in self._pagina().context["fases_configuracion"] for f in item["bloques"]
+            for c in f.get("contenidos", []) if c["bloque"].pk == bloque.pk
+        )
+        self.assertTrue(fila["en_recorrido"])
+        self.assertNotIn("destino_rechazada", fila["form_ruta"].fields)  # rechazar termina el recorrido del ítem
+
+    def test_rutas_de_una_aprobacion_por_item(self):
+        caja = self._recorrido()
+        self._crear(
+            "ACTIVIDAD", "Producir", **{"contenedor_id": caja.pk, "rama": "ITEM", "nuevo-config-tipo_actor": "SOLICITANTE"}
+        )
+        self._crear(
+            "APROBACION", "Revisar", **{
+                "contenedor_id": caja.pk, "rama": "ITEM", "nuevo-config-cantidad": "1",
+                "nuevo-participantes-0-tipo": "USUARIO", "nuevo-participantes-0-usuario": self.actor.pk,
+            },
+        )
+        producir = self.version.bloques.get(nombre="Producir")
+        revisar = self.version.bloques.get(nombre="Revisar")
+        self.client.post(
+            reverse("catalogo:studio_ruta_aprobacion_guardar", args=[self.servicio.pk, revisar.pk]),
+            {f"bloque-{revisar.pk}-ruta-destino_aprobada": "", f"bloque-{revisar.pk}-ruta-destino_devuelta": producir.pk},
+        )
+        rutas = {t.resultado_aprobacion: t.bloque_destino_id for t in revisar.transiciones_salientes.all()}
+        self.assertEqual(rutas, {"DEVUELTA": producir.pk})
+
+    def test_cerrar_el_alcance_al_llegar_a_un_bloque(self):
+        self._crear(
+            "ACTIVIDAD", "Consolidar", **{
+                "nuevo-config-tipo_actor": "SOLICITANTE", "nuevo-config-cierra_alcance": [self.definicion.clave],
+            },
+        )
+        bloque = self.version.bloques.get(nombre="Consolidar")
+        self.assertEqual(bloque.configuracion["cierra_alcance"], [self.definicion.clave])
+        self.assertIn("cierra el alcance", self._pagina().context["fases_configuracion"][0]["bloques"][0]["resumen"])
+
+    def test_actividades_en_paralelo_solo_admiten_ramas_generales(self):
+        self._crear("GRUPO_ACTIVIDADES", "En paralelo")
+        grupo = self.version.bloques.get(nombre="En paralelo")
+        self._crear("ACTIVIDAD", "Una", **{"contenedor_id": grupo.pk, "rama": "GENERAL", "nuevo-config-tipo_actor": "SOLICITANTE"})
+        self._crear("ACTIVIDAD", "Mal", **{"contenedor_id": grupo.pk, "rama": "ITEM", "nuevo-config-tipo_actor": "SOLICITANTE"})
+        self.assertEqual(list(grupo.contenidos.values_list("nombre", flat=True)), ["Una"])
+
+    def test_el_tipo_equipo_solo_existe_en_las_columnas(self):
+        borrador = crear_nueva_version(self.servicio.formulario, self.actor)
+        self.client.post(
+            reverse("catalogo:studio_campo_crear", args=[self.servicio.pk]),
+            {"campo-nuevo-tipo": "EQUIPO", "campo-nuevo-etiqueta": "Equipo", "campo-nuevo-orden": "2"},
+        )
+        self.assertFalse(borrador.campos.filter(tipo="EQUIPO").exists())
+        pagina = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "entrada"})
+        self.assertNotIn("EQUIPO", [v for v, _ in pagina.context["campo_form_nuevo"].fields["tipo"].choices])
+        crear_nueva_version(self.definicion.formulario, self.actor)
+        pagina = self.client.get(
+            reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "entrada", "uso": "parrilla"}
+        )
+        self.assertIn("EQUIPO", [v for v, _ in pagina.context["campo_form_nuevo"].fields["tipo"].choices])
+
+
+class StudioDatosInicioTests(_EscenarioBloquesClaveMixin, TestCase):
+    def setUp(self):
+        self._preparar_escenario_bloques()
+        self.servicio.tipo = "PROCESO"
+        self.servicio.save(update_fields=["tipo", "actualizado_en"])
+        self.client.login(username="bloque_clave", password=CLAVE_PRUEBA)
+
+    def _guardar(self, **extra):
+        return self.client.post(
+            reverse("catalogo:studio_general_guardar", args=[self.servicio.pk]),
+            {
+                "nombre": self.servicio.nombre, "descripcion": "", "categoria": self.servicio.categoria_id,
+                "tipo": "PROCESO", "instrucciones": "", "alcance_visibilidad": self.servicio.alcance_visibilidad,
+                "modo": "MANUAL", **extra,
+            },
+        )
+
+    def test_un_proceso_manual_elige_completar_los_datos_durante_la_ejecucion_y_se_audita(self):
+        eventos = RegistroAuditoria.objects.count()
+        self._guardar(datos_inicio_en_ejecucion="on")
+        self.servicio.refresh_from_db()
+        self.assertTrue(self.servicio.datos_inicio_en_ejecucion)
+        self.assertGreater(RegistroAuditoria.objects.count(), eventos)
+        self._guardar()
+        self.servicio.refresh_from_db()
+        self.assertFalse(self.servicio.datos_inicio_en_ejecucion)
+
+    def test_la_operacion_no_aplica_a_un_servicio(self):
+        from apps.catalogo.operaciones import configurar_datos_inicio
+
+        Servicio.objects.filter(pk=self.servicio.pk).update(tipo="SERVICIO")
+        self.servicio.refresh_from_db()
+        configurar_datos_inicio(self.servicio, self.actor, en_ejecucion=True)
+        self.servicio.refresh_from_db()
+        self.assertFalse(self.servicio.datos_inicio_en_ejecucion)

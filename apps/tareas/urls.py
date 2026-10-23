@@ -11,6 +11,7 @@ urlpatterns = [
     path("<int:pk>/tomar/", views.tomar_view, name="tomar"),
     path("<int:pk>/iniciar/", views.iniciar_view, name="iniciar"),
     path("<int:pk>/completar/", views.completar_view, name="completar"),
+    path("<int:pk>/verificacion/<int:item_id>/", views.verificar_view, name="verificar"),
     path("<int:pk>/asignar/", views.asignar_view, name="asignar"),
     path("<int:pk>/reasignar/", views.reasignar_view, name="reasignar"),
     path("<int:pk>/delegar/", views.delegar_view, name="delegar"),

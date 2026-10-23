@@ -108,6 +108,9 @@
       <div class="sol-backdrop" data-sol-preview-backdrop hidden></div>
     </div>
 
+    {% if ticket.datos_inicio_en_ejecucion %}
+      <p class="sol-help">Puedes iniciar este proceso sin completar todos los campos: quien lo atienda los completará durante la ejecución.</p>
+    {% endif %}
     <div class="sol-actions">
       <p class="sol-status{% if tiene_respuestas_guardadas %} is-saved{% else %} is-new{% endif %}" data-sol-status role="status" aria-live="polite">
         {% if tiene_respuestas_guardadas %}{% include "components/icon.html" with name="check-circle" size="sm" %}Borrador guardado{% else %}Borrador nuevo{% endif %}

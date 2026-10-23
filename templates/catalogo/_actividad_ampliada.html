@@ -1,0 +1,45 @@
+{% comment %} Fase 1 / 4.A — fechas de una ACTIVIDAD (a la vista) y evidencia, verificación, subtareas y datos de inicio
+   (en «Opciones avanzadas»). El modo de fechas solo guía: el servidor descarta lo que no corresponde. {% endcomment %}
+<fieldset class="svc-fieldset">
+  <legend>{{ form.modo_fechas.label }}</legend>
+  {% for opcion in form.modo_fechas %}
+    {% if opcion.data.value != "DATO" or form.fecha_prevista_campo.field.choices|length > 1 %}
+      <label class="choice">{{ opcion.tag }} {{ opcion.choice_label }}</label>
+    {% endif %}
+  {% endfor %}
+  <div data-mostrar-si="modo_fechas=PLAZO">
+    <p class="svc-note">Los plazos se cuentan desde que el flujo llega a esta actividad.</p>
+    <div class="svc-form-grid svc-form-grid--two">
+      <div class="field">{{ form.plazo_previsto_cantidad.label_tag }}<span class="svc-inline">{{ form.plazo_previsto_cantidad }} {{ form.plazo_previsto_unidad }}</span></div>
+      <div class="field">{{ form.plazo_limite_cantidad.label_tag }}<span class="svc-inline">{{ form.plazo_limite_cantidad }} {{ form.plazo_limite_unidad }}</span></div>
+    </div>
+    <label class="choice">{{ form.plazo_habiles }} {{ form.plazo_habiles.label_tag }}</label>
+  </div>
+  {% if form.fecha_prevista_campo.field.choices|length > 1 %}
+    <div data-mostrar-si="modo_fechas=DATO">
+      <div class="svc-form-grid svc-form-grid--two">
+        <div class="field">{{ form.fecha_prevista_campo.label_tag }}{{ form.fecha_prevista_campo }}</div>
+        <div class="field">{{ form.fecha_limite_campo.label_tag }}{{ form.fecha_limite_campo }}</div>
+      </div>
+      <p class="svc-note">La fecha sale del formulario o de la columna del ítem. Si el dato está vacío, la tarea no tendrá esa fecha.</p>
+    </div>
+  {% endif %}
+</fieldset>
+<details class="svc-advanced"{% if form.requiere_evidencia.value or form.verificacion_obligatoria.value or form.verificacion_opcional.value or form.exige_datos_inicio.value or form.permite_subtareas.value %} open{% endif %}>
+  <summary>Opciones avanzadas: evidencia, verificación y subtareas</summary>
+  <label class="choice">{{ form.requiere_evidencia }} {{ form.requiere_evidencia.label_tag }}</label>
+  <div class="field">{{ form.verificacion_obligatoria.label_tag }}{{ form.verificacion_obligatoria }}</div>
+  <div class="field">{{ form.verificacion_opcional.label_tag }}{{ form.verificacion_opcional }}</div>
+  <label class="choice">{{ form.exige_datos_inicio }} {{ form.exige_datos_inicio.label_tag }}</label>
+  <label class="choice">{{ form.permite_subtareas }} {{ form.permite_subtareas.label_tag }}</label>
+</details>
+{% if form.columnas_editables.field.choices %}
+  <details class="svc-advanced"{% if form.columnas_editables.value %} open{% endif %}>
+    <summary>Edición del ítem</summary>
+    <fieldset class="svc-fieldset">
+      <legend>{{ form.columnas_editables.label }}</legend>
+      {% for opcion in form.columnas_editables %}<label class="choice">{{ opcion.tag }} {{ opcion.choice_label }}</label>{% endfor %}
+    </fieldset>
+    <p class="svc-help">Solo en una actividad «para cada ítem». Mientras la tarea siga abierta, quien la realiza modifica únicamente estas columnas de su ítem; no edita otros ítems ni se vuelve responsable del ticket. Se valida al publicar contra la colección recorrida.</p>
+  </details>
+{% endif %}

@@ -1,0 +1,11 @@
+{% comment %} Responsable de una ACTIVIDAD (Fase 4.A: cada selector solo con su opción). «Avanzado: la persona o el equipo de
+   una columna del ítem» solo aparece si el proceso tiene columnas de persona/equipo; el servidor exige que el
+   bloque esté en el recorrido de esa colección. {% endcomment %}
+<div class="svc-form-grid svc-form-grid--two">
+  <div class="field">{{ form.tipo_actor.label_tag }}{{ form.tipo_actor }}</div>
+  <div class="field" data-mostrar-si="tipo_actor=USUARIO">{{ form.usuario.label_tag }}{{ form.usuario }}</div>
+  <div class="field" data-mostrar-si="tipo_actor=EQUIPO">{{ form.equipo.label_tag }}{{ form.equipo }}</div>
+  {% if form.columna.field.choices|length > 1 %}
+    <div class="field" data-mostrar-si="tipo_actor=COLUMNA">{{ form.columna.label_tag }}{{ form.columna }}<span class="svc-help">Solo para un paso «para cada ítem»: el responsable es la persona o el equipo de esa columna del ítem.</span></div>
+  {% endif %}
+</div>

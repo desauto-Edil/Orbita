@@ -122,9 +122,8 @@ def errores_de_compatibilidad(servicio, configuracion=None):
         )
     for nombre in bloques_dirigidos_al_solicitante(servicio, configuracion):
         errores.append(mensaje_bloque_solicitante(nombre))
-    obligatorios = campos_obligatorios_del_formulario(servicio)
-    if obligatorios:
-        errores.append(mensaje_campos_obligatorios(obligatorios))
+    # Fase 2: los campos obligatorios ya no impiden programar: el responsable los diligencia dentro de la
+    # ejecución (guardar avance / completar diligenciamiento), no antes de crear el ticket.
     return errores
 
 

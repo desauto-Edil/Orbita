@@ -172,6 +172,9 @@
             {% endif %}
             {% if panel.aprobacion %}<p><a class="btn btn--secondary" href="{% url 'aprobaciones:detalle' panel.aprobacion.pk %}">Abrir la aprobación</a></p>{% endif %}
 
+          {% elif panel.tipo == "RECORRIDO_ITEMS" or panel.tipo == "GRUPO_ACTIVIDADES" %}
+            <p>{{ trabajo_actual.pendiente }}</p>
+            <p class="ws-nota">Cada ítem o actividad avanza por su cuenta: mira «Recorridos» más abajo. El flujo continúa solo cuando no queda ninguno en curso.</p>
           {% elif panel.tipo == "TAREAS_ELEMENTOS" %}
             {% if panel.correccion %}
               <div class="alert alert--warning" role="status" id="ws-correccion">
@@ -206,7 +209,11 @@
 
   {% if es_proceso %}
     {# --- Elementos del proceso: la misma tabla operable del detalle, con la revisión de cada fila --- #}
+    {% include "tickets/_datos_inicio.html" with next_url=ws_next %}
+    {% include "tickets/_recorridos.html" with next_url=ws_next %}
+    {% include "tickets/_gacetas.html" %}
     {% include "tickets/_parrilla.html" %}
+    {% for parrilla in colecciones_adicionales %}{% include "tickets/_parrilla.html" %}{% endfor %}
 
     {# --- Entregables y revisiones --- #}
     <section class="card" id="ws-entregables" aria-labelledby="ws-entregables-t">

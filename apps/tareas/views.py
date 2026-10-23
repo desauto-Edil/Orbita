@@ -71,8 +71,9 @@ from apps.tareas.forms import (
     ReasignacionTareaForm,
     SubtareaForm,
 )
-from apps.tareas.models import AdjuntoTarea, Tarea
+from apps.tareas.models import AdjuntoTarea, ItemVerificacionTarea, Tarea
 from apps.tickets.autorizacion import puede_consultar_ticket
+from apps.tickets.edicion_por_tarea import elemento_de_tarea
 from apps.tickets.models import Ticket
 from apps.workflows.integracion import completar_tarea_workflow
 from apps.workflows.models import TareaWorkflow
@@ -118,9 +119,13 @@ def _ticket_de_la_tarea(tarea, usuario):
         TareaWorkflow.objects.filter(tarea=principal).select_related("instancia_etapa__instancia_workflow").first()
     )
     if vinculo is None:
-        return None
+        # Fase 3: la corrección de una gaceta lleva a su ticket.
+        ronda = getattr(principal, "ronda_gaceta", None)
+        ticket = ronda.participacion.gaceta.ticket if ronda is not None else None
+        return ticket if ticket is not None and puede_consultar_ticket(usuario, ticket) else None
     ticket = (
-        Ticket.objects.filter(instancia_workflow_id=vinculo.instancia_etapa.instancia_workflow_id)
+        # Fase 2: una tarea de un recorrido por ítem pertenece al Ticket de la instancia principal.
+        Ticket.objects.filter(instancia_workflow_id=vinculo.instancia_etapa.instancia_workflow.raiz_id)
         .select_related("detalle_servicio__servicio")
         .first()
     )
@@ -180,6 +185,8 @@ def detalle_view(request, pk):
         "tarea": tarea,
         "vencida": _es_vencida(tarea, ahora),
         "ticket_vinculado": _ticket_de_la_tarea(tarea, request.user),
+        # Bloque 3.1: el ítem que esta tarea abierta permite editar (solo las columnas que autoriza).
+        "elemento_editable": elemento_de_tarea(tarea, request.user),
         "delegado_actual": delegado_actual(tarea, ahora=ahora),
         "puede_tomar": puede_tomar_tarea(request.user, tarea),
         "puede_iniciar": puede_iniciar_tarea(request.user, tarea),
@@ -205,9 +212,30 @@ def detalle_view(request, pk):
         "evidencias": tarea.adjuntos.select_related("subido_por").all(),
         "delegaciones": tarea.delegaciones.select_related("delegado_a", "delegada_por").all(),
         "historial": tarea.historial.select_related("actor").all(),
+        "verificaciones": tarea.verificaciones.select_related("marcado_por").all(),
+        # Marca la lista quien puede completar la Tarea, mientras siga abierta (`marcar_verificacion`).
+        "puede_marcar_verificacion": (
+            tarea.estado in (Tarea.Estado.PENDIENTE, Tarea.Estado.EN_PROGRESO)
+            and puede_completar_tarea(request.user, tarea)
+        ),
         "titulo_pagina": tarea.titulo,
     }
     return render(request, "tareas/detalle.html", contexto)
+
+
+@login_required
+def verificar_view(request, pk, item_id):
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    tarea = get_object_or_404(Tarea, pk=pk)
+    item = get_object_or_404(ItemVerificacionTarea, pk=item_id, tarea=tarea)
+    if not puede_completar_tarea(request.user, tarea):
+        raise PermissionDenied
+    try:
+        operaciones.marcar_verificacion(item, request.user, marcado=request.POST.get("marcado") == "1")
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    return volver_a(request, "tareas:detalle", pk)
 
 
 @login_required
@@ -252,6 +280,11 @@ def completar_view(request, pk):
     try:
         if hasattr(tarea, "vinculo_workflow") or hasattr(tarea, "vinculo_elemento"):
             completar_tarea_workflow(tarea, request.user)
+        elif hasattr(tarea, "ronda_gaceta"):
+            # Fase 3: completar la corrección de una gaceta es reenviarla a revisión (una sola operación).
+            from apps.gacetas.operaciones import reenviar_por_tarea
+
+            reenviar_por_tarea(tarea, request.user)
         else:
             operaciones.completar_tarea(tarea, request.user)
     except ValidationError as exc:

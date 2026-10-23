@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}{{ titulo_pagina }} — {{ sistema.nombre }}{% endblock %}
+{% block content %}
+  <h1>Gacetas en revisión</h1>
+  <p class="text-muted">Gacetas abiertas o con el periodo cerrado en las que participas como revisor o aprobador.</p>
+  {% if gacetas %}
+    <ul class="work-list">
+      {% for gaceta in gacetas %}
+        <li class="card">
+          <a href="{% url 'gacetas:detalle' gaceta.pk %}"><strong>{{ gaceta.nombre }}</strong></a>
+          · {{ gaceta.ticket.detalle_servicio.servicio.nombre }} {{ gaceta.ticket.codigo|default:"" }}
+          · <span class="badge">{{ gaceta.get_estado_display }}</span>
+          {% if gaceta.vence_revision_en %}· Revisión hasta {{ gaceta.vence_revision_en|date:"d/m/Y H:i" }}{% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <section class="card"><p class="text-muted">No tienes gacetas en revisión.</p></section>
+  {% endif %}
+{% endblock %}

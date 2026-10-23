@@ -1,0 +1,3 @@
+{% comment %} Resumen del estado de un apartado bajo su título: qué hay guardado y, si requiere atención, qué
+   corregir (mensajes de los validadores existentes). {% endcomment %}<p class="apartado-estado apartado-estado--{{ apartado.estado }}"><span class="apartado-estado__etiqueta">{{ apartado.estado_etiqueta }}</span>{% if apartado.texto %}<span class="apartado-estado__texto">{{ apartado.texto }}</span>{% endif %}</p>
+{% if apartado.estado == "attention" and apartado.mensajes|length > 1 %}<ul class="apartado-estado__mensajes">{% for mensaje in apartado.mensajes %}<li>{{ mensaje }}</li>{% endfor %}</ul>{% endif %}

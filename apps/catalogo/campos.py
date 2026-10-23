@@ -24,7 +24,7 @@ from datetime import date, datetime
 from django.core.exceptions import ValidationError
 from django.core.validators import EmailValidator, URLValidator
 
-from apps.core.models import Area, UnidadNegocio, Usuario
+from apps.core.models import Area, Equipo, UnidadNegocio, Usuario
 
 
 class EstrategiaCampo(ABC):
@@ -336,4 +336,6 @@ ESTRATEGIAS_POR_TIPO = {
     "USUARIO": EstrategiaReferenciaOrganizacional(modelo=Usuario),
     "AREA": EstrategiaReferenciaOrganizacional(modelo=Area),
     "UNIDAD": EstrategiaReferenciaOrganizacional(modelo=UnidadNegocio),
+    # Fase 2 — equipos de trabajo (solo en columnas de colecciones de ítems; ver `apps.catalogo.studio`).
+    "EQUIPO": EstrategiaReferenciaOrganizacional(modelo=Equipo),
 }

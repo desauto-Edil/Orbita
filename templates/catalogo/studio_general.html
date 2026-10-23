@@ -1,56 +1,73 @@
-<section class="svc-section svc-section--basic">
+{% comment %} Fase 4.B — Básico con navegación secundaria: un grupo a la vez (Identidad · Inicio · Responsables · Visibilidad ·
+   Tiempos y prórrogas). Los campos del formulario general están en varios grupos y se asocian con `form=` al
+   MISMO formulario (`form-general-servicio`): «Guardar» sigue siendo una sola operación. Sin JS se ven todos. {% endcomment %}
+<section class="svc-section svc-section--basic ui-form" data-config-inicio data-tipo="{{ servicio.tipo }}" data-subnav-ambito="basico" data-subnav-asistente{% if basico_progresivo %} data-subnav-progresivo{% endif %}{% if basico_grupo %} data-subnav-inicial="{{ basico_grupo }}"{% endif %}>
   <header class="svc-section__head">
     <div>
       <p class="svc-kicker">Básico</p>
       <h2>Información general</h2>
+      <p class="apartado-estado apartado-estado--{{ basico_resumen.estado }}" data-basico-resumen><span class="apartado-estado__etiqueta">{{ basico_resumen.etiqueta }}</span><span class="apartado-estado__texto">{{ basico_resumen.texto }}</span></p>
       <p data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>Define cómo aparecerá este {{ servicio.get_tipo_display|lower }} en el catálogo.</p>
     </div>
-    <button type="submit" form="form-general-servicio" class="btn btn--primary">Guardar</button>
   </header>
+  <form id="form-general-servicio" method="post" action="{% url 'catalogo:studio_general_guardar' servicio.pk %}" class="form">{% csrf_token %}</form>
 
-  <div class="svc-basic-grid">
-    <article class="svc-panel svc-panel--editor">
-      <form id="form-general-servicio" method="post" action="{% url 'catalogo:studio_general_guardar' servicio.pk %}" class="form" data-config-inicio>
-        {% csrf_token %}
-        <div class="svc-form-grid svc-form-grid--two">
-          <div class="field">
-            <label for="id_nombre">Nombre</label>
-            {{ form_general.nombre }}
-          </div>
-          <div class="field">
-            <label for="id_categoria">Categoría</label>
-            {{ form_general.categoria }}
-          </div>
-          <div class="field">
-            <label for="id_tipo">Tipo</label>
-            {{ form_general.tipo }}
-            <span class="svc-help">Servicio: necesidad puntual. Proceso: ciclo estructurado.</span>
-          </div>
-          <div class="field" data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>
-            <label for="id_alcance_visibilidad">Visibilidad</label>
-            {{ form_general.alcance_visibilidad }}
-            <span class="svc-help">El acceso restringido se define abajo.</span>
-          </div>
-        </div>
+  <div class="subnav" role="tablist" aria-label="Grupos de Básico">
+    <button type="button" class="subnav__item" role="tab" data-subnav-ir="identidad" data-estado-apartado="{{ apartados_basico.identidad.estado }}" title="{{ apartados_basico.identidad.texto }}">{% include "catalogo/_estado_apartado.html" with apartado=apartados_basico.identidad etiqueta="Identidad" %}</button>
+    {% if inicio_aplica %}<button type="button" class="subnav__item" role="tab" data-subnav-ir="inicio" data-estado-apartado="{{ apartados_basico.inicio.estado }}" title="{{ apartados_basico.inicio.texto }}" data-solo-proceso{% if servicio.tipo != "PROCESO" %} hidden{% endif %}>{% include "catalogo/_estado_apartado.html" with apartado=apartados_basico.inicio etiqueta="Inicio" %}</button>{% endif %}
+    <button type="button" class="subnav__item" role="tab" data-subnav-ir="responsables" data-estado-apartado="{{ apartados_basico.responsables.estado }}" title="{{ apartados_basico.responsables.texto }}">{% include "catalogo/_estado_apartado.html" with apartado=apartados_basico.responsables etiqueta="Responsables" %}</button>
+    <button type="button" class="subnav__item" role="tab" data-subnav-ir="visibilidad" data-estado-apartado="{{ apartados_basico.visibilidad.estado }}" title="{{ apartados_basico.visibilidad.texto }}" data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>{% include "catalogo/_estado_apartado.html" with apartado=apartados_basico.visibilidad etiqueta="Visibilidad" %}</button>
+    <button type="button" class="subnav__item" role="tab" data-subnav-ir="tiempos" data-estado-apartado="{{ apartados_basico.tiempos.estado }}" title="{{ apartados_basico.tiempos.texto }}">{% include "catalogo/_estado_apartado.html" with apartado=apartados_basico.tiempos etiqueta="Tiempos y prórrogas" %}</button>
+  </div>
 
-        {% if inicio_aplica %}
+  <div class="subpanel" data-subpanel="identidad" role="tabpanel">
+    <h3 class="subpanel__titulo">Identidad</h3>
+    {% include "catalogo/_estado_apartado_detalle.html" with apartado=apartados_basico.identidad %}
+    <div class="ui-rejilla ui-rejilla--tres">
+      <div class="field"><label for="id_nombre">Nombre</label>{{ form_general.nombre }}</div>
+      <div class="field"><label for="id_categoria">Categoría</label>{{ form_general.categoria }}</div>
+      <div class="field">
+        <label for="id_tipo">Tipo</label>{{ form_general.tipo }}
+        <span class="svc-help">Servicio: necesidad puntual. Proceso: ciclo estructurado.</span>
+      </div>
+    </div>
+    <div class="ui-rejilla">
+      <div class="field"><label for="id_descripcion">Descripción</label>{{ form_general.descripcion }}</div>
+      <div class="field" data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>
+        <label for="id_instrucciones">Instrucciones para quien lo solicita</label>{{ form_general.instrucciones }}
+      </div>
+    </div>
+    <div class="form-actions" data-guardar-integrado><button type="submit" form="form-general-servicio" class="btn btn--primary">Guardar</button></div>
+  </div>
+
+  {% if inicio_aplica %}
+    <div class="subpanel" data-subpanel="inicio" role="tabpanel">
+      <h3 class="subpanel__titulo">¿Cómo se inicia este proceso?</h3>
+    {% include "catalogo/_estado_apartado_detalle.html" with apartado=apartados_basico.inicio %}
           <div class="svc-start" id="inicio-proceso" data-solo-proceso{% if servicio.tipo != "PROCESO" %} hidden{% endif %}>
             <fieldset class="field">
               <legend>{{ form_inicio.modo.label }}</legend>
-              {% for opcion in form_inicio.modo %}
-                <label class="choice">{{ opcion.tag }} {{ opcion.choice_label }}</label>
-              {% endfor %}
+              <div class="segmentos">
+                {% for opcion in form_inicio.modo %}
+                  <label class="choice">{{ opcion.tag }} {{ opcion.choice_label }}</label>
+                {% endfor %}
+              </div>
             </fieldset>
 
+            <div class="field" data-oculto-si-programado{% if programacion_activa %} hidden{% endif %}>
+              <label class="choice">{{ form_inicio.datos_inicio_en_ejecucion }} {{ form_inicio.datos_inicio_en_ejecucion.label }}</label>
+              <span class="svc-help">Quien inicia el proceso no tiene que completar todo el formulario: lo diligencia quien lo atiende, con «Guardar avance» y «Completar diligenciamiento». Solo afecta a los tickets nuevos.</span>
+            </div>
+
             <div data-inicio-programado{% if not programacion_activa %} hidden{% endif %}>
-              <div class="svc-form-grid svc-form-grid--two">
+              <div class="ui-rejilla ui-rejilla--tres">
                 <div class="field">{{ form_inicio.frecuencia.label_tag }}{{ form_inicio.frecuencia }}</div>
                 <div class="field">{{ form_inicio.dia_creacion.label_tag }}{{ form_inicio.dia_creacion }}<span class="svc-help">Del 1 al 28, para que exista todos los meses.</span></div>
                 <div class="field">{{ form_inicio.periodo.label_tag }}{{ form_inicio.periodo }}<span class="svc-help">Qué mes cubre la ejecución respecto del día en que se crea.</span></div>
-                <div class="field">{{ form_inicio.responsable_inicial.label_tag }}{{ form_inicio.responsable_inicial }}<span class="svc-help">Una persona o un equipo. Queda como responsable de este proceso.</span></div>
+                <div class="field ui-campo--doble">{{ form_inicio.responsable_inicial.label_tag }}{{ form_inicio.responsable_inicial }}<span class="svc-help">Una persona o un equipo. Queda como responsable de este proceso.</span></div>
               </div>
               <p class="svc-help">Órbita creará automáticamente una nueva ejecución de este proceso según esta programación. Aplica hacia adelante: no se crean ejecuciones de periodos que ya pasaron, y un proceso programado no se solicita manualmente.</p>
-              <p class="svc-help">Una ejecución no tiene solicitante: el flujo no puede incluir bloques dirigidos al solicitante, ni entrega formal ni campos obligatorios en el formulario.</p>
+              <p class="svc-help">Una ejecución no tiene solicitante: el flujo no puede incluir bloques dirigidos al solicitante ni entrega formal. El responsable completa el formulario de inicio dentro de la ejecución.</p>
               {% if inicio_incompatibilidades %}
                 <div class="alert alert--warning" role="status">
                   <strong>Para programarlo hay que corregir:</strong>
@@ -59,38 +76,7 @@
               {% endif %}
             </div>
           </div>
-        {% endif %}
-
-        <div class="field">
-          <label for="id_descripcion">Descripción</label>
-          {{ form_general.descripcion }}
-        </div>
-        <div class="field" data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>
-          <label for="id_instrucciones">Instrucciones para quien lo solicita</label>
-          {{ form_general.instrucciones }}
-        </div>
-      </form>
-    </article>
-
-    <aside class="svc-preview svc-preview--service" aria-label="Vista previa del servicio">
-      <span class="svc-preview__eyebrow">Vista previa</span>
-      <h3>{{ servicio.nombre }}</h3>
-      {% if servicio.descripcion %}<p>{{ servicio.descripcion }}</p>{% endif %}
-      <div class="svc-preview__chips">
-        <span>{{ servicio.get_tipo_display }}</span>
-        {% if servicio.categoria %}<span>{{ servicio.categoria.nombre }}</span>{% endif %}
-        <span>{% if servicio.activo %}Publicado{% else %}Borrador{% endif %}</span>
-      </div>
-      <div class="svc-preview__line" data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>
-        <strong>Visibilidad</strong>
-        <span>{% if es_restringido %}Restringido{% else %}Público interno{% endif %}</span>
-      </div>
-      {% if proceso_programado %}
-        <div class="svc-preview__line"><strong>Inicio</strong><span>Programado</span></div>
-      {% endif %}
-    </aside>
-  </div>
-
+              <div class="form-actions" data-guardar-integrado><button type="submit" form="form-general-servicio" class="btn btn--primary">Guardar</button></div>
   {% if programacion_activa or ejecuciones_programadas %}
     <section class="svc-panel svc-panel--start">
       <div class="svc-panel__head">
@@ -126,54 +112,27 @@
     </section>
   {% endif %}
 
-  {% if es_proceso %}
-    <div id="responsables-proceso">
-      {% include "catalogo/_studio_responsables.html" with tab_origen="general" %}
     </div>
   {% endif %}
 
-  <section class="svc-panel svc-panel--time">
-    <div class="svc-panel__head">
-      <div>
-        <h3>Tiempo objetivo de atención</h3>
-        <p>En cuánto tiempo se compromete la atención de cada ticket de este {{ servicio.get_tipo_display|lower }}.</p>
-      </div>
-      {% if servicio.tiempo_objetivo_cantidad %}<span class="svc-pill svc-pill--ok">Configurado</span>{% else %}<span class="svc-pill">Sin compromiso</span>{% endif %}
-    </div>
-    <form method="post" action="{% url 'catalogo:studio_tiempo_objetivo_guardar' servicio.pk %}" class="form">
-      {% csrf_token %}
-      <div class="svc-form-grid svc-form-grid--two">
-        <div class="field">{{ form_tiempo.cantidad.label_tag }}{{ form_tiempo.cantidad }}</div>
-        <div class="field">{{ form_tiempo.unidad.label_tag }}{{ form_tiempo.unidad }}</div>
-      </div>
-      <label class="choice">{{ form_tiempo.habiles }} {{ form_tiempo.habiles.label_tag }}</label>
-      <p class="svc-help">Déjalo vacío si no hay compromiso temporal. Aplica a los tickets que se creen desde ahora; los ya creados conservan el suyo.</p>
-      <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar tiempo objetivo</button></div>
-    </form>
-  </section>
+  <div class="subpanel" data-subpanel="responsables" role="tabpanel">
+    <h3 class="subpanel__titulo">Responsables generales</h3>
+    {% include "catalogo/_estado_apartado_detalle.html" with apartado=apartados_basico.responsables %}
+  <div id="responsables-generales">
+    {% include "catalogo/_studio_responsables.html" with tab_origen="general" %}
+  </div>
+  </div>
 
-  <section class="svc-panel svc-panel--extension">
-    <div class="svc-panel__head">
-      <div>
-        <h3>Prórroga de la fecha objetivo</h3>
-        <p>Si quien atiende puede pedir más tiempo cuando el ticket ya está en atención.</p>
+  <div class="subpanel" data-subpanel="visibilidad" role="tabpanel" data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>
+    <h3 class="subpanel__titulo">Visibilidad y búsqueda</h3>
+    {% include "catalogo/_estado_apartado_detalle.html" with apartado=apartados_basico.visibilidad %}
+    <div class="ui-rejilla ui-rejilla--tres">
+      <div class="field">
+        <label for="id_alcance_visibilidad">Quién puede encontrarlo</label>{{ form_general.alcance_visibilidad }}
+        <span class="svc-help">El acceso restringido se concede abajo, después de guardar.</span>
       </div>
-      {% if servicio.politica_prorroga == "NO_PERMITE" or not servicio.politica_prorroga %}<span class="svc-pill">No permite</span>{% else %}<span class="svc-pill svc-pill--ok">{{ servicio.get_politica_prorroga_display }}</span>{% endif %}
     </div>
-    <form method="post" action="{% url 'catalogo:studio_prorroga_guardar' servicio.pk %}" class="form">
-      {% csrf_token %}
-      <div class="svc-form-grid svc-form-grid--two">
-        <div class="field">{{ form_prorroga.politica.label_tag }}{{ form_prorroga.politica }}</div>
-      </div>
-      <div class="svc-form-grid svc-form-grid--two">
-        <div class="field">{{ form_prorroga.aprobador_usuario.label_tag }}{{ form_prorroga.aprobador_usuario }}</div>
-        <div class="field">{{ form_prorroga.aprobador_equipo.label_tag }}{{ form_prorroga.aprobador_equipo }}</div>
-      </div>
-      <p class="svc-help">El aprobador solo aplica con aprobación: elige un usuario o un equipo. Aplica a los tickets que se creen desde ahora; los ya creados conservan su política.</p>
-      <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar política de prórroga</button></div>
-    </form>
-  </section>
-
+    <div class="form-actions" data-guardar-integrado><button type="submit" form="form-general-servicio" class="btn btn--primary">Guardar</button></div>
   <section class="svc-panel svc-panel--visibility" data-oculto-si-programado{% if proceso_programado %} hidden{% endif %}>
     <div class="svc-panel__head">
       <div>
@@ -206,11 +165,11 @@
 
       <form method="post" action="{% url 'catalogo:studio_visibilidad_conceder' servicio.pk %}" class="form svc-inline-form">
         {% csrf_token %}
-        <div class="svc-form-grid svc-form-grid--four">
+        <div class="ui-rejilla ui-rejilla--tres">
           <div class="field">{{ form_visibilidad.tipo_alcance.label_tag }}{{ form_visibilidad.tipo_alcance }}</div>
-          <div class="field">{{ form_visibilidad.usuario.label_tag }}{{ form_visibilidad.usuario }}</div>
-          <div class="field">{{ form_visibilidad.area.label_tag }}{{ form_visibilidad.area }}</div>
-          <div class="field">{{ form_visibilidad.unidad_negocio.label_tag }}{{ form_visibilidad.unidad_negocio }}</div>
+          <div class="field" data-mostrar-si="tipo_alcance=USUARIO">{{ form_visibilidad.usuario.label_tag }}{{ form_visibilidad.usuario }}</div>
+          <div class="field" data-mostrar-si="tipo_alcance=AREA">{{ form_visibilidad.area.label_tag }}{{ form_visibilidad.area }}</div>
+          <div class="field" data-mostrar-si="tipo_alcance=UNIDAD">{{ form_visibilidad.unidad_negocio.label_tag }}{{ form_visibilidad.unidad_negocio }}</div>
         </div>
         <div class="form-actions"><button type="submit" class="btn btn--secondary">Conceder acceso</button></div>
       </form>
@@ -270,4 +229,60 @@
       </form>
     </section>
   {% endif %}
+  </div>
+
+  <div class="subpanel" data-subpanel="tiempos" role="tabpanel">
+    <h3 class="subpanel__titulo">Tiempos y prórrogas</h3>
+    {% include "catalogo/_estado_apartado_detalle.html" with apartado=apartados_basico.tiempos %}
+  <section class="svc-panel svc-panel--time">
+    <div class="svc-panel__head">
+      <div>
+        <h3>Tiempo objetivo de atención</h3>
+        <p>En cuánto tiempo se compromete la atención de cada ticket de este {{ servicio.get_tipo_display|lower }}.</p>
+      </div>
+      {% if servicio.tiempo_objetivo_cantidad %}<span class="svc-pill svc-pill--ok">Configurado</span>{% else %}<span class="svc-pill">Sin compromiso</span>{% endif %}
+    </div>
+    <form method="post" action="{% url 'catalogo:studio_tiempo_objetivo_guardar' servicio.pk %}" class="form">
+      {% csrf_token %}
+      <div class="ui-rejilla ui-rejilla--tres">
+        <div class="field">{{ form_tiempo.cantidad.label_tag }}{{ form_tiempo.cantidad }}</div>
+        <div class="field">{{ form_tiempo.unidad.label_tag }}{{ form_tiempo.unidad }}</div>
+        <div class="field ui-campo--alinear"><label class="choice">{{ form_tiempo.habiles }} {{ form_tiempo.habiles.label_tag }}</label></div>
+      </div>
+      <p class="svc-help">Déjalo vacío si no hay compromiso temporal. Aplica a los tickets que se creen desde ahora; los ya creados conservan el suyo.</p>
+      <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar tiempo objetivo</button></div>
+    </form>
+  </section>
+
+  <section class="svc-panel svc-panel--extension">
+    <div class="svc-panel__head">
+      <div>
+        <h3>Prórroga de la fecha objetivo</h3>
+        <p>Si quien atiende puede pedir más tiempo cuando el ticket ya está en atención.</p>
+      </div>
+      {% if servicio.politica_prorroga == "NO_PERMITE" or not servicio.politica_prorroga %}<span class="svc-pill">No permite</span>{% else %}<span class="svc-pill svc-pill--ok">{{ servicio.get_politica_prorroga_display }}</span>{% endif %}
+    </div>
+    <form method="post" action="{% url 'catalogo:studio_prorroga_guardar' servicio.pk %}" class="form">
+      {% csrf_token %}
+      <div class="ui-rejilla ui-rejilla--tres">
+        <div class="field">{{ form_prorroga.politica.label_tag }}{{ form_prorroga.politica }}</div>
+        <div class="field" data-mostrar-si="politica=CON_APROBACION">{{ form_prorroga.aprobador_usuario.label_tag }}{{ form_prorroga.aprobador_usuario }}</div>
+        <div class="field" data-mostrar-si="politica=CON_APROBACION">{{ form_prorroga.aprobador_equipo.label_tag }}{{ form_prorroga.aprobador_equipo }}</div>
+        <p class="svc-help ui-campo--completo" data-mostrar-si="politica=CON_APROBACION">Elige un usuario o un equipo, no ambos.</p>
+      </div>
+      <p class="svc-help">Aplica a los tickets que se creen desde ahora; los ya creados conservan su política.</p>
+      <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar política de prórroga</button></div>
+    </form>
+  </section>
+
+  </div>
+
+  {% comment %} Asistente de Básico: Anterior / Continuar entre grupos. Continuar guarda el grupo actual si tiene
+     cambios (solo lo que permite su formulario) y abre el siguiente cuando el servidor confirma. Sin JS no se
+     muestra: cada grupo conserva su botón Guardar. {% endcomment %}
+  <nav class="subnav-pasos" aria-label="Avanzar entre grupos de Básico" data-subnav-pasos hidden>
+    <button type="button" class="btn btn--ghost" data-subnav-anterior>{% include "components/icon.html" with name="chevron-left" size="sm" %} Anterior</button>
+    <span class="subnav-pasos__posicion" data-subnav-posicion aria-live="polite"></span>
+    <button type="button" class="btn btn--primary" data-subnav-siguiente>Continuar</button>
+  </nav>
 </section>

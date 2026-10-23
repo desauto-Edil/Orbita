@@ -22,11 +22,19 @@ class DefinicionParrilla(RegistroBase):
 
     Cada Ticket congela la `FormularioVersion` ACTIVA al nacer (`tickets.ParrillaTicket`): cambiar
     columnas aquí solo afecta a los Tickets que nazcan después. `activa=False` deja de ofrecerla a
-    Tickets nuevos sin tocar los ya creados."""
+    Tickets nuevos sin tocar los ya creados.
 
-    servicio = models.OneToOneField(
-        "catalogo.Servicio", on_delete=models.CASCADE, related_name="definicion_parrilla"
+    Fase 1 (modelo configurable de procesos): un Proceso puede tener VARIAS colecciones de ítems. Cada
+    una se identifica por una `clave` estable (única por Proceso, generada una vez desde el nombre del
+    ítem) y se ordena por `orden`. La PRIMERA (menor `orden`) es la «colección por defecto»: la que
+    usan las piezas anteriores que conocían una sola estructura (tareas por elemento, revisión por
+    conjunto) y `apps.catalogo.parrilla.definicion_de(servicio)` sin clave."""
+
+    servicio = models.ForeignKey(
+        "catalogo.Servicio", on_delete=models.CASCADE, related_name="definiciones_parrilla"
     )
+    clave = models.CharField(max_length=claves.LARGO_MAXIMO, validators=[claves.validar_clave])
+    orden = models.PositiveIntegerField(default=1)
     formulario = models.OneToOneField(
         "catalogo.Formulario", on_delete=models.PROTECT, related_name="definicion_parrilla"
     )
@@ -35,6 +43,15 @@ class DefinicionParrilla(RegistroBase):
         help_text="Cómo se llama cada fila (p. ej. «Publicación»).",
     )
     activa = models.BooleanField(default=True)
+    # Fase 1 — tras cerrar el alcance de la colección en un Ticket, ¿se pueden agregar ítems de forma
+    # extraordinaria (autorizada y justificada)? Se congela en cada Ticket al nacer.
+    permite_altas_extraordinarias = models.BooleanField(default=False)
+
+    class Meta:
+        ordering = ["orden", "pk"]
+        constraints = [
+            UniqueConstraint(fields=["servicio", "clave"], name="uq_definicion_parrilla_servicio_clave"),
+        ]
 
     def clean(self):
         if self.servicio_id is not None:
@@ -71,6 +88,8 @@ class ConfiguracionTareasElemento(RegistroBase):
       completar es de una fase posterior.
     - `activa=False` deja de ofrecer la generación a los Tickets que nazcan después; no toca ningún Ticket
       ya creado ni las Tareas ya generadas.
+    - `columnas_editables` (Bloque 3.1): `[clave, …]` de columnas que el responsable de la Tarea ABIERTA puede
+      editar en SU elemento (nunca las que originaron la Tarea). Vacía = la Tarea no concede edición.
 
     Cada Ticket congela su propia copia al nacer (`tickets.ConfiguracionTareasTicket`): lo que se cambie
     aquí después no altera a los Tickets existentes."""
@@ -84,6 +103,7 @@ class ConfiguracionTareasElemento(RegistroBase):
     clave_responsable = models.SlugField(max_length=claves.LARGO_MAXIMO)
     clave_fecha_limite = models.SlugField(max_length=claves.LARGO_MAXIMO)
     requiere_evidencia = models.BooleanField(default=False)
+    columnas_editables = models.JSONField(default=list, blank=True)
 
     def __str__(self):
         return f"Tareas por elemento de {self.definicion}"
@@ -138,6 +158,39 @@ class RevisorDefinicion(RegistroBase):
             ),
             UniqueConstraint(
                 fields=["definicion", "equipo"], condition=Q(equipo__isnull=False), name="uq_revisordefinicion_equipo"
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.definicion} · {self.usuario or self.equipo}"
+
+
+class ParticipanteColeccion(RegistroBase):
+    """Bloque 3 — persona o equipo que PARTICIPA en una colección de ítems: crea y edita sus ítems durante la
+    ejecución sin ser el responsable del Ticket (no retira, no excluye, no cierra el alcance ni coordina
+    gacetas). Mismo patrón que `RevisorDefinicion`: configuración mutable; cada Ticket congela su copia
+    (`tickets.ParticipanteParrilla`) al nacer."""
+
+    definicion = models.ForeignKey(DefinicionParrilla, on_delete=models.CASCADE, related_name="participantes")
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    equipo = models.ForeignKey(Equipo, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+
+    class Meta:
+        ordering = ["pk"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(Q(usuario__isnull=False, equipo__isnull=True) | Q(usuario__isnull=True, equipo__isnull=False)),
+                name="ck_participantecoleccion_usuario_o_equipo",
+            ),
+            UniqueConstraint(
+                fields=["definicion", "usuario"], condition=Q(usuario__isnull=False),
+                name="uq_participantecoleccion_usuario",
+            ),
+            UniqueConstraint(
+                fields=["definicion", "equipo"], condition=Q(equipo__isnull=False),
+                name="uq_participantecoleccion_equipo",
             ),
         ]
 

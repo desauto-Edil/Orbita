@@ -62,6 +62,18 @@ def crear_plantilla_fases(actor, *, nombre, descripcion=""):
     )
 
 
+def clave_nueva_de_fase(version, nombre):
+    """Fase 4.A — clave estable para una fase NUEVA: única en todo el linaje del Workflow (no solo en su
+    versión), para que una fase creada después de eliminar otra con el mismo nombre nunca herede, al
+    reconciliar, los bloques que los Servicios tenían en la eliminada."""
+    from apps.catalogo.claves import generar_clave
+
+    usadas = FaseWorkflow.objects.filter(version__workflow_id=version.workflow_id).exclude(clave="").values_list(
+        "clave", flat=True
+    )
+    return generar_clave(nombre, usadas, por_defecto="fase")
+
+
 @transaction.atomic
 def agregar_fase(version, actor, *, nombre, descripcion="", orden=None):
     version.exigir_editable()
@@ -70,7 +82,9 @@ def agregar_fase(version, actor, *, nombre, descripcion="", orden=None):
     if orden is None:
         ultimo = version.fases.aggregate(maximo=Max("orden"))["maximo"] or 0
         orden = ultimo + 1
-    fase = FaseWorkflow(version=version, nombre=nombre, descripcion=descripcion, orden=orden)
+    fase = FaseWorkflow(
+        version=version, nombre=nombre, descripcion=descripcion, orden=orden, clave=clave_nueva_de_fase(version, nombre),
+    )
     fase.full_clean()
     fase.save()
     registrar_evento(
@@ -116,16 +130,17 @@ def editar_fase(fase, actor, *, nombre=None, descripcion=None, orden=None):
 @transaction.atomic
 def eliminar_fase(fase, actor):
     fase.version.exigir_editable()
-    anterior = serializar(fase)
-    fase.delete()
+    # La auditoría va ANTES de `delete()` (Django limpia el `pk` al borrar y `registrar_evento` lo
+    # necesita), igual que `editor.eliminar_etapa`.
     registrar_evento(
         accion=RegistroAuditoria.Accion.ELIMINAR,
         instancia=fase,
         origen=RegistroAuditoria.Origen.USUARIO,
         usuario=actor,
-        datos_anteriores=anterior,
+        datos_anteriores=serializar(fase),
         datos_nuevos=None,
     )
+    fase.delete()
 
 
 @transaction.atomic
@@ -153,13 +168,12 @@ def conectar_fases(origen, destino, actor, *, nombre="", prioridad=0):
 @transaction.atomic
 def eliminar_transicion_fase(transicion, actor):
     transicion.fase_origen.version.exigir_editable()
-    anterior = serializar(transicion)
-    transicion.delete()
     registrar_evento(
         accion=RegistroAuditoria.Accion.ELIMINAR,
         instancia=transicion,
         origen=RegistroAuditoria.Origen.USUARIO,
         usuario=actor,
-        datos_anteriores=anterior,
+        datos_anteriores=serializar(transicion),
         datos_nuevos=None,
     )
+    transicion.delete()

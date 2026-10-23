@@ -12,6 +12,7 @@
   {% if contexto_prorroga %}<div><dt>Qué se aprueba</dt><dd>Prórroga de la fecha objetivo · {{ contexto_prorroga.servicio.nombre }}</dd></div>{% endif %}
   {% if contexto_workflow %}<div><dt>Flujo</dt><dd>{{ contexto_workflow.workflow.nombre }}</dd></div>{% endif %}
   {% if contexto_workflow.fase %}<div><dt>Fase</dt><dd>{{ contexto_workflow.fase.nombre }}</dd></div>{% endif %}
+  {% if item_aprobado %}<div><dt>Ítem</dt><dd>{{ item_aprobado.nombre_elemento }} #{{ item_aprobado.elemento.numero }}</dd></div>{% endif %}
   {% if entregable_revisado %}<div><dt>Revisa</dt><dd>{{ entregable_revisado.nombre }} · {% if entregable_revisado.entregado %}Entregado{% else %}Pendiente de entregar{% endif %}</dd></div>{% endif %}
   <div><dt>Referencia</dt><dd>Aprobación #{{ aprobacion.pk }}</dd></div>
   <div><dt>Cómo se decide</dt><dd>{{ esquema.get_modo_display }}{% if esquema.politica %} · {{ esquema.get_politica_display }}{% endif %}</dd></div>

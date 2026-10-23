@@ -1,0 +1,306 @@
+{% comment %} Fase 4.B — CONSTRUCTOR VISUAL del flujo (Studio › Flujo, configuración por fases). Fases como columnas,
+   actividades como tarjetas, conexiones reales (apps.catalogo.lienzo / flujo_api) e inspector contextual a la
+   derecha. Mover una tarjeta dentro de su columna solo cambia la POSICIÓN VISUAL; el orden de ejecución y la
+   fase se cambian con acciones explícitas del inspector (con confirmación). JS: static/js/lienzo.js. {% endcomment %}
+      {% if variables_decision %}
+        <datalist id="variables-decision">
+          {% for referencia, descripcion in variables_decision %}<option value="{{ referencia }}">{{ descripcion }}</option>{% endfor %}
+        </datalist>
+      {% endif %}
+
+
+<div class="lienzo" data-lienzo
+     data-posiciones-url="{% url 'catalogo:studio_lienzo_posiciones' servicio.pk %}"
+     data-editable="{% if editable_ejecucion %}1{% else %}0{% endif %}"
+     data-arrastre="{% if puede_ejecucion %}1{% else %}0{% endif %}"
+     data-servicio="{{ servicio.pk }}">
+  {% csrf_token %}
+  <div class="lienzo__barra" role="toolbar" aria-label="Herramientas del flujo">
+    <div class="lienzo__barra-grupo">
+      <span class="chip chip--neutral" title="Plantilla de fases compartible">{% include "components/icon.html" with name="workflow" size="sm" %} {{ workflow.nombre }}{% if version_ejecucion_activa %} · v{{ version_ejecucion_activa.numero }}{% endif %}</span>
+      {% if configuracion_ejecucion_borrador %}
+        <span class="estado estado--progress">Borrador v{{ configuracion_ejecucion_borrador.numero }}</span>
+      {% endif %}
+      {% if configuracion_ejecucion_activa %}
+        <span class="estado estado--complete">Activa v{{ configuracion_ejecucion_activa.numero }}</span>
+      {% elif not configuracion_ejecucion_borrador %}
+        <span class="estado estado--empty">Sin configuración activa</span>
+      {% endif %}
+    </div>
+    <div class="lienzo__barra-grupo">
+      {% if reconciliacion %}<button type="button" class="btn btn--secondary btn--sm" data-seleccionar="inspector-reconciliar">{% include "components/icon.html" with name="alert" size="sm" %} El flujo cambió</button>{% endif %}
+      {% if pendientes_flujo %}<button type="button" class="btn btn--ghost btn--sm" data-seleccionar="inspector-validacion">{% include "components/icon.html" with name="alert" size="sm" %} {{ pendientes_flujo }} por revisar</button>{% endif %}
+      {% if recorrido_proceso %}<button type="button" class="btn btn--ghost btn--sm" data-seleccionar="inspector-recorrido">{% include "components/icon.html" with name="list" size="sm" %} Recorrido</button>{% endif %}
+      <button type="button" class="btn btn--ghost btn--sm" data-seleccionar="inspector-leyenda">Leyenda</button>
+      {% if configuracion_ejecucion_borrador %}
+        <form method="post" action="{% url 'catalogo:studio_ejecucion_activar_configuracion' servicio.pk %}" class="lienzo__accion">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--primary btn--sm"{% if not configuracion_ejecucion_publicable or not puede_ejecucion %} disabled{% endif %} title="Pone en vigor solo el flujo de este {{ servicio.get_tipo_display|lower }} para los tickets nuevos">Activar configuración</button>
+        </form>
+      {% elif puede_ejecucion and not reconciliacion or puede_ejecucion and configuracion_ejecucion_activa %}
+        <form method="post" action="{% url 'catalogo:studio_ejecucion_configurar' servicio.pk %}" class="lienzo__accion">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--primary btn--sm">Editar configuración</button>
+        </form>
+      {% endif %}
+    </div>
+    <div class="lienzo__zoom" role="group" aria-label="Zoom del lienzo">
+      <button type="button" class="btn-icon btn-icon--sm" data-zoom="-1" aria-label="Alejar">{% include "components/icon.html" with name="zoom-out" size="sm" %}</button>
+      <output class="lienzo__zoom-valor" data-zoom-valor>100%</output>
+      <button type="button" class="btn-icon btn-icon--sm" data-zoom="1" aria-label="Acercar">{% include "components/icon.html" with name="zoom-in" size="sm" %}</button>
+      <button type="button" class="btn-icon btn-icon--sm" data-zoom="ajustar" aria-label="Ajustar a la pantalla">{% include "components/icon.html" with name="maximize" size="sm" %}</button>
+    </div>
+  </div>
+  {% if sin_permiso_flujo %}
+    <p class="lienzo__aviso" role="status">Puedes ver el flujo, pero cambiar sus actividades requiere el permiso de administrar flujos.</p>
+  {% elif not editable_ejecucion and configuracion_ejecucion_activa and not reconciliacion %}
+    <p class="lienzo__aviso" role="status">Estás viendo la configuración activa. «Editar configuración» abre un borrador; lo activo no cambia hasta activarlo o publicar.</p>
+  {% endif %}
+
+  {% if not lienzo %}
+    <p class="lienzo__aviso" role="status">Este {{ servicio.get_tipo_display|lower }} aún no tiene actividades configuradas sobre el flujo. {% if puede_ejecucion %}Pulsa «Editar configuración» para empezar.{% endif %}</p>
+  {% endif %}
+  <div class="lienzo__cuerpo">
+    <div class="lienzo__viewport" data-lienzo-viewport tabindex="0" aria-label="Lienzo del flujo. Usa las flechas para desplazarte.">
+      <div class="lienzo__contenido" data-lienzo-contenido>
+        <svg class="lienzo__conexiones" data-lienzo-svg aria-hidden="true"></svg>
+        {% for col in lienzo.columnas %}
+          <section class="lienzo-fase{% if col.con_errores %} is-atencion{% endif %}" id="{{ col.dom_id }}" data-fase="{{ col.fase.pk }}" aria-labelledby="{{ col.dom_id }}-titulo">
+            <header class="lienzo-fase__cabecera">
+              <button type="button" class="lienzo-fase__titulo" id="{{ col.dom_id }}-titulo" data-seleccionar="inspector-fase-{{ col.fase.pk }}">
+                <span class="lienzo-fase__indice">{{ forloop.counter }}</span>
+                <span class="lienzo-fase__nombre">{{ col.fase.nombre }}</span>
+              </button>
+              <span class="chip chip--neutral" title="Actividades en esta fase">{{ col.tarjetas|length }}</span>
+              {% if col.con_errores %}<span class="estado estado--attention" title="Hay actividades por completar">!</span>{% endif %}
+              {% if editable_ejecucion %}
+                <button type="button" class="btn-icon btn-icon--sm" data-seleccionar="inspector-fase-{{ col.fase.pk }}" data-fase-agregar="{{ col.fase.pk }}" aria-label="Agregar actividad en {{ col.fase.nombre }}">{% include "components/icon.html" with name="plus" size="sm" %}</button>
+              {% endif %}
+              <button type="button" class="btn-icon btn-icon--sm" data-fase-contraer aria-expanded="true" aria-label="Contraer la fase {{ col.fase.nombre }}">{% include "components/icon.html" with name="chevron-left" size="sm" %}</button>
+            </header>
+            {% if col.fase.descripcion %}<p class="lienzo-fase__descripcion">{{ col.fase.descripcion|truncatechars:90 }}</p>{% endif %}
+            <div class="lienzo-fase__cuerpo" data-fase-cuerpo style="height: {{ col.alto }}px">
+              {% for t in col.tarjetas %}
+                {% include "catalogo/_lienzo_tarjeta.html" %}
+              {% empty %}
+                <p class="lienzo-fase__vacia">Sin actividades.{% if editable_ejecucion %} Usa + para agregar.{% endif %}</p>
+              {% endfor %}
+            </div>
+          </section>
+        {% endfor %}
+        <div class="lienzo-fin" id="nodo-fin"><span>Fin del flujo</span></div>
+      </div>
+    </div>
+
+    <aside class="lienzo__inspector inspector" data-inspector aria-label="Inspector" tabindex="-1">
+      <div class="inspector__vacio" data-inspector-vacio>
+        <strong>Selecciona una fase, una actividad o una conexión</strong>
+        <p>Sus propiedades aparecerán aquí. Para agregar una actividad, usa + en la columna de una fase.</p>
+      </div>
+
+      {% for col in lienzo.columnas %}
+        <section class="inspector__panel" id="inspector-fase-{{ col.fase.pk }}" data-inspector-panel hidden>
+          <header class="inspector__cabecera">
+            <span class="inspector__tipo">Fase {{ forloop.counter }}</span>
+            <h3 class="inspector__titulo">{{ col.fase.nombre }}</h3>
+            {% if col.fase.descripcion %}<p class="inspector__resumen">{{ col.fase.descripcion }}</p>{% endif %}
+          </header>
+          <p class="svc-help">{{ col.tarjetas|length }} actividad{{ col.tarjetas|length|pluralize:"es" }}. Las fases y sus conexiones se editan en la plantilla del flujo; aquí configuras qué sucede en cada una.</p>
+          {% if col.salidas %}
+            <ul class="inspector__lista">
+              {% for salida in col.salidas %}
+                <li>→ {{ salida.destino.nombre }} {% if salida.ejecuta %}<span class="estado estado--complete">Se ejecuta</span>{% else %}<span class="estado estado--empty" title="Cada fase solo continúa por su primera conexión">No se ejecuta</span>{% endif %}</li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p class="svc-help">Fase final: al terminar sus actividades el flujo termina.</p>
+          {% endif %}
+          {% if editable_ejecucion %}
+            <h4 class="inspector__subtitulo">Agregar actividad · ¿Qué necesitas que suceda?</h4>
+            <ul class="intenciones">
+              {% for grupo in intenciones_principal %}
+                <li class="intenciones__grupo">
+                  <span class="intenciones__titulo">{{ grupo.intencion.etiqueta }}</span>
+                  {% for item in grupo.opciones %}
+                    {% if item.disponible %}
+                      <button type="button" class="intenciones__opcion" data-seleccionar="inspector-nuevo-{{ item.opcion.codigo }}" data-fase-destino="{{ col.fase.pk }}" title="{{ item.opcion.descripcion }}">{{ item.opcion.etiqueta }}</button>
+                    {% else %}
+                      <span class="intenciones__no-disponible">{{ item.opcion.etiqueta }}: {{ item.motivo }} <a href="{% url 'catalogo:studio' servicio.pk %}?tab={{ item.seccion.0 }}{% if item.seccion.1 %}&amp;uso={{ item.seccion.1 }}{% endif %}">Ir allí</a></span>
+                    {% endif %}
+                  {% endfor %}
+                </li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        </section>
+      {% endfor %}
+
+      {% if editable_ejecucion %}
+        {% for grupo in intenciones_principal %}
+          {% for item in grupo.opciones %}
+            {% if item.disponible %}
+              <section class="inspector__panel" id="inspector-nuevo-{{ item.opcion.codigo }}" data-inspector-panel hidden>
+                <header class="inspector__cabecera">
+                  <span class="inspector__tipo">Nueva actividad · {{ grupo.intencion.etiqueta }}</span>
+                  <h3 class="inspector__titulo">{{ item.opcion.etiqueta }}</h3>
+                  <p class="inspector__resumen">{{ item.opcion.descripcion }}</p>
+                </header>
+                <form method="post" action="{% url 'catalogo:studio_bloque_crear' servicio.pk %}" class="form">
+                  {% csrf_token %}
+                  <div class="field">
+                    <label for="nuevo-fase-{{ item.opcion.codigo }}">Fase</label>
+                    <select id="nuevo-fase-{{ item.opcion.codigo }}" name="fase_id" data-fase-select>
+                      {% for fase in fases_vigentes %}<option value="{{ fase.pk }}">{{ fase.nombre }}</option>{% endfor %}
+                    </select>
+                  </div>
+                  {% include "catalogo/_bloque_operativo_nuevo.html" with codigo=item.opcion.tipo_bloque opcion=item.opcion decision_condicion=form_decision_condicion_nuevo decision_otro=form_decision_otro_caso_nuevo ruta_form=form_ruta_nueva en_recorrido=False %}
+                  <div class="inspector__pie">
+                    <button type="button" class="btn btn--ghost" data-inspector-cerrar>Cancelar</button>
+                    <button type="submit" class="btn btn--primary"{% if item.opcion.tipo_bloque == "ENTREGABLE" and item.opcion.codigo != "revision_conjunto" and servicio_sin_entregables %} disabled{% endif %}>Agregar al borrador</button>
+                  </div>
+                </form>
+              </section>
+            {% endif %}
+          {% endfor %}
+        {% endfor %}
+      {% endif %}
+
+      {% for fila in filas_inspector %}
+        <section class="inspector__panel" id="inspector-bloque-{{ fila.bloque.pk }}" data-inspector-panel data-nodo-ref="nodo-{{ fila.bloque.pk }}" hidden>
+          {% include "catalogo/_bloque_editor.html" %}
+        </section>
+      {% endfor %}
+
+      {% for c in lienzo.conexiones %}
+        <section class="inspector__panel" id="inspector-{{ c.id }}" data-inspector-panel data-conexion-ref="{{ c.id }}" hidden>
+          <header class="inspector__cabecera">
+            <span class="inspector__tipo">Conexión{% if c.tipo == "secuencia" %} · secuencia{% else %} · ruta{% endif %}</span>
+            <h3 class="inspector__titulo">{{ c.origen.nombre }} → {% if c.destino %}{{ c.destino.nombre }}{% else %}Fin del flujo{% endif %}</h3>
+            <p class="inspector__resumen">{{ c.cuando }}</p>
+          </header>
+          {% if c.tipo == "secuencia" %}
+            <p class="svc-help">Es el ORDEN DE EJECUCIÓN: después de «{{ c.origen.nombre }}» el flujo sigue {% if c.destino %}con «{{ c.destino.nombre }}»{% else %}hasta terminar{% endif %}. No se edita como una línea: cambia el orden («Antes» / «Después») o mueve la actividad de fase desde su inspector.</p>
+          {% else %}
+            <p class="svc-help">Es una RUTA de «{{ c.origen.nombre }}»: se toma {{ c.cuando|lower }}. Se edita en las rutas o condiciones de esa actividad.</p>
+          {% endif %}
+          <button type="button" class="btn btn--secondary btn--sm" data-seleccionar="inspector-bloque-{{ c.origen.pk }}">Abrir «{{ c.origen.nombre }}»</button>
+        </section>
+      {% endfor %}
+
+      <section class="inspector__panel" id="inspector-validacion" data-inspector-panel hidden>
+        <header class="inspector__cabecera"><span class="inspector__tipo">Por revisar</span><h3 class="inspector__titulo">Pendientes del flujo</h3></header>
+        {% if errores_configuracion_ejecucion %}
+          <h4 class="inspector__subtitulo">Antes de activar</h4>
+          <ul class="inspector__lista inspector__lista--errores">{% for error in errores_configuracion_ejecucion %}<li>{{ error }}</li>{% endfor %}</ul>
+        {% endif %}
+      {% if dependencias %}
+        <section id="dependencias">
+          <h4 class="inspector__subtitulo">Lo que tu configuración necesita</h4>
+          {% for dep in dependencias %}
+            <div class="svc-dependency svc-dependency--{{ dep.nivel }}">
+              <strong>{% if dep.bloquea %}Obligatorio para publicar:{% else %}Aviso:{% endif %}</strong> {{ dep.mensaje }}
+              <p class="svc-help">{{ dep.como_resolver }}</p>
+              {% if dep.agregar_opcion and editable_ejecucion and fases_vigentes %}
+                <form method="post" action="{% url 'catalogo:studio_bloque_crear' servicio.pk %}" class="form svc-inline-form">
+                  {% csrf_token %}
+                  <input type="hidden" name="intencion" value="{{ dep.agregar_opcion }}">
+                  <input type="hidden" name="nuevo-tipo" value="">
+                  {% for clave, valor in dep.agregar_datos %}<input type="hidden" name="nuevo-config-{{ clave }}" value="{{ valor }}">{% endfor %}
+                  {% if dep.agregar_opcion == "gaceta" %}<input type="hidden" name="nuevo-config-presentar_items" value="on"><input type="hidden" name="nuevo-config-esperar" value="RESOLUCION">{% endif %}
+                  <label>Nombre <input type="text" name="nuevo-nombre" maxlength="150" required value="{% if dep.agregar_opcion == "tareas_elementos" %}Tareas por elemento{% elif dep.agregar_opcion == "gaceta" %}Revisión en gaceta{% else %}Completar resultado{% endif %}"></label>
+                  <label>En la fase
+                    <select name="fase_id" required>{% for fase in fases_vigentes %}<option value="{{ fase.pk }}">{{ fase.nombre }}</option>{% endfor %}</select>
+                  </label>
+                  <button type="submit" class="btn btn--secondary btn--sm">Agregar el paso al borrador</button>
+                </form>
+              {% elif dep.agregar_opcion and not editable_ejecucion and puede_ejecucion %}
+                <p class="svc-help">Pulsa «Editar configuración» para agregar el paso desde aquí.</p>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </section>
+      {% endif %}
+
+      </section>
+
+      <section class="inspector__panel" id="inspector-reconciliar" data-inspector-panel hidden>
+      {% if reconciliacion %}
+        {# Fase 4.A — la plantilla publicó otra versión: los bloques se conservan y se trasladan por clave de fase. #}
+        <section class="svc-panel svc-dependency svc-dependency--advertencia" id="actualizar-flujo">
+          <h3>El flujo «{{ workflow.nombre }}» cambió</h3>
+          <p>Publicó la versión {{ reconciliacion.version_destino.numero }}. Tu configuración sigue funcionando sobre la versión {{ reconciliacion.base.workflow_version.numero }} para los tickets nuevos hasta que la actualices; los tickets existentes no cambian.</p>
+          {% if puede_ejecucion %}
+            <form method="post" action="{% url 'catalogo:studio_reconciliar' servicio.pk %}" class="form">
+              {% csrf_token %}
+              {% if reconciliacion.conflictos %}
+                <p><strong>Estas fases ya no existen y tienen actividades. Decide qué hacer con cada una (no se quita nada sin tu decisión):</strong></p>
+                {% for conflicto in reconciliacion.conflictos %}
+                  <div class="field">
+                    <label for="rec-fase-{{ conflicto.fase.pk }}">«{{ conflicto.fase.nombre }}» ({% for b in conflicto.bloques %}{{ b.nombre }}{% if not forloop.last %}, {% endif %}{% endfor %})</label>
+                    <select name="fase-{{ conflicto.fase.pk }}" id="rec-fase-{{ conflicto.fase.pk }}" required>
+                      <option value="">— Elige —</option>
+                      {% for fase in reconciliacion.version_destino.fases.all %}<option value="{{ fase.pk }}">Mover a «{{ fase.nombre }}»</option>{% endfor %}
+                      <option value="QUITAR">Quitar estas actividades</option>
+                    </select>
+                  </div>
+                {% endfor %}
+              {% else %}
+                <p>Todas las fases con actividades siguen existiendo: se trasladarán con sus rutas sin perder nada.</p>
+              {% endif %}
+              {% if reconciliacion.fases_nuevas %}<p class="svc-help">Fases nuevas sin actividades: {% for f in reconciliacion.fases_nuevas %}«{{ f.nombre }}»{% if not forloop.last %}, {% endif %}{% endfor %}.</p>{% endif %}
+              <button type="submit" class="btn btn--primary">Actualizar la configuración (borrador)</button>
+            </form>
+          {% endif %}
+        </section>
+      {% endif %}
+
+      </section>
+
+      <section class="inspector__panel" id="inspector-recorrido" data-inspector-panel hidden>
+      {% if recorrido_proceso %}
+        <section class="svc-panel" id="recorrido-proceso">
+          <div class="svc-panel__head">
+            <div>
+              <h3>Recorrido de ejecución</h3>
+              <p>El orden en que se ejecutan los bloques, quién los atiende, qué esperan y adónde sigue el flujo.</p>
+            </div>
+          </div>
+          <ol class="svc-flow-steps">
+            {% for paso in recorrido_proceso %}
+              <li class="svc-flow-step">
+                <div class="svc-flow-step__head">
+                  <span class="svc-tag">{{ paso.numero }}</span>
+                  <strong>{{ paso.bloque.nombre }}</strong>
+                  <span class="svc-tag svc-tag--accent">{{ paso.tipo }}</span>
+                  <span class="svc-muted">{{ paso.fase }}</span>
+                </div>
+                <p class="svc-help">{{ paso.responsable }} · {{ paso.espera }}</p>
+                {% if paso.nota %}<p class="svc-help">{{ paso.nota }}</p>{% endif %}
+                {% if paso.rutas %}
+                  <ul class="svc-flow-step__rutas">
+                    {% for ruta in paso.rutas %}<li class="svc-tag{% if ruta.sin_conectar %} svc-pill--warn{% endif %}">{{ ruta.cuando }} → {{ ruta.destino }}</li>{% endfor %}
+                  </ul>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ol>
+        </section>
+      {% endif %}
+
+      </section>
+
+      <section class="inspector__panel" id="inspector-leyenda" data-inspector-panel hidden>
+        <header class="inspector__cabecera"><span class="inspector__tipo">Ayuda</span><h3 class="inspector__titulo">Cómo leer el lienzo</h3></header>
+        <ul class="leyenda">
+          <li><span class="leyenda__linea leyenda__linea--secuencia"></span> Secuencia: el orden en que se ejecutan las actividades (dentro de la fase y al pasar a la siguiente).</li>
+          <li><span class="leyenda__linea leyenda__linea--aprobada"></span> Si se aprueba · <span class="leyenda__linea leyenda__linea--devuelta"></span> si se devuelve · <span class="leyenda__linea leyenda__linea--rechazada"></span> si se rechaza.</li>
+          <li><span class="leyenda__linea leyenda__linea--condicion"></span> Condición de una decisión · <span class="leyenda__linea leyenda__linea--otro_caso"></span> en otro caso.</li>
+          <li><span class="leyenda__linea leyenda__linea--fase-extra"></span> Conexión de fase que no se recorre (cada fase solo continúa por la primera).</li>
+        </ul>
+        <p class="svc-help">Arrastrar una tarjeta dentro de su fase solo cambia dónde se ve. El orden de ejecución («Paso N») se cambia con «Antes» / «Después»; cambiar de fase pide confirmación. Los pasos de un recorrido por ítem o de tareas en paralelo están dentro de su tarjeta.</p>
+        <p class="svc-help">Todavía no disponible: bifurcar por fase con condiciones y conectar una tarea a cualquier actividad (una tarea siempre sigue con la siguiente por orden). Para bifurcar, usa «Evaluar una condición» o las rutas de una aprobación.</p>
+      </section>
+    </aside>
+  </div>
+  {{ lienzo_json|json_script:"lienzo-datos" }}
+</div>

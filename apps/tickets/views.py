@@ -38,6 +38,7 @@ from apps.tickets.autorizacion import (
     puede_cancelar_ticket,
     puede_cerrar_ticket,
     puede_comentar_ticket,
+    puede_consultar_coleccion,
     puede_consultar_ticket,
     puede_entregar_ticket,
     puede_escribir_entregables_finales,
@@ -55,6 +56,7 @@ from apps.tickets.autorizacion import (
     puede_tomar,
     puede_ver_en_cola,
 )
+from apps.tickets.edicion_por_tarea import puede_editar_por_tarea
 from apps.tickets.forms import CancelacionProrrogaForm, SolicitudProrrogaForm
 from apps.tickets.models import (
     Adjunto,
@@ -388,6 +390,10 @@ def borrador_formulario_view(request, pk):
     if ticket.estado != Ticket.Estado.BORRADOR:
         return redirect("tickets:detalle", pk=ticket.pk)
     version = ticket.respuesta_formulario.formulario_version
+    # Proceso manual sin datos previos a la radicación: no hay formulario que diligenciar aquí; se inicia
+    # directamente desde la confirmación (los datos de la ejecución se completan dentro del ticket).
+    if solicitud.inicio_directo(ticket):
+        return redirect("tickets:revisar", pk=ticket.pk)
 
     if request.method == "POST":
         error_destino = _guardar_destino_general(request, ticket)
@@ -423,9 +429,16 @@ def solicitud_estado_view(request, pk):
 
 def _errores_para_revisar(ticket):
     """Obligatoriedad y validez del estado YA guardado (`radicar_ticket`
-    ejecuta exactamente esta validación)."""
+    ejecuta exactamente esta validación). Fase 2: si los datos de inicio
+    pertenecen a la ejecución, iniciar no exige los obligatorios (solo que lo
+    guardado sea válido), igual que `radicar_ticket`."""
     try:
-        validar_para_radicar(ticket)
+        if ticket.datos_inicio_en_ejecucion:
+            from apps.tickets.datos_inicio import validar_formato
+
+            validar_formato(ticket)
+        else:
+            validar_para_radicar(ticket)
     except ValidationError as exc:
         return exc.message_dict if hasattr(exc, "error_dict") else {}
     return {}
@@ -444,6 +457,9 @@ def revisar_view(request, pk):
 
     errores_formato, valores_con_error = {}, {}
     error_destino = None
+    if request.method == "POST" and solicitud.inicio_directo(ticket):
+        # Nada que guardar antes de radicar: se muestra la confirmación de inicio.
+        return redirect("tickets:revisar", pk=ticket.pk)
     if request.method == "POST":
         error_destino = _guardar_destino_general(request, ticket)
         errores_formato, valores_con_error, error_general = _guardar_envio(request, ticket, version)
@@ -469,7 +485,10 @@ def revisar_view(request, pk):
         return redirect("tickets:revisar", pk=ticket.pk)
 
     contexto = solicitud.contexto_workspace(ticket)
-    contexto["titulo_pagina"] = f"Revisa tu solicitud — {contexto['servicio'].nombre}"
+    contexto["titulo_pagina"] = (
+        f"Iniciar — {contexto['servicio'].nombre}" if contexto["inicio_directo"]
+        else f"Revisa tu solicitud — {contexto['servicio'].nombre}"
+    )
     # 4.F2: aviso (no bloqueante) si pidió una fecha anterior al tiempo objetivo del servicio.
     plazo = plazos.evaluar_plazo(ticket)
     contexto["plazo_corto"] = plazo if plazo is not None and plazo["anticipada"] else None
@@ -635,8 +654,15 @@ def detalle_view(request, pk):
     contexto.update(_contexto_entrega(request.user, ticket))
     contexto.update(_contexto_prorrogas(request.user, ticket))
     contexto.update(_contexto_trabajo_actual(request.user, ticket))
+    # Fase 2: datos de inicio diligenciados en la ejecución y recorridos por ítem / actividades en paralelo.
+    contexto["datos_inicio"] = trabajo_ops.datos_inicio_del_ticket(request.user, ticket)
+    contexto["recorridos"] = trabajo_ops.recorridos_del_ticket(request.user, ticket)
+    # Fase 3: gacetas del ticket y condiciones de cierre del Proceso.
+    contexto.update(trabajo_ops.gacetas_y_cierre(request.user, ticket))
     # 4.G2B1: elementos estructurados (solo si el Proceso los usa).
-    contexto["parrilla"] = parrilla_ops.tabla(ticket, request.user)
+    contexto["colecciones"] = parrilla_ops.tablas(ticket, request.user)
+    # La colección por defecto, con el nombre de siempre (una sola colección antes de la Fase 1).
+    contexto["parrilla"] = contexto["colecciones"][0] if contexto["colecciones"] else None
     return render(request, "tickets/detalle.html", contexto)
 
 
@@ -932,6 +958,59 @@ def reabrir_view(request, pk):
     return redirect("tickets:detalle", pk=pk)
 
 
+def _elemento_de_coleccion(request, pk, elemento_id):
+    """El ítem `elemento_id` del ticket `pk` para quien puede consultar su colección: quien consulta el ticket o
+    (Bloque 3) un participante de ESA colección, o (Bloque 3.1) el responsable de una tarea abierta que lo
+    trabaja y le permite editar columnas. Las operaciones vuelven a autorizar bajo lock."""
+    ticket = get_object_or_404(Ticket, pk=pk)
+    elemento = get_object_or_404(
+        parrilla_ops.ElementoParrilla.objects.select_related("parrilla"), pk=elemento_id, parrilla__ticket=ticket
+    )
+    if not (
+        puede_consultar_coleccion(request.user, elemento.parrilla, ticket)
+        or puede_editar_por_tarea(request.user, elemento, ticket)
+    ):
+        raise PermissionDenied
+    return ticket, elemento
+
+
+@login_required
+@require_GET
+def elemento_tarea_view(request, pk, elemento_id):
+    """Bloque 3.1 — UN ítem para el responsable de una tarea abierta que lo trabaja: edita solo las columnas que
+    su tarea autoriza (valores y archivos) y registra versiones, sin abrir el ticket ni la colección."""
+    ticket, elemento = _elemento_de_coleccion(request, pk, elemento_id)
+    ficha = parrilla_ops.ficha_por_tarea(elemento, request.user)
+    if ficha is None:
+        raise PermissionDenied
+    tarea_id = request.GET.get("tarea") or ""
+    return render(request, "tickets/elemento_tarea.html", {
+        "ticket": ticket,
+        "ficha": ficha,
+        "ws_next": request.get_full_path(),
+        "tarea_id": int(tarea_id) if tarea_id.isdigit() else None,
+        "titulo_pagina": f"{ficha['nombre_elemento']} #{elemento.numero}",
+    })
+
+
+@login_required
+@require_GET
+def coleccion_view(request, pk, clave):
+    """Bloque 3 — UNA colección del ticket para quien participa en ella (o consulta el ticket): sus ítems, alta,
+    edición, archivos y versiones con las mismas operaciones de siempre, sin abrir el resto del ticket."""
+    ticket = get_object_or_404(Ticket.objects.select_related("detalle_servicio__servicio"), pk=pk)
+    parrilla = get_object_or_404(parrilla_ops.ParrillaTicket, ticket=ticket, clave=clave)
+    if not puede_consultar_coleccion(request.user, parrilla, ticket):
+        raise PermissionDenied
+    return render(request, "tickets/coleccion.html", {
+        "ticket": ticket,
+        "servicio": ticket.detalle_servicio.servicio,
+        "parrilla": parrilla_ops.tabla(ticket, request.user, parrilla=parrilla),
+        "ws_next": request.path,
+        "titulo_pagina": f"{parrilla.nombre_elemento} — {ticket.codigo or ticket.pk}",
+    })
+
+
 def _volver_a_elementos(request, pk):
     """Vuelve a la pantalla de origen (`next`, solo destinos internos: p. ej. el espacio de trabajo del
     proceso) o, por defecto, a los elementos del detalle."""
@@ -946,14 +1025,19 @@ def _volver_a_elementos(request, pk):
 def elemento_agregar_view(request, pk):
     """4.G2B1 — agrega una fila a la parrilla del Ticket con los valores del formulario."""
     ticket = get_object_or_404(Ticket, pk=pk)
-    if not puede_consultar_ticket(request.user, ticket):
+    # Fase 1: la colección llega por su clave estable; sin ella, la por defecto (formularios anteriores).
+    clave = request.POST.get("coleccion") or None
+    parrilla = parrilla_ops.parrilla_de(ticket, clave)
+    # Bloque 3: un participante de la colección opera sin consultar el resto del ticket.
+    if not (puede_consultar_ticket(request.user, ticket) or (
+        parrilla is not None and puede_consultar_coleccion(request.user, parrilla, ticket)
+    )):
         raise PermissionDenied
-    parrilla = parrilla_ops.parrilla_de(ticket)
     try:
         if parrilla is None:
             raise ValidationError("Este ticket no usa elementos estructurados.")
         valores = parrilla_ops.valores_desde_post(request.POST, parrilla_ops.columnas_de(parrilla))
-        parrilla_ops.crear_elemento(ticket, request.user, valores)
+        parrilla_ops.crear_elemento(ticket, request.user, valores, clave=parrilla.clave)
     except (PermissionDenied, ValidationError) as exc:
         messages.error(request, _mensaje_error(exc))
     else:
@@ -965,12 +1049,10 @@ def elemento_agregar_view(request, pk):
 @require_POST
 def elemento_guardar_view(request, pk, elemento_id):
     """4.G2B1 — modifica los valores de una fila vigente."""
-    ticket = get_object_or_404(Ticket, pk=pk)
-    if not puede_consultar_ticket(request.user, ticket):
-        raise PermissionDenied
-    elemento = get_object_or_404(parrilla_ops.ElementoParrilla, pk=elemento_id, parrilla__ticket=ticket)
+    ticket, elemento = _elemento_de_coleccion(request, pk, elemento_id)
     try:
-        columnas = parrilla_ops.columnas_de(elemento.parrilla)
+        # Bloque 3.1: quien edita por su tarea solo envía sus columnas (un checkbox ausente no es «desmarcado»).
+        columnas = parrilla_ops.columnas_editables_para(request.user, elemento)
         parrilla_ops.actualizar_valores(
             elemento, request.user, parrilla_ops.valores_desde_post(request.POST, columnas)
         )
@@ -1037,6 +1119,222 @@ def _entregable_de_conjunto_o_404(pk, entregable_id):
 
 
 @login_required
+def _ticket_consultable(request, pk):
+    ticket = get_object_or_404(Ticket, pk=pk)
+    if not puede_consultar_ticket(request.user, ticket):
+        raise PermissionDenied
+    return ticket
+
+
+@login_required
+@require_POST
+def alcance_cerrar_view(request, pk):
+    """Fase 1 — cierra el alcance de una colección (foto del alcance original)."""
+    ticket = _ticket_consultable(request, pk)
+    try:
+        parrilla = parrilla_ops.cerrar_alcance(ticket, request.user, clave=request.POST.get("coleccion") or None)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, f"Alcance de «{parrilla.nombre_elemento}» cerrado.")
+    return _volver_a_elementos(request, pk)
+
+
+@login_required
+@require_POST
+def elemento_extraordinario_view(request, pk):
+    """Fase 1 — alta extraordinaria (justificada) tras cerrar el alcance."""
+    ticket = _ticket_consultable(request, pk)
+    parrilla = parrilla_ops.parrilla_de(ticket, request.POST.get("coleccion") or None)
+    try:
+        if parrilla is None:
+            raise ValidationError("Este ticket no usa elementos estructurados.")
+        valores = parrilla_ops.valores_desde_post(request.POST, parrilla_ops.columnas_de(parrilla))
+        elemento = parrilla_ops.agregar_elemento_extraordinario(
+            ticket, request.user, valores, clave=parrilla.clave, justificacion=request.POST.get("justificacion", ""),
+        )
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, f"#{elemento.numero} agregado como alta extraordinaria.")
+    return _volver_a_elementos(request, pk)
+
+
+@login_required
+@require_POST
+def elemento_salida_view(request, pk, elemento_id):
+    """Fase 1 — excluye o rechaza un ítem con justificación."""
+    ticket = _ticket_consultable(request, pk)
+    elemento = get_object_or_404(parrilla_ops.ElementoParrilla, pk=elemento_id, parrilla__ticket=ticket)
+    try:
+        decision = parrilla_ops.decidir_salida_de_alcance(
+            elemento, request.user, tipo=request.POST.get("tipo", ""), justificacion=request.POST.get("justificacion", ""),
+        )
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, f"#{elemento.numero}: {decision.get_tipo_display().lower()}.")
+    return _volver_a_elementos(request, pk)
+
+
+# --- Fase 2: datos de inicio, recorridos y versiones de un ítem ----------------------------------------------
+
+
+def _volver_a(request, pk, ancla):
+    destino = request.POST.get("next") or ""
+    if destino.startswith("/"):
+        return volver_a(request, "tickets:detalle", pk)
+    return redirect(f"{reverse('tickets:detalle', args=[pk])}#{ancla}")
+
+
+@login_required
+@require_POST
+def datos_inicio_view(request, pk):
+    """GUARDAR AVANCE (`accion=avance`) o COMPLETAR DILIGENCIAMIENTO (`accion=completar`) de los datos de inicio
+    de un proceso cuyos datos pertenecen a la ejecución. Son dos operaciones: primero se guarda el avance (en su
+    propia transacción, para no perder lo escrito) y, si se pidió completar, después se valida y se marca como
+    completo. La autorización y el estado los revalida el dominio (`apps.tickets.datos_inicio`)."""
+    from apps.tickets import datos_inicio
+
+    ticket = get_object_or_404(Ticket, pk=pk)
+    if not puede_consultar_ticket(request.user, ticket):
+        raise PermissionDenied
+    version = ticket.respuesta_formulario.formulario_version
+    respuestas = _leer_respuestas_de_request(request, version)
+    try:
+        datos_inicio.guardar_avance(ticket, request.user, respuestas)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+        return _volver_a(request, pk, "datos-inicio")
+    if request.POST.get("accion") != "completar":
+        messages.success(request, "Avance guardado. Puedes continuar después.")
+        return _volver_a(request, pk, "datos-inicio")
+    try:
+        datos_inicio.completar_diligenciamiento(ticket, request.user)
+    except ValidationError as exc:
+        pendientes = datos_inicio.pendientes_de(ticket)
+        if pendientes:
+            messages.error(request, "Se guardó el avance, pero falta completar: " + ", ".join(pendientes) + ".")
+        else:
+            messages.error(request, _mensaje_error(exc))
+    except PermissionDenied as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Datos de inicio completados.")
+    return _volver_a(request, pk, "datos-inicio")
+
+
+@login_required
+@require_POST
+def recorrido_reintentar_view(request, pk, instancia_id):
+    """Reintenta un recorrido detenido (p. ej. faltaba el responsable en la columna del ítem). Autoriza y
+    revalida bajo lock `workflows.integracion.reintentar_recorrido` (quien edita los elementos)."""
+    from apps.workflows.integracion import reintentar_recorrido
+    from apps.workflows.models import InstanciaWorkflow
+
+    ticket = get_object_or_404(Ticket, pk=pk)
+    if not puede_consultar_ticket(request.user, ticket) or ticket.instancia_workflow_id is None:
+        raise PermissionDenied
+    hija = get_object_or_404(InstanciaWorkflow, pk=instancia_id, instancia_padre_id=ticket.instancia_workflow_id)
+    try:
+        hija = reintentar_recorrido(hija, request.user)
+    except (PermissionDenied, ValidationError, ValueError) as exc:
+        messages.error(request, _mensaje_error(exc) if not isinstance(exc, ValueError) else str(exc))
+    else:
+        if hija.estado == InstanciaWorkflow.Estado.ERROR:
+            messages.error(request, "El recorrido sigue detenido: revisa el dato indicado.")
+        else:
+            messages.success(request, "Recorrido reanudado.")
+    return _volver_a(request, pk, "recorridos")
+
+
+@login_required
+@require_GET
+def elemento_versiones_view(request, pk, elemento_id):
+    """Historial de versiones de un ítem (las `VersionElemento` registradas: valores y archivos de cada foto,
+    quién, cuándo y por qué). Solo lectura; lo ve quien puede consultar el ticket."""
+    ticket, elemento = _elemento_de_coleccion(request, pk, elemento_id)
+    columnas = {c.clave: c for c in parrilla_ops.columnas_de(elemento.parrilla)}
+    etiquetas = {clave: c.etiqueta for clave, c in columnas.items()}
+    versiones = []
+    for version in reversed(parrilla_ops.versiones_de(elemento)):
+        contenido = version.contenido or {}
+        versiones.append({
+            "version": version,
+            "valores": [
+                {
+                    "etiqueta": etiquetas.get(clave, clave),
+                    "valor": parrilla_ops.texto_de_valor_canonico(columnas.get(clave), valor),
+                }
+                for clave, valor in sorted((contenido.get("valores") or {}).items())
+            ],
+            "archivos": [
+                {**archivo, "etiqueta": etiquetas.get(archivo.get("campo"), archivo.get("campo"))}
+                for archivo in contenido.get("archivos") or []
+            ],
+        })
+    contexto = {
+        "ticket": ticket,
+        "elemento": elemento,
+        "nombre_elemento": elemento.parrilla.nombre_elemento or "Ítem",
+        "actual": parrilla_ops.tabla_de_elemento(elemento),
+        "versiones": versiones,
+        "titulo_pagina": f"Versiones de {elemento.parrilla.nombre_elemento or 'ítem'} #{elemento.numero}",
+    }
+    return render(request, "tickets/elemento_versiones.html", contexto)
+
+
+@login_required
+@require_POST
+def elemento_version_view(request, pk, elemento_id):
+    """Fase 1 — registra una versión del ítem tal como está ahora."""
+    ticket, elemento = _elemento_de_coleccion(request, pk, elemento_id)
+    try:
+        version = parrilla_ops.registrar_version(elemento, request.user, request.POST.get("motivo", ""))
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, f"#{elemento.numero}: versión {version.numero} registrada.")
+    return _volver_a_elementos(request, pk)
+
+
+@login_required
+@require_POST
+def elemento_archivo_adjuntar_view(request, pk, elemento_id, campo_id):
+    """Fase 1 — adjunta un archivo a una columna ARCHIVO de un elemento."""
+    ticket, elemento = _elemento_de_coleccion(request, pk, elemento_id)
+    try:
+        adjunto = parrilla_ops.adjuntar_archivo_elemento(elemento, campo_id, request.user, request.FILES.get("archivo"))
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, f"Archivo «{adjunto.nombre_original}» adjuntado a #{elemento.numero}.")
+    return _volver_a_elementos(request, pk)
+
+
+@login_required
+@require_POST
+def elemento_archivo_retirar_view(request, pk, adjunto_id):
+    """Fase 1 — retira (lógicamente) un archivo de un elemento."""
+    ticket = get_object_or_404(Ticket, pk=pk)
+    adjunto = get_object_or_404(
+        Adjunto.objects.select_related("elemento__parrilla"), pk=adjunto_id, tipo_relacion=Adjunto.TipoRelacion.ELEMENTO,
+        elemento__parrilla__ticket=ticket,
+    )
+    if not (
+        puede_consultar_coleccion(request.user, adjunto.elemento.parrilla, ticket)
+        or puede_editar_por_tarea(request.user, adjunto.elemento, ticket)
+    ):
+        raise PermissionDenied
+    try:
+        parrilla_ops.retirar_archivo_elemento(adjunto, request.user)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, f"Archivo «{adjunto.nombre_original}» retirado.")
+    return _volver_a_elementos(request, pk)
+
+
 @require_GET
 def revision_conjunto_view(request, pk, entregable_id):
     """4.G2C1 — revisión de TODOS los elementos de un entregable de conjunto en una sola vista: N/N,
@@ -1198,12 +1496,16 @@ def descargar_adjunto_view(request, adjunto_id):
     # disponible — forma parte de la historia de una entrega.
     en_entrega = Exists(ResultadoEntregaTicket.adjuntos.through.objects.filter(adjunto_id=OuterRef("pk")))
     adjunto = get_object_or_404(
-        Adjunto.objects.filter(Q(retirado_en__isnull=True) | en_entrega).select_related(
+        # Fase 3: el archivo retirado de un ítem sigue siendo parte de sus versiones anteriores.
+        Adjunto.objects.filter(
+            Q(retirado_en__isnull=True) | en_entrega | Q(tipo_relacion=Adjunto.TipoRelacion.ELEMENTO)
+        ).select_related(
             "ticket",
             "comentario__ticket",
             "solicitud__ticket",
             "respuesta_solicitud__solicitud__ticket",
             "entregable__ticket",
+            "elemento__parrilla__ticket",
         ),
         pk=adjunto_id,
     )
@@ -1214,6 +1516,17 @@ def descargar_adjunto_view(request, adjunto_id):
             adjunto.tipo_relacion == Adjunto.TipoRelacion.ENTREGABLE
             and puede_revisar_entregable(request.user, adjunto.entregable)
         )
+        if not revisa and adjunto.tipo_relacion == Adjunto.TipoRelacion.ELEMENTO:
+            # Fase 3: revisores y aprobadores de una gaceta del ítem revisan sus evidencias.
+            from apps.gacetas.autorizacion import puede_ver_elemento
+
+            # Bloque 3: un participante de la colección ve los archivos de sus ítems.
+            # Bloque 3.1: y el responsable de una tarea abierta que trabaja el ítem.
+            revisa = (
+                puede_ver_elemento(request.user, adjunto.elemento)
+                or puede_consultar_coleccion(request.user, adjunto.elemento.parrilla, ticket)
+                or puede_editar_por_tarea(request.user, adjunto.elemento, ticket)
+            )
         if not revisa:
             raise PermissionDenied
     return FileResponse(adjunto.archivo.open("rb"), as_attachment=True, filename=adjunto.nombre_original)

@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% comment %}
+  Bloque 3.1 — UN ítem para el responsable de una tarea abierta que lo trabaja. Espera `ticket`, `ficha` (ver
+  `apps/tickets/parrilla.py::ficha_por_tarea`), `ws_next` y `tarea_id` (opcional, para volver a la tarea). Solo
+  ofrece las columnas que la tarea autoriza; el servidor vuelve a autorizar cada acción bajo lock.
+{% endcomment %}
+
+{% block title %}{{ titulo_pagina }} — {{ sistema.nombre }}{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/trabajo.css' %}">{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'core:mi_trabajo' %}">Mi trabajo</a>
+    {% if tarea_id %}
+      <span class="breadcrumb__separator" aria-hidden="true">/</span>
+      <a href="{% url 'tareas:detalle' tarea_id %}">Tarea</a>
+    {% endif %}
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">{{ ticket.codigo|default:"" }}{% if ticket.etiqueta %} · {{ ticket.etiqueta }}{% endif %}</span>
+  </nav>
+
+  <header class="page-header">
+    <h1>{{ ficha.nombre_elemento }} #{{ ficha.elemento.numero }}</h1>
+    <p class="text-muted">Tu tarea te permite modificar solo las columnas marcadas como editables. El resto se muestra como referencia.</p>
+  </header>
+
+  <section class="card">
+    <h2>Contenido actual</h2>
+    <dl class="resumen__datos">
+      {% for celda in ficha.celdas %}
+        <dt>{{ celda.campo.etiqueta }}{% if celda.editable %} <span class="badge badge--info">Editable</span>{% endif %}</dt>
+        <dd>{{ celda.texto|default:"—" }}</dd>
+      {% endfor %}
+    </dl>
+    <p><a href="{% url 'tickets:elemento_versiones' ticket.pk ficha.elemento.pk %}">Ver historial de versiones</a></p>
+  </section>
+
+  {% if ficha.celdas_valor %}
+    <section class="card">
+      <h2>Modificar</h2>
+      <form method="post" action="{% url 'tickets:elemento_guardar' ticket.pk ficha.elemento.pk %}" class="form">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ ws_next }}">
+        {% include "tickets/_parrilla_campos.html" with celdas=ficha.celdas_valor %}
+        <button type="submit" class="btn btn--primary">Guardar</button>
+      </form>
+    </section>
+  {% endif %}
+
+  {% for celda in ficha.celdas_archivo %}
+    <section class="card">
+      <h2>{{ celda.campo.etiqueta }}{% if celda.obligatorio %} <abbr title="Obligatorio">*</abbr>{% endif %}</h2>
+      {% for archivo in celda.archivos %}
+        <form method="post" action="{% url 'tickets:elemento_archivo_retirar' ticket.pk archivo.pk %}">
+          {% csrf_token %}<input type="hidden" name="next" value="{{ ws_next }}">
+          <a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a>
+          <button type="submit" class="btn btn--ghost btn--sm">Retirar archivo</button>
+        </form>
+      {% endfor %}
+      <form method="post" enctype="multipart/form-data" action="{% url 'tickets:elemento_archivo_adjuntar' ticket.pk ficha.elemento.pk celda.campo.pk %}">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ ws_next }}">
+        <input type="file" name="archivo" required>
+        <button type="submit" class="btn btn--secondary btn--sm">Adjuntar</button>
+      </form>
+    </section>
+  {% endfor %}
+
+  <section class="card">
+    <form method="post" action="{% url 'tickets:elemento_version' ticket.pk ficha.elemento.pk %}" class="form svc-inline-form">
+      {% csrf_token %}<input type="hidden" name="next" value="{{ ws_next }}">
+      <input type="text" name="motivo" maxlength="200" placeholder="Motivo de la versión (opcional)" aria-label="Motivo de la versión">
+      <button type="submit" class="btn btn--ghost btn--sm">Registrar versión</button>
+    </form>
+  </section>
+{% endblock %}

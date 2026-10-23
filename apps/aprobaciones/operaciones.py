@@ -63,7 +63,9 @@ from apps.core.models import RegistroAuditoria
 
 
 @transaction.atomic
-def crear_esquema_aprobacion(*, modo, politica=None, participantes, actor=None):
+def crear_esquema_aprobacion(
+    *, modo, politica=None, participantes, actor=None, permite_exclusion=False, justificacion_al_aprobar=False
+):
     """`participantes`: lista ordenada de tuplas
     `(tipo_aprobador, usuario_o_equipo)` — `tipo_aprobador` es
     `Aprobacion.TipoAprobador.USUARIO`/`EQUIPO`. `orden` se deriva de la
@@ -82,7 +84,10 @@ def crear_esquema_aprobacion(*, modo, politica=None, participantes, actor=None):
     if modo == EsquemaAprobacion.Modo.SECUENCIAL and politica:
         raise ValidationError("modo=SECUENCIAL no admite política de cierre propia.")
 
-    esquema = EsquemaAprobacion.objects.create(modo=modo, politica=politica or "")
+    esquema = EsquemaAprobacion.objects.create(
+        modo=modo, politica=politica or "", permite_exclusion=bool(permite_exclusion),
+        justificacion_al_aprobar=bool(justificacion_al_aprobar),
+    )
     for orden, (tipo_aprobador, aprobador) in enumerate(participantes, start=1):
         if tipo_aprobador == Aprobacion.TipoAprobador.USUARIO:
             Aprobacion.objects.create(
@@ -103,6 +108,10 @@ def crear_esquema_aprobacion(*, modo, politica=None, participantes, actor=None):
             "modo": esquema.modo,
             "politica": esquema.politica,
             "cantidad_aprobaciones": esquema.participaciones.count(),
+            # Fase 2: las decisiones permitidas solo se registran cuando se usan, así la auditoría de un
+            # esquema de siempre no cambia.
+            **({"permite_exclusion": True} if esquema.permite_exclusion else {}),
+            **({"justificacion_al_aprobar": True} if esquema.justificacion_al_aprobar else {}),
         },
     )
     return esquema
@@ -127,6 +136,9 @@ def _evaluar_cierre_esquema(esquema, participaciones):
 
     if any(p.estado == Estado.RECHAZADA for p in participaciones):
         resultado = EsquemaAprobacion.Resultado.RECHAZADA
+    elif any(p.estado == Estado.EXCLUIDA for p in participaciones):
+        # Fase 2 — precedencia aprobada: RECHAZADA > EXCLUIDA > DEVUELTA > APROBADA.
+        resultado = EsquemaAprobacion.Resultado.EXCLUIDA
     elif any(p.estado == Estado.DEVUELTA for p in participaciones):
         resultado = EsquemaAprobacion.Resultado.DEVUELTA
     else:
@@ -157,6 +169,20 @@ def _evaluar_cierre_esquema(esquema, participaciones):
     return esquema
 
 
+DECISIONES = (
+    Aprobacion.Estado.APROBADA, Aprobacion.Estado.RECHAZADA, Aprobacion.Estado.DEVUELTA, Aprobacion.Estado.EXCLUIDA,
+)
+
+
+def decisiones_permitidas(esquema):
+    """Fase 2 — las decisiones que ofrece un esquema: aprobar, devolver y rechazar siempre; excluir solo si el
+    esquema lo permite."""
+    base = [Aprobacion.Estado.APROBADA, Aprobacion.Estado.DEVUELTA, Aprobacion.Estado.RECHAZADA]
+    if esquema.permite_exclusion:
+        base.append(Aprobacion.Estado.EXCLUIDA)
+    return base
+
+
 @transaction.atomic
 def resolver_aprobacion(aprobacion, actor, *, decision, observacion=""):
     """CU-024. `decision` ∈ {APROBADA, RECHAZADA, DEVUELTA} — los mismos 3
@@ -164,12 +190,17 @@ def resolver_aprobacion(aprobacion, actor, *, decision, observacion=""):
     (PENDIENTE/NO_REQUERIDA nunca lo son). Observación obligatoria en
     RECHAZADA/DEVUELTA, opcional en APROBADA (RQF-080, decisión
     aprobada)."""
-    if decision not in (Aprobacion.Estado.APROBADA, Aprobacion.Estado.RECHAZADA, Aprobacion.Estado.DEVUELTA):
+    if decision not in DECISIONES:
         raise ValidationError(f"Decisión inválida: {decision}.")
-    if decision in (Aprobacion.Estado.RECHAZADA, Aprobacion.Estado.DEVUELTA) and not observacion:
-        raise ValidationError("La observación es obligatoria para rechazar o devolver (RQF-080).")
+    observacion = (observacion or "").strip()
+    if decision in (Aprobacion.Estado.RECHAZADA, Aprobacion.Estado.DEVUELTA, Aprobacion.Estado.EXCLUIDA) and not observacion:
+        raise ValidationError("La observación es obligatoria para rechazar, devolver o excluir (RQF-080).")
 
     esquema = EsquemaAprobacion.objects.select_for_update().get(pk=aprobacion.esquema_id)
+    if decision == Aprobacion.Estado.EXCLUIDA and not esquema.permite_exclusion:
+        raise ValidationError("Esta aprobación no permite excluir.")
+    if decision == Aprobacion.Estado.APROBADA and esquema.justificacion_al_aprobar and not observacion:
+        raise ValidationError("Esta aprobación exige una justificación también al aprobar.")
     participaciones = list(Aprobacion.objects.select_for_update().filter(esquema=esquema).order_by("pk"))
     por_pk = {p.pk: p for p in participaciones}
     aprobacion = por_pk.get(aprobacion.pk)
@@ -282,7 +313,8 @@ def anular_esquema_aprobacion(esquema, actor):
     registrar_evento(
         accion=RegistroAuditoria.Accion.ACTUALIZAR,
         instancia=esquema,
-        origen=RegistroAuditoria.Origen.USUARIO,
+        # Sin actor es el Sistema (p. ej. la aceptación automática de una gaceta al vencer su periodo).
+        origen=RegistroAuditoria.Origen.USUARIO if actor is not None else RegistroAuditoria.Origen.SISTEMA,
         usuario=actor,
         datos_anteriores={"aprobaciones_pendientes": len(pendientes)},
         datos_nuevos={"aprobaciones_pendientes": 0, "anulado": True},

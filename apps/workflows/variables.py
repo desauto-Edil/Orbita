@@ -35,6 +35,13 @@ Referencias admitidas (`variable` de una transición):
   referencias son INEXISTENTES allí. `ticket.*`, `formulario.*` y las variables
   planas funcionan igual en ambos modos.
 
+- Fase 2: `item.<clave de columna>` es el valor de esa columna en el ítem de un recorrido (solo dentro
+  de una subinstancia por ítem; fuera de ella es INEXISTENTE). `recorridos.<clave>.<total|completados|
+  excluidos|rechazados|cancelados>` y `grupos.<clave>.<total|completadas>` los publica el motor al terminar
+  un contenedor. `ticket.datos_inicio_completos` dice si los datos de inicio ya se completaron (siempre
+  verdadero cuando se completaron al iniciar). Una subinstancia resuelve `ticket.*` y `formulario.*` contra
+  el Ticket de su instancia principal.
+
 - `entregables.<clave>.satisfecho` (4.B1) es `True` cuando el bloque ENTREGABLE con esa
   clave quedó satisfecho; mientras el bloque no se haya completado es INEXISTENTE. Solo
   contiene ese indicador: el contenido (archivo, texto, enlace) vive en el
@@ -68,7 +75,14 @@ _CAMPOS_TICKET = {
     "radicado_en": lambda t: t.radicado_en,
     "fecha_objetivo": lambda t: t.fecha_objetivo_vigente,
     "fecha_objetivo_original": lambda t: t.fecha_objetivo_original,
+    "datos_inicio_completos": lambda t: _datos_inicio_completos(t),
 }
+
+
+def _datos_inicio_completos(ticket):
+    from apps.tickets.datos_inicio import datos_completos
+
+    return datos_completos(ticket)
 
 
 class ResolutorVariables:
@@ -86,6 +100,7 @@ class ResolutorVariables:
         self._ticket = None
         self._ticket_cargado = False
         self._formulario = None
+        self._item = None
 
     # --- Ticket -------------------------------------------------------------
 
@@ -104,7 +119,8 @@ class ResolutorVariables:
         consulta = Ticket.objects.select_related(
             "solicitante", "usuario_responsable", "equipo_responsable", "detalle_servicio__servicio"
         )
-        ticket = consulta.filter(instancia_workflow=self.instancia).first()
+        # Fase 2: una subinstancia pertenece al Ticket de su instancia principal.
+        ticket = consulta.filter(instancia_workflow_id=self.instancia.raiz_id).first()
         if ticket is not None:
             return ticket
         # Durante `radicar_ticket` el motor corre ANTES de que el Ticket guarde la
@@ -168,6 +184,38 @@ class ResolutorVariables:
             return INEXISTENTE
         return self.formulario.get(segmentos[0], INEXISTENTE)
 
+    # --- Ítem de un recorrido (Fase 2) --------------------------------------------
+
+    @property
+    def item(self):
+        """`{clave de columna: valor}` del ítem de esta subinstancia (vacío si no es un recorrido por ítem).
+        Una columna sin valor vale `None`; una clave que la colección no tiene es INEXISTENTE."""
+        if self._item is None:
+            self._item = self._cargar_item()
+        return self._item
+
+    def _cargar_item(self):
+        elemento_id = getattr(self.instancia, "elemento_id", None) if self.instancia is not None else None
+        if elemento_id is None:
+            return {}
+        from apps.tickets.models import ElementoParrilla
+
+        elemento = (
+            ElementoParrilla.objects.select_related("parrilla__formulario_version")
+            .prefetch_related("valores__campo").filter(pk=elemento_id).first()
+        )
+        if elemento is None:
+            return {}
+        valores = {campo.clave: None for campo in elemento.parrilla.formulario_version.campos.all() if campo.clave}
+        for valor in elemento.valores.all():
+            valores[valor.campo.clave] = valor.valor
+        return valores
+
+    def _del_item(self, segmentos):
+        if len(segmentos) != 1:
+            return INEXISTENTE
+        return self.item.get(segmentos[0], INEXISTENTE)
+
     # --- API --------------------------------------------------------------------
 
     def resolver(self, nombre):
@@ -183,6 +231,8 @@ class ResolutorVariables:
                 valor = self._del_ticket(resto)
             elif ambito == "formulario":
                 valor = self._del_formulario(resto)
+            elif ambito == "item":
+                valor = self._del_item(resto)
             elif ambito in AMBITOS_BLOQUE and len(resto) == 2:
                 valor = leer_resultado_bloque(self.contexto, ambito, resto[0], resto[1])
             if valor is not INEXISTENTE:
@@ -208,6 +258,7 @@ def referencias_disponibles(*, campos=(), bloques=()):
         ("ticket.solicitante", "Nombre de usuario de quien solicita"),
         ("ticket.responsable", "Nombre de usuario del responsable (vacío si aún no hay)"),
         ("ticket.fecha_objetivo", "Fecha objetivo vigente de atención"),
+        ("ticket.datos_inicio_completos", "Verdadero cuando los datos de inicio ya se completaron"),
     ]
     for campo in campos:
         if campo.clave:
@@ -221,6 +272,21 @@ def referencias_disponibles(*, campos=(), bloques=()):
             lista.append(
                 (f"entregables.{bloque.clave}.satisfecho", f"Verdadero cuando se completó el entregable «{bloque.nombre}»")
             )
+        if bloque.tipo == "RECORRIDO_ITEMS" and bloque.clave:
+            for campo, texto in (
+                ("total", "ítems que recorrieron"), ("completados", "ítems que completaron su recorrido"),
+                ("excluidos", "ítems excluidos"), ("rechazados", "ítems rechazados"),
+            ):
+                lista.append((f"recorridos.{bloque.clave}.{campo}", f"«{bloque.nombre}»: {texto}"))
+        if bloque.tipo == "GACETA" and bloque.clave:
+            for campo, texto in (
+                ("aprobados", "ítems aprobados"), ("rechazados", "ítems rechazados"), ("excluidos", "ítems excluidos"),
+                ("total", "ítems presentados"), ("resuelta", "verdadero si la gaceta ya se resolvió"),
+            ):
+                lista.append((f"gacetas.{bloque.clave}.{campo}", f"Gaceta «{bloque.nombre}»: {texto}"))
+        if bloque.tipo == "GRUPO_ACTIVIDADES" and bloque.clave:
+            lista.append((f"grupos.{bloque.clave}.completadas", f"Actividades completadas de «{bloque.nombre}»"))
+            lista.append((f"grupos.{bloque.clave}.total", f"Actividades de «{bloque.nombre}»"))
         if bloque.tipo == "TAREAS_ELEMENTOS" and bloque.clave:
             lista.append(
                 (f"tareas_elementos.{bloque.clave}.completadas", f"Tareas completadas del bloque «{bloque.nombre}»")

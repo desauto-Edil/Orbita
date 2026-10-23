@@ -1,0 +1,52 @@
+{% comment %}Fase 2 — recorridos por ítem y actividades en paralelo del flujo del ticket. Espera `recorridos`
+(`trabajo.recorridos_del_ticket`), `ticket` y, opcionalmente, `next_url`. Solo lectura, salvo «Reintentar» en un
+recorrido detenido (lo autoriza y revalida el dominio).{% endcomment %}
+{% if recorridos %}
+  <section class="card" id="recorridos" aria-labelledby="recorridos-t">
+    <h3 id="recorridos-t">Recorridos</h3>
+    {% for grupo in recorridos %}
+      <div class="ws-recorrido">
+        <h4>{{ grupo.bloque.nombre }} <span class="badge">{{ grupo.tipo }}</span>{% if grupo.vigente %} <span class="badge badge--info">En curso</span>{% endif %}</h4>
+        <p class="text-muted">
+          {{ grupo.progreso.completados }} completado(s) de {{ grupo.progreso.total }}
+          {% if grupo.progreso.en_curso %} · {{ grupo.progreso.en_curso }} en curso{% endif %}
+          {% if grupo.progreso.con_error %} · {{ grupo.progreso.con_error }} detenido(s){% endif %}
+          {% if grupo.progreso.excluidos %} · {{ grupo.progreso.excluidos }} excluido(s){% endif %}
+          {% if grupo.progreso.rechazados %} · {{ grupo.progreso.rechazados }} rechazado(s){% endif %}
+          {% if grupo.progreso.pendiente_alcance %} · espera el cierre del alcance{% endif %}
+        </p>
+        {% if grupo.filas %}
+          <table class="table">
+            <thead><tr><th>Ítem / actividad</th><th>Paso</th><th>Estado</th><th>Responsable</th><th></th></tr></thead>
+            <tbody>
+              {% for fila in grupo.filas %}
+                <tr>
+                  <td>{{ fila.etiqueta }}</td>
+                  <td>{{ fila.paso|default:"—" }}</td>
+                  <td>
+                    <span class="badge{% if fila.con_error %} badge--danger{% elif fila.en_curso %} badge--info{% endif %}">{{ fila.estado }}</span>
+                    {% if fila.error %}<br><small class="text-muted">{{ fila.error }}</small>{% endif %}
+                  </td>
+                  <td>{{ fila.responsable|default:"—" }}</td>
+                  <td>
+                    {% if fila.tarea %}<a href="{% url 'tareas:detalle' fila.tarea.pk %}">Abrir tarea</a>{% endif %}
+                    {% if fila.aprobacion %}<a href="{% url 'aprobaciones:detalle' fila.aprobacion.pk %}">Abrir aprobación</a>{% endif %}
+                    {% if fila.puede_reintentar %}
+                      <form method="post" action="{% url 'tickets:recorrido_reintentar' ticket.pk fila.instancia.pk %}">
+                        {% csrf_token %}
+                        {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+                        <button type="submit" class="btn btn--ghost btn--sm">Reintentar</button>
+                      </form>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        {% else %}
+          <p class="text-muted">No hubo ítems ni actividades que recorrer.</p>
+        {% endif %}
+      </div>
+    {% endfor %}
+  </section>
+{% endif %}

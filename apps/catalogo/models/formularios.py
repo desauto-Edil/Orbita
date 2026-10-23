@@ -94,6 +94,9 @@ class Campo(RegistroBase):
         UNIDAD = "UNIDAD", "Unidad de negocio"
         CORREO = "CORREO", "Correo electrónico"
         URL = "URL", "URL"
+        # Fase 2 — un equipo de trabajo (`core.Equipo`). Solo se ofrece en las columnas de una colección de
+        # ítems (responsable por equipo de un recorrido); el formulario de inicio no lo usa.
+        EQUIPO = "EQUIPO", "Equipo"
 
     version = models.ForeignKey(FormularioVersion, on_delete=models.CASCADE, related_name="campos")
     tipo = models.CharField(max_length=20, choices=TipoCampo.choices)

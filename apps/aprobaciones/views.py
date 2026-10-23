@@ -148,7 +148,7 @@ def _contexto_entregable_revisado(usuario, aprobacion):
         return None
     definicion = bloque.entregable_revisado.definicion_entregable
     ticket = (
-        Ticket.objects.filter(instancia_workflow_id=ejecucion.instancia_workflow_id)
+        Ticket.objects.filter(instancia_workflow_id=ejecucion.instancia_workflow.raiz_id)
         .select_related("detalle_servicio__servicio")
         .first()
     )
@@ -180,6 +180,49 @@ def _contexto_entregable_revisado(usuario, aprobacion):
         ),
         "revision": revision,
     }
+
+
+def _contexto_item(aprobacion):
+    """Fase 2 — si la aprobación es del recorrido de un ítem, qué ítem es y sus valores (solo lectura), para
+    que quien decide sepa sobre qué decide. Lo ve quien ya puede consultar la aprobación; no abre el resto del
+    ticket. `None` para una aprobación general."""
+    from apps.gacetas.models import RondaRevisionGaceta
+    from apps.tickets import parrilla as parrilla_ops
+
+    gaceta = None
+    ronda = (
+        RondaRevisionGaceta.objects.filter(esquema_id=aprobacion.esquema_id)
+        .select_related("participacion__elemento__parrilla", "participacion__gaceta", "version").first()
+    )
+    if ronda is not None:
+        # Fase 3: ronda de una gaceta — el ítem, la versión presentada y la gaceta.
+        elemento, gaceta = ronda.participacion.elemento, ronda.participacion.gaceta
+    else:
+        vinculo = (
+            EsquemaAprobacionWorkflow.objects.filter(esquema_id=aprobacion.esquema_id)
+            .select_related("instancia_etapa__instancia_workflow__elemento__parrilla")
+            .first()
+        )
+        if vinculo is None or vinculo.instancia_etapa.instancia_workflow.elemento_id is None:
+            return None
+        elemento = vinculo.instancia_etapa.instancia_workflow.elemento
+    return {
+        "elemento": elemento,
+        "nombre_elemento": elemento.parrilla.nombre_elemento or "Ítem",
+        "valores": parrilla_ops.tabla_de_elemento(elemento),
+        "gaceta": gaceta,
+        "ronda": ronda,
+    }
+
+
+def _decision_form(aprobacion, *, es_prorroga, datos=None):
+    esquema = aprobacion.esquema
+    return DecisionAprobacionForm(
+        datos,
+        permite_devolver=not es_prorroga,
+        permite_excluir=esquema.permite_exclusion,
+        justificacion_al_aprobar=esquema.justificacion_al_aprobar,
+    )
 
 
 @login_required
@@ -229,6 +272,7 @@ def vista_previa_view(request, pk):
         "puede_decidir": puede_aprobar(request.user, aprobacion),
         "contexto_prorroga": _contexto_prorroga(request.user, aprobacion.esquema),
         "entregable_revisado": _contexto_entregable_revisado(request.user, aprobacion),
+        "item_aprobado": _contexto_item(aprobacion),
     }
     return HttpResponse(render_to_string("aprobaciones/_vista_previa.html", contexto))
 
@@ -253,6 +297,7 @@ def detalle_view(request, pk):
         "contexto_workflow": contexto_workflow,
         "contexto_prorroga": contexto_prorroga,
         "entregable_revisado": _contexto_entregable_revisado(request.user, aprobacion),
+        "item_aprobado": _contexto_item(aprobacion),
         "participaciones": aprobacion.esquema.participaciones.select_related(
             "aprobador_usuario", "aprobador_equipo", "decidido_por"
         ).all(),
@@ -266,7 +311,7 @@ def detalle_view(request, pk):
         "puede_decidir": puede_decidir,
         "puede_reasignar": puede_reasignar,
         "decision_form": (
-            DecisionAprobacionForm(permite_devolver=contexto_prorroga is None) if puede_decidir else None
+            _decision_form(aprobacion, es_prorroga=contexto_prorroga is not None) if puede_decidir else None
         ),
         "reasignacion_form": ReasignacionAprobacionForm() if puede_reasignar else None,
         "titulo_pagina": f"Aprobación #{aprobacion.pk}",
@@ -282,7 +327,7 @@ def decidir_view(request, pk):
     if not puede_aprobar(request.user, aprobacion):
         raise PermissionDenied
     es_prorroga = _prorroga_del_esquema(aprobacion.esquema) is not None
-    form = DecisionAprobacionForm(request.POST, permite_devolver=not es_prorroga)
+    form = _decision_form(aprobacion, es_prorroga=es_prorroga, datos=request.POST)
     if not form.is_valid():
         messages.error(request, "Revise los datos de la decisión.")
         return redirect("aprobaciones:detalle", pk=pk)
@@ -291,6 +336,16 @@ def decidir_view(request, pk):
             # 4.A2: la decisión también aplica (o no) la nueva fecha del Ticket,
             # en una sola transacción — nunca `resolver_aprobacion` a secas.
             resolver_prorroga_por_aprobacion(
+                aprobacion,
+                request.user,
+                decision=form.cleaned_data["decision"],
+                observacion=form.cleaned_data.get("observacion", ""),
+            )
+        elif hasattr(aprobacion.esquema, "ronda_gaceta"):
+            # Fase 3: la decisión de una ronda de gaceta aplica su resultado a ESE ítem en la gaceta.
+            from apps.gacetas.operaciones import resolver_aprobacion_gaceta
+
+            resolver_aprobacion_gaceta(
                 aprobacion,
                 request.user,
                 decision=form.cleaned_data["decision"],

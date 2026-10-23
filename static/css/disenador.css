@@ -3424,3 +3424,131 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Fase 1 — configuración ampliada de una ACTIVIDAD (plazos, evidencia, verificación). */
+.svc-fieldset {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.svc-fieldset legend {
+  padding: 0 var(--space-2);
+  font-weight: var(--font-weight-semibold);
+}
+
+.svc-inline {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}
+
+.svc-inline input {
+  max-width: 7rem;
+}
+
+/* Fase 1 — selector de colecciones de ítems de un Proceso. */
+.svc-colecciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  align-items: center;
+  margin-bottom: var(--space-3);
+}
+
+.svc-colecciones__nueva {
+  flex-basis: 100%;
+}
+
+/* Fase 2 — contenedores (recorrido por ítem / actividades en paralelo) y sus pasos anidados. */
+.svc-contenedor {
+  margin-top: var(--space-3);
+  padding: var(--space-3);
+  border-left: 3px solid var(--border-strong);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-md);
+  width: 100%;
+}
+.svc-block-list--anidada { margin: 0 0 var(--space-3); }
+.svc-block-row--contenido { background: var(--surface-card); }
+.svc-contenedor__agregar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.svc-contenedor__agregar .svc-inline-editor { flex-basis: 100%; }
+
+/* ---------------------------------------------------------------------------------------------------------
+   Fase 4.A — Studio guiado: estados de sección, progreso, navegación, selector de actividades, opciones
+   avanzadas, versiones y dependencias. Solo tokens semánticos.
+   --------------------------------------------------------------------------------------------------------- */
+
+.service-step__badge {
+  justify-self: start;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: var(--font-size-small);
+  font-weight: 700;
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+}
+
+.service-step__badge--complete { background: var(--status-success-soft); color: var(--status-success); }
+.service-step__badge--optional { background: var(--status-info-soft); color: var(--status-info); }
+.service-step__badge--progress { background: var(--status-warning-soft); color: var(--status-warning); }
+.service-step__badge--attention { background: var(--status-danger-soft); color: var(--status-danger); }
+.service-step__badge--empty { background: var(--surface-sunken); color: var(--text-secondary); }
+
+.service-step--attention .service-step__index { box-shadow: inset 0 0 0 2px var(--status-danger); }
+
+.service-progress { display: grid; gap: 6px; margin-top: 10px; }
+.service-progress__text { font-size: var(--font-size-small); color: var(--text-secondary); }
+.service-progress__bar {
+  display: block;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+.service-progress__bar > span { display: block; height: 100%; background: var(--color-primary); }
+
+.service-guide {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border-subtle);
+}
+.service-guide__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.service-guide__pos { color: var(--text-secondary); font-size: var(--font-size-small); }
+.service-guide .svc-help { flex-basis: 100%; margin: 0; }
+
+.svc-group-title { margin: 8px 0 0; font-size: var(--font-size-small); letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-secondary); }
+
+.svc-advanced { border: 1px dashed var(--border-subtle); border-radius: 14px; padding: 8px 12px; }
+.svc-advanced > summary { cursor: pointer; font-weight: 700; }
+.svc-advanced[open] > summary { margin-bottom: 8px; }
+
+.svc-intent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; }
+.svc-intent { display: grid; gap: 6px; padding: 12px; border: 1px solid var(--border-subtle); border-radius: 16px; background: var(--surface-card); }
+.svc-intent h4 { margin: 0; }
+.svc-intent__opcion { display: grid; gap: 4px; }
+.svc-intent__motivo { font-size: var(--font-size-small); color: var(--text-secondary); }
+
+.svc-versions { width: 100%; border-collapse: collapse; }
+.svc-versions th, .svc-versions td { padding: 6px 8px; border-bottom: 1px solid var(--border-subtle); text-align: left; vertical-align: top; }
+
+.svc-dependency { padding: 10px 12px; border-radius: 12px; border: 1px solid var(--border-subtle); }
+.svc-dependency--bloqueante { border-color: var(--status-danger); background: var(--status-danger-soft); }
+.svc-dependency--advertencia { border-color: var(--status-warning); background: var(--status-warning-soft); }
+.svc-dependency form { margin-top: 8px; }
+
+.svc-order-actions { display: inline-flex; gap: 2px; }

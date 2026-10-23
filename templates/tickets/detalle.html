@@ -373,7 +373,10 @@
     {% endif %}
   </section>
 
-  {% include "tickets/_parrilla.html" %}
+  {% include "tickets/_datos_inicio.html" %}
+  {% include "tickets/_recorridos.html" %}
+  {% include "tickets/_gacetas.html" %}
+  {% for parrilla in colecciones %}{% include "tickets/_parrilla.html" %}{% endfor %}
 
   {% include "tickets/_historial.html" %}
 

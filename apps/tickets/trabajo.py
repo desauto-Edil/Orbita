@@ -27,6 +27,7 @@ from apps.workflows.models import (
 TIPOS_BLOQUE = {
     "ACTIVIDAD": "Actividad", "ENTREGABLE": "Entregable", "APROBACION": "Aprobación", "DECISION": "Decisión",
     "ESPERA": "Espera", "TAREAS_ELEMENTOS": "Tareas por elemento",
+    "GRUPO_ACTIVIDADES": "Actividades en paralelo", "RECORRIDO_ITEMS": "Recorrido por ítem", "GACETA": "Gaceta",
 }
 
 # Estado de un bloque dentro de la fase actual (derivado de las ejecuciones reales).
@@ -125,9 +126,144 @@ def contexto_trabajo_actual(usuario, ticket):
                 trabajo["pendiente"] = (
                     f"Van {progreso.completadas} de {progreso.total} tareas por elemento completadas."
                 )
+        elif motivo in (InstanciaEtapa.MotivoEspera.RECORRIDO, InstanciaEtapa.MotivoEspera.GRUPO):
+            # Fase 2: la instancia principal espera a sus subinstancias (detalle en «Recorridos»).
+            from apps.workflows import recorridos
+
+            avance = recorridos.progreso(ultima)
+            partes = [f"{avance.en_curso} en curso"]
+            if avance.con_error:
+                partes.append(f"{avance.con_error} detenido(s)")
+            if avance.pendiente_alcance:
+                partes.append("esperando el cierre del alcance")
+            trabajo["pendiente"] = f"{avance.total - avance.en_curso - avance.con_error} de {avance.total} terminados · " + ", ".join(partes) + "."
+        elif motivo == InstanciaEtapa.MotivoEspera.GACETA:
+            # Fase 3: el flujo espera la resolución de una gaceta (ver «Gacetas»).
+            datos = ultima.resultado or {}
+            trabajo["pendiente"] = (
+                f"Esperando la resolución de la gaceta: {datos.get('aprobados', 0)} aprobado(s), "
+                f"{datos.get('en_revision', 0)} en revisión, {datos.get('en_correccion', 0)} en corrección."
+            )
         else:
             trabajo["pendiente"] = "En espera programada."
     return {"trabajo_actual": trabajo, "trabajo_interno_en_curso": en_curso}
+
+
+# --- Fase 2: recorridos por ítem / actividades en paralelo y datos de inicio --------------------------------
+
+ESTADO_RECORRIDO = {
+    "EN_EJECUCION": "En curso", "EN_ESPERA": "En curso", "ERROR": "Detenido",
+    "COMPLETADO": "Completado", "EXCLUIDO": "Excluido", "RECHAZADO": "Rechazado", "RETIRADO": "Retirado",
+    "CANCELADO": "Cancelado",
+}
+
+
+def _responsable_de(tarea=None, participaciones=()):
+    if tarea is not None:
+        if tarea.usuario_responsable_id:
+            return tarea.usuario_responsable.get_full_name().strip() or tarea.usuario_responsable.get_username()
+        return tarea.equipo_responsable.nombre if tarea.equipo_responsable_id else "Sin asignar"
+    nombres = []
+    for aprobacion in participaciones:
+        if aprobacion.estado != "PENDIENTE":
+            continue
+        if aprobacion.aprobador_usuario_id:
+            nombres.append(aprobacion.aprobador_usuario.get_full_name().strip() or aprobacion.aprobador_usuario.get_username())
+        elif aprobacion.aprobador_equipo_id:
+            nombres.append(aprobacion.aprobador_equipo.nombre)
+    return ", ".join(nombres)
+
+
+def _fila_de_recorrido(usuario, hija, puede_reintentar):
+    from apps.aprobaciones.autorizacion import puede_consultar_aprobacion
+    from apps.tareas.autorizacion import puede_consultar_tarea
+    from apps.workflows import recorridos
+
+    ultima = hija.ejecuciones_etapa.select_related("bloque_operativo").order_by("-orden").first()
+    resultado = recorridos.resultado_de(hija)
+    fila = {
+        "instancia": hija,
+        "elemento": hija.elemento,
+        "etiqueta": (
+            f"{hija.elemento.parrilla.nombre_elemento or 'Ítem'} #{hija.elemento.numero}" if hija.elemento_id
+            else (hija.bloque_rama.nombre if hija.bloque_rama_id else f"#{hija.pk}")
+        ),
+        "estado": ESTADO_RECORRIDO.get(resultado, resultado),
+        "en_curso": hija.estado in recorridos.ESTADOS_EN_CURSO,
+        "con_error": hija.estado == InstanciaWorkflow.Estado.ERROR,
+        "paso": ultima.bloque_operativo.nombre if ultima is not None and ultima.bloque_operativo_id else "",
+        "error": (ultima.error or {}).get("mensaje", "") if ultima is not None and ultima.error else "",
+        "responsable": "",
+        "tarea": None,
+        "aprobacion": None,
+        "puede_reintentar": puede_reintentar and hija.estado == InstanciaWorkflow.Estado.ERROR,
+    }
+    if ultima is not None and ultima.estado == InstanciaEtapa.Estado.EN_ESPERA:
+        vinculo = TareaWorkflow.objects.filter(instancia_etapa=ultima).select_related(
+            "tarea__usuario_responsable", "tarea__equipo_responsable"
+        ).first()
+        if vinculo is not None:
+            fila["responsable"] = _responsable_de(tarea=vinculo.tarea)
+            fila["tarea"] = vinculo.tarea if puede_consultar_tarea(usuario, vinculo.tarea) else None
+        esquema = EsquemaAprobacionWorkflow.objects.filter(instancia_etapa=ultima).select_related("esquema").first()
+        if esquema is not None:
+            participaciones = list(
+                esquema.esquema.participaciones.select_related("aprobador_usuario", "aprobador_equipo").order_by("orden")
+            )
+            fila["responsable"] = _responsable_de(participaciones=participaciones)
+            fila["aprobacion"] = next((a for a in participaciones if puede_consultar_aprobacion(usuario, a)), None)
+    return fila
+
+
+def recorridos_del_ticket(usuario, ticket):
+    """Fase 2 — cada contenedor (recorrido por ítem / actividades en paralelo) que el flujo del Ticket ejecutó,
+    del más reciente al más antiguo, con una fila por subinstancia: qué ítem o actividad es, en qué paso va,
+    su estado o resultado, quién la tiene, el acceso a su tarea o aprobación (si `usuario` puede verlas) y si
+    se puede reintentar (solo un recorrido detenido y solo quien edita los elementos). Solo LEE."""
+    if ticket.instancia_workflow_id is None:
+        return []
+    from apps.workflows import recorridos
+
+    ejecuciones = (
+        InstanciaEtapa.objects.filter(
+            instancia_workflow_id=ticket.instancia_workflow_id,
+            bloque_operativo__tipo__in=(recorridos.TIPO_GRUPO, recorridos.TIPO_RECORRIDO),
+        ).select_related("bloque_operativo").order_by("-orden")
+    )
+    puede_reintentar = puede_editar_parrilla(usuario, ticket)
+    resultado = []
+    for ejecucion in ejecuciones:
+        filas = [_fila_de_recorrido(usuario, hija, puede_reintentar) for hija in recorridos.subinstancias_de(ejecucion)]
+        resultado.append({
+            "ejecucion": ejecucion,
+            "bloque": ejecucion.bloque_operativo,
+            "tipo": TIPOS_BLOQUE.get(ejecucion.bloque_operativo.tipo, ""),
+            "vigente": ejecucion.estado == InstanciaEtapa.Estado.EN_ESPERA,
+            "progreso": recorridos.progreso(ejecucion),
+            "filas": filas,
+        })
+    return resultado
+
+
+def datos_inicio_del_ticket(usuario, ticket, *, errores=None, valores_envio=None):
+    """Fase 2 — la sección «Datos de inicio» de un ticket cuyos datos se diligencian en la ejecución: si ya
+    están completos (cuándo y quién), qué falta, si `usuario` puede diligenciarlos y los campos del MISMO
+    formulario congelado (`solicitud.construir_items`). `None` si el ticket completó sus datos al iniciar."""
+    from apps.tickets import datos_inicio, solicitud
+    from apps.tickets.autorizacion import puede_diligenciar_datos_inicio
+
+    if not datos_inicio.requiere_diligenciamiento(ticket):
+        return None
+    respuesta = ticket.respuesta_formulario
+    puede = puede_diligenciar_datos_inicio(usuario, ticket)
+    return {
+        "completo": respuesta.completado_en is not None,
+        "completado_en": respuesta.completado_en,
+        "completado_por": respuesta.completado_por,
+        "puede_diligenciar": puede,
+        "pendientes": datos_inicio.pendientes_de(ticket) if respuesta.completado_en is None else [],
+        "items": solicitud.construir_items(ticket, errores=errores, valores_envio=valores_envio) if puede else [],
+    }
 
 
 def entregable_operable_ahora(ticket, entregable):
@@ -260,6 +396,10 @@ def espacio(usuario, ticket):
     contexto["es_proceso"] = False
     if ticket.tipo == Ticket.Tipo.PROCESO:
         _contexto_proceso(usuario, ticket, contexto)
+    # Fase 2: recorridos por ítem / actividades en paralelo y datos de inicio en la ejecución.
+    contexto["recorridos"] = recorridos_del_ticket(usuario, ticket)
+    contexto["datos_inicio"] = datos_inicio_del_ticket(usuario, ticket)
+    contexto.update(gacetas_y_cierre(usuario, ticket))
     if not contexto["hay_flujo"]:
         return contexto
     instancia = ticket.instancia_workflow
@@ -336,6 +476,11 @@ def _contexto_proceso(usuario, ticket, contexto):
                 })
             fila["revisiones"] = revisiones
         parrilla["con_revision"] = bool(conjuntos)
+    # Fase 1: las demás colecciones del Ticket (la revisión por conjunto solo conoce la por defecto).
+    adicionales = [
+        parrilla_ops.tabla(ticket, usuario, parrilla=otra) for otra in parrilla_ops.parrillas_de(ticket)[1:]
+    ]
+    todas = ([parrilla] if parrilla else []) + adicionales
 
     from apps.tickets import tareas_elemento as tareas_ops
 
@@ -344,15 +489,16 @@ def _contexto_proceso(usuario, ticket, contexto):
         "es_proceso": True,
         "tareas_configuradas": tareas_ops.configuracion_de(ticket) is not None,
         "parrilla": parrilla,
+        "colecciones_adicionales": adicionales,
         "entregables": entregables,
         "conjuntos": conjuntos,
         "puede_escribir_entregables": puede_escribir_entregables_finales(usuario, ticket),
         "historial": ticket.historial.select_related("actor").all(),
         "resumen_proceso": {
-            "elementos": len(parrilla["filas"]) if parrilla else 0,
-            "incompletos": parrilla["n_incompletas"] if parrilla else 0,
-            "retirados": parrilla["n_retirados"] if parrilla else 0,
-            "tiene_elementos": parrilla is not None,
+            "elementos": sum(len(t["filas"]) for t in todas),
+            "incompletos": sum(t["n_incompletas"] for t in todas),
+            "retirados": sum(t["n_retirados"] for t in todas),
+            "tiene_elementos": bool(todas),
             "tareas": tareas["progreso"] if tareas else None,
         },
     })
@@ -380,4 +526,20 @@ def tarjeta(usuario, ticket):
         "fases_total": total,
         "fases_completadas": completadas,
         "porcentaje": porcentaje,
+    }
+
+
+def gacetas_y_cierre(usuario, ticket):
+    """Fase 3 — gacetas del ticket (resumen y acceso) y, en un Proceso, sus condiciones de cierre evaluadas
+    (`apps.tickets.finalizacion`). Solo lectura."""
+    from apps.gacetas.consultas import del_ticket
+    from apps.tickets import finalizacion
+
+    return {
+        "gacetas_ticket": del_ticket(usuario, ticket),
+        "condiciones_cierre": (
+            finalizacion.evaluar(ticket)
+            if ticket.tipo == Ticket.Tipo.PROCESO and ticket.estado in (Ticket.Estado.RADICADO, Ticket.Estado.EN_ATENCION)
+            else []
+        ),
     }

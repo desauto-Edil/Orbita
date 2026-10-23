@@ -1,0 +1,62 @@
+{% comment %} Campos para AGREGAR una actividad (flujo principal o dentro de un contenedor). El <form>, el csrf y la ubicación
+   (fase_id o contenedor_id + rama) los pone quien incluye. Fase 4.A: `opcion` (de «¿Qué necesitas que suceda?»,
+   `apps.catalogo.intenciones`) envía `intencion` y el servidor decide el tipo; `codigo` es el tipo de bloque en el
+   que se traduce (también se envía como `nuevo-tipo` por compatibilidad). Variables: codigo, opcion,
+   decision_condicion, decision_otro, ruta_form, en_recorrido. Las opciones son las MISMAS que al editar. {% endcomment %}
+<input type="hidden" name="nuevo-tipo" value="{{ codigo }}">
+{% if opcion %}<input type="hidden" name="intencion" value="{{ opcion.codigo }}">{% endif %}
+<div class="field">{{ bloque_general_form.nombre.label_tag }}{{ bloque_general_form.nombre }}</div>
+<div class="field">{{ bloque_general_form.descripcion.label_tag }}{{ bloque_general_form.descripcion }}</div>
+{% if codigo == "ACTIVIDAD" %}
+  {% if opcion.codigo == "informacion" %}
+    {% include "catalogo/_actividad_responsable.html" with form=form_actividad_informacion %}
+    {% include "catalogo/_actividad_ampliada.html" with form=form_actividad_informacion %}
+  {% else %}
+    {% include "catalogo/_actividad_responsable.html" with form=form_actividad_nuevo %}
+    {% include "catalogo/_actividad_ampliada.html" with form=form_actividad_nuevo %}
+  {% endif %}
+{% elif codigo == "ENTREGABLE" %}
+  {% if opcion.codigo == "revision_conjunto" %}
+    <div class="field">{{ form_entregable_revision.definicion.label_tag }}{{ form_entregable_revision.definicion }}</div>
+    <p class="svc-note">El flujo continuará cuando todos los elementos estén revisados y aprobados.</p>
+  {% elif servicio_sin_entregables %}
+    <p class="svc-note">Este servicio todavía no tiene entregables configurados. Defínelos primero en la pestaña Salida.</p>
+  {% else %}
+    {% if opcion.codigo == "resultado" %}
+      <div class="field">{{ form_entregable_resultado.definicion.label_tag }}{{ form_entregable_resultado.definicion }}</div>
+    {% else %}
+      <div class="field">{{ form_entregable_nuevo.definicion.label_tag }}{{ form_entregable_nuevo.definicion }}</div>
+    {% endif %}
+    <p class="svc-note">El flujo continuará cuando este entregable del ticket esté completado.</p>
+  {% endif %}
+{% elif codigo == "TAREAS_ELEMENTOS" %}
+  <p class="svc-note">Usa las columnas elegidas en Formulario › Colecciones › Tareas por elemento. El flujo espera a que todas las tareas estén completas.</p>
+{% elif codigo == "GRUPO_ACTIVIDADES" %}
+  <p class="svc-note">Después de agregarlo, añade dentro las tareas o aprobaciones que se hacen al mismo tiempo. El flujo continúa cuando terminan todas.</p>
+{% elif codigo == "GACETA" %}
+  <div class="field">{{ form_gaceta_bloque_nuevo.gaceta.label_tag }}{{ form_gaceta_bloque_nuevo.gaceta }}</div>
+  <label class="choice">{{ form_gaceta_bloque_nuevo.presentar_items }} {{ form_gaceta_bloque_nuevo.presentar_items.label }}</label>
+  <div class="field">{{ form_gaceta_bloque_nuevo.esperar.label_tag }}{{ form_gaceta_bloque_nuevo.esperar }}</div>
+  <p class="svc-note">La gaceta también recibe ítems sin este paso (a mano o automáticamente, según su configuración). Usa una condición después para seguir según sus resultados.</p>
+{% elif codigo == "RECORRIDO_ITEMS" %}
+  {% include "catalogo/_recorrido_config.html" with form=form_recorrido_nuevo %}
+  <p class="svc-note">Después de agregarlo, añade dentro los pasos «para cada ítem» (tareas, aprobaciones, condiciones) y, si quieres, tareas generales que corren en paralelo.</p>
+{% elif codigo == "APROBACION" %}
+  {% include "catalogo/_aprobacion_config.html" with form=form_aprobacion_nuevo filas=filas_aprobadores_nuevo cantidad=1 con_columna=opciones_bloques.columnas_actor %}
+{% elif codigo == "DECISION" and decision_condicion %}
+  <div class="svc-decision-config">
+    <h5>¿Cuándo se cumple?</h5>
+    {% include "catalogo/_variables_decision.html" %}
+    <div class="field">Si {{ decision_condicion.variable }} {{ decision_condicion.operador }} {{ decision_condicion.valor }}</div>
+    {{ decision_condicion.prioridad.as_hidden }}
+    <div class="field"><label for="{{ decision_condicion.destino.id_for_label }}">Si se cumple, ir a</label> {{ decision_condicion.destino }}</div>
+    <div class="field"><label for="{{ decision_otro.destino.id_for_label }}">Si no se cumple, ir a</label> {{ decision_otro.destino }}</div>
+    <p class="svc-note">Puedes agregar más condiciones después, editando la condición.</p>
+  </div>
+{% endif %}
+{% if form_cierre_nuevo %}
+  <details class="svc-advanced">
+    <summary>Opciones avanzadas: alcance de las colecciones</summary>
+    {% include "catalogo/_cierre_alcance.html" with form=form_cierre_nuevo %}
+  </details>
+{% endif %}

@@ -164,8 +164,9 @@ class EstadoElemento:
 
 
 def evaluar(entregable):
-    """`([EstadoElemento], Resumen)` de los elementos vigentes del Ticket para este entregable."""
-    parrilla = ParrillaTicket.objects.filter(ticket_id=entregable.ticket_id).first()
+    """`([EstadoElemento], Resumen)` de los elementos del Ticket EN EL ALCANCE para este entregable (Fase 2: un
+    ítem excluido o rechazado ya no cuenta en el agregado; su historial se conserva)."""
+    parrilla = parrilla_ops.parrilla_de(entregable.ticket)
     if parrilla is None:
         return [], Resumen()
     campos = columnas_revisadas_de(entregable)
@@ -173,7 +174,7 @@ def evaluar(entregable):
     for revision in entregable.revisiones.order_by("pk"):
         ultimas[revision.elemento_id] = revision
     estados = []
-    for elemento in parrilla_ops.elementos_vigentes(parrilla):
+    for elemento in parrilla_ops.elementos_en_alcance(parrilla):
         _, huella = contenido_y_huella(elemento, campos)
         ultima = ultimas.get(elemento.pk)
         vigente = ultima is not None and ultima.huella == huella
@@ -257,6 +258,8 @@ def _decidir(entregable, elemento, actor, decision, observacion):
         raise ValidationError("El elemento no pertenece al ticket de este entregable.")
     if elemento.retirado_en is not None:
         raise ValidationError("El elemento está retirado y ya no se revisa.")
+    if parrilla_ops.decision_de_salida(elemento) is not None:
+        raise ValidationError("El elemento salió del alcance y ya no se revisa.")
     observacion = (observacion or "").strip()
     campos = columnas_revisadas_de(entregable)
     actual = estado_de(entregable, elemento)

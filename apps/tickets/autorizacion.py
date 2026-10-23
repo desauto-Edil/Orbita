@@ -74,7 +74,13 @@ from apps.aprobaciones.autorizacion import es_aprobador_directo, puede_aprobar
 from apps.catalogo.models import Servicio, ServicioResponsable
 from apps.core.autorizacion import alcances_autorizados
 from apps.core.models import MiembroEquipo
-from apps.tickets.models import ProrrogaTicket, RevisorEntregable, Ticket, TicketContextoAtencion
+from apps.tickets.models import (
+    ParticipanteParrilla,
+    ProrrogaTicket,
+    RevisorEntregable,
+    Ticket,
+    TicketContextoAtencion,
+)
 
 PERMISO_ATENDER = "tickets.atender"
 
@@ -334,6 +340,53 @@ def puede_editar_parrilla(usuario, ticket):
     return puede_escribir_entregables_finales(usuario, ticket)
 
 
+def es_participante_coleccion(usuario, parrilla):
+    """Bloque 3 — `usuario` participa en ESTA colección del Ticket: persona congelada como participante, o
+    miembro activo de un equipo activo congelado. Relación con el objeto, no con el Ticket: no lo convierte en
+    responsable ni le da acceso al resto del ticket."""
+    if not (getattr(usuario, "is_authenticated", False) and getattr(usuario, "is_active", False)):
+        return False
+    return ParticipanteParrilla.objects.filter(parrilla_id=parrilla.pk).filter(
+        Q(usuario_id=usuario.pk)
+        | Q(equipo__activo=True, equipo__miembros__usuario_id=usuario.pk, equipo__miembros__activo=True)
+    ).exists()
+
+
+def puede_operar_coleccion(usuario, parrilla, ticket=None):
+    """Bloque 3 — CREAR y EDITAR ítems de una colección (valores, archivos, versiones): el responsable individual
+    (`puede_editar_parrilla`, como siempre) o un participante de ESA colección, solo con el ticket EN ATENCIÓN.
+    No incluye retirar, excluir, cerrar el alcance, altas extraordinarias ni coordinar gacetas: esas siguen en
+    `puede_editar_parrilla`, que NO se amplía. Las operaciones revalidan bajo lock."""
+    ticket = ticket or parrilla.ticket
+    if ticket.estado != Ticket.Estado.EN_ATENCION:
+        return False
+    return puede_editar_parrilla(usuario, ticket) or es_participante_coleccion(usuario, parrilla)
+
+
+def puede_consultar_coleccion(usuario, parrilla, ticket=None):
+    """Bloque 3 — ver una colección (sus ítems, versiones y archivos): quien consulta el ticket, o un participante
+    de ESA colección, que ve solo la colección y no el resto del ticket."""
+    return puede_consultar_ticket(usuario, ticket or parrilla.ticket) or es_participante_coleccion(usuario, parrilla)
+
+
+def puede_diligenciar_datos_inicio(usuario, ticket):
+    """Fase 2 — quién guarda avance y completa los datos de inicio de un PROCESO cuyos datos pertenecen a la
+    ejecución: el responsable individual del ticket en atención (la misma relación que edita los elementos) o
+    quien lo inició. Solo mientras el ticket está radicado o en atención y el diligenciamiento no se completó.
+    Las operaciones revalidan bajo lock."""
+    if not (getattr(usuario, "is_authenticated", False) and getattr(usuario, "is_active", False)):
+        return False
+    if not ticket.datos_inicio_en_ejecucion:
+        return False
+    if ticket.estado not in (Ticket.Estado.RADICADO, Ticket.Estado.EN_ATENCION):
+        return False
+    from apps.tickets.models import RespuestaFormulario
+
+    if RespuestaFormulario.objects.filter(ticket_id=ticket.pk, completado_en__isnull=False).exists():
+        return False
+    return puede_escribir_entregables_finales(usuario, ticket) or ticket.solicitante_id == usuario.pk
+
+
 def puede_revisar_conjunto(usuario, entregable):
     """4.G2C1: quién REVISA los elementos de un entregable de conjunto. Es un permiso distinto del de
     editar (`puede_editar_parrilla`): lo tiene quien el Proceso configuró como revisor —una persona o
@@ -456,6 +509,8 @@ def puede_consultar_prorrogas(usuario, ticket):
 
 
 def puede_revisar_entregable(usuario, entregable):
+    from apps.workflows.models import InstanciaWorkflow
+
     if not getattr(usuario, "is_authenticated", False):
         return False
     instancia_id = entregable.ticket.instancia_workflow_id
@@ -464,7 +519,10 @@ def puede_revisar_entregable(usuario, entregable):
     from apps.aprobaciones.models import Aprobacion
 
     aprobaciones = Aprobacion.objects.filter(
-        esquema__vinculo_workflow__instancia_etapa__instancia_workflow_id=instancia_id,
+        esquema__vinculo_workflow__instancia_etapa__instancia_workflow_id__in=[
+            instancia_id,
+            *InstanciaWorkflow.objects.filter(instancia_padre_id=instancia_id).values_list("pk", flat=True),
+        ],
         esquema__vinculo_workflow__instancia_etapa__bloque_operativo__entregable_revisado__definicion_entregable_id=(
             entregable.definicion_id
         ),

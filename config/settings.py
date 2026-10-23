@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "apps.tareas",
     "apps.workflows",
     "apps.aprobaciones",
+    "apps.gacetas",
 ]
 
 if DEBUG:

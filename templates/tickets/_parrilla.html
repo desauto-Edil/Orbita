@@ -1,14 +1,32 @@
 {% comment %}
-  Elementos estructurados del ticket (4.G2B1/4.G2B2). Espera `parrilla` (ver `apps/tickets/parrilla.py::tabla`).
+  Elementos estructurados del ticket (4.G2B1/4.G2B2). Espera `parrilla` (ver `apps/tickets/parrilla.py::tabla`);
+  con varias colecciones (Fase 1) se incluye una vez por colección.
   Vista operable: columnas (las obligatorias van marcadas), filas vigentes con su completitud, agregar, editar
   y retirar. Los elementos retirados van aparte, solo lectura. Sin revisión ni aprobación todavía.
 {% endcomment %}
 {% if parrilla %}
-<section class="card" id="elementos">
+<section class="card" id="elementos{% if not parrilla.es_por_defecto %}-{{ parrilla.parrilla.clave }}{% endif %}">
   <h3>{{ parrilla.nombre_elemento }}s</h3>
   <p class="text-muted">
     {{ parrilla.filas|length }} vigente{{ parrilla.filas|length|pluralize }}{% if parrilla.n_retirados %} · {{ parrilla.n_retirados }} retirado{{ parrilla.n_retirados|pluralize }}{% endif %}{% if parrilla.n_incompletas %} · {{ parrilla.n_incompletas }} incompleta{{ parrilla.n_incompletas|pluralize }}{% endif %}
   </p>
+  {% with alcance=parrilla.alcance %}
+    <p class="text-muted">
+      {% if alcance.cerrado %}
+        Alcance cerrado el {{ alcance.cerrado_en|date:"d/m/Y H:i" }}{% if alcance.cerrado_por %} por {{ alcance.cerrado_por }}{% endif %}:
+        {{ alcance.original|length }} en el alcance original · {{ alcance.efectivo|length }} en el alcance efectivo{% if alcance.excluidos %} · {{ alcance.excluidos|length }} excluido{{ alcance.excluidos|length|pluralize }}{% endif %}{% if alcance.rechazados %} · {{ alcance.rechazados|length }} rechazado{{ alcance.rechazados|length|pluralize }}{% endif %}{% if alcance.altas_extraordinarias %} · {{ alcance.altas_extraordinarias|length }} alta{{ alcance.altas_extraordinarias|length|pluralize }} extraordinaria{{ alcance.altas_extraordinarias|length|pluralize }}{% endif %}.
+      {% else %}
+        Alcance abierto: todavía se pueden agregar y retirar ítems.
+      {% endif %}
+    </p>
+    {% if parrilla.puede_editar and not alcance.cerrado %}
+      <form method="post" action="{% url 'tickets:alcance_cerrar' ticket.pk %}" onsubmit="return confirm('¿Cerrar el alcance? Después solo se podrán excluir o rechazar ítems con justificación.');">
+        {% csrf_token %}{% if ws_next %}<input type="hidden" name="next" value="{{ ws_next }}">{% endif %}
+        <input type="hidden" name="coleccion" value="{{ parrilla.parrilla.clave }}">
+        <button type="submit" class="btn btn--ghost btn--sm">Cerrar alcance</button>
+      </form>
+    {% endif %}
+  {% endwith %}
   {% if parrilla.hay_obligatorias %}
     <p class="text-muted"><abbr title="Obligatorio">*</abbr> Las columnas marcadas son obligatorias: puedes guardar una fila incompleta y terminarla después.</p>
   {% endif %}
@@ -22,14 +40,14 @@
             {% for columna in parrilla.columnas %}<th>{{ columna.etiqueta }}{% if columna.obligatorio %} <abbr title="Obligatorio">*</abbr>{% endif %}</th>{% endfor %}
             <th>Estado</th>
             {% if parrilla.con_revision %}<th>Revisión</th>{% endif %}
-            {% if parrilla.puede_editar %}<th></th>{% endif %}
+            {% if parrilla.puede_operar %}<th></th>{% endif %}
           </tr>
         </thead>
         <tbody>
           {% for fila in parrilla.filas %}
             <tr{% if not fila.completitud.completo %} data-incompleta{% endif %}>
-              <td>{{ fila.elemento.numero }}</td>
-              {% for celda in fila.celdas %}<td>{% if celda.soportado %}{{ celda.texto }}{% if celda.faltante %} <span class="badge badge--warning">Falta</span>{% endif %}{% else %}<span class="text-muted">Archivo: aún no disponible</span>{% endif %}</td>{% endfor %}
+              <td>{{ fila.elemento.numero }}{% if fila.salida %} <span class="badge badge--warning" title="{{ fila.salida.justificacion }}">{{ fila.salida.get_tipo_display }}</span>{% endif %}{% if fila.n_versiones %} <a class="text-muted" href="{% url 'tickets:elemento_versiones' ticket.pk fila.elemento.pk %}" title="Ver historial de versiones"><small>v{{ fila.n_versiones }}</small></a>{% endif %}</td>
+              {% for celda in fila.celdas %}<td>{% if celda.es_archivo %}{% for archivo in celda.archivos %}<a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a>{% if not forloop.last %}, {% endif %}{% empty %}<span class="text-muted">Sin archivos</span>{% endfor %}{% else %}{{ celda.texto }}{% endif %}{% if celda.faltante %} <span class="badge badge--warning">Falta</span>{% endif %}</td>{% endfor %}
               <td>
                 {% if fila.completitud.completo %}
                   <span class="badge badge--success">Completa</span>
@@ -49,8 +67,11 @@
                   {% empty %}<span class="text-muted">—</span>{% endfor %}
                 </td>
               {% endif %}
-              {% if parrilla.puede_editar %}
+              {% if parrilla.puede_operar %}
                 <td>
+                  {% if fila.salida %}
+                    <small class="text-muted">{{ fila.salida.get_tipo_display }}: {{ fila.salida.justificacion }}</small>
+                  {% else %}
                   <details>
                     <summary>Editar</summary>
                     <form method="post" action="{% url 'tickets:elemento_guardar' ticket.pk fila.elemento.pk %}" class="form">
@@ -58,11 +79,48 @@
                       {% include "tickets/_parrilla_campos.html" with celdas=fila.celdas %}
                       <button type="submit" class="btn btn--primary btn--sm">Guardar</button>
                     </form>
-                    <form method="post" action="{% url 'tickets:elemento_retirar' ticket.pk fila.elemento.pk %}">
+                    {% for celda in fila.celdas %}{% if celda.es_archivo %}
+                      <div class="field">
+                        <span>{{ celda.campo.etiqueta }}{% if celda.obligatorio %} <abbr title="Obligatorio">*</abbr>{% endif %}</span>
+                        {% for archivo in celda.archivos %}
+                          <form method="post" action="{% url 'tickets:elemento_archivo_retirar' ticket.pk archivo.pk %}">
+                            {% csrf_token %}{% if ws_next %}<input type="hidden" name="next" value="{{ ws_next }}">{% endif %}
+                            <a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a>
+                            <button type="submit" class="btn btn--ghost btn--sm">Retirar archivo</button>
+                          </form>
+                        {% endfor %}
+                        <form method="post" enctype="multipart/form-data" action="{% url 'tickets:elemento_archivo_adjuntar' ticket.pk fila.elemento.pk celda.campo.pk %}">
+                          {% csrf_token %}{% if ws_next %}<input type="hidden" name="next" value="{{ ws_next }}">{% endif %}
+                          <input type="file" name="archivo" required>
+                          <button type="submit" class="btn btn--secondary btn--sm">Adjuntar</button>
+                        </form>
+                      </div>
+                    {% endif %}{% endfor %}
+                    <form method="post" action="{% url 'tickets:elemento_version' ticket.pk fila.elemento.pk %}" class="form svc-inline-form">
                       {% csrf_token %}{% if ws_next %}<input type="hidden" name="next" value="{{ ws_next }}">{% endif %}
-                      <button type="submit" class="btn btn--ghost btn--sm">Retirar</button>
+                      <input type="text" name="motivo" maxlength="200" placeholder="Motivo de la versión (opcional)" aria-label="Motivo de la versión">
+                      <button type="submit" class="btn btn--ghost btn--sm">Registrar versión</button>
                     </form>
+                    {% comment %} Excluir, rechazar y retirar: solo el responsable individual (no los participantes). {% endcomment %}
+                    {% if not parrilla.puede_editar %}
+                    {% elif parrilla.alcance.cerrado %}
+                      <form method="post" action="{% url 'tickets:elemento_salida' ticket.pk fila.elemento.pk %}" class="form">
+                        {% csrf_token %}{% if ws_next %}<input type="hidden" name="next" value="{{ ws_next }}">{% endif %}
+                        <div class="field">
+                          <label for="salida-{{ fila.elemento.pk }}">Justificación</label>
+                          <textarea id="salida-{{ fila.elemento.pk }}" name="justificacion" rows="2" required></textarea>
+                        </div>
+                        <button type="submit" name="tipo" value="EXCLUIDO" class="btn btn--ghost btn--sm">Excluir del alcance</button>
+                        <button type="submit" name="tipo" value="RECHAZADO" class="btn btn--ghost btn--sm">Rechazar</button>
+                      </form>
+                    {% else %}
+                      <form method="post" action="{% url 'tickets:elemento_retirar' ticket.pk fila.elemento.pk %}">
+                        {% csrf_token %}{% if ws_next %}<input type="hidden" name="next" value="{{ ws_next }}">{% endif %}
+                        <button type="submit" class="btn btn--ghost btn--sm">Retirar</button>
+                      </form>
+                    {% endif %}
                   </details>
+                  {% endif %}
                 </td>
               {% endif %}
             </tr>
@@ -74,21 +132,38 @@
     <div class="empty-state"><p>Todavía no hay {{ parrilla.nombre_elemento|lower }}s en este ticket.</p></div>
   {% endif %}
 
-  {% if parrilla.puede_editar %}
+  {% if parrilla.puede_editar and parrilla.alcance.cerrado %}
+    {% if parrilla.parrilla.permite_altas_extraordinarias %}
+      <details>
+        <summary>Alta extraordinaria de {{ parrilla.nombre_elemento|lower }}</summary>
+        <form method="post" action="{% url 'tickets:elemento_extraordinario' ticket.pk %}" class="form">
+          {% csrf_token %}{% if ws_next %}<input type="hidden" name="next" value="{{ ws_next }}">{% endif %}
+          <input type="hidden" name="coleccion" value="{{ parrilla.parrilla.clave }}">
+          {% include "tickets/_parrilla_campos.html" with celdas=parrilla.celdas_nuevas %}
+          <div class="field">
+            <label for="extra-{{ parrilla.parrilla.pk }}">Justificación</label>
+            <textarea id="extra-{{ parrilla.parrilla.pk }}" name="justificacion" rows="2" required></textarea>
+          </div>
+          <button type="submit" class="btn btn--primary btn--sm">Agregar</button>
+        </form>
+      </details>
+    {% endif %}
+  {% elif parrilla.puede_operar and not parrilla.alcance.cerrado %}
     <details>
       <summary>Agregar {{ parrilla.nombre_elemento|lower }}</summary>
       <form method="post" action="{% url 'tickets:elemento_agregar' ticket.pk %}" class="form">
         {% csrf_token %}{% if ws_next %}<input type="hidden" name="next" value="{{ ws_next }}">{% endif %}
+        <input type="hidden" name="coleccion" value="{{ parrilla.parrilla.clave }}">
         {% include "tickets/_parrilla_campos.html" with celdas=parrilla.celdas_nuevas %}
         <button type="submit" class="btn btn--primary btn--sm">Agregar</button>
       </form>
     </details>
-  {% elif ticket.estado == "EN_ATENCION" or ticket.estado == "RADICADO" %}
-    <p class="text-muted">Solo quien atiende el ticket (responsable individual) puede modificar los elementos.</p>
+  {% elif not parrilla.puede_operar and ticket.estado == "EN_ATENCION" or not parrilla.puede_operar and ticket.estado == "RADICADO" %}
+    <p class="text-muted">Solo quien atiende el ticket (responsable individual) o un participante de esta colección, con el ticket en atención, puede modificar sus elementos.</p>
   {% endif %}
 
   {% if parrilla.retiradas %}
-    <details id="elementos-retirados">
+    <details id="elementos-retirados{% if not parrilla.es_por_defecto %}-{{ parrilla.parrilla.clave }}{% endif %}">
       <summary>Retirados ({{ parrilla.retiradas|length }})</summary>
       <p class="text-muted">Quedan en el historial del ticket; ya no se pueden modificar.</p>
       <div style="overflow-x:auto">
@@ -104,7 +179,7 @@
             {% for fila in parrilla.retiradas %}
               <tr>
                 <td>{{ fila.elemento.numero }}</td>
-                {% for celda in fila.celdas %}<td>{% if celda.soportado %}{{ celda.texto }}{% else %}—{% endif %}</td>{% endfor %}
+                {% for celda in fila.celdas %}<td>{{ celda.texto|default:"—" }}</td>{% endfor %}
                 <td>{{ fila.elemento.retirado_en|date:"d/m/Y H:i" }}</td>
               </tr>
             {% endfor %}

@@ -21,3 +21,6 @@ htmlcov/
 .idea/
 .fallas_regresion.txt
 fallas_regresion.txt
+
+# Demo local del Diseñador (documento de trabajo, no versionado)
+/docs/demo/ORBITA_DEMO.md

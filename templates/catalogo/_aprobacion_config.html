@@ -1,0 +1,33 @@
+{% comment %} Fase 4.A — configuración de una APROBACION, la MISMA al crear y al editar. Visible: quién aprueba y, con varios,
+   si deben aprobar todos o cualquiera. Opciones avanzadas: orden, entregable revisado, justificaciones,
+   exclusión y (al crear) rutas. Variables: form, filas, cantidad (aprobadores visibles), con_columna,
+   en_recorrido, ruta_form (formulario de rutas al crear; al editar las rutas van en su propio formulario). {% endcomment %}
+<div data-aprobacion>
+  <div class="field">{{ form.cantidad.label_tag }}{{ form.cantidad }}</div>
+  {% for pform in filas %}
+    <div class="field" data-aprobacion-fila data-mostrar-ambito{% if forloop.counter > cantidad %} hidden{% endif %}>
+      <label>Aprobador {{ forloop.counter }}</label> {{ pform.tipo }}
+      <span data-mostrar-si="-tipo=USUARIO">{{ pform.usuario }}</span>
+      <span data-mostrar-si="-tipo=EQUIPO">{{ pform.equipo }}</span>
+      {% if con_columna %}<span data-mostrar-si="-tipo=COLUMNA">{{ pform.columna }}</span>{% endif %}
+    </div>
+  {% endfor %}
+  <div class="field" data-aprobacion-modo{% if cantidad < 2 %} hidden{% endif %}>{{ form.politica.label_tag }}{{ form.politica }}</div>
+  <details class="svc-advanced">
+    <summary>Opciones avanzadas: orden, entregable revisado, justificaciones{% if ruta_form %} y rutas{% endif %}</summary>
+    <div class="field" data-aprobacion-modo{% if cantidad < 2 %} hidden{% endif %}>{{ form.modo.label_tag }}{{ form.modo }}</div>
+    <div class="field">{{ form.revisa.label_tag }}{{ form.revisa }}</div>
+    <p class="svc-note">Opcional. Si eliges un entregable, quien aprueba verá qué está revisando. Solo aparecen los bloques de entregable ya agregados al flujo.</p>
+    {% include "catalogo/_aprobacion_decisiones.html" %}
+    {% if ruta_form %}
+      <h5>Rutas</h5>
+      {% if en_recorrido %}<p class="svc-note">En el recorrido de un ítem, rechazar o excluir terminan el recorrido de ese ítem.</p>{% endif %}
+      <div class="svc-form-grid svc-form-grid--three">
+        <div class="field">{{ ruta_form.destino_aprobada.label_tag }}{{ ruta_form.destino_aprobada }}</div>
+        <div class="field">{{ ruta_form.destino_devuelta.label_tag }}{{ ruta_form.destino_devuelta }}</div>
+        {% if ruta_form.destino_rechazada %}<div class="field">{{ ruta_form.destino_rechazada.label_tag }}{{ ruta_form.destino_rechazada }}</div>{% endif %}
+      </div>
+      <p class="svc-help">Las rutas que dejes en «Definir después» se configuran al editar la aprobación; publicar las exige.</p>
+    {% endif %}
+  </details>
+</div>

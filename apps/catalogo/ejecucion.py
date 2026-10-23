@@ -235,10 +235,23 @@ def crear_copia_de_ejecucion(servicio, actor):
         versionamiento.activar_version(nuevo, nuevo.versiones.get(estado=WorkflowVersion.Estado.BORRADOR), actor)
     servicio.workflow = nuevo
     campos = ["workflow", "actualizado_en"]
+    configuracion_anterior = None
+    copia_activa = Workflow.objects.get(pk=nuevo.pk).version_activa_id is not None
     if origen_wf.modo == Workflow.Modo.PLANTILLA_FASES:
-        servicio.configuracion_ejecucion_activa = None
-        campos.append("configuracion_ejecucion_activa")
+        configuracion_anterior = servicio.configuracion_ejecucion_activa
+        if configuracion_anterior is None or not copia_activa:
+            # Sin configuración que trasladar: el Servicio queda sin configuración activa (la anterior pertenece
+            # al flujo original y pasa a historia, para no dejar dos «activas»).
+            _historizar(configuracion_anterior, actor)
+            servicio.configuracion_ejecucion_activa = None
+            campos.append("configuracion_ejecucion_activa")
+            configuracion_anterior = None
     servicio.save(update_fields=campos)
+    if configuracion_anterior is not None:
+        # Fase 4.A: la copia nace con la MISMA estructura (las fases conservan su clave), así que los bloques del
+        # Servicio se trasladan sin ambigüedad y la configuración se reactiva sobre la copia: el Servicio no pierde
+        # su ejecución. Si por algo no fuera válida, queda como borrador para revisarla (nunca se borra nada).
+        _trasladar_configuracion_a_copia(servicio, configuracion_anterior, nuevo, actor)
     registrar_evento(
         accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=servicio,
         origen=RegistroAuditoria.Origen.USUARIO, usuario=actor,
@@ -248,6 +261,62 @@ def crear_copia_de_ejecucion(servicio, actor):
     )
     servicio_original.refresh_from_db()
     return nuevo
+
+
+def _trasladar_configuracion_a_copia(servicio, configuracion, workflow_copia, actor):
+    from apps.catalogo.configuracion_ejecucion import (
+        _siguiente_numero, activar_configuracion_ejecucion, clonar_contenido,
+    )
+    from apps.catalogo.models import ConfiguracionEjecucionVersion
+
+    vigente = Workflow.objects.get(pk=workflow_copia.pk).version_activa
+    fases = list(vigente.fases.all())
+
+    def fase_destino(fase):
+        por_clave = next((f for f in fases if fase.clave and f.clave == fase.clave), None)
+        return por_clave or next(f for f in fases if f.orden == fase.orden and f.nombre == fase.nombre)
+
+    nueva = ConfiguracionEjecucionVersion.objects.create(
+        servicio=servicio, workflow_version=vigente, numero=_siguiente_numero(servicio),
+        estado=ConfiguracionEjecucionVersion.Estado.BORRADOR,
+    )
+    clonar_contenido(configuracion, nueva, fase_destino=fase_destino)
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.CREAR, instancia=nueva, origen=RegistroAuditoria.Origen.USUARIO,
+        usuario=actor, datos_anteriores=None,
+        datos_nuevos={"copiada_desde_id": configuracion.pk, "workflow_version_id": vigente.pk},
+    )
+    # La configuración anterior pertenece al flujo ORIGINAL: pasa a historia (una sola ACTIVA por Servicio) y el
+    # Servicio deja de apuntarla; luego se activa la trasladada. Si no se puede activar, queda como borrador para
+    # revisarla (nada se borra).
+    _historizar(configuracion, actor)
+    Servicio.objects.filter(pk=servicio.pk).update(configuracion_ejecucion_activa=None)
+    servicio.configuracion_ejecucion_activa = None
+    try:
+        with transaction.atomic():
+            activar_configuracion_ejecucion(servicio, nueva, actor)
+    except (ValidationError, PermissionDenied):
+        pass
+    return nueva
+
+
+def _historizar(configuracion, actor=None):
+    """Pasa a HISTORICA una configuración que deja de ser la del Servicio porque su flujo cambió (copia). Es solo
+    un cambio de estado de un registro ya no editable: se hace con `update()` porque el `clean()` del modelo exige
+    que la configuración use el flujo VIGENTE del Servicio, que ya es otro. Auditado."""
+    from apps.catalogo.models import ConfiguracionEjecucionVersion
+
+    if configuracion is None or configuracion.estado != ConfiguracionEjecucionVersion.Estado.ACTIVA:
+        return
+    ConfiguracionEjecucionVersion.objects.filter(pk=configuracion.pk).update(
+        estado=ConfiguracionEjecucionVersion.Estado.HISTORICA
+    )
+    configuracion.estado = ConfiguracionEjecucionVersion.Estado.HISTORICA
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=configuracion, origen=RegistroAuditoria.Origen.USUARIO
+        if actor is not None else RegistroAuditoria.Origen.SISTEMA, usuario=actor,
+        datos_anteriores={"estado": "ACTIVA"}, datos_nuevos={"estado": "HISTORICA", "motivo": "copia del flujo"},
+    )
 
 
 def _configurar_actividad(etapa, actor, *, tipo_actor="", usuario=None, equipo=None, permite_subtareas=False):
@@ -439,10 +508,10 @@ def eliminar_bloque_en_flujo(workflow, version, bloque, actor):
 @transaction.atomic
 def crear_flujo(actor, *, nombre, descripcion=""):
     """Crea un Flujo NUEVO e independiente de cualquier Servicio: un `Workflow`
-    real de la biblioteca, con su v1 en BORRADOR (INICIO → FIN) lista para
-    diseñar. Solo exige `workflows.administrar`. Es la misma alta que el
-    editor técnico (`versionamiento.crear_workflow`); aquí se le añade el
-    esqueleto mínimo para que el flujo nazca editable."""
+    real de la biblioteca en modo PLANTILLA_FASES (D3), con su v1 en BORRADOR
+    y sin fases, lista para diseñar en el lienzo de fases. Los bloques no viven
+    en el Flujo sino en la configuración de cada Servicio/Proceso. Solo exige
+    `workflows.administrar`."""
     _exigir_administrar_flujos(actor)
     nombre = (nombre or "").strip()
     if not nombre:
@@ -487,8 +556,8 @@ def publicar_flujo(workflow, version, actor, *, confirmar_impacto_compartido=Fal
     otros = list(servicios_que_comparten(flujo))
     if otros and flujo.version_activa_id is not None and not confirmar_impacto_compartido:
         raise ValidationError(
-            f"Publicar cambiará la ejecución de los tickets nuevos de {_nombres(otros)}, que usan este flujo. "
-            "Requiere confirmación reforzada."
+            f"Publicar ofrece esta versión a {_nombres(otros)}, que usan este flujo: cada uno seguirá con la suya hasta "
+            "actualizar su configuración (Fase 4.A). Requiere confirmación reforzada."
         )
     try:
         versionamiento.activar_version(flujo, version, actor)
@@ -511,5 +580,5 @@ def duplicar_flujo(workflow, actor, *, nombre=None):
         raise ValidationError("El flujo no tiene versiones que copiar.")
     return versionamiento.crear_workflow(
         actor, nombre=(nombre or "").strip() or f"Copia de {original.nombre}",
-        descripcion=original.descripcion, clonar_desde=origen,
+        descripcion=original.descripcion, clonar_desde=origen, modo=original.modo,
     )

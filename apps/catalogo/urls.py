@@ -42,6 +42,10 @@ urlpatterns = [
         studio.studio_parrilla_configurar_view, name="studio_parrilla_configurar",
     ),
     path(
+        "<int:pk>/studio/parrilla/participantes/",
+        studio.studio_parrilla_participantes_view, name="studio_parrilla_participantes",
+    ),
+    path(
         "<int:pk>/studio/parrilla/tareas/",
         studio.studio_parrilla_tareas_view, name="studio_parrilla_tareas",
     ),
@@ -70,6 +74,10 @@ urlpatterns = [
         studio.studio_opcion_guardar_view, {"uso": "parrilla"}, name="studio_parrilla_opcion_crear",
     ),
     path(
+        "<int:pk>/studio/parrilla/campos/<int:campo_id>/opciones/<int:opcion_id>/editar/",
+        studio.studio_opcion_guardar_view, {"uso": "parrilla"}, name="studio_parrilla_opcion_editar",
+    ),
+    path(
         "<int:pk>/studio/parrilla/campos/<int:campo_id>/opciones/<int:opcion_id>/eliminar/",
         studio.studio_opcion_eliminar_view, {"uso": "parrilla"}, name="studio_parrilla_opcion_eliminar",
     ),
@@ -80,6 +88,14 @@ urlpatterns = [
         studio.studio_entrada_activar_view, name="studio_entrada_activar",
     ),
     path("<int:pk>/studio/entrada/campos/nuevo/", studio.studio_campo_guardar_view, name="studio_campo_crear"),
+    path(
+        "<int:pk>/studio/entrada/campos/<int:campo_id>/mover/",
+        studio.studio_campo_mover_view, name="studio_campo_mover",
+    ),
+    path(
+        "<int:pk>/studio/parrilla/campos/<int:campo_id>/mover/",
+        studio.studio_campo_mover_view, {"uso": "parrilla"}, name="studio_parrilla_campo_mover",
+    ),
     path(
         "<int:pk>/studio/entrada/campos/<int:campo_id>/editar/",
         studio.studio_campo_guardar_view, name="studio_campo_editar",
@@ -140,6 +156,24 @@ urlpatterns = [
         "<int:pk>/studio/ejecucion/bloques/<int:bloque_id>/eliminar/",
         studio.studio_bloque_eliminar_view, name="studio_bloque_eliminar",
     ),
+    # Fase 4.A — reordenar una actividad y actualizar la configuración a la versión vigente del flujo
+    path(
+        "<int:pk>/studio/ejecucion/bloques/<int:bloque_id>/mover/",
+        studio.studio_bloque_mover_view, name="studio_bloque_mover",
+    ),
+    # Fase 4.B — lienzo: cambiar de fase (funcional, con confirmación) y posiciones visuales (solo presentación)
+    path(
+        "<int:pk>/studio/ejecucion/bloques/<int:bloque_id>/fase/",
+        studio.studio_bloque_fase_view, name="studio_bloque_fase",
+    ),
+    path(
+        "<int:pk>/studio/ejecucion/lienzo/posiciones/",
+        studio.studio_lienzo_posiciones_view, name="studio_lienzo_posiciones",
+    ),
+    path(
+        "<int:pk>/studio/ejecucion/reconciliar/",
+        studio.studio_reconciliar_view, name="studio_reconciliar",
+    ),
     path(
         "<int:pk>/studio/ejecucion/bloques/<int:bloque_id>/ruta/",
         studio.studio_ruta_aprobacion_guardar_view, name="studio_ruta_aprobacion_guardar",
@@ -171,6 +205,17 @@ urlpatterns = [
         studio.studio_entregable_retirar_view, name="studio_entregable_retirar",
     ),
     path("<int:pk>/studio/salida/entrega/", studio.studio_entrega_guardar_view, name="studio_entrega_guardar"),
+    # Fase 3 — gacetas y reglas de cierre del Proceso (Salida)
+    path("<int:pk>/studio/salida/gacetas/nueva/", studio.studio_gaceta_guardar_view, name="studio_gaceta_crear"),
+    path(
+        "<int:pk>/studio/salida/gacetas/<int:definicion_id>/editar/",
+        studio.studio_gaceta_guardar_view, name="studio_gaceta_editar",
+    ),
+    path(
+        "<int:pk>/studio/salida/gacetas/<int:definicion_id>/estado/",
+        studio.studio_gaceta_estado_view, name="studio_gaceta_estado",
+    ),
+    path("<int:pk>/studio/salida/cierre/", studio.studio_reglas_finalizacion_view, name="studio_reglas_finalizacion"),
     # Visibilidad (General) y responsables (Publicación) — 4.4.1
     path(
         "<int:pk>/studio/visibilidad/nueva/",

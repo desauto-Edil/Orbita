@@ -1,0 +1,32 @@
+{% comment %} Propiedades de un campo o columna, AGRUPADAS: Identidad (etiqueta, tipo, clave) · Comportamiento
+   (obligatoriedad y parámetros del tipo) · Ayuda y configuración adicional. Los parámetros de cada tipo solo se muestran
+   para los tipos a los que aplican (`_campo_parametros.html`, `data-mostrar-si`); el servidor descarta el resto. En el
+   modo ampliado los grupos van en dos columnas cuando caben (consulta de contenedor `propiedades`). Espera `form`,
+   `es_parrilla` y `tipo` (tipo guardado; vacío para uno nuevo). Solo presentación: mismos campos de `CampoForm`. {% endcomment %}
+<div class="propiedad-grupos">
+  <fieldset class="propiedad-grupo">
+    <legend class="propiedad-grupo__titulo">Identidad</legend>
+    <div class="field">{{ form.etiqueta.label_tag }}{{ form.etiqueta }}</div>
+    <div class="field">{{ form.tipo.label_tag }}{{ form.tipo }}</div>
+    <div class="field">{{ form.clave.label_tag }}{{ form.clave }}<small class="text-muted">{{ form.clave.help_text }}</small></div>
+  </fieldset>
+
+  <fieldset class="propiedad-grupo">
+    <legend class="propiedad-grupo__titulo">Comportamiento</legend>
+    <label class="choice">{{ form.obligatorio }} {{ form.obligatorio.label_tag }}</label>
+    {% if es_parrilla %}<small class="text-muted">Un ítem se puede guardar incompleto; se marca «Incompleto» hasta que tenga un valor aquí.</small>{% endif %}
+    {% if not es_parrilla %}
+      <div class="field" data-solo-tipos="FECHA,FECHA_HORA"{% if tipo != "FECHA" and tipo != "FECHA_HORA" %} hidden{% endif %}>
+        <label class="choice">{{ form.es_fecha_requerida }} {{ form.es_fecha_requerida.label_tag }}</label>
+        <small class="text-muted">{{ form.es_fecha_requerida.help_text }}</small>
+      </div>
+    {% endif %}
+    {% include "catalogo/_campo_parametros.html" with form=form %}
+  </fieldset>
+
+  <fieldset class="propiedad-grupo propiedad-grupo--ancho">
+    <legend class="propiedad-grupo__titulo">Ayuda y configuración adicional</legend>
+    <div class="field">{{ form.ayuda.label_tag }}{{ form.ayuda }}</div>
+    <div class="field propiedad-grupo__corto">{{ form.orden.label_tag }}{{ form.orden }}</div>
+  </fieldset>
+</div>

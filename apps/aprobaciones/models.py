@@ -58,6 +58,9 @@ class EsquemaAprobacion(RegistroBase):
         APROBADA = "APROBADA", "Aprobada"
         RECHAZADA = "RECHAZADA", "Rechazada"
         DEVUELTA = "DEVUELTA", "Devuelta"
+        # Fase 2 — solo si el esquema lo permite (`permite_exclusion`): el objeto aprobado (un ítem) sale del
+        # alcance. Precedencia al cerrar: RECHAZADA > EXCLUIDA > DEVUELTA > APROBADA.
+        EXCLUIDA = "EXCLUIDA", "Excluida"
 
     modo = models.CharField(max_length=10, choices=Modo.choices)
     # Solo aplica si modo=PARALELA (SECUENCIAL cierra según orden +
@@ -66,6 +69,11 @@ class EsquemaAprobacion(RegistroBase):
     politica = models.CharField(max_length=10, choices=Politica.choices, blank=True)
     resultado = models.CharField(max_length=10, choices=Resultado.choices, null=True, blank=True)
     resuelto_en = models.DateTimeField(null=True, blank=True)
+    # Fase 2 — decisiones permitidas: aprobar, devolver y rechazar siempre; excluir solo si quien creó el
+    # esquema lo permite (la aprobación de un ítem). `justificacion_al_aprobar` exige observación también al
+    # aprobar (rechazar, devolver y excluir siempre la exigen). Se fijan al crear el esquema.
+    permite_exclusion = models.BooleanField(default=False)
+    justificacion_al_aprobar = models.BooleanField(default=False)
 
     class Meta:
         constraints = [
@@ -102,6 +110,7 @@ class Aprobacion(RegistroBase):
         APROBADA = "APROBADA", "Aprobada"
         RECHAZADA = "RECHAZADA", "Rechazada"
         DEVUELTA = "DEVUELTA", "Devuelta"
+        EXCLUIDA = "EXCLUIDA", "Excluida"
         NO_REQUERIDA = "NO_REQUERIDA", "No requerida"
 
     esquema = models.ForeignKey(EsquemaAprobacion, on_delete=models.CASCADE, related_name="participaciones")
@@ -140,7 +149,7 @@ class Aprobacion(RegistroBase):
                 check=(
                     Q(estado__in=["PENDIENTE", "NO_REQUERIDA"], decidido_por__isnull=True, decidida_en__isnull=True)
                     | Q(
-                        estado__in=["APROBADA", "RECHAZADA", "DEVUELTA"],
+                        estado__in=["APROBADA", "RECHAZADA", "DEVUELTA", "EXCLUIDA"],
                         decidido_por__isnull=False,
                         decidida_en__isnull=False,
                     )

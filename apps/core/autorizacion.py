@@ -39,10 +39,14 @@ def _asignaciones_vigentes(usuario, *permiso_codigos):
     """
     if not getattr(usuario, "is_authenticated", False) or not usuario.is_active:
         return AsignacionRol.objects.none()
+    return _vigentes(*permiso_codigos).filter(usuario=usuario)
 
+
+def _vigentes(*permiso_codigos):
+    """Asignaciones (de cualquier usuario) que otorgan hoy alguno de `permiso_codigos`: misma regla de
+    vigencia que `_asignaciones_vigentes`."""
     hoy = timezone.now().date()
     return AsignacionRol.objects.filter(
-        usuario=usuario,
         activo=True,
         fecha_inicio__lte=hoy,
         rol__activo=True,
@@ -50,6 +54,18 @@ def _asignaciones_vigentes(usuario, *permiso_codigos):
         rol__rolpermiso__permiso__codigo__in=permiso_codigos,
         rol__rolpermiso__permiso__activo=True,
     ).filter(Q(fecha_fin__isnull=True) | Q(fecha_fin__gte=hoy))
+
+
+def existe_asignacion_vigente(permiso_codigo, *, usuarios_ids=None, solo_global=False):
+    """¿Alguna persona ACTIVA tiene hoy `permiso_codigo`? Consulta de solo lectura para comprobar que una
+    configuración tiene quién la opere (no decide una acción concreta: eso sigue siendo `usuario_tiene_permiso`).
+    `usuarios_ids` limita la búsqueda a esas personas; `solo_global` exige alcance GLOBAL."""
+    consulta = _vigentes(permiso_codigo).filter(usuario__is_active=True)
+    if usuarios_ids is not None:
+        consulta = consulta.filter(usuario_id__in=list(usuarios_ids))
+    if solo_global:
+        consulta = consulta.filter(tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL)
+    return consulta.exists()
 
 
 def usuario_tiene_permiso(usuario, permiso_codigo, area=None, unidad_negocio=None):

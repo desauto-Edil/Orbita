@@ -1,6 +1,6 @@
 {% comment %}Controles de una fila (4.G2B1/4.G2B2). Espera `celdas`. La obligatoriedad solo se marca: no se exige al guardar.{% endcomment %}
 {% for celda in celdas %}
-  {% if celda.soportado %}
+  {% if not celda.es_archivo %}
     <div class="field">
       <label>{{ celda.campo.etiqueta }}{% if celda.obligatorio %} <abbr title="Obligatorio">*</abbr>{% endif %}</label>
       {% if celda.tipo == "TEXTO_LARGO" %}

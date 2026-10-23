@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}{{ titulo_pagina }} — {{ sistema.nombre }}{% endblock %}
+{% block content %}
+  <p><a href="{% url 'tickets:detalle' ticket.pk %}#elementos">← Volver al ticket {{ ticket.codigo|default:ticket.pk }}</a></p>
+  <h2>{{ nombre_elemento }} #{{ elemento.numero }} — versiones</h2>
+
+  <section class="card">
+    <h3>Contenido actual</h3>
+    <dl>
+      {% for fila in actual %}<dt>{{ fila.etiqueta }}</dt><dd>{{ fila.texto }}</dd>{% endfor %}
+    </dl>
+  </section>
+
+  {% for item in versiones %}
+    <section class="card">
+      <h3>Versión {{ item.version.numero }}</h3>
+      <p class="text-muted">
+        {{ item.version.creada_en|date:"d/m/Y H:i" }}
+        {% if item.version.creada_por %} · {{ item.version.creada_por.get_full_name|default:item.version.creada_por.get_username }}{% endif %}
+        {% if item.version.motivo %} · {{ item.version.motivo }}{% endif %}
+      </p>
+      <dl>
+        {% for valor in item.valores %}<dt>{{ valor.etiqueta }}</dt><dd>{{ valor.valor|default_if_none:"—" }}</dd>{% endfor %}
+        {% for archivo in item.archivos %}<dt>{{ archivo.etiqueta }}</dt><dd>{{ archivo.nombre }}</dd>{% endfor %}
+      </dl>
+      <small class="text-muted">Huella {{ item.version.huella|truncatechars:16 }}</small>
+    </section>
+  {% empty %}
+    <section class="card"><p class="text-muted">Este ítem todavía no tiene versiones registradas.</p></section>
+  {% endfor %}
+{% endblock %}

@@ -80,15 +80,11 @@ def crear_nueva_version(formulario, actor, clonar_desde=None):
 
 
 def _exigir_compatible_con_procesos_programados(formulario, version):
-    """4.G1 — un Proceso programado nace con el formulario vacío y sin solicitante: no se activa
-    una versión con campos obligatorios mientras un Proceso programado (activo) la use."""
-    from apps.catalogo.programacion import campos_obligatorios_de_version, mensaje_campos_obligatorios
-
-    if not formulario.servicios.filter(programacion__activa=True).exists():
-        return
-    obligatorios = campos_obligatorios_de_version(version)
-    if obligatorios:
-        raise ValueError(mensaje_campos_obligatorios(obligatorios))
+    """4.G1 exigía que un Proceso programado no tuviera campos obligatorios (nacía con el formulario vacío y
+    sin nadie que lo respondiera). Fase 2 del modelo configurable: el responsable diligencia los datos de inicio
+    DENTRO de la ejecución (`apps.tickets.datos_inicio`), así que un formulario con obligatorios ya es
+    compatible. Se conserva el punto de extensión sin restricciones."""
+    return None
 
 
 @transaction.atomic
@@ -128,3 +124,34 @@ def activar_version(formulario, version, actor):
         datos_anteriores=datos_anteriores,
         datos_nuevos={"version_activa_id": version.pk},
     )
+
+
+@transaction.atomic
+def mover_campo(version, campo, actor, *, direccion):
+    """Fase 4.B — sube (`direccion=-1`) o baja (`+1`) un campo/columna UNA posición dentro de su versión en
+    BORRADOR (el guardado del modelo lo exige: RN-013). Renumera el orden de la versión de forma estable (1..n)
+    para que posiciones repetidas no dejen ambigüedad. Auditado. En el borde no hace nada."""
+    if direccion not in (-1, 1):
+        raise ValueError("Dirección de movimiento no válida.")
+    version = FormularioVersion.objects.select_for_update().get(pk=version.pk)
+    version.exigir_editable()
+    campos = list(Campo.objects.filter(version=version).order_by("orden", "id"))
+    indices = {c.pk: i for i, c in enumerate(campos)}
+    actual = indices.get(campo.pk)
+    if actual is None:
+        raise ValueError("El campo no pertenece a esta versión.")
+    destino = actual + direccion
+    if destino < 0 or destino >= len(campos):
+        return campo
+    campos[actual], campos[destino] = campos[destino], campos[actual]
+    anterior = campo.orden
+    for numero, item in enumerate(campos, start=1):
+        if item.orden != numero:
+            item.orden = numero
+            item.save(update_fields=["orden", "actualizado_en"])
+    movido = next(c for c in campos if c.pk == campo.pk)
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=movido, origen=RegistroAuditoria.Origen.USUARIO,
+        usuario=actor, datos_anteriores={"orden": anterior}, datos_nuevos={"orden": movido.orden},
+    )
+    return movido

@@ -1,0 +1,35 @@
+{% load static %}
+{% comment %}Fase 2 — datos de inicio de un proceso que los diligencia dentro de la ejecución. Espera `datos_inicio`
+(`trabajo.datos_inicio_del_ticket`), `ticket` y, opcionalmente, `next_url`. Es el MISMO formulario congelado del
+ticket (no otro): «Guardar avance» persiste sin exigir obligatorios y no avanza el flujo; «Completar
+diligenciamiento» valida los obligatorios y marca los datos como completos.{% endcomment %}
+{% if datos_inicio %}
+  <section class="card" id="datos-inicio" aria-labelledby="datos-inicio-t">
+    <h3 id="datos-inicio-t">Datos de inicio</h3>
+    {% if datos_inicio.completo %}
+      <p>Completados el {{ datos_inicio.completado_en|date:"d/m/Y H:i" }}{% if datos_inicio.completado_por %} por {{ datos_inicio.completado_por.get_full_name|default:datos_inicio.completado_por.get_username }}{% endif %}.</p>
+    {% else %}
+      <p class="text-muted">Este proceso se inició sin exigir el formulario completo: se diligencia aquí, durante la ejecución.</p>
+      {% if datos_inicio.pendientes %}
+        <p>Falta: {{ datos_inicio.pendientes|join:", " }}.</p>
+      {% endif %}
+      {% if datos_inicio.puede_diligenciar %}
+        <link rel="stylesheet" href="{% static 'css/solicitud.css' %}">
+        <form method="post" action="{% url 'tickets:datos_inicio' ticket.pk %}" enctype="multipart/form-data" class="form" novalidate>
+          {% csrf_token %}
+          {% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
+          {% for item in datos_inicio.items %}
+            {% include "tickets/_solicitud_campo.html" %}
+          {% endfor %}
+          <div class="form-actions">
+            <button type="submit" name="accion" value="avance" class="btn btn--secondary">Guardar avance</button>
+            <button type="submit" name="accion" value="completar" class="btn btn--primary">Completar diligenciamiento</button>
+          </div>
+          <p class="text-muted">Guardar avance no exige los campos obligatorios ni hace avanzar el flujo. Completar el diligenciamiento los exige y deja los datos fijos.</p>
+        </form>
+      {% else %}
+        <p class="text-muted">Los diligencia quien atiende el ticket.</p>
+      {% endif %}
+    {% endif %}
+  </section>
+{% endif %}

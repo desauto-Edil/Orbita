@@ -81,11 +81,35 @@ class BloqueOperativo(RegistroBase):
         # 4.G2D2 — solo en un Proceso con tareas por elemento configuradas: convierte los elementos del
         # Ticket en Tareas (`apps.tareas`) y espera a que se completen.
         TAREAS_ELEMENTOS = "TAREAS_ELEMENTOS", "Tareas por elemento"
+        # Fase 2 — bloques CONTENEDORES: sus bloques contenidos (`contenedor`) los ejecutan subinstancias del
+        # mismo motor. GRUPO_ACTIVIDADES: varias actividades generales en paralelo. RECORRIDO_ITEMS: un
+        # recorrido independiente por cada ítem de una colección (rama ITEM) y, opcionalmente, actividades
+        # generales concurrentes (rama GENERAL).
+        GRUPO_ACTIVIDADES = "GRUPO_ACTIVIDADES", "Actividades en paralelo"
+        RECORRIDO_ITEMS = "RECORRIDO_ITEMS", "Recorrido por ítem"
+        # Fase 3 — coordina una GACETA del Proceso desde el flujo principal: la abre, presenta los ítems y
+        # (opcionalmente) espera su resolución. No es el único ingreso de ítems a la gaceta.
+        GACETA = "GACETA", "Gaceta"
+
+    class Rama(models.TextChoices):
+        NINGUNA = "", "Flujo principal"
+        ITEM = "ITEM", "Para cada ítem"
+        GENERAL = "GENERAL", "General, en paralelo"
 
     # Vocabulario V1 que un administrador puede crear: ESPERA queda fuera. Es una regla
     # de dominio (`configuracion_ejecucion.agregar_bloque_operativo`), no una restricción
     # de `choices`, para no impedir cargar registros históricos.
-    TIPOS_CONFIGURABLES = ("ACTIVIDAD", "ENTREGABLE", "APROBACION", "DECISION", "TAREAS_ELEMENTOS")
+    TIPOS_CONFIGURABLES = (
+        "ACTIVIDAD", "ENTREGABLE", "APROBACION", "DECISION", "TAREAS_ELEMENTOS", "GRUPO_ACTIVIDADES",
+        "RECORRIDO_ITEMS", "GACETA",
+    )
+    TIPOS_CONTENEDOR = ("GRUPO_ACTIVIDADES", "RECORRIDO_ITEMS")
+    # Qué puede ir DENTRO de un contenedor, por rama. Un recorrido de ítem es una secuencia (actividades,
+    # aprobaciones y decisiones); una rama general es una sola actividad o aprobación que corre en paralelo.
+    TIPOS_POR_RAMA = {
+        "ITEM": ("ACTIVIDAD", "APROBACION", "DECISION"),
+        "GENERAL": ("ACTIVIDAD", "APROBACION"),
+    }
     # Entregables que una aprobación puede REVISAR (4.E2): los que tienen un contenido que
     # revisar y volver a entregar corregido. Una CONFIRMACION no tiene nada que revisar.
     TIPOS_ENTREGABLE_REVISABLES = ("TEXTO", "ENLACE", "ARCHIVO")
@@ -124,10 +148,22 @@ class BloqueOperativo(RegistroBase):
     descripcion = models.TextField(blank=True)
     orden = models.PositiveIntegerField()
     configuracion = models.JSONField(default=dict, blank=True)
+    # Fase 2: un bloque CONTENIDO pertenece a un contenedor (GRUPO_ACTIVIDADES / RECORRIDO_ITEMS) de la misma
+    # configuración y fase, y nunca forma parte del recorrido principal. `rama` dice cómo se ejecuta: ITEM (la
+    # secuencia de cada ítem) o GENERAL (una actividad general en paralelo). Un bloque del flujo principal no
+    # tiene contenedor ni rama.
+    contenedor = models.ForeignKey(
+        "self", on_delete=models.CASCADE, null=True, blank=True, related_name="contenidos"
+    )
+    rama = models.CharField(max_length=10, choices=Rama.choices, blank=True, default="")
 
     class Meta:
         constraints = [
             UniqueConstraint(fields=["version", "fase", "orden"], name="uq_bloqueop_version_fase_orden"),
+            models.CheckConstraint(
+                condition=Q(contenedor__isnull=True, rama="") | Q(contenedor__isnull=False, rama__in=["ITEM", "GENERAL"]),
+                name="ck_bloqueop_contenedor_rama",
+            ),
             UniqueConstraint(
                 fields=["version", "clave"], condition=~Q(clave=""), name="uq_bloqueop_version_clave"
             ),
@@ -142,6 +178,7 @@ class BloqueOperativo(RegistroBase):
         self._validar_definicion_entregable()
         self._validar_entregable_revisado()
         self._validar_tareas_elementos()
+        self._validar_contenedor()
         if self.clave:
             repetida = BloqueOperativo.objects.filter(version_id=self.version_id, clave=self.clave).exclude(pk=self.pk)
             if repetida.exists():
@@ -158,6 +195,38 @@ class BloqueOperativo(RegistroBase):
             raise ValidationError("Las tareas por elemento solo existen en un proceso.")
         if BloqueOperativo.objects.filter(version_id=self.version_id, tipo=self.tipo).exclude(pk=self.pk).exists():
             raise ValidationError("El flujo ya tiene un bloque de tareas por elemento.")
+
+    def _validar_contenedor(self):
+        """Fase 2 — un contenedor está en el flujo principal (nunca dentro de otro: un solo nivel de
+        subinstancias); un bloque contenido es de la misma configuración y fase que su contenedor, de un tipo
+        admitido por su rama, y la rama ITEM solo existe en un RECORRIDO_ITEMS."""
+        if self.tipo in (self.Tipo.RECORRIDO_ITEMS, self.Tipo.GACETA):
+            servicio = self.version.servicio
+            if servicio.tipo != "PROCESO" or servicio.es_ticket_general:
+                raise ValidationError("Los recorridos por ítem y las gacetas solo existen en un proceso.")
+        if self.contenedor_id is None:
+            if self.rama:
+                raise ValidationError({"rama": "Solo un bloque dentro de un contenedor tiene rama."})
+            return
+        contenedor = self.contenedor
+        if self.tipo in self.TIPOS_CONTENEDOR:
+            raise ValidationError("Un contenedor no puede ir dentro de otro contenedor.")
+        if contenedor.tipo not in self.TIPOS_CONTENEDOR:
+            raise ValidationError({"contenedor": "Solo un grupo de actividades o un recorrido por ítem contiene bloques."})
+        if contenedor.version_id != self.version_id or contenedor.fase_id != self.fase_id:
+            raise ValidationError({"contenedor": "El bloque debe estar en la misma configuración y fase que su contenedor."})
+        if self.rama not in self.TIPOS_POR_RAMA:
+            raise ValidationError({"rama": "Indica si el bloque es para cada ítem o general."})
+        if self.rama == self.Rama.ITEM and contenedor.tipo != self.Tipo.RECORRIDO_ITEMS:
+            raise ValidationError({"rama": "Un grupo de actividades solo tiene actividades generales."})
+        if self.tipo not in self.TIPOS_POR_RAMA[self.rama]:
+            raise ValidationError(
+                f"«{self.get_tipo_display()}» no se puede agregar como {self.get_rama_display().lower()}."
+            )
+
+    @property
+    def es_contenido(self):
+        return self.contenedor_id is not None
 
     def _validar_definicion_entregable(self):
         if self.tipo == self.Tipo.ENTREGABLE:
@@ -256,7 +325,12 @@ class TransicionBloqueOperativo(RegistroBase):
     es_fallback = models.BooleanField(default=False)
     resultado_aprobacion = models.CharField(
         max_length=10,
-        choices=[("APROBADA", "Aprobada"), ("RECHAZADA", "Rechazada"), ("DEVUELTA", "Devuelta")],
+        choices=[
+            ("APROBADA", "Aprobada"), ("RECHAZADA", "Rechazada"), ("DEVUELTA", "Devuelta"),
+            # Fase 2 — solo en la aprobación de un recorrido por ítem; hoy sin ruta propia (excluir termina el
+            # recorrido del ítem), se admite el valor para no cerrar esa puerta.
+            ("EXCLUIDA", "Excluida"),
+        ],
         blank=True,
     )
 
@@ -283,6 +357,13 @@ class TransicionBloqueOperativo(RegistroBase):
                 raise ValidationError("Indique el bloque destino de la ruta o finalice el flujo.")
             if self.bloque_origen.version_id != self.bloque_destino.version_id:
                 raise ValidationError("Los bloques conectados deben pertenecer a la misma configuracion.")
+            # Fase 2: una ruta no sale ni entra de un contenedor: dentro de un recorrido solo se conecta con
+            # bloques de la misma rama del mismo contenedor; en el flujo principal, con bloques principales.
+            origen, destino = self.bloque_origen, self.bloque_destino
+            if (origen.contenedor_id, origen.rama) != (destino.contenedor_id, destino.rama):
+                raise ValidationError(
+                    "Una ruta solo conecta bloques del mismo recorrido (o del flujo principal entre sí)."
+                )
         tipo = self.bloque_origen.tipo
         if tipo == BloqueOperativo.Tipo.DECISION:
             if self.es_fallback:
@@ -322,3 +403,22 @@ class TransicionBloqueOperativo(RegistroBase):
         etiqueta = f" [{self.nombre}]" if self.nombre else ""
         destino = "Finalizar flujo" if self.finaliza else self.bloque_destino
         return f"{self.bloque_origen} -> {destino}{etiqueta}"
+
+
+class PosicionVisualBloque(RegistroBase):
+    """Fase 4.B — POSICIÓN VISUAL de una actividad en el lienzo del Studio. Solo presentación: el motor NUNCA la
+    lee (el orden de ejecución es `BloqueOperativo.orden` y las rutas explícitas). Pertenece al Servicio y se
+    identifica por la CLAVE ESTABLE del bloque (no por su pk), así sobrevive a las versiones de la configuración y
+    a la reconciliación con otra versión de la plantilla. `y` es el desplazamiento vertical dentro de la columna
+    de su fase; `x` queda reservado (hoy 0: las columnas fijan la horizontal)."""
+
+    servicio = models.ForeignKey("catalogo.Servicio", on_delete=models.CASCADE, related_name="posiciones_lienzo")
+    clave = models.CharField(max_length=claves.LARGO_MAXIMO + 10)
+    x = models.IntegerField(default=0)
+    y = models.IntegerField(default=0)
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=["servicio", "clave"], name="uq_posicion_lienzo_servicio_clave")]
+
+    def __str__(self):
+        return f"{self.servicio_id}:{self.clave} ({self.x}, {self.y})"

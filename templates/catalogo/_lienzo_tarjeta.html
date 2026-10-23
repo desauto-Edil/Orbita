@@ -1,0 +1,29 @@
+{% comment %} Fase 4.B — tarjeta de una actividad en el lienzo. `t` es un `apps.catalogo.lienzo.Tarjeta`. La posición vertical
+   (`top`) es SOLO visual; el número es el orden de ejecución dentro de la fase. {% endcomment %}
+<article class="lienzo-tarjeta lienzo-tarjeta--{{ t.bloque.tipo|lower }}{% if t.errores %} is-atencion{% endif %}"
+         id="{{ t.dom_id }}" data-nodo data-clave="{{ t.clave }}" data-y="{{ t.y }}" style="top: {{ t.y }}px"
+         data-seleccionar="inspector-bloque-{{ t.bloque.pk }}">
+  <div class="lienzo-tarjeta__cabeza">
+    <span class="lienzo-tarjeta__icono" aria-hidden="true">{% include "components/icon.html" with name=t.icono size="sm" %}</span>
+    <span class="lienzo-tarjeta__paso" title="Orden de ejecución dentro de la fase">Paso {{ t.paso }}</span>
+    {% if puede_ejecucion %}<span class="lienzo-tarjeta__asa" aria-hidden="true" title="Arrastra para moverla (solo cambia la posición visual)">{% include "components/icon.html" with name="move" size="sm" %}</span>{% endif %}
+  </div>
+  <button type="button" class="lienzo-tarjeta__nombre" data-seleccionar="inspector-bloque-{{ t.bloque.pk }}">{{ t.bloque.nombre }}</button>
+  <span class="lienzo-tarjeta__tipo">{{ t.tipo }}</span>
+  {% if t.resumen %}<span class="lienzo-tarjeta__resumen">{{ t.resumen }}</span>{% endif %}
+  <span class="estado estado--{{ t.estado }}">{% if t.errores %}Requiere atención{% else %}Configurada{% endif %}</span>
+  {% if t.ramas %}
+    <div class="lienzo-tarjeta__ramas">
+      {% for etiqueta, pasos in t.ramas %}
+        <div class="lienzo-tarjeta__rama">
+          <span class="lienzo-tarjeta__rama-titulo">{{ etiqueta }}</span>
+          <ol>
+            {% for p in pasos %}
+              <li><button type="button" class="lienzo-tarjeta__paso-interno{% if p.errores %} is-atencion{% endif %}" data-seleccionar="inspector-bloque-{{ p.bloque.pk }}">{{ p.bloque.nombre }} <small>{{ p.tipo }}</small></button></li>
+            {% endfor %}
+          </ol>
+        </div>
+      {% endfor %}
+    </div>
+  {% endif %}
+</article>

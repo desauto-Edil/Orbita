@@ -110,7 +110,7 @@
                           <button type="button" data-flow-open-inspector data-target="inspector-conectar-{{ fila.fase.pk }}">Conectar</button>
                           <form method="post" action="{% url 'flujos:fase_eliminar' workflow.pk fila.fase.pk %}">
                             {% csrf_token %}
-                            <button type="submit" onclick="return confirm('Eliminar esta fase?')">Eliminar</button>
+                            <button type="submit" onclick="return confirm('{% if fila.en_uso_por %}Esta fase tiene actividades en: {{ fila.en_uso_por|join:", "|escapejs }}. Al actualizar su configuración, cada uno decidirá a dónde moverlas (nada se borra solo). ¿Eliminar la fase de este borrador?{% else %}¿Eliminar esta fase?{% endif %}')">Eliminar</button>
                           </form>
                         </div>
                       </details>
@@ -214,7 +214,8 @@
         {% if editable_ejecucion and usado_por and version_activa %}
           <section class="flow-inspector__section is-action-panel" id="inspector-publicar" hidden>
             <h3>Publicar version</h3>
-            <p class="flow-inspector__text">Los tickets nuevos usaran esta version. Los tickets ya iniciados conservan la suya.</p>
+            <p class="flow-inspector__text">Los tickets nuevos usarán esta versión cuando cada servicio actualice su configuración; hasta entonces cada servicio sigue con la suya. Los tickets ya iniciados conservan la suya.</p>
+            {% if servicios_afectados %}<p class="flow-inspector__text"><strong>Atención:</strong> esta versión quita fases con actividades en {{ servicios_afectados|join:", " }}. Al actualizar, cada uno tendrá que decidir a dónde moverlas.</p>{% endif %}
             <ul class="flow-used-list">
               {% for servicio in usado_por %}
                 <li><span>{{ servicio.nombre }}</span><small>{{ servicio.get_tipo_display }}</small></li>
@@ -235,6 +236,7 @@
         {% for fila in fases %}
           <section class="flow-inspector__section is-action-panel" id="inspector-fase-info-{{ fila.fase.pk }}" hidden>
             <h3>{{ fila.fase.nombre }}</h3>
+            {% if fila.en_uso_por %}<p class="flow-inspector__text">Con actividades en: {{ fila.en_uso_por|join:", " }}. Renombrarla no les afecta; eliminarla les pedirá decidir a dónde moverlas.</p>{% endif %}
             <p class="flow-inspector__text">
               {% if fila.es_inicial %}Fase inicial.{% elif fila.es_final %}Fase final.{% else %}Fase del recorrido.{% endif %}
               {% if fila.fase.descripcion %} {{ fila.fase.descripcion }}{% else %} Agrega una descripcion para explicar esta fase.{% endif %}

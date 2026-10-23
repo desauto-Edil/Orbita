@@ -1,0 +1,13 @@
+{# Fase 2 — configuración de un RECORRIDO POR ÍTEM. #}
+<fieldset class="svc-fieldset">
+  <legend>Recorrido por ítem</legend>
+  <div class="field">{{ form.coleccion.label_tag }}{{ form.coleccion }}</div>
+  <div class="field">
+    {{ form.condicion_variable.label_tag }}
+    <span class="svc-inline">{{ form.condicion_variable }} {{ form.condicion_operador }} {{ form.condicion_valor }}</span>
+    <span class="svc-help">Opcional. Sin condición, todos los ítems del alcance hacen el recorrido. Los ítems excluidos o rechazados nunca entran.</span>
+  </div>
+  <label class="choice">{{ form.incorporar_nuevos }} {{ form.incorporar_nuevos.label }}</label>
+  <label class="choice">{{ form.espera_alcance_cerrado }} {{ form.espera_alcance_cerrado.label }}</label>
+  <p class="svc-note">Cada ítem avanza a su ritmo. El flujo principal continúa cuando ya no queda ningún recorrido en curso.</p>
+</fieldset>

@@ -1,149 +1,90 @@
+{% comment %} Fase 4.B — «Revisión y publicación»: UNA sola revisión (resumen compacto · verificación con Listo / Requiere atención /
+   Opcional · versiones · una acción principal). No repite información ni presenta como obligatorio lo opcional; los
+   pendientes vienen de la publicación SIMULADA (los mismos que daría publicar). La publicación sigue siendo la
+   transaccional de 4.A. {% endcomment %}
 <section class="svc-section svc-section--publish">
-  <header class="svc-section__head">
+  <header class="revision__cabecera">
     <div>
       <p class="svc-kicker">Publicación</p>
-      <h2>Publicar</h2>
-      <p>Revisa si el servicio está listo para usarse.</p>
+      <h2>Revisión y publicación</h2>
+      {% if es_proceso %}<p class="svc-help">Resumen del proceso y lo que falta antes de publicar.</p>{% endif %}
+      <dl class="revision__datos">
+        <div><dt>Nombre</dt><dd>{{ servicio.nombre }}</dd></div>
+        <div><dt>Tipo</dt><dd>{{ cabecera_revision.tipo }}</dd></div>
+        {% if cabecera_revision.modalidad %}<div><dt>Modalidad de inicio</dt><dd>{{ cabecera_revision.modalidad }}</dd></div>{% endif %}
+        <div><dt>Responsable</dt><dd>{{ cabecera_revision.responsable }}</dd></div>
+        <div><dt>Flujo asociado</dt><dd>{{ cabecera_revision.flujo }}</dd></div>
+      </dl>
     </div>
-    {% if impacto_compartido %}
-      <a class="btn btn--primary" href="#confirmar-publicacion">Revisar impacto</a>
-    {% else %}
-      <form method="post" action="{% url 'catalogo:studio_publicar' servicio.pk %}">
-        {% csrf_token %}
-        <button type="submit" class="btn btn--primary" {% if not publicable %}disabled{% endif %}>
-          {% if servicio.activo %}Actualizar publicación{% else %}Publicar{% endif %}
-        </button>
-      </form>
-    {% endif %}
+    <div class="revision__accion">
+      {% if impacto_compartido %}
+        <a class="btn btn--primary" href="#confirmar-publicacion">Revisar impacto</a>
+      {% elif es_legacy %}
+        <form method="post" action="{% url 'catalogo:studio_publicar' servicio.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--primary" {% if not publicable %}disabled{% endif %}>
+            {% if servicio.activo %}Actualizar publicación{% else %}Publicar{% endif %}
+          </button>
+        </form>
+      {% elif accion_publicar %}
+        <form method="post" action="{% url 'catalogo:studio_publicar' servicio.pk %}">
+          {% csrf_token %}
+          <button type="submit" class="btn btn--primary" {% if not publicable %}disabled{% endif %}>{{ accion_publicar }}</button>
+        </form>
+        {% if not publicable %}<p class="svc-help">Corrige lo marcado como «Requiere atención» para publicar.</p>{% endif %}
+      {% else %}
+        <span class="estado estado--complete">Publicado · sin cambios pendientes</span>
+      {% endif %}
+    </div>
   </header>
 
-  {% if es_proceso and resumen_proceso.tarjetas %}
-    <section class="svc-panel" id="resumen-proceso" aria-label="Resumen de la configuración del proceso">
-      <div class="svc-panel__head">
-        <div>
-          <h3>Resumen del proceso</h3>
-          <p>Cómo quedará configurado: modalidad, datos, elementos, revisiones, tareas y flujo.</p>
-        </div>
+  <section aria-labelledby="titulo-verificacion">
+    <h3 class="subpanel__titulo" id="titulo-verificacion">Verificación</h3>
+    <ul class="verificacion">
+      {% for fila in verificacion %}
+        <li class="verificacion__fila verificacion__fila--{{ fila.clase }}">
+          <span class="verificacion__nombre">{{ fila.nombre }}</span>
+          <span class="estado estado--{{ fila.clase }}">{{ fila.etiqueta }}</span>
+          <div class="verificacion__detalle">
+            {% for linea in fila.lineas %}<p>{{ linea }}</p>{% endfor %}
+            {% if fila.errores %}
+              <p><strong>Bloquea la publicación:</strong></p>
+              <ul>{% for error in fila.errores %}<li>{{ error }}</li>{% endfor %}</ul>
+            {% endif %}
+          </div>
+          <a class="btn btn--ghost btn--sm" href="{{ fila.url }}" data-studio-navegacion>{% if fila.estado == "atencion" %}Corregir en {{ fila.donde }}{% else %}Ir a {{ fila.donde }}{% endif %}</a>
+        </li>
+      {% endfor %}
+    </ul>
+    {% if advertencias_dependencias %}
+      <p class="svc-help"><strong>Avisos (no bloquean):</strong> {% for dep in advertencias_dependencias %}{{ dep.mensaje }} {% endfor %}</p>
+    {% endif %}
+  </section>
+
+  {% if not es_legacy %}
+  <section class="svc-panel" id="versiones" aria-label="Versiones">
+    <div class="svc-panel__head">
+      <div>
+        <h3>Versiones: qué está en vigor y qué está pendiente</h3>
+        <p>Guardar deja los cambios en borrador. «Activar» en cada sección pone en vigor solo esa pieza. {% if servicio.activo %}«Publicar cambios» activa todo lo pendiente a la vez{% else %}«Publicar» activa lo pendiente y publica{% endif %}; si algo falla, no cambia nada. Los tickets existentes nunca cambian.</p>
       </div>
-      <div class="svc-resumen-grid">
-        {% for tarjeta in resumen_proceso.tarjetas %}
-          <article class="svc-resumen-card">
-            <h4>
-              {{ tarjeta.titulo }}
-              {% if tarjeta.estado == "ok" %}<span class="svc-pill svc-pill--ok">Listo</span>{% elif tarjeta.estado == "pendiente" %}<span class="svc-pill svc-pill--warn">Por completar</span>{% else %}<span class="svc-pill">Opcional</span>{% endif %}
-            </h4>
-            {% for linea in tarjeta.lineas %}<p>{{ linea }}</p>{% endfor %}
-            <a class="btn btn--ghost btn--sm" href="{% url 'catalogo:studio' servicio.pk %}?tab={{ tarjeta.seccion.2 }}{% if tarjeta.seccion.3 %}&amp;uso={{ tarjeta.seccion.3 }}{% endif %}">Ir a {{ tarjeta.seccion.1 }}</a>
-          </article>
+    </div>
+    <table class="svc-versions">
+      <thead><tr><th>Pieza</th><th>En vigor</th><th>Pendiente</th></tr></thead>
+      <tbody>
+        {% for pieza in piezas_version %}
+          <tr>
+            <td><a href="{% url 'catalogo:studio' servicio.pk %}?tab={{ pieza.seccion.0 }}{% if pieza.seccion.1 %}&amp;uso={{ pieza.seccion.1 }}{% endif %}">{{ pieza.etiqueta }}</a>{% if pieza.nota %}<p class="svc-help">{{ pieza.nota }}</p>{% endif %}</td>
+            <td>{% if pieza.activa %}v{{ pieza.activa }}{% else %}—{% endif %}</td>
+            <td>{% if pieza.pendiente %}<span class="svc-pill svc-pill--warn">Borrador v{{ pieza.borrador.numero }}: entrará en vigor al publicar</span>{% else %}Sin cambios{% endif %}</td>
+          </tr>
         {% endfor %}
-      </div>
-      {% if resumen_proceso.avisos %}
-        <div class="svc-alert svc-alert--warning" role="status">
-          <strong>Conviene revisar (no bloquea la publicación):</strong>
-          <ul>{% for aviso in resumen_proceso.avisos %}<li>{{ aviso }}</li>{% endfor %}</ul>
-        </div>
-      {% endif %}
-    </section>
+      </tbody>
+    </table>
+    {% if activaria %}<p class="svc-help">Al publicar entrarán en vigor: {{ activaria|join:", " }}.</p>{% endif %}
+    <p class="svc-help">Aplican a los tickets nuevos en cuanto se guardan (sin borrador): {{ aplican_al_guardar|join:", " }}.</p>
+  </section>
   {% endif %}
-
-  <div class="svc-publish-grid">
-    <article class="svc-panel svc-readiness">
-      <div class="svc-panel__head">
-        <div>
-          <h3>{% if errores %}Pendientes antes de publicar{% else %}Todo listo{% endif %}</h3>
-          <p>{{ checklist|length }} punto{{ checklist|length|pluralize }} revisado{{ checklist|length|pluralize }}.</p>
-        </div>
-        {% if errores %}<span class="svc-pill svc-pill--warn">{{ errores|length }} pendiente{{ errores|length|pluralize }}</span>{% else %}<span class="svc-pill svc-pill--ok">Listo</span>{% endif %}
-      </div>
-
-      <ul class="svc-checklist">
-        {% for item in checklist %}
-          <li{% if item.ok %} class="is-ok"{% endif %}>
-            <span aria-hidden="true">{% if item.ok %}✓{% else %}•{% endif %}</span>
-            <strong>{{ item.texto }}</strong>
-          </li>
-        {% endfor %}
-      </ul>
-
-      {% if errores %}
-        <div class="svc-alert">
-          <strong>Antes de publicar:</strong>
-          {% if errores_por_seccion %}
-            {% for grupo in errores_por_seccion %}
-              <p class="svc-help">Corrígelo en <a href="{{ grupo.url }}">{{ grupo.etiqueta }}</a>:</p>
-              <ul>
-                {% for error in grupo.errores %}<li>{{ error }}</li>{% endfor %}
-              </ul>
-            {% endfor %}
-          {% else %}
-            <ul>
-              {% for error in errores %}<li>{{ error }}</li>{% endfor %}
-            </ul>
-          {% endif %}
-        </div>
-      {% endif %}
-    </article>
-
-    <aside class="svc-panel svc-publish-summary">
-      <h3>Visibilidad</h3>
-      {% if es_restringido %}
-        {% if concesiones %}
-          <p>Restringido. Pueden encontrarlo y solicitarlo:</p>
-          <ul class="svc-compact-list svc-compact-list--plain">
-            {% for concesion in concesiones %}
-              <li>
-                <span>
-                  {% if concesion.tipo_alcance == "USUARIO" %}{{ concesion.usuario }}
-                  {% elif concesion.tipo_alcance == "AREA" %}{{ concesion.area }}
-                  {% else %}{{ concesion.unidad_negocio }}{% endif %}
-                </span>
-                <span class="svc-tag">{{ concesion.get_tipo_alcance_display }}</span>
-              </li>
-            {% endfor %}
-          </ul>
-        {% else %}
-          <p>Restringido, sin accesos concedidos todavía.</p>
-        {% endif %}
-      {% else %}
-        <p>Público interno: cualquier persona de la organización.</p>
-      {% endif %}
-      <a class="btn btn--ghost btn--sm" href="{% url 'catalogo:studio' servicio.pk %}?tab=general">Cambiar visibilidad</a>
-    </aside>
-  </div>
-
-  <div class="svc-publish-grid svc-publish-grid--secondary">
-    {% if es_proceso %}
-    <section class="svc-panel">
-      <div class="svc-panel__head">
-        <div>
-          <h3>Responsables</h3>
-          <p>Quién atiende este proceso se configura en Básico.</p>
-        </div>
-        <a class="btn btn--ghost btn--sm" href="{% url 'catalogo:studio' servicio.pk %}?tab=general">Ir a Básico</a>
-      </div>
-    </section>
-    {% else %}
-    {% include "catalogo/_studio_responsables.html" with tab_origen="publicacion" %}
-    {% endif %}
-
-    {% if not proceso_programado %}
-    <section class="svc-panel">
-      <div class="svc-panel__head">
-        <div>
-          <h3>Entrega</h3>
-          <p>Qué verá el solicitante al cierre.</p>
-        </div>
-        {% if politica_actual %}<span class="svc-pill svc-pill--ok">Configurada</span>{% else %}<span class="svc-pill">Manual</span>{% endif %}
-      </div>
-      {% if politica_actual %}
-        <p class="svc-muted">{{ politica_actual }}</p>
-      {% else %}
-        <p class="svc-muted">Sin entrega formal configurada.</p>
-      {% endif %}
-      <a class="btn btn--ghost btn--sm" href="{% url 'catalogo:studio' servicio.pk %}?tab=salida">Ajustar salida</a>
-    </section>
-    {% endif %}
-  </div>
 
   {% if impacto_compartido %}
     <form id="confirmar-publicacion" method="post" action="{% url 'catalogo:studio_publicar' servicio.pk %}" class="svc-panel svc-impact-form form">

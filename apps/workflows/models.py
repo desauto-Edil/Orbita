@@ -99,10 +99,19 @@ class FaseWorkflow(RegistroBase):
     nombre = models.CharField(max_length=150)
     descripcion = models.TextField(blank=True)
     orden = models.PositiveIntegerField()
+    # Fase 4.A — identidad ESTABLE de la fase a lo largo de las versiones de su plantilla (como
+    # `BloqueOperativo.clave`): se genera una vez al crearla (única en TODO el linaje del Workflow, para que
+    # una fase nueva nunca herede los bloques de una eliminada), se copia al clonar la versión y renombrar
+    # no la cambia. La usa la reconciliación de la configuración de un Servicio cuando la plantilla publica
+    # otra versión (`apps.catalogo.reconciliacion`).
+    clave = models.CharField(max_length=60, blank=True, default="")
 
     class Meta:
         constraints = [
             UniqueConstraint(fields=["version", "orden"], name="uq_faseworkflow_version_orden"),
+            UniqueConstraint(
+                fields=["version", "clave"], condition=~Q(clave=""), name="uq_faseworkflow_version_clave"
+            ),
         ]
         ordering = ["version_id", "orden", "id"]
 
@@ -408,6 +417,53 @@ class InstanciaWorkflow(RegistroBase):
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
     finalizada_en = models.DateTimeField(null=True, blank=True)
+    # Fase 2 del modelo configurable — SUBINSTANCIAS. Un bloque RECORRIDO_ITEMS o GRUPO_ACTIVIDADES de la
+    # instancia principal lanza instancias hijas que ejecuta el MISMO motor, cada una con su propio punto
+    # activo (la invariante «una instancia = una ejecución vigente» no cambia). Una hija recorre los bloques
+    # contenidos en ese bloque: por ítem (`elemento`, rama ITEM) o una actividad general concurrente
+    # (`bloque_rama`, rama GENERAL). Un solo nivel: una hija nunca lanza hijas. El Ticket sigue siendo UNO y
+    # apunta a la instancia principal (`raiz_id`).
+    instancia_padre = models.ForeignKey(
+        "self", on_delete=models.PROTECT, null=True, blank=True, related_name="subinstancias"
+    )
+    ejecucion_padre = models.ForeignKey(
+        "InstanciaEtapa", on_delete=models.PROTECT, null=True, blank=True, related_name="subinstancias"
+    )
+    elemento = models.ForeignKey(
+        "tickets.ElementoParrilla", on_delete=models.PROTECT, null=True, blank=True, related_name="recorridos"
+    )
+    bloque_rama = models.ForeignKey(
+        "catalogo.BloqueOperativo", on_delete=models.PROTECT, null=True, blank=True, related_name="ramas_ejecutadas"
+    )
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(
+                    Q(instancia_padre__isnull=True, ejecucion_padre__isnull=True, elemento__isnull=True,
+                      bloque_rama__isnull=True)
+                    | Q(instancia_padre__isnull=False, ejecucion_padre__isnull=False)
+                ),
+                name="ck_instanciawf_subinstancia_coherente",
+            ),
+            UniqueConstraint(
+                fields=["ejecucion_padre", "elemento"], condition=Q(elemento__isnull=False),
+                name="uq_instanciawf_recorrido_elemento",
+            ),
+            UniqueConstraint(
+                fields=["ejecucion_padre", "bloque_rama"], condition=Q(bloque_rama__isnull=False),
+                name="uq_instanciawf_rama_general",
+            ),
+        ]
+
+    @property
+    def raiz_id(self):
+        """La instancia principal (la que referencia el Ticket): la propia, o su padre si es una hija."""
+        return self.instancia_padre_id or self.pk
+
+    @property
+    def es_subinstancia(self):
+        return self.instancia_padre_id is not None
 
     def __str__(self):
         return f"Instancia de {self.workflow_version} (#{self.pk})"
@@ -472,6 +528,12 @@ class InstanciaEtapa(RegistroBase):
         ENTREGABLE = "ENTREGABLE", "Entregable"
         # 4.G2D2 — bloque TAREAS_ELEMENTOS: espera a que se completen las Tareas generadas por los elementos.
         ELEMENTOS = "ELEMENTOS", "Tareas por elemento"
+        # Fase 2 — la instancia principal espera a sus subinstancias (recorridos por ítem o actividades en
+        # paralelo). Las libera `apps.workflows.recorridos` cuando la última hija termina.
+        RECORRIDO = "RECORRIDO", "Recorridos por ítem"
+        GRUPO = "GRUPO", "Actividades en paralelo"
+        # Fase 3 — el flujo espera la resolución de una gaceta (la libera `apps.gacetas`).
+        GACETA = "GACETA", "Gaceta"
 
     instancia_workflow = models.ForeignKey(
         InstanciaWorkflow, on_delete=models.CASCADE, related_name="ejecuciones_etapa"

@@ -1,0 +1,17 @@
+{% comment %} Fase 4.A — parámetros de un campo o columna: cada grupo se muestra solo para los tipos a los que aplica
+   (`data-mostrar-si` en static/js/studio.js). Sin JS se ven todos; el servidor descarta los que no aplican
+   (`CampoForm.configuracion_desde_tipo`). Espera `form`. {% endcomment %}
+<div class="svc-form-grid svc-form-grid--three">
+  <div class="field" data-mostrar-si="-tipo=TEXTO,TEXTO_LARGO,CORREO,URL">{{ form.longitud_maxima.label_tag }}{{ form.longitud_maxima }}</div>
+  <div class="field" data-mostrar-si="-tipo=NUMERO">{{ form.minimo.label_tag }}{{ form.minimo }}</div>
+  <div class="field" data-mostrar-si="-tipo=NUMERO">{{ form.maximo.label_tag }}{{ form.maximo }}</div>
+  <div class="field" data-mostrar-si="-tipo=FECHA,FECHA_HORA">{{ form.fecha_minima.label_tag }}{{ form.fecha_minima }}</div>
+  <div class="field" data-mostrar-si="-tipo=FECHA,FECHA_HORA">{{ form.fecha_maxima.label_tag }}{{ form.fecha_maxima }}</div>
+  <div class="field" data-mostrar-si="-tipo=ARCHIVO">{{ form.extensiones_permitidas.label_tag }}{{ form.extensiones_permitidas }}<small class="text-muted">{{ form.extensiones_permitidas.help_text }}</small></div>
+  <div class="field" data-mostrar-si="-tipo=ARCHIVO">{{ form.tamano_maximo_mb.label_tag }}{{ form.tamano_maximo_mb }}</div>
+  <div class="field" data-mostrar-si="-tipo=MULTILISTA">{{ form.minimo_selecciones.label_tag }}{{ form.minimo_selecciones }}</div>
+  <div class="field" data-mostrar-si="-tipo=MULTILISTA">{{ form.maximo_selecciones.label_tag }}{{ form.maximo_selecciones }}</div>
+</div>
+<label class="choice" data-mostrar-si="-tipo=NUMERO">{{ form.permite_decimales }} {{ form.permite_decimales.label_tag }}</label>
+<label class="choice" data-mostrar-si="-tipo=USUARIO,AREA,UNIDAD,EQUIPO">{{ form.solo_activos }} {{ form.solo_activos.label_tag }}</label>
+<p class="svc-help" data-mostrar-si="-tipo=LISTA,MULTILISTA">Las opciones de la lista se agregan después de guardar, en «Opciones».</p>

@@ -136,6 +136,12 @@ def _crear_borrador_de_servicio(usuario, servicio, *, origen=Ticket.Origen.MANUA
         prorroga_politica=servicio.politica_prorroga,
         prorroga_aprobador_usuario=servicio.prorroga_aprobador_usuario,
         prorroga_aprobador_equipo=servicio.prorroga_aprobador_equipo,
+        # Fase 2: en un PROCESO, los datos de inicio pueden pertenecer a la ejecución (siempre en uno
+        # programado). Se congela aquí, como el resto de políticas.
+        datos_inicio_en_ejecucion=(
+            servicio.tipo == Servicio.Tipo.PROCESO
+            and (servicio.datos_inicio_en_ejecucion or origen == Ticket.Origen.PROGRAMACION)
+        ),
     )
     TicketServicio.objects.create(ticket=ticket, servicio=servicio, formulario_version=version)
     RespuestaFormulario.objects.create(ticket=ticket, formulario_version=version)
@@ -148,6 +154,14 @@ def _crear_borrador_de_servicio(usuario, servicio, *, origen=Ticket.Origen.MANUA
     crear_parrilla_para_borrador(ticket, servicio)
     materializar_entregables(ticket)
     ticket.entregables_materializados = True
+    if servicio.tipo == Servicio.Tipo.PROCESO:
+        # Fase 3: las gacetas del Proceso y sus reglas de finalización se congelan al nacer el ticket.
+        from apps.catalogo.gacetas import reglas_de
+        from apps.gacetas.operaciones import materializar as materializar_gacetas
+
+        materializar_gacetas(ticket, servicio)
+        ticket.reglas_finalizacion = reglas_de(servicio)
+        Ticket.objects.filter(pk=ticket.pk).update(reglas_finalizacion=ticket.reglas_finalizacion)
     return ticket
 
 
@@ -246,7 +260,14 @@ def guardar_respuestas_borrador(ticket, actor, respuestas_crudas):
         raise PermissionDenied("Solo el solicitante puede modificar este borrador.")
     if ticket.estado != Ticket.Estado.BORRADOR:
         raise ValidationError("Solo se pueden guardar respuestas mientras el ticket es un borrador.")
+    return _guardar_respuestas(ticket, actor, respuestas_crudas)
 
+
+def _guardar_respuestas(ticket, actor, respuestas_crudas):
+    """Núcleo de `guardar_respuestas_borrador` (y, en la Fase 2, de `datos_inicio.guardar_avance`): upsert
+    de las respuestas presentes, borrado de las vacías y de los campos ocultos, validación de formato con
+    las Strategies. NO exige obligatorios (eso es al radicar / completar el diligenciamiento). Quien llama
+    ya autorizó y comprobó el estado."""
     respuesta_formulario = ticket.respuesta_formulario
     version = respuesta_formulario.formulario_version
     campos = {c.id: c for c in version.campos.prefetch_related("opciones")}
@@ -373,6 +394,10 @@ def _radicar_nucleo(ticket, servicio, actor, *, datos_historial=None):
         )
 
     historial.registrar(ticket, HistorialTicket.TipoEvento.RADICADO, actor, **(datos_historial or {}))
+    # Fase 3: se abren las gacetas configuradas para abrirse al iniciar (las demás las abre su bloque).
+    from apps.gacetas.operaciones import abrir_al_iniciar
+
+    abrir_al_iniciar(ticket)
     if direccion is not None:
         direccionamiento.fijar(ticket, actor, *direccion)
         _auditar_cambio_responsable(
@@ -431,7 +456,14 @@ def radicar_ticket(ticket, actor):
             "El servicio ya no está activo: no es posible radicar este ticket."
         )
 
-    validar_para_radicar(ticket)
+    if ticket.datos_inicio_en_ejecucion:
+        # Fase 2: en un PROCESO cuyos datos de inicio pertenecen a la ejecución, iniciar no exige el
+        # formulario completo (sí que lo guardado sea válido); se completa después, dentro de la ejecución.
+        from apps.tickets.datos_inicio import validar_formato
+
+        validar_formato(ticket)
+    else:
+        validar_para_radicar(ticket)
 
     _radicar_nucleo(ticket, servicio, actor)
 
@@ -822,9 +854,11 @@ def resolver_ticket(ticket, actor, descripcion, archivos=None):
         if pendientes:
             raise ValidationError("Faltan entregables obligatorios: " + ", ".join(pendientes) + ".")
         # 4.G2D2: tampoco con tareas por elemento pendientes o en progreso (los Servicios no cambian).
-        from apps.tickets import tareas_elemento
+        from apps.tickets import finalizacion, tareas_elemento
 
         tareas_elemento.exigir_sin_tareas_abiertas(ticket)
+        # Fase 3: las reglas de finalización congeladas del Proceso (gacetas resueltas, correcciones, resultados…).
+        finalizacion.exigir(ticket)
     if ticket.solicitudes_informacion.filter(estado=SolicitudInformacion.Estado.PENDIENTE).exists():
         raise ValidationError(
             "No es posible resolver mientras existan solicitudes de información pendientes."
@@ -838,8 +872,13 @@ def resolver_ticket(ticket, actor, descripcion, archivos=None):
     exigir_transicion(ticket, "RESOLVER")
     ticket.save()
 
+    resumen = None
+    if ticket.tipo == Ticket.Tipo.PROCESO:
+        from apps.tickets.finalizacion import resumen_resultados
+
+        resumen = resumen_resultados(ticket)  # trazabilidad de la decisión final
     resolucion = ResolucionTicket.objects.create(
-        ticket=ticket, resuelto_por=actor, descripcion=descripcion.strip()
+        ticket=ticket, resuelto_por=actor, descripcion=descripcion.strip(), resumen_resultados=resumen,
     )
     for archivo_subido in archivos or []:
         _crear_adjunto(Adjunto.TipoRelacion.RESOLUCION, {"resolucion": resolucion}, archivo_subido, actor)
@@ -919,6 +958,10 @@ def cancelar_ticket(ticket, actor, motivo):
         cancelar_ejecucion(InstanciaWorkflow(pk=instancia_id), actor, motivo=motivo)
     # 4.G2D1: las Tareas por elemento abiertas también se detienen (las completadas se conservan).
     tareas_elemento.cancelar_tareas_de_elementos(ticket, actor, motivo=motivo)
+    # Fase 3: sus gacetas quedan canceladas (aprobaciones pendientes retiradas, correcciones canceladas).
+    from apps.gacetas.operaciones import cancelar_del_ticket
+
+    cancelar_del_ticket(ticket, actor, motivo=motivo)
     prorrogas.cancelar_prorroga_pendiente_del_ticket(ticket, actor, motivo="El ticket se canceló.")
 
     historial.registrar(

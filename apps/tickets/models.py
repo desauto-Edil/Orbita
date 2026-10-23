@@ -177,6 +177,14 @@ class Ticket(RegistroBase):
     # cuál ejecución es; no reemplaza el nombre del Proceso ni se concatena a él. Vacía en los
     # tickets manuales (no se inventan etiquetas para Servicios).
     etiqueta = models.CharField(max_length=60, blank=True, default="", editable=False)
+    # Fase 2 del modelo configurable — los datos de inicio pertenecen a la ejecución (congelado al crear el
+    # ticket desde `Servicio.datos_inicio_en_ejecucion`, siempre en un ticket programado): el ticket se
+    # radica sin exigir el formulario completo y quien lo atiende lo diligencia después
+    # (`apps.tickets.datos_inicio`). En False, todo como siempre.
+    datos_inicio_en_ejecucion = models.BooleanField(default=False, editable=False)
+    # Fase 3 — reglas de finalización del Proceso, congeladas al crear el ticket (`apps.tickets.finalizacion`).
+    # NULL = las reglas por defecto (un ticket anterior a la Fase 3 o un Proceso sin reglas propias).
+    reglas_finalizacion = models.JSONField(null=True, blank=True, editable=False)
 
     class Meta:
         constraints = [
@@ -292,9 +300,33 @@ class Ticket(RegistroBase):
                 "Solo se puede modificar el contenido de un ticket mientras está en BORRADOR."
             )
 
+    def exigir_respuestas_editables(self):
+        """Las respuestas del formulario de inicio se escriben en BORRADOR (siempre) o, cuando los datos
+        pertenecen a la ejecución (Fase 2), mientras el ticket está RADICADO/EN_ATENCION y su
+        diligenciamiento no se ha completado. Fuera de eso son inmutables."""
+        if self.estado == Ticket.Estado.BORRADOR:
+            return
+        if self.datos_inicio_en_ejecucion and self.estado in (Ticket.Estado.RADICADO, Ticket.Estado.EN_ATENCION):
+            completado = RespuestaFormulario.objects.filter(ticket_id=self.pk, completado_en__isnull=False).exists()
+            if not completado:
+                return
+            raise ValidationError("Los datos de inicio ya se completaron y no se pueden modificar.")
+        self.exigir_editable()
+
     def delete(self, *args, **kwargs):
         self.exigir_eliminable()
         super().delete(*args, **kwargs)
+
+    @property
+    def parrilla(self):
+        """Colección por defecto del Ticket (la primera por `orden`), como cuando solo había una.
+        Conserva el contrato del antiguo accesor 1:1: si no hay, lanza una excepción que es a la vez
+        `ParrillaTicket.DoesNotExist` y `AttributeError` (así `getattr(ticket, "parrilla", None)` sigue
+        funcionando)."""
+        parrilla = self.parrillas.order_by("orden", "pk").first()
+        if parrilla is None:
+            raise _SinParrilla("Este ticket no tiene estructura de elementos.")
+        return parrilla
 
     def __str__(self):
         return f"Ticket {self.codigo or '#' + str(self.pk)} ({self.get_estado_display()})"
@@ -384,6 +416,8 @@ class HistorialTicket(models.Model):
         # persona. Direccionar NO inicia la atención: son eventos distintos.
         DIRECCIONADO = "DIRECCIONADO", "Direccionado"
         ATENCION_INICIADA = "ATENCION_INICIADA", "Atención iniciada"
+        # Fase 2 — los datos de inicio de un proceso se completaron dentro de la ejecución.
+        DATOS_COMPLETADOS = "DATOS_COMPLETADOS", "Datos de inicio completados"
 
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="historial")
     tipo_evento = models.CharField(max_length=30, choices=TipoEvento.choices)
@@ -496,6 +530,13 @@ class RespuestaFormulario(RegistroBase):
     formulario_version = models.ForeignKey(
         FormularioVersion, on_delete=models.PROTECT, related_name="respuestas_formulario"
     )
+    # Fase 2 — cuándo y quién COMPLETÓ el diligenciamiento de los datos de inicio dentro de la ejecución
+    # (`apps.tickets.datos_inicio.completar_diligenciamiento`). Vacío mientras solo hay avances guardados o
+    # cuando los datos se completaron al iniciar (lo de siempre).
+    completado_en = models.DateTimeField(null=True, blank=True, editable=False)
+    completado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, editable=False, related_name="+"
+    )
 
     def _exigir_formulario_version_inmutable(self):
         if self.pk is None:
@@ -533,13 +574,14 @@ COLUMNA_POR_TIPO = {
     Campo.TipoCampo.USUARIO: "valor_usuario",
     Campo.TipoCampo.AREA: "valor_area",
     Campo.TipoCampo.UNIDAD: "valor_unidad",
+    Campo.TipoCampo.EQUIPO: "valor_equipo",
     Campo.TipoCampo.ARCHIVO: None,  # vive en ArchivoRespuestaCampo, no aquí
 }
 
 _COLUMNAS_ESCALARES = ("valor_texto", "valor_numero", "valor_fecha", "valor_fecha_hora", "valor_booleano", "valor_json")
 # Pública (sin guion bajo): `operaciones.py` también la necesita para saber
 # cuándo un valor normalizado se asigna por `_id` en vez de por valor directo.
-COLUMNAS_REFERENCIA = ("valor_usuario", "valor_area", "valor_unidad")
+COLUMNAS_REFERENCIA = ("valor_usuario", "valor_area", "valor_unidad", "valor_equipo")
 _COLUMNAS_VALOR = _COLUMNAS_ESCALARES + COLUMNAS_REFERENCIA
 
 
@@ -562,6 +604,7 @@ class RespuestaCampo(RegistroBase):
     valor_unidad = models.ForeignKey(
         UnidadNegocio, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
+    valor_equipo = models.ForeignKey(Equipo, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
 
     class Meta:
         constraints = [
@@ -607,7 +650,7 @@ class RespuestaCampo(RegistroBase):
 
     def save(self, *args, **kwargs):
         self.exigir_integridad()
-        self.respuesta_formulario.ticket.exigir_editable()
+        self.respuesta_formulario.ticket.exigir_respuestas_editables()
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -647,7 +690,7 @@ class ArchivoRespuestaCampo(RegistroBase):
 
     def save(self, *args, **kwargs):
         self.exigir_integridad()
-        self.respuesta_campo.respuesta_formulario.ticket.exigir_editable()
+        self.respuesta_campo.respuesta_formulario.ticket.exigir_respuestas_editables()
         super().save(*args, **kwargs)
 
     def __str__(self):
@@ -797,6 +840,9 @@ class ResolucionTicket(models.Model):
     resuelto_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
     descripcion = models.TextField()
     resuelto_en = models.DateTimeField(auto_now_add=True)
+    # Fase 3 — foto de los resultados al resolver un Proceso: ítems por resultado, gacetas y reglas de
+    # finalización evaluadas (trazabilidad de la decisión final). NULL en Servicios y resoluciones anteriores.
+    resumen_resultados = models.JSONField(null=True, blank=True, editable=False)
 
     class Meta:
         ordering = ["resuelto_en"]
@@ -843,6 +889,8 @@ class Adjunto(RegistroBase):
         RESPUESTA_SOLICITUD = "RESPUESTA_SOLICITUD", "Respuesta a solicitud de información"
         RESOLUCION = "RESOLUCION", "Resolución"
         ENTREGABLE = "ENTREGABLE", "Entregable"
+        # Fase 1 (modelo configurable de procesos): archivo de una columna ARCHIVO de un ítem.
+        ELEMENTO = "ELEMENTO", "Ítem"
 
     tipo_relacion = models.CharField(max_length=20, choices=TipoRelacion.choices)
     ticket = models.ForeignKey(
@@ -867,6 +915,13 @@ class Adjunto(RegistroBase):
     entregable = models.ForeignKey(
         "EntregableTicket", on_delete=models.CASCADE, null=True, blank=True, related_name="archivos"
     )
+    # Rama ELEMENTO: el ítem y la columna ARCHIVO (de la versión congelada de su colección).
+    elemento = models.ForeignKey(
+        "ElementoParrilla", on_delete=models.CASCADE, null=True, blank=True, related_name="archivos"
+    )
+    campo_elemento = models.ForeignKey(
+        Campo, on_delete=models.PROTECT, null=True, blank=True, related_name="archivos_elemento"
+    )
     # Retiro lógico de archivos de entregable: conserva trazabilidad y evita
     # borrar un objeto del storage antes de confirmar una transacción SQL.
     retirado_en = models.DateTimeField(null=True, blank=True, editable=False)
@@ -889,6 +944,7 @@ class Adjunto(RegistroBase):
                         solicitud__isnull=True,
                         respuesta_solicitud__isnull=True,
                         resolucion__isnull=True,
+                        elemento__isnull=True,
                     )
                     | Q(
                         entregable__isnull=True,
@@ -898,6 +954,7 @@ class Adjunto(RegistroBase):
                         solicitud__isnull=True,
                         respuesta_solicitud__isnull=True,
                         resolucion__isnull=True,
+                        elemento__isnull=True,
                     )
                     | Q(
                         entregable__isnull=True,
@@ -907,6 +964,7 @@ class Adjunto(RegistroBase):
                         solicitud__isnull=False,
                         respuesta_solicitud__isnull=True,
                         resolucion__isnull=True,
+                        elemento__isnull=True,
                     )
                     | Q(
                         entregable__isnull=True,
@@ -916,6 +974,7 @@ class Adjunto(RegistroBase):
                         solicitud__isnull=True,
                         respuesta_solicitud__isnull=False,
                         resolucion__isnull=True,
+                        elemento__isnull=True,
                     )
                     | Q(
                         entregable__isnull=True,
@@ -925,11 +984,17 @@ class Adjunto(RegistroBase):
                         solicitud__isnull=True,
                         respuesta_solicitud__isnull=True,
                         resolucion__isnull=False,
+                        elemento__isnull=True,
                     )
                     | Q(
                         tipo_relacion="ENTREGABLE", entregable__isnull=False,
                         ticket__isnull=True, comentario__isnull=True, solicitud__isnull=True,
-                        respuesta_solicitud__isnull=True, resolucion__isnull=True,
+                        respuesta_solicitud__isnull=True, resolucion__isnull=True, elemento__isnull=True,
+                    )
+                    | Q(
+                        tipo_relacion="ELEMENTO", elemento__isnull=False, campo_elemento__isnull=False,
+                        entregable__isnull=True, ticket__isnull=True, comentario__isnull=True,
+                        solicitud__isnull=True, respuesta_solicitud__isnull=True, resolucion__isnull=True,
                     )
                 ),
                 name="ck_adjunto_relacion_coherente",
@@ -951,6 +1016,8 @@ class Adjunto(RegistroBase):
             return self.respuesta_solicitud.solicitud.ticket
         if self.tipo_relacion == self.TipoRelacion.ENTREGABLE:
             return self.entregable.ticket
+        if self.tipo_relacion == self.TipoRelacion.ELEMENTO:
+            return self.elemento.parrilla.ticket
         return self.resolucion.ticket
 
     def __str__(self):
@@ -1376,15 +1443,42 @@ class ParrillaTicket(RegistroBase):
     Ticket (misma invariante que `TicketServicio.formulario_version`). Es independiente de
     `RespuestaFormulario`, que sigue siendo la entrada inicial del Ticket.
 
-    Sigue siendo UN Ticket: los elementos son filas de esta ejecución, no tickets ni flujos."""
+    Sigue siendo UN Ticket: los elementos son filas de esta ejecución, no tickets ni flujos.
 
-    ticket = models.OneToOneField(Ticket, on_delete=models.CASCADE, related_name="parrilla")
+    Fase 1 (modelo configurable de procesos): un Ticket congela UNA fila por cada colección activa de su
+    Proceso, identificada por la `clave` estable de la colección (única por Ticket) y su `orden`. La
+    primera es la colección por defecto (`Ticket.parrilla`, `parrilla.parrilla_de(ticket)`)."""
+
+    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="parrillas")
+    clave = models.CharField(max_length=60)
+    orden = models.PositiveIntegerField(default=1)
     formulario_version = models.ForeignKey(
         FormularioVersion, on_delete=models.PROTECT, related_name="parrillas_ticket"
     )
     nombre_elemento = models.CharField(max_length=60)
+    # Fase 1 — control de alcance. `permite_altas_extraordinarias` se congela de la colección al nacer el
+    # Ticket. Cerrar el alcance ocurre una sola vez (`parrilla.cerrar_alcance`) y fija la foto del
+    # alcance ORIGINAL (`alcance_original`: ítems vigentes con su número y huella en ese momento).
+    permite_altas_extraordinarias = models.BooleanField(default=False)
+    alcance_cerrado_en = models.DateTimeField(null=True, blank=True, editable=False)
+    alcance_cerrado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, editable=False, related_name="+"
+    )
+    alcance_original = models.JSONField(null=True, blank=True, editable=False)
 
-    _CAMPOS_INMUTABLES = ("ticket_id", "formulario_version_id", "nombre_elemento")
+    _CAMPOS_INMUTABLES = (
+        "ticket_id", "clave", "orden", "formulario_version_id", "nombre_elemento", "permite_altas_extraordinarias",
+    )
+
+    @property
+    def alcance_cerrado(self):
+        return self.alcance_cerrado_en is not None
+
+    class Meta:
+        ordering = ["orden", "pk"]
+        constraints = [
+            models.UniqueConstraint(fields=["ticket", "clave"], name="uq_parrilla_ticket_clave"),
+        ]
 
     def save(self, *args, **kwargs):
         if self.pk is not None:
@@ -1395,6 +1489,45 @@ class ParrillaTicket(RegistroBase):
 
     def __str__(self):
         return f"Elementos de {self.ticket}"
+
+
+class ParticipanteParrilla(RegistroBase):
+    """Bloque 3 — copia CONGELADA, al nacer el Ticket, de los participantes de una colección
+    (`catalogo.ParticipanteColeccion`): persona o equipo que crea y edita ítems de ESA colección mientras el ticket
+    está en atención. Participar no es ser responsable del Ticket ni da acceso al resto del ticket."""
+
+    parrilla = models.ForeignKey(ParrillaTicket, on_delete=models.CASCADE, related_name="participantes")
+    usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    equipo = models.ForeignKey(Equipo, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=(Q(usuario__isnull=False, equipo__isnull=True) | Q(usuario__isnull=True, equipo__isnull=False)),
+                name="ck_participanteparrilla_usuario_o_equipo",
+            ),
+            UniqueConstraint(
+                fields=["parrilla", "usuario"], condition=Q(usuario__isnull=False),
+                name="uq_participanteparrilla_usuario",
+            ),
+            UniqueConstraint(
+                fields=["parrilla", "equipo"], condition=Q(equipo__isnull=False), name="uq_participanteparrilla_equipo"
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("Los participantes congelados de un ticket no se modifican.")
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.parrilla} · {self.usuario or self.equipo}"
+
+
+class _SinParrilla(ParrillaTicket.DoesNotExist, AttributeError):
+    """`Ticket.parrilla` cuando el Ticket no tiene colecciones (mismo contrato que el accesor 1:1)."""
 
 
 class ElementoParrilla(RegistroBase):
@@ -1446,6 +1579,99 @@ class ElementoParrilla(RegistroBase):
         return f"#{self.numero} de {self.parrilla}"
 
 
+class VersionElemento(models.Model):
+    """Fase 1 (modelo configurable de procesos) — versión (Memento) de un ítem: foto INMUTABLE de sus
+    valores y de sus archivos vigentes en un momento, con autor, fecha y motivo. `numero` es
+    consecutivo por ítem; `huella` = SHA-256 del `contenido` canónico, así dos versiones seguidas
+    idénticas no se registran. Append-only: no se edita ni se borra."""
+
+    elemento = models.ForeignKey(ElementoParrilla, on_delete=models.CASCADE, related_name="versiones")
+    numero = models.PositiveIntegerField()
+    huella = models.CharField(max_length=64)
+    contenido = models.JSONField()
+    motivo = models.CharField(max_length=200, blank=True)
+    creada_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    creada_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["elemento", "numero"]
+        constraints = [
+            UniqueConstraint(fields=["elemento", "numero"], name="uq_versionelemento_numero"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("Una versión de un elemento no se modifica.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Una versión de un elemento no se elimina.")
+
+    def __str__(self):
+        return f"v{self.numero} de {self.elemento}"
+
+
+class DecisionAlcanceElemento(models.Model):
+    """Fase 1 (modelo configurable de procesos) — decisión sobre el ALCANCE de una colección, append-only.
+
+    - EXCLUIDO / RECHAZADO: el ítem sale del alcance efectivo con justificación obligatoria. Es una
+      decisión final para ese ítem (a lo sumo una por ítem): no se modifica después.
+    - ALTA_EXTRAORDINARIA: el ítem se agregó después de cerrar el alcance, con autorización y
+      justificación.
+
+    `origen` dice de dónde vino la decisión (manual hoy; aprobación o gaceta en fases posteriores).
+    El alcance efectivo se CALCULA (`parrilla.alcance_de`), nunca se guarda."""
+
+    class Tipo(models.TextChoices):
+        EXCLUIDO = "EXCLUIDO", "Excluido"
+        RECHAZADO = "RECHAZADO", "Rechazado"
+        ALTA_EXTRAORDINARIA = "ALTA_EXTRAORDINARIA", "Alta extraordinaria"
+
+    class Origen(models.TextChoices):
+        MANUAL = "MANUAL", "Manual"
+        APROBACION = "APROBACION", "Aprobación"
+        GACETA = "GACETA", "Gaceta"
+
+    TIPOS_DE_SALIDA = ("EXCLUIDO", "RECHAZADO")
+
+    elemento = models.ForeignKey(ElementoParrilla, on_delete=models.CASCADE, related_name="decisiones_alcance")
+    tipo = models.CharField(max_length=20, choices=Tipo.choices)
+    justificacion = models.TextField()
+    origen = models.CharField(max_length=12, choices=Origen.choices, default=Origen.MANUAL)
+    decidido_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    decidido_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["decidido_en", "pk"]
+        constraints = [
+            # A lo sumo UNA salida del alcance por ítem (excluido o rechazado) y a lo sumo un alta extraordinaria.
+            UniqueConstraint(
+                fields=["elemento"], condition=Q(tipo__in=["EXCLUIDO", "RECHAZADO"]),
+                name="uq_decisionalcance_una_salida",
+            ),
+            UniqueConstraint(
+                fields=["elemento"], condition=Q(tipo="ALTA_EXTRAORDINARIA"),
+                name="uq_decisionalcance_una_alta",
+            ),
+            models.CheckConstraint(condition=~Q(justificacion=""), name="ck_decisionalcance_justificada"),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            raise ValidationError("Una decisión de alcance no se modifica.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Una decisión de alcance no se elimina.")
+
+    def __str__(self):
+        return f"{self.get_tipo_display()} — {self.elemento}"
+
+
 class ValorElemento(RegistroBase):
     """Valor de UNA celda: `ElementoParrilla` + `Campo` — 4.G2B1.
 
@@ -1470,6 +1696,7 @@ class ValorElemento(RegistroBase):
     )
     valor_area = models.ForeignKey(Area, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
     valor_unidad = models.ForeignKey(UnidadNegocio, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
+    valor_equipo = models.ForeignKey(Equipo, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
 
     class Meta:
         constraints = [
@@ -1661,12 +1888,25 @@ class ConfiguracionTareasTicket(RegistroBase):
     campo_responsable = models.ForeignKey(Campo, on_delete=models.PROTECT, related_name="+")
     campo_fecha_limite = models.ForeignKey(Campo, on_delete=models.PROTECT, related_name="+")
     requiere_evidencia = models.BooleanField(default=False)
+    # Bloque 3.1 — claves de las columnas (de la versión congelada) que el responsable de una Tarea ABIERTA
+    # puede editar en SU elemento. Copia de la configuración del catálogo al nacer el Ticket.
+    columnas_editables = models.JSONField(default=list, blank=True)
 
     def exigir_integridad(self):
-        """Los cuatro campos pertenecen a la versión congelada y son de un tipo compatible con su destino."""
+        """Los cuatro campos pertenecen a la versión congelada y son de un tipo compatible con su destino; las
+        columnas editables existen en esa versión y no son las que originan la Tarea."""
         from apps.catalogo.tareas_elemento import DESTINOS
 
         version_id = ParrillaTicket.objects.values_list("formulario_version_id", flat=True).get(pk=self.parrilla_id)
+        if self.columnas_editables:
+            existentes = set(Campo.objects.filter(version_id=version_id).values_list("clave", flat=True))
+            origen = {
+                getattr(self, "campo_" + atributo.removeprefix("clave_")).clave
+                for atributo, *_ in DESTINOS
+                if getattr(self, "campo_" + atributo.removeprefix("clave_")) is not None
+            }
+            if any(clave not in existentes or clave in origen for clave in self.columnas_editables):
+                raise ValidationError("Las columnas editables no son columnas válidas de la estructura congelada.")
         for atributo, nombre, tipos, obligatoria in DESTINOS:
             campo = getattr(self, "campo_" + atributo.removeprefix("clave_"))
             if campo is None:

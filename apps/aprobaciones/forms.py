@@ -38,21 +38,29 @@ class DecisionAprobacionForm(forms.Form):
     decision = forms.ChoiceField(choices=DECISIONES, label="Decisión", widget=forms.RadioSelect)
     observacion = forms.CharField(required=False, widget=forms.Textarea, label="Observación")
 
-    def __init__(self, *args, permite_devolver=True, **kwargs):
+    def __init__(self, *args, permite_devolver=True, permite_excluir=False, justificacion_al_aprobar=False, **kwargs):
         """`permite_devolver=False` para trabajo que solo se aprueba o se
-        rechaza (p. ej. una prórroga): "Devolver" no existe como salida."""
+        rechaza (p. ej. una prórroga): "Devolver" no existe como salida.
+        Fase 2: `permite_excluir` agrega «Excluir del alcance» (solo la
+        aprobación de un ítem) y `justificacion_al_aprobar` pide observación
+        también al aprobar. Lo decide el esquema; aquí solo se refleja."""
         super().__init__(*args, **kwargs)
+        opciones = list(self.DECISIONES)
         if not permite_devolver:
-            self.fields["decision"].choices = [
-                opcion for opcion in self.DECISIONES if opcion[0] != Aprobacion.Estado.DEVUELTA
-            ]
+            opciones = [opcion for opcion in opciones if opcion[0] != Aprobacion.Estado.DEVUELTA]
+        if permite_excluir:
+            opciones.append((Aprobacion.Estado.EXCLUIDA, "Excluir del alcance"))
+        self.fields["decision"].choices = opciones
+        self.justificacion_al_aprobar = justificacion_al_aprobar
 
     def clean(self):
         cleaned = super().clean()
         decision = cleaned.get("decision")
-        observacion = cleaned.get("observacion")
-        if decision in (Aprobacion.Estado.RECHAZADA, Aprobacion.Estado.DEVUELTA) and not observacion:
-            raise forms.ValidationError("La observación es obligatoria para rechazar o devolver (RQF-080).")
+        observacion = (cleaned.get("observacion") or "").strip()
+        if decision in (Aprobacion.Estado.RECHAZADA, Aprobacion.Estado.DEVUELTA, Aprobacion.Estado.EXCLUIDA) and not observacion:
+            raise forms.ValidationError("La observación es obligatoria para rechazar, devolver o excluir (RQF-080).")
+        if decision == Aprobacion.Estado.APROBADA and self.justificacion_al_aprobar and not observacion:
+            raise forms.ValidationError("Esta aprobación exige una justificación también al aprobar.")
         return cleaned
 
 

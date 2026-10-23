@@ -30,8 +30,9 @@
               </div>
               <label class="choice">{{ definicion.form_editar.obligatorio }} {{ definicion.form_editar.obligatorio.label_tag }}</label>
 
-              <fieldset class="svc-subpanel" data-revision-elementos>
-                <legend>Solo para «Revisión de elementos»</legend>
+              {% if es_proceso %}
+              <fieldset class="svc-subpanel" data-revision-elementos data-mostrar-si="-tipo=ELEMENTOS">
+                <legend>Revisión de elementos</legend>
                 {% if definicion.form_editar.hay_estructura %}
                   <div class="field">{{ definicion.form_editar.columnas_revisadas.label_tag }}{{ definicion.form_editar.columnas_revisadas }}</div>
                   <div class="svc-form-grid svc-form-grid--two">
@@ -40,9 +41,11 @@
                   </div>
                   <small class="text-muted">Cada elemento se aprueba o devuelve por separado. Quien aprueba no es, por serlo, el responsable del ticket.</small>
                 {% else %}
-                  <small class="text-muted">Este proceso aún no tiene elementos estructurados con columnas: actívalos en la pestaña Formulario («Elementos del proceso»).</small>
+                  <small class="text-muted">Este proceso aún no tiene una colección con columnas: actívala en Formulario › Colecciones de ítems.</small>
                 {% endif %}
-              </fieldset>              <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar</button></div>
+              </fieldset>
+              {% endif %}
+              <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar</button></div>
             </form>
           </div>
         </article>

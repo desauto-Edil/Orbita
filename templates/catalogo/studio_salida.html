@@ -1,13 +1,30 @@
-<section class="svc-section svc-section--output">
+{% comment %} Fase 4.B — Salida por categorías: «¿Qué necesitas configurar?» (Resultados · Revisiones · Gacetas · Finalización ·
+   Entrega). Un grupo a la vez; cada uno guarda con su operación de siempre. Sin JS se ven todos. {% endcomment %}
+<section class="svc-section svc-section--output" data-subnav-ambito="salida">
   <header class="svc-section__head">
     <div>
       <p class="svc-kicker">Salida</p>
       <h2>{% if es_proceso %}Entregables y revisiones{% else %}Entregables{% endif %}</h2>
       <p>{% if proceso_programado or es_proceso %}Define qué produce cada ejecución de este proceso y cómo se revisa.{% else %}Define qué recibirá el solicitante al finalizar.{% endif %}</p>
     </div>
-    <button type="button" class="btn btn--primary" data-action="toggle-panel" data-target="panel-entregable-nuevo">Añadir entregable</button>
   </header>
 
+  <p class="subpanel__ayuda">¿Qué necesitas configurar?</p>
+  <div class="subnav" role="tablist" aria-label="Categorías de la salida">
+    <button type="button" class="subnav__item" role="tab" data-subnav-ir="resultados">Resultados</button>
+    {% if es_proceso %}<button type="button" class="subnav__item" role="tab" data-subnav-ir="revisiones">Revisiones</button>{% endif %}
+    {% if gacetas_aplica %}
+      <button type="button" class="subnav__item" role="tab" data-subnav-ir="gacetas">Gacetas <span class="chip">{{ gacetas|length }}</span></button>
+      <button type="button" class="subnav__item" role="tab" data-subnav-ir="finalizacion">Finalización</button>
+    {% endif %}
+    <button type="button" class="subnav__item" role="tab" data-subnav-ir="entrega">Entrega</button>
+  </div>
+
+  <div class="subpanel" data-subpanel="resultados" role="tabpanel">
+    <div class="campo-lista__cabecera">
+      <h3 class="subpanel__titulo">Resultados y entregables</h3>
+      <button type="button" class="btn btn--primary btn--sm" data-action="toggle-panel" data-target="panel-entregable-nuevo">{% if es_proceso %}+ Resultado o revisión{% else %}+ Entregable{% endif %}</button>
+    </div>
   {% if es_proceso %}
     {# 4.G2E: en un Proceso la salida se organiza por lo que produce: entregables del proceso y revisión por conjunto de elementos. #}
     <section class="svc-panel" id="entregables-del-proceso">
@@ -28,6 +45,61 @@
       {% endif %}
     </section>
 
+  {% endif %}
+  {% if not es_proceso %}
+    {% if definiciones %}
+      <div class="svc-object-grid">
+        {% for definicion in definiciones %}
+          {% include "catalogo/_studio_salida_definicion.html" with indice=forloop.counter %}
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="svc-empty svc-empty--large">Todavía no hay entregables configurados.</div>
+    {% endif %}
+  {% endif %}
+
+  <article id="panel-entregable-nuevo" class="svc-panel svc-panel--drawer" hidden>
+    <div class="svc-panel__head">
+      <div>
+        <h3>Nuevo entregable</h3>
+        <p>En ejecución podrá admitir uno o varios archivos según el tipo.</p>
+      </div>
+    </div>
+    <form method="post" action="{% url 'catalogo:studio_entregable_crear' servicio.pk %}" class="form">
+      {% csrf_token %}
+      <div class="svc-form-grid svc-form-grid--two">
+        <div class="field">{{ entregable_form_nuevo.nombre.label_tag }}{{ entregable_form_nuevo.nombre }}</div>
+        <div class="field">{{ entregable_form_nuevo.tipo.label_tag }}{{ entregable_form_nuevo.tipo }}</div>
+        <div class="field">{{ entregable_form_nuevo.descripcion.label_tag }}{{ entregable_form_nuevo.descripcion }}</div>
+        <div class="field">{{ entregable_form_nuevo.orden.label_tag }}{{ entregable_form_nuevo.orden }}</div>
+      </div>
+      <label class="choice">{{ entregable_form_nuevo.obligatorio }} {{ entregable_form_nuevo.obligatorio.label_tag }}</label>
+
+      {% if es_proceso %}
+      <fieldset class="svc-subpanel" data-revision-elementos data-mostrar-si="-tipo=ELEMENTOS">
+        <legend>Revisión de elementos</legend>
+        {% if entregable_form_nuevo.hay_estructura %}
+          <div class="field">{{ entregable_form_nuevo.columnas_revisadas.label_tag }}{{ entregable_form_nuevo.columnas_revisadas }}</div>
+          <div class="svc-form-grid svc-form-grid--two">
+            <div class="field">{{ entregable_form_nuevo.revisores_usuarios.label_tag }}{{ entregable_form_nuevo.revisores_usuarios }}</div>
+            <div class="field">{{ entregable_form_nuevo.revisores_equipos.label_tag }}{{ entregable_form_nuevo.revisores_equipos }}</div>
+          </div>
+          <small class="text-muted">Cada elemento se aprueba o devuelve por separado. Quien aprueba no es, por serlo, el responsable del ticket.</small>
+        {% else %}
+          <small class="text-muted">Este proceso aún no tiene una colección con columnas: actívala en Formulario › Colecciones de ítems.</small>
+        {% endif %}
+      </fieldset>
+      {% endif %}
+      <div class="form-actions"><button type="submit" class="btn btn--primary">Agregar</button></div>
+    </form>
+  </article>
+
+  </div>
+
+  {% if es_proceso %}
+    <div class="subpanel" data-subpanel="revisiones" role="tabpanel">
+      <h3 class="subpanel__titulo">Revisiones</h3>
+    <p class="svc-help">Una revisión por conjunto aprueba o devuelve cada ítem por separado. Es distinta de una aprobación del flujo (una decisión sobre el ticket o un ítem) y de una gaceta (revisión colaborativa con observaciones y correcciones).</p>
     <section class="svc-panel" id="entregables-conjunto">
       <div class="svc-panel__head">
         <div>
@@ -67,49 +139,90 @@
         </div>
       </section>
     {% endif %}
-  {% elif definiciones %}
-    <div class="svc-object-grid">
-      {% for definicion in definiciones %}
-        {% include "catalogo/_studio_salida_definicion.html" with indice=forloop.counter %}
-      {% endfor %}
     </div>
-  {% else %}
-    <div class="svc-empty svc-empty--large">Todavía no hay entregables configurados.</div>
   {% endif %}
 
-  <article id="panel-entregable-nuevo" class="svc-panel svc-panel--drawer" hidden>
+  {% if gacetas_aplica %}
+    <div class="subpanel" data-subpanel="gacetas" role="tabpanel">
+      <h3 class="subpanel__titulo">Gacetas</h3>
+  <section class="svc-panel" id="gacetas">
     <div class="svc-panel__head">
       <div>
-        <h3>Nuevo entregable</h3>
-        <p>En ejecución podrá admitir uno o varios archivos según el tipo.</p>
+        <h3>Gacetas</h3>
+        <p>Revisión colaborativa de ítems: observaciones, correcciones y decisiones. Opcionales; puede haber varias.</p>
       </div>
     </div>
-    <form method="post" action="{% url 'catalogo:studio_entregable_crear' servicio.pk %}" class="form">
-      {% csrf_token %}
-      <div class="svc-form-grid svc-form-grid--two">
-        <div class="field">{{ entregable_form_nuevo.nombre.label_tag }}{{ entregable_form_nuevo.nombre }}</div>
-        <div class="field">{{ entregable_form_nuevo.tipo.label_tag }}{{ entregable_form_nuevo.tipo }}</div>
-        <div class="field">{{ entregable_form_nuevo.descripcion.label_tag }}{{ entregable_form_nuevo.descripcion }}</div>
-        <div class="field">{{ entregable_form_nuevo.orden.label_tag }}{{ entregable_form_nuevo.orden }}</div>
+    {% for definicion in gacetas %}
+      <article class="svc-block-row">
+        <div class="svc-block-row__main">
+          <strong>{{ definicion.nombre }}</strong>
+          <span class="svc-tag" title="Cada vez que guardas la gaceta sube su versión; aplica a los tickets nuevos.">v{{ definicion.version }}</span>
+          {% if definicion.configuracion.obligatoria %}<span class="svc-tag svc-tag--accent">Obligatoria</span>{% else %}<span class="svc-tag">Opcional</span>{% endif %}
+          {% if not definicion.activa %}<span class="svc-pill">Retirada</span>{% endif %}
+        </div>
+        <div class="svc-row-actions">
+          <button type="button" class="btn btn--ghost btn--sm" data-action="toggle-panel" data-target="panel-gaceta-{{ definicion.pk }}">Editar</button>
+          <form method="post" action="{% url 'catalogo:studio_gaceta_estado' servicio.pk definicion.pk %}">
+            {% csrf_token %}<input type="hidden" name="activa" value="{% if definicion.activa %}0{% else %}1{% endif %}">
+            <button type="submit" class="btn btn--ghost btn--sm">{% if definicion.activa %}Retirar{% else %}Reactivar{% endif %}</button>
+          </form>
+        </div>
+        <div id="panel-gaceta-{{ definicion.pk }}" class="svc-inline-editor" hidden>
+          <form method="post" action="{% url 'catalogo:studio_gaceta_editar' servicio.pk definicion.pk %}" class="form" data-pasos>
+            {% csrf_token %}
+            {% include "catalogo/_studio_gaceta_form.html" with form=definicion.form_editar %}
+            <button type="submit" class="btn btn--primary">Guardar gaceta</button>
+          </form>
+        </div>
+      </article>
+    {% empty %}
+      <div class="svc-empty">Este proceso no tiene gacetas. Una gaceta es una revisión colaborativa de ítems (observaciones, correcciones y decisiones); es opcional.</div>
+    {% endfor %}
+    <button type="button" class="btn btn--primary btn--sm" data-action="toggle-panel" data-target="panel-gaceta-nueva">+ Crear gaceta</button>
+    <div id="panel-gaceta-nueva" class="svc-inline-editor" hidden>
+      <form method="post" action="{% url 'catalogo:studio_gaceta_crear' servicio.pk %}" class="form" data-pasos>
+        {% csrf_token %}
+        {% include "catalogo/_studio_gaceta_form.html" with form=gaceta_form_nueva %}
+        <button type="submit" class="btn btn--primary">Crear gaceta</button>
+      </form>
+    </div>
+  </section>
+
+    </div>
+    <div class="subpanel" data-subpanel="finalizacion" role="tabpanel">
+      <h3 class="subpanel__titulo">Condiciones de finalización</h3>
+  <section class="svc-panel" id="reglas-cierre">
+    <div class="svc-panel__head">
+      <div>
+        <h3>Condiciones de cierre del ticket</h3>
+        <p>Qué debe cumplirse para resolver un ticket de este proceso. Los ítems pueden terminar aprobados, rechazados o excluidos.</p>
       </div>
-      <label class="choice">{{ entregable_form_nuevo.obligatorio }} {{ entregable_form_nuevo.obligatorio.label_tag }}</label>
-
-      <fieldset class="svc-subpanel" data-revision-elementos>
-        <legend>Solo para «Revisión de elementos»</legend>
-        {% if entregable_form_nuevo.hay_estructura %}
-          <div class="field">{{ entregable_form_nuevo.columnas_revisadas.label_tag }}{{ entregable_form_nuevo.columnas_revisadas }}</div>
-          <div class="svc-form-grid svc-form-grid--two">
-            <div class="field">{{ entregable_form_nuevo.revisores_usuarios.label_tag }}{{ entregable_form_nuevo.revisores_usuarios }}</div>
-            <div class="field">{{ entregable_form_nuevo.revisores_equipos.label_tag }}{{ entregable_form_nuevo.revisores_equipos }}</div>
-          </div>
-          <small class="text-muted">Cada elemento se aprueba o devuelve por separado. Quien aprueba no es, por serlo, el responsable del ticket.</small>
-        {% else %}
-          <small class="text-muted">Este proceso aún no tiene elementos estructurados con columnas: actívalos en la pestaña Formulario («Elementos del proceso»).</small>
-        {% endif %}
-      </fieldset>      <div class="form-actions"><button type="submit" class="btn btn--primary">Agregar entregable</button></div>
+    </div>
+    <form method="post" action="{% url 'catalogo:studio_reglas_finalizacion' servicio.pk %}" class="form reglas-cierre">
+      {% csrf_token %}
+      <fieldset class="svc-fieldset"><legend>Actividades</legend><label class="choice">{{ reglas_form.actividades_cerradas }} {{ reglas_form.actividades_cerradas.label }}</label></fieldset>
+      <fieldset class="svc-fieldset"><legend>Recorridos</legend><label class="choice">{{ reglas_form.recorridos_terminados }} {{ reglas_form.recorridos_terminados.label }}</label></fieldset>
+      <fieldset class="svc-fieldset"><legend>Aprobaciones</legend><label class="choice">{{ reglas_form.aprobaciones_resueltas }} {{ reglas_form.aprobaciones_resueltas.label }}</label></fieldset>
+      <fieldset class="svc-fieldset"><legend>Gacetas</legend>
+        <label class="choice">{{ reglas_form.gacetas_resueltas }} {{ reglas_form.gacetas_resueltas.label }}</label>
+        <label class="choice">{{ reglas_form.sin_correcciones }} {{ reglas_form.sin_correcciones.label }}</label>
+        <p class="svc-help">Una gaceta OBLIGATORIA que nunca se abrió también impide resolver; una opcional, no.</p>
+      </fieldset>
+      <fieldset class="svc-fieldset"><legend>Alcance de colecciones</legend><label class="choice">{{ reglas_form.alcance_cerrado }} {{ reglas_form.alcance_cerrado.label }}</label></fieldset>
+      <fieldset class="svc-fieldset"><legend>Resultados finales de los ítems</legend>
+        <label class="choice">{{ reglas_form.items_con_resultado }} {{ reglas_form.items_con_resultado.label }}</label>
+        <div class="field" data-mostrar-si="items_con_resultado=on">{{ reglas_form.resultados_admitidos.label_tag }}{{ reglas_form.resultados_admitidos }}</div>
+        <div class="field">{{ reglas_form.minimo_aprobados.label_tag }}{{ reglas_form.minimo_aprobados }}</div>
+      </fieldset>
+      <p class="svc-help">Se suman a lo que ya se exige siempre (flujo terminado, entregables obligatorios). Aplican a los tickets nuevos.</p>
+      <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar condiciones</button></div>
     </form>
-  </article>
+  </section>
+    </div>
+  {% endif %}
 
+  <div class="subpanel" data-subpanel="entrega" role="tabpanel">
+    <h3 class="subpanel__titulo">{% if proceso_programado %}Entrega formal{% else %}Entrega al solicitante{% endif %}</h3>
   {% if proceso_programado %}
   <section class="svc-panel svc-panel--delivery">
     <div class="svc-panel__head">
@@ -136,14 +249,15 @@
       {% csrf_token %}
       <div class="svc-form-grid svc-form-grid--two">
         <div class="field">{{ form_politica.politica.label_tag }}{{ form_politica.politica }}</div>
-        <div class="field">
+        <div class="field" data-mostrar-si="politica=PERIODO_OBSERVACIONES">
           {{ form_politica.dias_observacion.label_tag }}{{ form_politica.dias_observacion }}
           <span class="svc-help">Solo aplica con periodo de observaciones.</span>
         </div>
       </div>
-      <p class="svc-help">Aplica a los tickets que se creen desde ahora; los ya creados conservan su política.</p>
+      <p class="svc-help">Aplica a los tickets que se creen desde ahora; los ya creados conservan su política. Para volver a resolver y cerrar manualmente, elige «Sin entrega formal».</p>
       <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar política</button></div>
     </form>
   </section>
   {% endif %}
+  </div>
 </section>

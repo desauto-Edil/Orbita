@@ -31,6 +31,9 @@
       {% if ticket_vinculado %}
         <p class="text-muted">Parte del ticket <a href="{% url 'tickets:detalle' ticket_vinculado.pk %}">{{ ticket_vinculado.detalle_servicio.servicio.nombre }}</a></p>
       {% endif %}
+      {% if elemento_editable %}
+        <p><a class="btn btn--secondary btn--sm" href="{% url 'tickets:elemento_tarea' elemento_editable.parrilla.ticket_id elemento_editable.pk %}?tarea={{ tarea.pk }}">Editar {{ elemento_editable.parrilla.nombre_elemento|default:"ítem"|lower }} #{{ elemento_editable.numero }}</a></p>
+      {% endif %}
       {% if tarea.tarea_padre %}
         <p class="text-muted">Subtarea de <a href="{% url 'tareas:detalle' tarea.tarea_padre.pk %}">{{ tarea.tarea_padre.titulo }}</a></p>
       {% endif %}
@@ -73,6 +76,27 @@
           <p class="text-muted">Sin descripción.</p>
         {% endif %}
       </section>
+
+      {% if verificaciones %}
+        <section class="card">
+          <h2>Lista de verificación</h2>
+          <ul class="work-checklist">
+            {% for item in verificaciones %}
+              <li class="work-checklist__item{% if item.marcado %} is-done{% endif %}">
+                {% if puede_marcar_verificacion %}
+                  <form method="post" action="{% url 'tareas:verificar' tarea.pk item.pk %}">
+                    {% csrf_token %}
+                    <input type="hidden" name="marcado" value="{% if item.marcado %}0{% else %}1{% endif %}">
+                    <button type="submit" class="btn btn--ghost btn--sm" aria-pressed="{% if item.marcado %}true{% else %}false{% endif %}">{% if item.marcado %}Desmarcar{% else %}Marcar{% endif %}</button>
+                  </form>
+                {% endif %}
+                <span>{{ item.texto }}{% if not item.obligatorio %} <small class="text-muted">(opcional)</small>{% endif %}</span>
+                {% if item.marcado %}<small class="text-muted">{{ item.marcado_por }} · {{ item.marcado_en|date:"d/m/Y H:i" }}</small>{% endif %}
+              </li>
+            {% endfor %}
+          </ul>
+        </section>
+      {% endif %}
 
       {% if muestra_subtareas %}
         <section class="card">
@@ -188,6 +212,7 @@
       <section class="card">
         <h2>Detalles</h2>
         <dl class="work-facts">
+          {% if tarea.fecha_prevista %}<div><dt>Fecha prevista</dt><dd>{{ tarea.fecha_prevista|date:"d/m/Y H:i" }}</dd></div>{% endif %}
           <div><dt>Fecha límite</dt><dd>{% if tarea.fecha_limite %}{{ tarea.fecha_limite|date:"d/m/Y H:i" }}{% else %}Sin fecha límite{% endif %}</dd></div>
           <div><dt>Responsable</dt><dd>{% if tarea.usuario_responsable %}{{ tarea.usuario_responsable }}{% else %}Sin asignar{% endif %}</dd></div>
           <div><dt>Equipo</dt><dd>{% if tarea.equipo_responsable %}{{ tarea.equipo_responsable }}{% else %}—{% endif %}</dd></div>
@@ -261,7 +286,7 @@
             {% for evento in historial %}
               <li>
                 {{ evento.get_tipo_evento_display }}
-                <span>{{ evento.actor }} · {{ evento.creado_en|date:"d/m/Y H:i" }}</span>
+                <span>{{ evento.actor|default:"Sistema" }} · {{ evento.creado_en|date:"d/m/Y H:i" }}</span>
               </li>
             {% empty %}
               <li class="text-muted">Sin eventos.</li>

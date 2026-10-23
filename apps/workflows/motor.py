@@ -91,6 +91,11 @@ TIPO_ETAPA_POR_BLOQUE = {
     "DECISION": "CONDICION",
     "ENTREGABLE": "ENTREGABLE",
     "TAREAS_ELEMENTOS": "TAREAS_ELEMENTOS",
+    # Fase 2 — contenedores: su Strategy lanza subinstancias del MISMO motor y espera a que terminen.
+    "GRUPO_ACTIVIDADES": "GRUPO_ACTIVIDADES",
+    "RECORRIDO_ITEMS": "RECORRIDO_ITEMS",
+    # Fase 3 — bloque GACETA (clave propia: la etapa LEGACY «GACETA» sigue sin ejecutarse).
+    "GACETA": "GACETA_BLOQUE",
 }
 
 
@@ -123,6 +128,9 @@ class _EtapaDesdeBloque:
         # 4.B1: identidad estable (resultados publicados) y referencia del ENTREGABLE.
         self.clave = bloque.clave
         self.definicion_entregable_id = bloque.definicion_entregable_id
+        # Fase 2: un bloque contenido (recorrido por ítem / rama general) conoce su contenedor y rama.
+        self.contenedor_id = bloque.contenedor_id
+        self.rama = bloque.rama
         if self.tipo == "TAREA":
             self.configuracion_tarea = self._config_tarea()
         if self.tipo == "APROBACION":
@@ -141,6 +149,10 @@ class _EtapaDesdeBloque:
             usuario_responsable=usuario,
             equipo_responsable=equipo,
             permite_subtareas=bool(cfg.get("permite_subtareas")),
+            # Fase 1: fechas relativas, evidencia y lista de verificación (`apps.catalogo.actividades`).
+            ampliacion=cfg,
+            # Fase 2: responsable tomado de una columna (USUARIO/EQUIPO) del ítem del recorrido.
+            columna=cfg.get("columna") or "",
         )
 
     def _config_aprobacion(self):
@@ -167,12 +179,16 @@ class _EtapaDesdeBloque:
                     tipo_aprobador=dato.get("tipo"),
                     usuario=usuario,
                     equipo=equipo,
+                    columna=dato.get("columna") or "",
                 )
             )
         return SimpleNamespace(
             modo=cfg.get("modo"),
             politica=cfg.get("politica") or "",
             participantes=_Participantes(participantes),
+            # Fase 2 — decisiones permitidas: excluir solo en la aprobación de un ítem.
+            permite_exclusion=bool(cfg.get("permite_exclusion")) and self.bloque.rama == "ITEM",
+            justificacion_al_aprobar=bool(cfg.get("justificacion_al_aprobar")),
         )
 
 
@@ -244,8 +260,19 @@ def _resolver_transicion_saliente(etapa, resultado):
 
 
 def _siguiente_bloque_lineal(bloque):
+    if bloque.contenedor_id is not None:
+        # Fase 2: dentro de un recorrido por ítem se sigue por el siguiente bloque de la MISMA rama del mismo
+        # contenedor; al terminar la secuencia (o en una rama general, que es un solo bloque) la subinstancia
+        # termina. Nunca sale al flujo principal: eso lo decide la instancia principal.
+        if bloque.rama != "ITEM":
+            return None
+        return (
+            bloque.version.bloques.filter(contenedor_id=bloque.contenedor_id, rama="ITEM", orden__gt=bloque.orden)
+            .order_by("orden", "pk")
+            .first()
+        )
     siguiente = (
-        bloque.version.bloques.filter(fase=bloque.fase, orden__gt=bloque.orden)
+        bloque.version.bloques.filter(fase=bloque.fase, orden__gt=bloque.orden, contenedor__isnull=True)
         .order_by("orden", "pk")
         .first()
     )
@@ -262,7 +289,8 @@ def _primer_bloque_desde_fase(configuracion, fase, visitadas=None):
     if fase.pk in visitadas:
         return None
     visitadas.add(fase.pk)
-    bloque = configuracion.bloques.filter(fase=fase).order_by("orden", "pk").first()
+    # Los bloques contenidos (Fase 2) nunca son parte del recorrido principal.
+    bloque = configuracion.bloques.filter(fase=fase, contenedor__isnull=True).order_by("orden", "pk").first()
     if bloque is not None:
         return bloque
     for transicion in fase.transiciones_salientes.order_by("prioridad", "pk"):
@@ -299,9 +327,22 @@ def _ejecutar_etapa(instancia, instancia_etapa):
     etapa = _definicion_ejecutable(instancia_etapa)
     estrategia = ESTRATEGIAS_POR_TIPO.get(etapa.tipo)
 
+    primera_entrada = instancia_etapa.estado == InstanciaEtapa.Estado.PENDIENTE
     instancia_etapa.estado = InstanciaEtapa.Estado.EN_EJECUCION
     instancia_etapa.iniciada_en = timezone.now()
     instancia_etapa.save(update_fields=["estado", "iniciada_en", "actualizado_en"])
+
+    if primera_entrada and instancia_etapa.bloque_operativo_id:
+        # Fase 2 — efectos configurados al LLEGAR a un bloque (p. ej. cerrar el alcance de una colección).
+        # El motor no sabe qué son: delega en `apps.workflows.efectos`, una sola vez por ejecución.
+        from apps.workflows import efectos
+
+        try:
+            efectos.aplicar_al_entrar(instancia, instancia_etapa)
+        except Exception as exc:  # noqa: BLE001 — mismo tratamiento que una Strategy que falla.
+            logger.exception("Error aplicando efectos de entrada de InstanciaEtapa %s", instancia_etapa.pk)
+            _registrar_error(instancia, instancia_etapa, tipo="TECNICO", mensaje=str(exc) or type(exc).__name__)
+            return False
 
     if estrategia is None or not estrategia.ejecutable:
         # Defensa adicional: `validar_estructura` ya impide activar una
@@ -414,6 +455,14 @@ def _avanzar_automaticamente(instancia):
         punto = _localizar_punto_continuacion(instancia)
         if punto.tipo == "TERMINADO":
             _cerrar_instancia_por_fases(instancia)
+            if instancia.instancia_padre_id is not None and instancia.estado == InstanciaWorkflow.Estado.COMPLETADA:
+                # Fase 3: efectos de terminar un recorrido (p. ej. el ítem ingresa a una gaceta). Delegado.
+                from apps.workflows import efectos
+
+                efectos.al_terminar_subinstancia(instancia)
+                # Fase 2: una subinstancia que termina avisa a la principal, que decide si su contenedor ya
+                # puede continuar (`apps.workflows.recorridos`).
+                _avisar_padre(instancia)
             return instancia
 
         if pasos >= LIMITE_AVANCES_AUTOMATICOS_POR_INVOCACION:
@@ -507,9 +556,15 @@ def _iniciar_workflow_por_configuracion(workflow, version, *, actor=None, origen
     config_id = datos_iniciales.get("configuracion_ejecucion_version_id")
     if not config_id:
         raise ValueError("La plantilla de fases necesita una configuracion de ejecucion activa.")
-    configuracion = ConfiguracionEjecucionVersion.objects.get(pk=config_id)
+    configuracion = ConfiguracionEjecucionVersion.objects.select_related("workflow_version").get(pk=config_id)
     if configuracion.workflow_version_id != version.pk:
-        raise ValueError("La configuracion de ejecucion no corresponde a la version activa del workflow.")
+        # Fase 4.A: una configuración ACTIVA atada a una versión ANTERIOR publicada de la misma plantilla se
+        # ejecuta sobre SU versión (sus bloques pertenecen a esas fases) hasta que el Servicio la reconcilie. Un
+        # borrador u otra plantilla siguen rechazándose.
+        propia = configuracion.workflow_version
+        if propia.workflow_id != workflow.pk or propia.estado == WorkflowVersion.Estado.BORRADOR:
+            raise ValueError("La configuracion de ejecucion no corresponde a la version activa del workflow.")
+        version = propia
     if configuracion.estado != ConfiguracionEjecucionVersion.Estado.ACTIVA:
         raise ValueError("La configuracion de ejecucion no esta activa.")
 
@@ -543,6 +598,99 @@ def _iniciar_workflow_por_configuracion(workflow, version, *, actor=None, origen
         datos_nuevos=serializar(instancia),
     )
     return _avanzar_automaticamente(instancia)
+
+
+# --- Fase 2 — subinstancias ------------------------------------------------------------------------------
+
+
+def _avisar_padre(hija):
+    from apps.workflows import recorridos
+
+    recorridos.evaluar_espera(hija.ejecucion_padre_id)
+
+
+def bloquear_con_padre(instancia_id):
+    """Lock de una instancia respetando el orden «principal → hija»: si es una subinstancia, bloquea primero
+    a la principal (lectura sin lock del padre: el vínculo es inmutable). Devuelve la instancia pedida."""
+    padre_id = InstanciaWorkflow.objects.filter(pk=instancia_id).values_list("instancia_padre_id", flat=True).first()
+    if padre_id is not None:
+        InstanciaWorkflow.objects.select_for_update().get(pk=padre_id)
+    return InstanciaWorkflow.objects.select_for_update().get(pk=instancia_id)
+
+
+def iniciar_subinstancia(padre, ejecucion_padre, bloque_inicial, *, elemento=None, bloque_rama=None, actor=None):
+    """Lanza una subinstancia de `padre` para el contenedor que se está ejecutando en `ejecucion_padre`:
+    misma versión y configuración, su propio contexto (con el ticket y, si es de un ítem, el elemento) y su
+    propio punto activo, que avanza con el MISMO motor. Debe llamarse con `padre` bloqueada. No valida qué
+    bloques corresponden: eso es de `apps.workflows.recorridos`."""
+    datos = dict((padre.contexto or {}).get("datos_iniciales") or {})
+    datos.update({
+        "configuracion_ejecucion_version_id": padre.configuracion_ejecucion_version_id,
+        "instancia_padre_id": padre.pk,
+        "elemento_id": elemento.pk if elemento is not None else None,
+    })
+    hija = InstanciaWorkflow.objects.create(
+        workflow_version=padre.workflow_version,
+        configuracion_ejecucion_version=padre.configuracion_ejecucion_version,
+        estado=InstanciaWorkflow.Estado.EN_EJECUCION,
+        contexto=construir_contexto_inicial(datos),
+        iniciado_por=actor,
+        instancia_padre=padre,
+        ejecucion_padre=ejecucion_padre,
+        elemento=elemento,
+        bloque_rama=bloque_rama,
+    )
+    InstanciaEtapa.objects.create(
+        instancia_workflow=hija,
+        bloque_operativo=bloque_inicial,
+        fase_workflow=bloque_inicial.fase,
+        orden=1,
+        estado=InstanciaEtapa.Estado.PENDIENTE,
+    )
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.CREAR, instancia=hija,
+        origen=RegistroAuditoria.Origen.USUARIO if actor is not None else RegistroAuditoria.Origen.SISTEMA,
+        usuario=actor, datos_anteriores=None, datos_nuevos=serializar(hija),
+    )
+    return _avanzar_automaticamente(hija)
+
+
+def finalizar_subinstancia(hija, ejecucion, *, resultado):
+    """Termina una subinstancia ANTES de recorrer el resto de su secuencia (p. ej. su ítem se excluyó o se
+    rechazó en una aprobación): la ejecución en espera queda COMPLETADA sin ruta, la subinstancia COMPLETADA
+    con `resultado_recorrido` en su contexto, y se avisa a la principal. Debe llamarse con la principal y la
+    hija bloqueadas. Nada se borra."""
+    ejecucion.estado = InstanciaEtapa.Estado.COMPLETADA
+    ejecucion.finalizada_en = timezone.now()
+    ejecucion.save(update_fields=["estado", "finalizada_en", "actualizado_en"])
+    hija.contexto = {**(hija.contexto or {}), "resultado_recorrido": resultado}
+    hija.estado = InstanciaWorkflow.Estado.COMPLETADA
+    hija.finalizada_en = timezone.now()
+    hija.save(update_fields=["estado", "contexto", "finalizada_en", "actualizado_en"])
+    _avisar_padre(hija)
+    return hija
+
+
+@transaction.atomic
+def reintentar_subinstancia_con_error(hija):
+    """Una subinstancia quedó en ERROR (p. ej. su ítem no tenía responsable en la columna configurada). Tras
+    corregir el dato, se reintenta EXACTAMENTE la ejecución que falló: vuelve a PENDIENTE y el motor la
+    ejecuta de nuevo. Solo para subinstancias (la principal conserva su tratamiento de siempre). Quien llama
+    autoriza. Devuelve la subinstancia."""
+    hija = bloquear_con_padre(hija.pk)
+    if hija.instancia_padre_id is None:
+        raise ValueError("Solo se reintenta una subinstancia.")
+    if hija.estado != InstanciaWorkflow.Estado.ERROR:
+        return hija
+    ejecucion = hija.ejecuciones_etapa.order_by("-orden").first()
+    if ejecucion is None or ejecucion.estado != InstanciaEtapa.Estado.ERROR:
+        return hija
+    ejecucion.estado = InstanciaEtapa.Estado.PENDIENTE
+    ejecucion.error = None
+    ejecucion.save(update_fields=["estado", "error", "actualizado_en"])
+    hija.estado = InstanciaWorkflow.Estado.EN_EJECUCION
+    hija.save(update_fields=["estado", "actualizado_en"])
+    return _avanzar_automaticamente(hija)
 
 
 @transaction.atomic
@@ -587,7 +735,13 @@ def _completar_ejecucion_en_espera(instancia, ejecucion, *, transicion_seleccion
     ejecucion.estado = InstanciaEtapa.Estado.COMPLETADA
     ejecucion.finalizada_en = timezone.now()
     if ejecucion.bloque_operativo_id:
-        ejecucion.transicion_bloque_tomada = transicion_seleccionada or ejecucion.bloque_operativo.transiciones_salientes.first()
+        bloque = ejecucion.bloque_operativo
+        if transicion_seleccionada is None and bloque.contenedor_id is not None:
+            # Fase 2: dentro de un recorrido, sin ruta explícita se sigue la secuencia (nunca «la primera ruta»,
+            # que podría ser la de devolución de una aprobación).
+            ejecucion.transicion_bloque_tomada = None
+        else:
+            ejecucion.transicion_bloque_tomada = transicion_seleccionada or bloque.transiciones_salientes.first()
         campos = ["estado", "finalizada_en", "transicion_bloque_tomada", "actualizado_en"]
     else:
         ejecucion.transicion_tomada = transicion_seleccionada or ejecucion.etapa.transiciones_salientes.first()
@@ -678,6 +832,9 @@ def continuar_espera_externa(
     instancia bloqueada): se FUSIONA en `InstanciaEtapa.resultado` de esta ejecución bajo el mismo
     lock, antes de completarla. Es la evidencia propia de esa
     pasada (p. ej. qué versión de un entregable revisó una aprobación); no afecta la ruta."""
+    # Fase 2: una subinstancia se bloquea después de su principal (orden «principal → hija»).
+    instancia_id = InstanciaEtapa.objects.values_list("instancia_workflow_id", flat=True).get(pk=instancia_etapa.pk)
+    bloquear_con_padre(instancia_id)
     instancia_etapa = InstanciaEtapa.objects.select_for_update().get(pk=instancia_etapa.pk)
     instancia = InstanciaWorkflow.objects.select_for_update().get(pk=instancia_etapa.instancia_workflow_id)
 

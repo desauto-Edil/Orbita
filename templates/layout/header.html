@@ -1,27 +1,29 @@
 {% comment %}
-  Header global (nivel 0 de navegación): identidad, búsqueda, notificaciones y
-  menú de usuario. No contiene navegación de módulos (esa vive en el dock).
+  Navegación global flotante SUPERIOR (única): identidad y búsqueda a la izquierda, los destinos del módulo en el
+  centro (`layout/dock.html`, decididos por `apps.core.navegacion`) y notificaciones + menú de usuario a la
+  derecha. Sustituye al header tradicional y al dock inferior: no hay otra navegación global.
 
-  Búsqueda y notificaciones todavía no tienen backend (Sprint 8/9 del roadmap):
-  se muestran DESHABILITADAS y rotuladas "próximamente" para fijar su lugar en
-  la composición sin aparentar ser operativas ni inventar funcionalidad.
+  Búsqueda y notificaciones todavía no tienen backend (Sprint 8/9 del roadmap): se muestran DESHABILITADAS y
+  rotuladas «próximamente» para fijar su lugar sin aparentar ser operativas ni inventar funcionalidad.
 {% endcomment %}
 <header class="app-header">
-  <a class="app-header__brand" href="{% url 'core:inicio' %}" aria-label="{{ sistema.nombre }}, ir al inicio">
-    {% include "layout/marca.html" %}
-    <span class="app-header__brand-name">{{ sistema.nombre }}</span>
-  </a>
-
-  <div class="app-header__search search" role="search" data-tooltip="Búsqueda: próximamente" data-tooltip-pos="bottom">
-    <span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" %}</span>
-    <input class="search__input" type="search" placeholder="Buscar en {{ sistema.nombre }}" aria-label="Buscar en {{ sistema.nombre }} (próximamente)" disabled>
+  <div class="app-header__inicio">
+    <a class="app-header__brand" href="{% url 'core:inicio' %}" aria-label="{{ sistema.nombre }}, ir al inicio">
+      {% include "layout/marca.html" %}
+      <span class="app-header__brand-name">{{ sistema.nombre }}</span>
+    </a>
+    <span data-tooltip="Búsqueda: próximamente" data-tooltip-pos="bottom">
+      <button type="button" class="btn-icon app-header__boton" disabled aria-label="Buscar en {{ sistema.nombre }} (próximamente)">
+        {% include "components/icon.html" with name="search" %}
+      </button>
+    </span>
   </div>
 
-  <div class="app-header__spacer"></div>
+  {% include "layout/dock.html" %}
 
   <div class="app-header__actions">
     <span data-tooltip="Notificaciones: próximamente" data-tooltip-pos="bottom">
-      <button type="button" class="btn-icon btn-icon--outline" disabled aria-label="Notificaciones (próximamente)">
+      <button type="button" class="btn-icon app-header__boton" disabled aria-label="Notificaciones (próximamente)">
         {% include "components/icon.html" with name="bell" %}
       </button>
     </span>

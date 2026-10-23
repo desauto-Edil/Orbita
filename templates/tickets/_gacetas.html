@@ -1,0 +1,26 @@
+{% comment %}Fase 3 — gacetas del ticket (resumen y acceso). Espera `gacetas_ticket` (`gacetas.consultas.del_ticket`).{% endcomment %}
+{% if gacetas_ticket %}
+  <section class="card" id="gacetas" aria-labelledby="gacetas-t">
+    <h3 id="gacetas-t">Gacetas</h3>
+    <ul>
+      {% for fila in gacetas_ticket %}
+        <li>
+          {% if fila.puede_ver %}<a href="{% url 'gacetas:detalle' fila.gaceta.pk %}">{{ fila.gaceta.nombre }}</a>{% else %}{{ fila.gaceta.nombre }}{% endif %}
+          <span class="badge">{{ fila.gaceta.get_estado_display }}</span>
+          {{ fila.resumen.total }} ítem(s) · {{ fila.resumen.aprobados }} aprobado(s) · {{ fila.resumen.en_revision }} en revisión ·
+          {{ fila.resumen.en_correccion }} en corrección · {{ fila.resumen.rechazados }} rechazado(s) · {{ fila.resumen.excluidos }} excluido(s)
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endif %}
+{% if condiciones_cierre %}
+  <section class="card" id="condiciones-cierre" aria-labelledby="cierre-t">
+    <h3 id="cierre-t">Condiciones de cierre</h3>
+    <ul>
+      {% for regla in condiciones_cierre %}
+        <li>{% if regla.cumple %}✓{% else %}✗{% endif %} {{ regla.descripcion }}{% if regla.detalle %} — <span class="text-muted">{{ regla.detalle }}</span>{% endif %}</li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endif %}

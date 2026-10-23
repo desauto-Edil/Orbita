@@ -197,6 +197,8 @@ def crear_nueva_version(workflow, actor, clonar_desde=None):
                 nombre=fase.nombre,
                 descripcion=fase.descripcion,
                 orden=fase.orden,
+                # Fase 4.A: la identidad estable de la fase se copia siempre (reconciliación de Servicios).
+                clave=fase.clave,
             )
             mapa_fases[fase.pk] = clon
         for fase in origen.fases.all():

@@ -103,6 +103,22 @@ def version_activa_de(servicio):
     return formulario.version_activa if formulario is not None else None
 
 
+def inicio_directo(ticket):
+    """¿Este borrador se inicia SIN pedir datos antes de radicar? Solo en un PROCESO manual:
+
+    - sin datos de inicio (su versión congelada no tiene campos: el Proceso no los configuró), o
+    - con datos de inicio que pertenecen a la EJECUCIÓN (`datos_inicio_en_ejecucion`): se diligencian
+      después, dentro del ticket (`apps.tickets.datos_inicio`), no en la solicitud.
+
+    Un SERVICIO (incluido el Ticket General) nunca se inicia así: su formulario se diligencia y valida
+    antes de radicar. Las colecciones nunca forman parte de la solicitud: nacen vacías con el ticket."""
+    if ticket.tipo != Ticket.Tipo.PROCESO:
+        return False
+    if ticket.datos_inicio_en_ejecucion:
+        return True
+    return not ticket.respuesta_formulario.formulario_version.campos.exists()
+
+
 def obtener_o_crear_borrador(usuario, servicio):
     """Abre la solicitud de un Servicio/Proceso sin dejar basura al navegar.
 
@@ -586,4 +602,6 @@ def contexto_workspace(ticket, *, errores=None, valores_envio=None, error_destin
         "campos_con_error": [i for i in items if i["errores"] and i["visible"]],
         "tiene_respuestas_guardadas": respuesta_formulario.respuestas_campo.exists(),
         "servicio_activo": servicio.activo,
+        "inicio_directo": inicio_directo(ticket),
+        "datos_en_ejecucion": bool(ticket.datos_inicio_en_ejecucion and items),
     }

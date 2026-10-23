@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% comment %}
+  Una gaceta (Fase 3): una sola página para revisar sus ítems. Espera lo que arma `apps.gacetas.consultas.detalle`.
+  Las decisiones se registran en la aprobación de siempre (enlace «Decidir»); aquí se observa, se responde, se
+  reenvía la corrección, se excluye y se cierra o resuelve la gaceta.
+{% endcomment %}
+{% block title %}{{ titulo_pagina }} — {{ sistema.nombre }}{% endblock %}
+{% block content %}
+  <section class="card" id="gaceta-resumen">
+    <h1>{{ gaceta.nombre }} <span class="badge">{{ gaceta.get_estado_display }}</span></h1>
+    {% if gaceta.descripcion %}<p class="text-muted">{{ gaceta.descripcion }}</p>{% endif %}
+    <p>
+      {{ resumen.total }} ítem(s): {{ resumen.aprobados }} aprobado(s) · {{ resumen.en_revision }} en revisión ·
+      {{ resumen.en_correccion }} en corrección · {{ resumen.rechazados }} rechazado(s) · {{ resumen.excluidos }} excluido(s)
+    </p>
+    <p class="text-muted">
+      {% if gaceta.abierta_en %}Abierta el {{ gaceta.abierta_en|date:"d/m/Y H:i" }}.{% endif %}
+      {% if gaceta.vence_revision_en %}Periodo de revisión hasta {{ gaceta.vence_revision_en|date:"d/m/Y H:i" }}.{% endif %}
+      {% if gaceta.periodo_cerrado_en %}Periodo cerrado el {{ gaceta.periodo_cerrado_en|date:"d/m/Y H:i" }}.{% endif %}
+      {% if gaceta.resuelta_en %}Resuelta el {{ gaceta.resuelta_en|date:"d/m/Y H:i" }}{% if gaceta.resuelta_por %} por {{ gaceta.resuelta_por }}{% else %} automáticamente{% endif %}.{% endif %}
+    </p>
+    {% if coordinador %}
+      <div class="form-actions">
+        {% if gaceta.estado == "ABIERTA" %}
+          <form method="post" action="{% url 'gacetas:cerrar_periodo' gaceta.pk %}">{% csrf_token %}
+            <button type="submit" class="btn btn--secondary">Cerrar periodo de revisión</button>
+          </form>
+        {% endif %}
+        {% if gaceta.estado == "ABIERTA" or gaceta.estado == "PERIODO_CERRADO" %}
+          <form method="post" action="{% url 'gacetas:resolver' gaceta.pk %}" class="form">{% csrf_token %}
+            <label for="resolver-just">Justificación de la resolución</label>
+            <input id="resolver-just" name="justificacion" type="text">
+            <button type="submit" class="btn btn--primary">Resolver gaceta</button>
+          </form>
+        {% endif %}
+      </div>
+      {% if presentables %}
+        <form method="post" action="{% url 'gacetas:presentar' gaceta.pk %}" class="form">{% csrf_token %}
+          <label for="presentar-item">Presentar un ítem</label>
+          <select id="presentar-item" name="elemento_id">
+            {% for elemento in presentables %}<option value="{{ elemento.pk }}">{{ elemento.parrilla.nombre_elemento|default:"Ítem" }} #{{ elemento.numero }}</option>{% endfor %}
+          </select>
+          <button type="submit" class="btn btn--secondary">Presentar</button>
+        </form>
+      {% endif %}
+    {% endif %}
+  </section>
+
+  {% for fila in filas %}
+    <section class="card" id="item-{{ fila.elemento.pk }}">
+      <h2>
+        {{ fila.elemento.parrilla.nombre_elemento|default:"Ítem" }} #{{ fila.elemento.numero }}
+        <span class="badge{% if fila.participacion.estado == 'EN_CORRECCION' %} badge--warning{% elif fila.participacion.estado == 'APROBADA' %} badge--success{% elif fila.participacion.estado == 'RECHAZADA' or fila.participacion.estado == 'EXCLUIDA' %} badge--danger{% endif %}">{{ fila.participacion.get_estado_display }}</span>
+        <small class="text-muted">Estado operativo: {{ fila.estado_operativo }} · Ronda {{ fila.participacion.ronda }}</small>
+      </h2>
+      {% if fila.participacion.aceptada_automaticamente %}<p class="text-muted">Aceptado automáticamente al vencer el periodo.</p>{% endif %}
+      {% if fila.participacion.justificacion %}<p class="text-muted">{{ fila.participacion.justificacion }}</p>{% endif %}
+      {% if fila.participacion.vence_correccion_en %}<p>Corregir antes de {{ fila.participacion.vence_correccion_en|date:"d/m/Y H:i" }}{% if fila.participacion.correccion_vencida_en %} <span class="badge badge--danger">Vencida</span>{% endif %}</p>{% endif %}
+      <dl class="work-facts">
+        {% for valor in fila.valores %}<div><dt>{{ valor.etiqueta }}</dt><dd>{{ valor.texto }}</dd></div>{% endfor %}
+      </dl>
+      {% if fila.archivos %}
+        <p>Evidencias: {% for archivo in fila.archivos %}<a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a>{% if not forloop.last %}, {% endif %}{% endfor %}</p>
+      {% endif %}
+
+      <details>
+        <summary>Rondas y versiones ({{ fila.rondas|length }})</summary>
+        <ul>
+          {% for ronda in fila.rondas %}
+            <li>Ronda {{ ronda.numero }}{% if ronda.version %} · versión {{ ronda.version.numero }}{% if ronda.version.motivo %} ({{ ronda.version.motivo }}){% endif %}{% endif %}
+              · {{ ronda.get_resultado_display|default:"En curso" }}
+              {% if ronda.version %}<br><small class="text-muted">{% for clave, valor in ronda.version.contenido.valores.items %}{{ clave }}: {{ valor|default_if_none:"—" }}{% if not forloop.last %} · {% endif %}{% endfor %}</small>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </details>
+
+      <h3>Observaciones</h3>
+      {% for observacion in fila.observaciones %}
+        <div class="work-thread__item">
+          <p><strong>{{ observacion.autor }}</strong> · ronda {{ observacion.ronda.numero }} · {{ observacion.creada_en|date:"d/m/Y H:i" }}{% if observacion.atendida_en %} · <span class="badge badge--success">Atendida</span>{% endif %}</p>
+          <p>{{ observacion.texto }}</p>
+          {% if observacion.respuesta %}<p class="text-muted">Respuesta de {{ observacion.respondida_por }}: {{ observacion.respuesta }}</p>{% endif %}
+          {% if fila.puede_corregir and not observacion.atendida_en %}
+            <form method="post" action="{% url 'gacetas:responder' observacion.pk %}" class="form">{% csrf_token %}
+              <input type="text" name="respuesta" required aria-label="Respuesta" value="{{ observacion.respuesta }}">
+              <button type="submit" class="btn btn--ghost btn--sm">Responder</button>
+            </form>
+          {% endif %}
+        </div>
+      {% empty %}
+        <p class="text-muted">Sin observaciones.</p>
+      {% endfor %}
+
+      <div class="form-actions">
+        {% if fila.puede_observar %}
+          <form method="post" action="{% url 'gacetas:observar' fila.participacion.pk %}" class="form">{% csrf_token %}
+            <label for="obs-{{ fila.participacion.pk }}">Nueva observación</label>
+            <textarea id="obs-{{ fila.participacion.pk }}" name="texto" rows="2" required></textarea>
+            <button type="submit" class="btn btn--secondary">Registrar observación</button>
+          </form>
+        {% endif %}
+        {% if fila.aprobacion_pendiente %}
+          <a class="btn btn--primary" href="{% url 'aprobaciones:detalle' fila.aprobacion_pendiente.pk %}">Decidir (aprobar, devolver, rechazar{% if gaceta.configuracion.permite_exclusion %}, excluir{% endif %})</a>
+        {% endif %}
+        {% if fila.puede_corregir %}
+          <form method="post" action="{% url 'gacetas:reenviar' fila.participacion.pk %}" class="form">{% csrf_token %}
+            <label for="reenv-{{ fila.participacion.pk }}">Comentario de la corrección</label>
+            <input id="reenv-{{ fila.participacion.pk }}" type="text" name="comentario">
+            <button type="submit" class="btn btn--primary">Reenviar a revisión</button>
+          </form>
+        {% endif %}
+        {% if fila.puede_excluir %}
+          <form method="post" action="{% url 'gacetas:excluir' fila.participacion.pk %}" class="form">{% csrf_token %}
+            <label for="excl-{{ fila.participacion.pk }}">Justificación de la exclusión</label>
+            <input id="excl-{{ fila.participacion.pk }}" type="text" name="justificacion" required>
+            <button type="submit" class="btn btn--ghost">Excluir del alcance</button>
+          </form>
+        {% endif %}
+      </div>
+    </section>
+  {% empty %}
+    <section class="card"><p class="text-muted">Todavía no hay ítems en esta gaceta.</p></section>
+  {% endfor %}
+{% endblock %}

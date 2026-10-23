@@ -31,12 +31,11 @@
     </div>
   {% endif %}
 
-  <div class="app-shell">
+  <div class="app-shell{% if user.is_authenticated %} app-shell--nav{% endif %}">
     {% if user.is_authenticated %}{% include "layout/header.html" %}{% endif %}
     <main class="{% if user.is_authenticated %}content-area {% block content_modifier %}{% endblock %}{% else %}bare-content{% endif %}" id="main-content">
       {% block content %}{% endblock %}
     </main>
-    {% if user.is_authenticated %}{% include "layout/dock.html" %}{% endif %}
   </div>
 
   <script src="{% static 'js/app.js' %}" defer></script>

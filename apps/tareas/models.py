@@ -87,6 +87,9 @@ class Tarea(RegistroBase):
     # aprobada) sobre por qué 3.3 no deriva automáticamente esta fecha
     # desde la Etapa que origina la Tarea.
     fecha_limite = models.DateTimeField(null=True, blank=True)
+    # Fase 1 (modelo configurable de procesos) — fecha en la que se ESPERA terminar, distinta de la
+    # fecha límite (`fecha_limite`, compromiso). Informativa: no bloquea, no vence y no es un estado.
+    fecha_prevista = models.DateTimeField(null=True, blank=True)
     creada_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
@@ -138,6 +141,32 @@ class Tarea(RegistroBase):
 
     def __str__(self):
         return self.titulo
+
+
+class ItemVerificacionTarea(models.Model):
+    """Fase 1 (modelo configurable de procesos) — lista de verificación de una Tarea: un atributo de la
+    propia Tarea, no una fase, un bloque ni otra Tarea. Quien la crea copia los ítems (texto + si es
+    obligatorio); `operaciones.completar_tarea` exige los obligatorios marcados. Marcar y desmarcar deja
+    el último actor y momento aquí y el detalle en `HistorialTarea`; los ítems no se editan ni se borran."""
+
+    tarea = models.ForeignKey(Tarea, on_delete=models.CASCADE, related_name="verificaciones")
+    orden = models.PositiveIntegerField()
+    texto = models.CharField(max_length=200)
+    obligatorio = models.BooleanField(default=True)
+    marcado = models.BooleanField(default=False)
+    marcado_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    marcado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["orden", "pk"]
+        constraints = [
+            models.UniqueConstraint(fields=["tarea", "orden"], name="uq_verificacion_tarea_orden"),
+        ]
+
+    def __str__(self):
+        return self.texto
 
 
 class ComentarioTarea(models.Model):
@@ -266,10 +295,12 @@ class HistorialTarea(models.Model):
         INICIADA = "INICIADA", "Iniciada"
         COMPLETADA = "COMPLETADA", "Completada"
         CANCELADA = "CANCELADA", "Cancelada"
+        VERIFICACION = "VERIFICACION", "Lista de verificación"
 
     tarea = models.ForeignKey(Tarea, on_delete=models.CASCADE, related_name="historial")
     tipo_evento = models.CharField(max_length=15, choices=TipoEvento.choices)
-    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    # Fase 3: NULL = el Sistema (p. ej. una gaceta que se resuelve sola cancela una tarea de corrección).
+    actor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+")
     datos = models.JSONField(null=True, blank=True)
     creado_en = models.DateTimeField(auto_now_add=True)
 

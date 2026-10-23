@@ -97,6 +97,11 @@ def _tiene_trabajo_personal(usuario):
 
     if revisiones_pendientes_para(usuario):
         return True
+    # Bloque 3: participar en una colección de un ticket en atención también es trabajo suyo.
+    from apps.tickets.parrilla import colecciones_de_participante
+
+    if colecciones_de_participante(usuario).exists():
+        return True
     # 4.F3: los tickets que la persona atiende son su trabajo (no los que solicitó).
     if Ticket.objects.filter(usuario_responsable=usuario, estado=Ticket.Estado.EN_ATENCION).exists():
         return True

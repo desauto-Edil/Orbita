@@ -37,11 +37,15 @@ def validar_ejecucion(servicio):
         config = servicio.configuracion_ejecucion_activa
         if config is None or config.estado != "ACTIVA":
             raise ValidationError("La ejecucion no tiene una configuracion operativa activa.")
-        if config.workflow_version_id != version.pk:
+        # Fase 4.A: la configuración activa se ejecuta sobre SU versión de la plantilla (la vigente o una anterior
+        # publicada), así publicar otra versión de un flujo compartido no deja sin ejecución a los Servicios que
+        # aún no la reconcilian. Nunca sobre un borrador ni sobre otra plantilla.
+        propia = config.workflow_version
+        if propia.workflow_id != workflow.pk or propia.estado == WorkflowVersion.Estado.BORRADOR:
             raise ValidationError("La configuracion operativa no corresponde a la version activa de la plantilla.")
         from apps.catalogo.configuracion_ejecucion import validar_configuracion_ejecucion
 
-        errores = validar_configuracion_ejecucion(config)
+        errores = validar_configuracion_ejecucion(config, exigir_plantilla_vigente=False)
         if errores:
             raise ValidationError(errores)
         return
@@ -57,26 +61,188 @@ def validar_ejecucion_proceso(servicio):
     validar_ejecucion(servicio)
 
 
+def errores_de_prorroga(servicio):
+    """La regla de publicación de la prórroga (4.A2), reutilizable por quien muestra su estado. Solo lectura."""
+    if servicio.politica_prorroga == Servicio.PoliticaProrroga.CON_APROBACION:
+        usuario, equipo = servicio.prorroga_aprobador_usuario, servicio.prorroga_aprobador_equipo
+        if not ((usuario is not None and usuario.is_active) or (equipo is not None and equipo.activo)):
+            return ["La prórroga con aprobación necesita un aprobador activo (usuario o equipo)."]
+    return []
+
+
+def requiere_formulario_inicial(servicio):
+    """¿Este elemento del catálogo NECESITA un formulario de inicio propio para publicarse?
+
+    Un SERVICIO (incluido el Servicio interno del Ticket General) sí: quien solicita responde ese formulario.
+    Un PROCESO no: puede trabajar solo con datos de inicio, solo con colecciones de ítems, con ambos o con
+    ninguno. Si no los configuró, al publicarse recibe unos datos de inicio VACÍOS (`asegurar_datos_inicio`)
+    para que cada Ticket siga congelando una `FormularioVersion`, sin cambiar ese contrato."""
+    return servicio.tipo != Servicio.Tipo.PROCESO or servicio.es_ticket_general
+
+
+def errores_de_formulario_inicial(servicio):
+    """La regla del formulario de inicio para publicar. Solo lectura.
+
+    - Servicio: formulario propio con versión ACTIVA (lo de siempre).
+    - Proceso sin formulario: nada que exigir (los datos de inicio son opcionales).
+    - Proceso que empezó sus datos de inicio: lo guardado debe estar en vigor, si no el Ticket congelaría una
+      versión que el diseñador no ve como vigente."""
+    formulario = servicio.formulario
+    version = formulario.version_activa if formulario is not None else None
+    vigente = (
+        version is not None and version.estado == FormularioVersion.Estado.ACTIVA
+        and version.formulario_id == formulario.pk
+    )
+    if vigente:
+        return []
+    if requiere_formulario_inicial(servicio):
+        return ["Se requiere un formulario con una versión ACTIVA propia."]
+    if formulario is None:
+        return []
+    return ["Los datos de inicio tienen un borrador sin activar: actívalo o publica los cambios."]
+
+
+MENSAJE_SIN_ACCESO = (
+    "Nadie puede iniciarlo: está restringido y nadie tiene acceso. Concede acceso o hazlo público interno."
+)
+MENSAJE_SIN_ATENCION_PROGRAMADO = (
+    "Nadie puede tomar sus ejecuciones: ningún miembro activo del equipo responsable inicial tiene el permiso de "
+    "atender tickets. Elige una persona como responsable inicial o asigna ese permiso a alguien del equipo."
+)
+MENSAJE_SIN_ATENCION = (
+    "Nadie puede atenderlo: agrega un responsable (persona o equipo) que tenga el permiso de atender tickets, "
+    "o asigna ese permiso con alcance global a alguien."
+)
+
+
+def _es_proceso_programado(servicio):
+    from apps.catalogo.programacion import programacion_activa_de
+
+    return servicio.tipo == Servicio.Tipo.PROCESO and programacion_activa_de(servicio) is not None
+
+
+def hay_ruta_de_atencion(servicio):
+    """¿Existe hoy alguien que pueda TOMAR los tickets de `servicio`? Es la misma regla de
+    `tickets.autorizacion.puede_tomar`, leída sobre la configuración: alguien con `tickets.atender` GLOBAL, o un
+    responsable configurado (persona activa, o miembro activo de un equipo activo) con `tickets.atender` en algún
+    alcance. Solo lectura; no cambia el modelo de permisos."""
+    from apps.core.autorizacion import existe_asignacion_vigente
+    from apps.core.models import MiembroEquipo
+
+    permiso = "tickets.atender"
+    if existe_asignacion_vigente(permiso, solo_global=True):
+        return True
+    responsables = servicio.responsables.filter(activo=True)
+    personas = set(
+        responsables.filter(tipo_responsable=ServicioResponsable.TipoResponsable.USUARIO, usuario__is_active=True)
+        .values_list("usuario_id", flat=True)
+    )
+    equipos = responsables.filter(
+        tipo_responsable=ServicioResponsable.TipoResponsable.EQUIPO, equipo__activo=True
+    ).values_list("equipo_id", flat=True)
+    personas |= set(
+        MiembroEquipo.objects.filter(equipo_id__in=list(equipos), activo=True).values_list("usuario_id", flat=True)
+    )
+    return bool(personas) and existe_asignacion_vigente(permiso, usuarios_ids=personas)
+
+
+def errores_de_atencion_programada(programacion):
+    """Bloque 4.1 — ¿alguien podrá poner en atención las ejecuciones de un Proceso programado? Cada una nace
+    RADICADA con el responsable inicial: una PERSONA la inicia ella misma (`puede_iniciar_atencion`, sin otro
+    permiso); un EQUIPO la deja en Cola y alguien debe TOMARLA (`puede_tomar`: `tickets.atender` GLOBAL, o un
+    miembro activo del equipo con ese permiso en algún alcance). Lista vacía = hay ruta. Solo lectura; supone un
+    responsable inicial ya válido (`programacion.errores_de_responsable_inicial`)."""
+    from apps.core.autorizacion import existe_asignacion_vigente
+    from apps.core.models import MiembroEquipo
+
+    responsable = programacion.responsable_inicial if programacion is not None else None
+    if responsable is None or responsable.tipo_responsable != ServicioResponsable.TipoResponsable.EQUIPO:
+        return []
+    permiso = "tickets.atender"
+    if existe_asignacion_vigente(permiso, solo_global=True):
+        return []
+    miembros = MiembroEquipo.objects.filter(equipo_id=responsable.equipo_id, activo=True).values_list("usuario_id", flat=True)
+    if existe_asignacion_vigente(permiso, usuarios_ids=list(miembros)):
+        return []
+    return [MENSAJE_SIN_ATENCION_PROGRAMADO]
+
+
+def errores_de_acceso(servicio):
+    """Requisitos de PUBLICACIÓN para que lo publicado se pueda usar (Bloque 2): alguien puede iniciarlo (no está
+    restringido sin concesiones) y alguien puede atenderlo (`hay_ruta_de_atencion`). No aplican al Servicio interno
+    del Ticket General (se dirige por destinos, 4.C2); un Proceso programado no se solicita y su ruta es el responsable
+    inicial vigente (`programacion.errores_de_responsable_inicial`). Como `dependencias.exigir`, lo aplica `activar_servicio` y no
+    `validar_publicacion`: lo ya publicado y la generación programada no cambian. Solo lectura."""
+    if servicio.es_ticket_general:
+        return []
+    if _es_proceso_programado(servicio):
+        # Su ruta operativa es el responsable inicial de la programación (misma regla que la generación) y, si es un
+        # equipo, que alguien pueda tomar sus ejecuciones (Bloque 4.1).
+        from apps.catalogo.programacion import errores_de_responsable_inicial, programacion_activa_de
+
+        programacion = programacion_activa_de(servicio)
+        return (
+            errores_de_responsable_inicial(programacion.responsable_inicial, servicio)
+            or errores_de_atencion_programada(programacion)
+        )
+    errores = []
+    if (
+        servicio.alcance_visibilidad == Servicio.AlcanceVisibilidad.RESTRINGIDO
+        and not servicio.visibilidad.filter(activo=True).exists()
+    ):
+        errores.append(MENSAJE_SIN_ACCESO)
+    if not hay_ruta_de_atencion(servicio):
+        errores.append(MENSAJE_SIN_ATENCION)
+    return errores
+
+
+def datos_inicio_configurados(servicio):
+    """¿El Proceso tiene datos de inicio CONFIGURADOS (campos en su versión activa o un borrador en curso)?
+    El formulario técnico vacío que crea `asegurar_datos_inicio` no cuenta: la interfaz lo presenta como «sin
+    datos de inicio». En un Servicio equivale a tener formulario. Solo lectura."""
+    formulario = servicio.formulario
+    if formulario is None:
+        return False
+    if requiere_formulario_inicial(servicio):
+        return True
+    if formulario.versiones.filter(estado=FormularioVersion.Estado.BORRADOR).exists():
+        return True
+    activa = formulario.version_activa
+    return activa is not None and activa.campos.exists()
+
+
+@transaction.atomic
+def asegurar_datos_inicio(servicio, actor):
+    """Un PROCESO que no configuró datos de inicio recibe, al publicarse, un formulario de inicio VACÍO con su
+    versión 1 ACTIVA. Así cada Ticket congela su `FormularioVersion` como siempre (el contrato de
+    `TicketServicio`/`RespuestaFormulario` no cambia) y no hay nada que responder ni diligenciar. Idempotente:
+    no hace nada si el Proceso ya tiene formulario o si es un Servicio. Auditado (reutiliza las operaciones
+    existentes)."""
+    if requiere_formulario_inicial(servicio) or servicio.formulario_id is not None:
+        return None
+    from apps.catalogo.versionamiento import activar_version
+
+    formulario = asociar_formulario_nuevo(
+        servicio, actor, nombre=f"Datos de inicio · {servicio.nombre}"[:150],
+        descripcion="Sin datos de inicio: el proceso no pide información al crearse.",
+    )
+    version = formulario.versiones.order_by("-numero").first()
+    activar_version(formulario, version, actor)
+    servicio.refresh_from_db()
+    return formulario
+
+
 def validar_publicacion(servicio):
     """Solo lectura. No exige responsables/área: no son requisitos de radicación."""
     errores = []
     if servicio.tipo not in Servicio.Tipo.values:
         errores.append("Tipo de catálogo inválido.")
-    formulario = servicio.formulario
-    version = formulario.version_activa if formulario is not None else None
-    if (
-        version is None or version.estado != FormularioVersion.Estado.ACTIVA
-        or version.formulario_id != formulario.pk
-    ):
-        errores.append("Se requiere un formulario con una versión ACTIVA propia.")
+    errores.extend(errores_de_formulario_inicial(servicio))
     try:
         validar_ejecucion(servicio)
     except ValidationError as exc:
         errores.extend(exc.messages)
-    if servicio.politica_prorroga == Servicio.PoliticaProrroga.CON_APROBACION:
-        usuario, equipo = servicio.prorroga_aprobador_usuario, servicio.prorroga_aprobador_equipo
-        if not ((usuario is not None and usuario.is_active) or (equipo is not None and equipo.activo)):
-            errores.append("La prórroga con aprobación necesita un aprobador activo (usuario o equipo).")
+    errores.extend(errores_de_prorroga(servicio))
     # 4.G1: un Proceso con programación activa no puede depender de un solicitante humano.
     from apps.catalogo.programacion import errores_de_compatibilidad, programacion_activa_de
 
@@ -95,6 +261,10 @@ def validar_publicacion(servicio):
     from apps.catalogo.tareas_elemento import errores_de_tareas_elemento
 
     errores.extend(errores_de_tareas_elemento(servicio))
+    # Fase 3: cada gaceta activa del Proceso debe seguir siendo válida (colecciones, columnas, personas).
+    from apps.catalogo.gacetas import errores_de_gacetas
+
+    errores.extend(errores_de_gacetas(servicio))
     if errores:
         raise ValidationError(errores)
 
@@ -122,11 +292,33 @@ def _exigir_administracion(actor):
         raise PermissionDenied("No tiene autorización para administrar el catálogo.")
 
 
+def errores_para_publicar(servicio):
+    """TODO lo que impide publicar `servicio` tal como está persistido, junto: `validar_publicacion` (también lo
+    usa la ejecución), `errores_de_acceso` (Bloque 2) y las dependencias obligatorias del flujo (Fase 4.A: no se
+    publica una configuración que promete algo que nunca ocurriría). Las dos últimas no forman parte de
+    `validar_publicacion`, así lo ya publicado y la generación programada no se rompen. Solo lectura; es la regla
+    que aplica `activar_servicio` y la que evalúa el Studio (`apps.catalogo.evaluacion`)."""
+    from apps.catalogo import dependencias
+
+    errores = []
+    try:
+        validar_publicacion(servicio)
+    except ValidationError as exc:
+        errores.extend(exc.messages)
+    errores.extend(errores_de_acceso(servicio))
+    errores.extend(d.mensaje for d in dependencias.bloqueantes(servicio, servicio.configuracion_ejecucion_activa))
+    return errores
+
+
 @transaction.atomic
 def activar_servicio(servicio, actor):
     _exigir_administracion(actor)
     servicio = Servicio.objects.select_for_update().get(pk=servicio.pk)
-    validar_publicacion(servicio)
+    errores = errores_para_publicar(servicio)
+    if errores:
+        raise ValidationError(errores)
+    # Un Proceso sin datos de inicio los recibe vacíos (ver `asegurar_datos_inicio`).
+    asegurar_datos_inicio(servicio, actor)
     if servicio.activo:
         return servicio
     servicio.activo = True
@@ -382,7 +574,20 @@ def agregar_responsable(servicio, actor, *, tipo_responsable, usuario=None, equi
 
 @transaction.atomic
 def retirar_responsable(responsable, actor):
+    """Retira (desactiva) un responsable general. Bloque 4.1: el responsable inicial de una programación ACTIVA no
+    se retira (las ejecuciones dejarían de generarse sin aviso): primero se cambia en Básico › Inicio o se pasa el
+    proceso a Manual. Locks: Servicio → programación → responsable (el orden de `configurar_programacion`)."""
+    from apps.catalogo.models import ProgramacionProceso
+
     _exigir_administracion(actor)
+    _bloquear_servicio(responsable.servicio)
+    if ProgramacionProceso.objects.select_for_update().filter(
+        servicio_id=responsable.servicio_id, activa=True, responsable_inicial_id=responsable.pk
+    ).exists():
+        raise ValidationError(
+            "Es el responsable inicial de la programación: cámbialo en Básico › Inicio (o pasa el proceso a Manual) "
+            "antes de retirarlo."
+        )
     responsable = ServicioResponsable.objects.select_for_update().get(pk=responsable.pk)
     if not responsable.activo:
         return responsable
@@ -410,7 +615,9 @@ def configurar_politica_entrega(servicio, actor, *, politica, dias_observacion=N
     modifica retroactivamente a los Tickets ya creados."""
     _exigir_administracion(actor)
     Politica = Servicio.PoliticaEntrega
-    if politica not in (Politica.CIERRE_DIRECTO, Politica.PERIODO_OBSERVACIONES):
+    # Fase 4.A: `politica=""` RETIRA la entrega formal (vuelve a resolver y cerrar manualmente). Solo afecta a los
+    # tickets nuevos: cada ticket congeló su política al nacer.
+    if politica not in (Politica.CIERRE_DIRECTO, Politica.PERIODO_OBSERVACIONES, ""):
         raise ValidationError("Seleccione una política de entrega válida.")
     if politica == Politica.PERIODO_OBSERVACIONES:
         if not isinstance(dias_observacion, int) or isinstance(dias_observacion, bool) or not 1 <= dias_observacion <= 90:
@@ -418,7 +625,7 @@ def configurar_politica_entrega(servicio, actor, *, politica, dias_observacion=N
     else:
         dias_observacion = None
     servicio = Servicio.objects.select_for_update().get(pk=servicio.pk)
-    if _tiene_programacion_activa(servicio):
+    if politica and _tiene_programacion_activa(servicio):
         raise ValidationError(
             "Este proceso se genera por programación y no tiene solicitante a quien entregarle: "
             "pásalo a «Manual» en Inicio antes de definir una entrega formal."
@@ -522,5 +729,27 @@ def configurar_politica_prorroga(servicio, actor, *, politica, aprobador_usuario
         accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=servicio,
         origen=RegistroAuditoria.Origen.USUARIO, usuario=actor,
         datos_anteriores=anterior, datos_nuevos=nuevo,
+    )
+    return servicio
+
+
+
+@transaction.atomic
+def configurar_datos_inicio(servicio, actor, *, en_ejecucion):
+    """Fase 2 del modelo configurable — en un PROCESO, si los datos de inicio pertenecen a la ejecución (se
+    inicia sin exigir el formulario completo y quien lo atiende lo diligencia después). Solo afecta a los
+    tickets que se creen desde ahora: cada ticket congela la opción al nacer. Un Servicio no la usa."""
+    _exigir_administracion(actor)
+    servicio = Servicio.objects.select_for_update().get(pk=servicio.pk)
+    en_ejecucion = bool(en_ejecucion) and servicio.tipo == Servicio.Tipo.PROCESO and not servicio.es_ticket_general
+    if servicio.datos_inicio_en_ejecucion == en_ejecucion:
+        return servicio
+    anterior = servicio.datos_inicio_en_ejecucion
+    servicio.datos_inicio_en_ejecucion = en_ejecucion
+    servicio.save(update_fields=["datos_inicio_en_ejecucion", "actualizado_en"])
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=servicio, origen=RegistroAuditoria.Origen.USUARIO,
+        usuario=actor, datos_anteriores={"datos_inicio_en_ejecucion": anterior},
+        datos_nuevos={"datos_inicio_en_ejecucion": en_ejecucion},
     )
     return servicio

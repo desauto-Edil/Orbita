@@ -48,6 +48,7 @@ from apps.aprobaciones.consultas import aprobaciones_pendientes_para
 from apps.aprobaciones.models import Aprobacion
 from apps.catalogo import busqueda
 from apps.core import disenador, inicio
+from apps.tickets import parrilla as parrilla_ops
 from apps.tickets import revision_elementos as revision_ops
 from apps.tickets import trabajo as trabajo_ops
 from apps.tareas.consultas import tareas_asignadas_a, tareas_disponibles_para_tomar
@@ -291,6 +292,28 @@ def _fila_revision(revision):
     }
 
 
+def _fila_coleccion(parrilla):
+    """Bloque 3 — una colección en la que la persona PARTICIPA (crea y edita ítems sin ser responsable del
+    ticket). Fila de presentación de la misma bandeja: abre la colección, no el ticket."""
+    ticket = parrilla.ticket
+    return {
+        "tipo": "coleccion",
+        "titulo": f"{parrilla.nombre_elemento} · {ticket.codigo or ticket.pk}",
+        "detalle": ticket.detalle_servicio.servicio.nombre,
+        "estado": "En atención",
+        "estado_clase": "info",
+        "pendientes": 0,
+        "devueltos": 0,
+        "fecha_relevante": None,
+        "vencida": False,
+        "por_tomar": False,
+        "responsable": "",
+        "url": reverse("tickets:coleccion", args=[ticket.pk, parrilla.clave]),
+        "vista_url": "",
+        "creado_en": ticket.radicado_en or parrilla.creado_en,
+    }
+
+
 MI_TRABAJO_POR_PAGINA = 30
 MI_TRABAJO_TICKETS = 24
 
@@ -347,6 +370,8 @@ def mi_trabajo_view(request):
     filas_aprobaciones = [_fila_aprobacion(aprobacion) for aprobacion in aprobaciones_qs]
     # 4.G2C2: revisiones de conjuntos de elementos asignadas a la persona (misma bandeja).
     filas_revisiones = [_fila_revision(r) for r in revision_ops.revisiones_pendientes_para(usuario)]
+    # Bloque 3: colecciones en las que participa (sin ser responsable del ticket); solo en «Todo».
+    filas_colecciones = [_fila_coleccion(p) for p in parrilla_ops.colecciones_de_participante(usuario)]
 
     if tab == "tareas":
         filas = filas_tareas
@@ -356,7 +381,8 @@ def mi_trabajo_view(request):
         filas = filas_revisiones
     else:
         filas = sorted(
-            filas_tareas + filas_aprobaciones + filas_revisiones, key=lambda fila: fila["creado_en"], reverse=True
+            filas_tareas + filas_aprobaciones + filas_revisiones + filas_colecciones,
+            key=lambda fila: fila["creado_en"], reverse=True,
         )
 
     # Con mucho trabajo acumulado la lista se pagina: la pantalla nunca crece
@@ -367,7 +393,7 @@ def mi_trabajo_view(request):
         "filas": pagina.object_list,
         "pagina": pagina,
         "tarjetas": tarjetas,
-        "total": len(filas_tareas) + len(filas_aprobaciones) + len(filas_revisiones),
+        "total": len(filas_tareas) + len(filas_aprobaciones) + len(filas_revisiones) + len(filas_colecciones),
         # Directo de las listas ya construidas — ninguna consulta adicional
         # solo para contar (punto 11).
         "total_tareas": len(filas_tareas),

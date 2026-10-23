@@ -48,8 +48,16 @@ from apps.workflows.motor import continuar_espera_externa
 
 def bloquear_instancia(instancia_id):
     """Primer lock de toda operación que toma más de un lock de una ejecución (ver el docstring del módulo).
-    Devuelve la `InstanciaWorkflow` bloqueada. Debe llamarse dentro de una transacción."""
-    return InstanciaWorkflow.objects.select_for_update().get(pk=instancia_id)
+    Devuelve la `InstanciaWorkflow` bloqueada. Debe llamarse dentro de una transacción. Fase 2: si es una
+    subinstancia, primero se bloquea su instancia principal (orden «principal → hija»)."""
+    from apps.workflows.motor import bloquear_con_padre
+
+    return bloquear_con_padre(instancia_id)
+
+
+def ids_de_ejecucion(instancia_id):
+    """La instancia y sus subinstancias (Fase 2), en orden de pk: todo lo que «la ejecución del Ticket» abarca."""
+    return [instancia_id, *InstanciaWorkflow.objects.filter(instancia_padre_id=instancia_id).order_by("pk").values_list("pk", flat=True)]
 
 
 def _instancia_id_de_tarea(tarea):
@@ -100,9 +108,28 @@ def completar_tarea_workflow(tarea, actor):
             "apps.tareas.operaciones.completar_tarea directamente."
         )
 
+    _exigir_datos_inicio_si_corresponde(vinculo.instancia_etapa)
     tarea_completada = completar_tarea(tarea, actor)
     continuar_espera_externa(vinculo.instancia_etapa, motivo_espera=InstanciaEtapa.MotivoEspera.TAREA)
     return tarea_completada
+
+
+def _exigir_datos_inicio_si_corresponde(ejecucion):
+    """Fase 2 — una ACTIVIDAD configurada con «exige datos de inicio completos» no se completa mientras el
+    diligenciamiento de los datos de inicio del ticket siga pendiente. Opcional por actividad: el formulario no
+    se asocia obligatoriamente a ninguna fase ni actividad."""
+    bloque = ejecucion.bloque_operativo
+    if bloque is None or not (bloque.configuracion or {}).get("exige_datos_inicio"):
+        return
+    from apps.tickets.datos_inicio import datos_completos
+    from apps.tickets.models import Ticket
+
+    instancia = ejecucion.instancia_workflow
+    ticket = Ticket.objects.filter(instancia_workflow_id=instancia.raiz_id).first()
+    if ticket is not None and not datos_completos(ticket):
+        raise ValidationError(
+            "Completa primero el diligenciamiento de los datos de inicio del ticket: esta actividad lo exige."
+        )
 
 
 @transaction.atomic
@@ -260,7 +287,8 @@ def entregar_tareas_pendientes_al_responsable(ticket, actor):
     entregadas = []
     vinculos = (
         TareaWorkflow.objects.filter(
-            instancia_etapa__instancia_workflow_id=ticket.instancia_workflow_id,
+            # Fase 2: también las de los recorridos por ítem y las actividades en paralelo del ticket.
+            instancia_etapa__instancia_workflow_id__in=ids_de_ejecucion(ticket.instancia_workflow_id),
             instancia_etapa__estado=InstanciaEtapa.Estado.EN_ESPERA,
             instancia_etapa__instancia_workflow__estado=InstanciaWorkflow.Estado.EN_ESPERA,
             tarea__usuario_responsable__isnull=True,
@@ -321,6 +349,11 @@ def resolver_aprobacion_workflow(aprobacion, actor, *, decision, observacion="")
 
     ejecucion = vinculo.instancia_etapa
     definicion = ejecucion.etapa or ejecucion.bloque_operativo
+    bloque = ejecucion.bloque_operativo
+    if bloque is not None and bloque.contenedor_id is not None:
+        # Fase 2 — una aprobación DENTRO de un contenedor (recorrido por ítem o rama general).
+        _resolver_aprobacion_contenida(ejecucion, esquema)
+        return aprobacion, esquema
     transicion = definicion.transiciones_salientes.get(resultado_aprobacion=esquema.resultado)
     # 4.E2: si la aprobación REVISA un entregable, esta pasada deja constancia de qué versión
     # vio al decidir (en el historial de ESTA ejecución). Es lo que permite exigir una nueva
@@ -344,6 +377,67 @@ def resolver_aprobacion_workflow(aprobacion, actor, *, decision, observacion="")
         resultado_ejecucion=_evidencia_de_revision,
     )
     return aprobacion, esquema
+
+
+SALIDA_POR_RESULTADO = {"RECHAZADA": "RECHAZADO", "EXCLUIDA": "EXCLUIDO"}
+
+
+def _decision_que_cerro(esquema):
+    """La participación que decidió el resultado del esquema (la primera con ese estado): su autor y su
+    observación justifican el cambio de alcance."""
+    return esquema.participaciones.filter(estado=esquema.resultado).order_by("decidida_en", "pk").first()
+
+
+def _resolver_aprobacion_contenida(ejecucion, esquema):
+    """Fase 2 — cierre de una aprobación de un recorrido por ítem o de una rama general.
+
+    - Rama ITEM, RECHAZADA o EXCLUIDA: el ítem sale del alcance con esa decisión (origen APROBACION, la
+      observación de quien decidió como justificación) y SU recorrido termina; los demás ítems no cambian.
+    - Rama ITEM, APROBADA o DEVUELTA: sigue la ruta configurada para ese resultado dentro del recorrido (o la
+      secuencia, si la aprobación no tiene rutas). La devolución solo vuelve atrás en el recorrido de su ítem.
+    - Rama GENERAL: la rama es una sola aprobación; termina con su resultado publicado
+      (`aprobaciones.<clave>.resultado`), que la principal recibe al terminar el contenedor."""
+    from apps.workflows.motor import bloquear_con_padre, finalizar_subinstancia
+
+    bloque = ejecucion.bloque_operativo
+    publicado = ("aprobaciones", {"resultado": esquema.resultado})
+    if bloque.rama == "ITEM" and esquema.resultado in SALIDA_POR_RESULTADO:
+        hija = bloquear_con_padre(ejecucion.instancia_workflow_id)
+        ejecucion = InstanciaEtapa.objects.select_for_update().get(pk=ejecucion.pk)
+        if hija.estado != InstanciaWorkflow.Estado.EN_ESPERA or ejecucion.estado != InstanciaEtapa.Estado.EN_ESPERA:
+            return
+        decision = _decision_que_cerro(esquema)
+        resultado = SALIDA_POR_RESULTADO[esquema.resultado]
+        if hija.elemento_id is not None:
+            from apps.tickets.parrilla import registrar_salida_por_flujo
+
+            registrar_salida_por_flujo(
+                hija.elemento, decision.decidido_por if decision else None, tipo=resultado,
+                justificacion=(decision.observacion if decision else "") or f"{esquema.get_resultado_display()} en «{bloque.nombre}».",
+            )
+        from apps.workflows.contexto import publicar_resultado_bloque
+
+        if bloque.clave:
+            ambito, datos = publicado
+            publicar_resultado_bloque(hija.contexto, ambito, bloque.clave, datos)
+        ejecucion.resultado = {**(ejecucion.resultado or {}), "resultado": esquema.resultado}
+        ejecucion.save(update_fields=["resultado", "actualizado_en"])
+        finalizar_subinstancia(hija, ejecucion, resultado=resultado)
+        return
+    transicion = None
+    if bloque.rama == "ITEM":
+        transicion = bloque.transiciones_salientes.filter(resultado_aprobacion=esquema.resultado).first()
+        if transicion is None and esquema.resultado != "APROBADA":
+            raise ValidationError(
+                f"La aprobación «{bloque.nombre}» no tiene ruta para «{esquema.get_resultado_display()}»."
+            )
+    continuar_espera_externa(
+        ejecucion,
+        motivo_espera=InstanciaEtapa.MotivoEspera.APROBACION,
+        transicion_seleccionada=transicion,
+        resultado_bloque=publicado,
+        resultado_ejecucion={"resultado": esquema.resultado},
+    )
 
 
 @transaction.atomic
@@ -396,15 +490,19 @@ def bloquear_trabajo_de_ejecucion(instancia_id):
     la instancia YA esté bloqueada por esta transacción (`bloquear_instancia`): con la compuerta cerrada el
     conjunto no cambia mientras se bloquea, y quien complete una Tarea o decida una aprobación a la vez
     espera a la instancia (ver el docstring del módulo). Debe llamarse dentro de una transacción."""
+    # Fase 2: la ejecución abarca también sus subinstancias (bloqueadas después de la principal, por pk).
+    ids = ids_de_ejecucion(instancia_id)
+    if len(ids) > 1:
+        list(InstanciaWorkflow.objects.select_for_update().filter(pk__in=ids[1:]).order_by("pk"))
     tareas_ids = list(
-        TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow_id=instancia_id).values_list("tarea_id", flat=True)
+        TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow_id__in=ids).values_list("tarea_id", flat=True)
     )
     if tareas_ids:
         list(
             Tarea.objects.select_for_update().filter(Q(pk__in=tareas_ids) | Q(tarea_padre_id__in=tareas_ids)).order_by("pk")
         )
     esquemas_ids = list(
-        EsquemaAprobacionWorkflow.objects.filter(instancia_etapa__instancia_workflow_id=instancia_id).values_list(
+        EsquemaAprobacionWorkflow.objects.filter(instancia_etapa__instancia_workflow_id__in=ids).values_list(
             "esquema_id", flat=True
         )
     )
@@ -442,14 +540,16 @@ def cancelar_ejecucion(instancia, actor, *, motivo=""):
     if instancia.estado in (InstanciaWorkflow.Estado.COMPLETADA, InstanciaWorkflow.Estado.CANCELADA):
         return instancia
 
-    for vinculo in TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow=instancia).select_related("tarea").order_by("pk"):
-        cancelar_tarea(vinculo.tarea, actor, motivo=motivo)
-    for vinculo in (
-        EsquemaAprobacionWorkflow.objects.filter(instancia_etapa__instancia_workflow=instancia)
-        .select_related("esquema").order_by("pk")
-    ):
-        if vinculo.esquema.resultado is None:
-            anular_esquema_aprobacion(vinculo.esquema, actor)
+    _cancelar_trabajo([instancia.pk], actor, motivo)
+    # Fase 2 — cancelación en cascada: las subinstancias abiertas (recorridos por ítem, ramas generales)
+    # también se detienen; las terminadas se conservan tal cual.
+    for hija in InstanciaWorkflow.objects.filter(instancia_padre=instancia).order_by("pk"):
+        if hija.estado in (InstanciaWorkflow.Estado.COMPLETADA, InstanciaWorkflow.Estado.CANCELADA):
+            continue
+        _cancelar_trabajo([hija.pk], actor, motivo)
+        hija.contexto = {**(hija.contexto or {}), "resultado_recorrido": "CANCELADO"}
+        hija.estado = InstanciaWorkflow.Estado.CANCELADA
+        hija.save(update_fields=["estado", "contexto", "actualizado_en"])
 
     estado_anterior = instancia.estado
     instancia.estado = InstanciaWorkflow.Estado.CANCELADA
@@ -460,3 +560,71 @@ def cancelar_ejecucion(instancia, actor, *, motivo=""):
         datos_nuevos={"estado": instancia.estado, "motivo": (motivo or "").strip()},
     )
     return instancia
+
+
+def _cancelar_trabajo(instancias_ids, actor, motivo):
+    """Cancela las Tareas abiertas y retira las aprobaciones pendientes que crearon estas instancias."""
+    for vinculo in (
+        TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow_id__in=instancias_ids)
+        .select_related("tarea").order_by("pk")
+    ):
+        cancelar_tarea(vinculo.tarea, actor, motivo=motivo)
+    for vinculo in (
+        EsquemaAprobacionWorkflow.objects.filter(instancia_etapa__instancia_workflow_id__in=instancias_ids)
+        .select_related("esquema").order_by("pk")
+    ):
+        if vinculo.esquema.resultado is None:
+            anular_esquema_aprobacion(vinculo.esquema, actor)
+
+
+@transaction.atomic
+def cancelar_subinstancia(hija, actor, *, resultado="CANCELADO", motivo=""):
+    """Fase 2 — detiene UN recorrido (p. ej. su ítem salió del alcance): cancela sus Tareas abiertas y retira
+    sus aprobaciones pendientes (lo decidido se conserva), la deja CANCELADA con su `resultado_recorrido` y
+    avisa a la instancia principal, que puede continuar si era lo último pendiente. Los demás recorridos no se
+    tocan. Idempotente: una subinstancia ya terminada no cambia. Quien llama autoriza."""
+    from apps.workflows import recorridos
+
+    hija = bloquear_instancia(hija.pk)
+    if hija.instancia_padre_id is None:
+        raise ValueError("Solo se cancela así una subinstancia.")
+    if hija.estado in (InstanciaWorkflow.Estado.COMPLETADA, InstanciaWorkflow.Estado.CANCELADA):
+        return hija
+    bloquear_trabajo_de_ejecucion(hija.pk)
+    _cancelar_trabajo([hija.pk], actor, motivo)
+    estado_anterior = hija.estado
+    hija.contexto = {**(hija.contexto or {}), "resultado_recorrido": resultado}
+    hija.estado = InstanciaWorkflow.Estado.CANCELADA
+    hija.save(update_fields=["estado", "contexto", "actualizado_en"])
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=hija, origen=RegistroAuditoria.Origen.USUARIO
+        if actor is not None else RegistroAuditoria.Origen.SISTEMA, usuario=actor,
+        datos_anteriores={"estado": estado_anterior},
+        datos_nuevos={"estado": hija.estado, "resultado": resultado, "motivo": (motivo or "").strip()},
+    )
+    recorridos.evaluar_espera(hija.ejecucion_padre_id)
+    return hija
+
+
+@transaction.atomic
+def reintentar_recorrido(hija, actor):
+    """Fase 2 — reintenta la ejecución que dejó en ERROR a un recorrido (p. ej. el ítem no tenía responsable
+    en su columna), después de corregir el dato. Autoriza quien edita los elementos del ticket
+    (`puede_editar_parrilla`). Si el recorrido termina, la principal se reevalúa."""
+    from apps.tickets.autorizacion import puede_editar_parrilla
+    from apps.tickets.models import Ticket
+    from apps.workflows.motor import reintentar_subinstancia_con_error
+
+    hija = bloquear_instancia(hija.pk)
+    ticket = Ticket.objects.select_for_update().get(instancia_workflow_id=hija.raiz_id)
+    if not puede_editar_parrilla(actor, ticket):
+        raise PermissionDenied("Solo quien atiende el ticket puede reintentar un recorrido.")
+    if ticket.estado == Ticket.Estado.CANCELADO:
+        raise ValidationError("Este ticket fue cancelado: su flujo no se reactiva.")
+    hija = reintentar_subinstancia_con_error(hija)
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=hija, origen=RegistroAuditoria.Origen.USUARIO,
+        usuario=actor, datos_anteriores={"estado": "ERROR"}, datos_nuevos={"estado": hija.estado, "reintento": True},
+    )
+    # Si el recorrido terminó, el motor ya avisó a la principal (`motor._avisar_padre`).
+    return hija

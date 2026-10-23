@@ -521,6 +521,365 @@
 }
 
 /* ===================================================================== */
+/* 3.1 Formulario Órbita (`.ui-form`), panel (`.ui-panel`) y tarjeta    */
+/*     de opción (`.opcion-tarjeta`) — ámbito OPCIONAL                   */
+/* ===================================================================== */
+
+/* No reemplaza a `.form`: una pantalla (o un contenedor) adopta estos componentes con la clase `ui-form`. Los
+   controles se declaran con especificidad (0,2,1), IGUAL a la de `.form input[type=…]`: dentro de un `ui-form`
+   ganan por orden de fuente (este bloque va después de §3), también sobre formularios `.form` anidados, sin
+   declaraciones forzadas. Una pantalla ajusta con una regla propia de mayor especificidad. Contención: todo control ocupa
+   el ancho de su campo y nunca lo desborda. */
+
+.ui-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+  max-width: 100%;
+}
+
+.ui-form :where(.field) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+}
+
+.ui-form .field > label,
+.ui-form .label {
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+}
+
+.ui-form :where(fieldset) {
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.ui-form :is(input, select, textarea):not([type="checkbox"], [type="radio"], [type="hidden"], [type="file"]) {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-control);
+  background-color: var(--surface-control);
+  box-shadow: none;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-body);
+  line-height: var(--line-height-base);
+  -webkit-appearance: none;
+  appearance: none;
+  transition:
+    border-color var(--motion-fast) var(--ease-orbita),
+    box-shadow var(--motion-fast) var(--ease-orbita),
+    background-color var(--motion-fast) var(--ease-orbita);
+}
+
+.ui-form :is(input, select):not([type="checkbox"], [type="radio"], [type="hidden"], [type="file"], [multiple]) {
+  height: var(--control-h-form);
+}
+
+.ui-form select:not([multiple]) {
+  padding-right: calc(var(--space-3) + 22px);
+  background-image: var(--icon-select-chevron);
+  background-repeat: no-repeat;
+  background-position: right var(--space-3) center;
+  background-size: 16px 16px;
+  text-overflow: ellipsis;
+}
+
+.ui-form select[multiple] {
+  height: auto;
+  min-height: calc(var(--control-h-form) * 2);
+  padding: var(--space-2);
+}
+
+/* Textarea: alto inicial fijo, crece solo en vertical (nunca en ancho) y no excede el campo. */
+.ui-form textarea {
+  height: auto;
+  min-height: var(--textarea-min-h);
+  padding: 10px var(--space-3);
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
+
+.ui-form :is(input, select, textarea)::placeholder {
+  color: var(--text-muted);
+}
+
+.ui-form :is(input, select, textarea):not([type="checkbox"], [type="radio"]):hover {
+  border-color: var(--border-control-hover);
+}
+
+.ui-form :is(input, select, textarea):focus {
+  outline: none;
+}
+
+.ui-form :is(input, select, textarea):not([type="checkbox"], [type="radio"]):focus-visible {
+  border-color: var(--border-focus);
+  box-shadow: var(--ring-focus);
+}
+
+.ui-form :is(input, select, textarea):not([type="checkbox"], [type="radio"])[disabled] {
+  background-color: var(--surface-sunken);
+  color: var(--text-disabled);
+  cursor: not-allowed;
+}
+
+/* Error: borde y halo de peligro en el control del campo con errores (lista de Django o aria-invalid). */
+.ui-form .field:has(.errorlist) :is(input, select, textarea):not([type="checkbox"], [type="radio"]),
+.ui-form :is(input, select, textarea)[aria-invalid="true"] {
+  border-color: var(--status-danger);
+  box-shadow: var(--ring-error);
+}
+
+.ui-form :where(.errorlist) {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: var(--font-size-small);
+  color: var(--status-danger);
+}
+
+/* Foco de teclado en casillas y radios: anillo estándar; el tinte de la casilla es el acento. */
+.ui-form :is(input[type="checkbox"], input[type="radio"]):focus-visible {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+.ui-form :where(.choice input, input[type="checkbox"], input[type="radio"]) {
+  accent-color: var(--color-primary);
+}
+
+/* Rejilla de campos responsive: 1 columna en móvil, 2 en tablet, hasta 3 en escritorio amplio. Un campo extenso
+   ocupa más columnas con `ui-campo--doble` (2) o `ui-campo--completo` (toda la fila). */
+.ui-rejilla {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3) var(--space-4);
+  min-width: 0;
+}
+
+@media (min-width: 640px) {
+  .ui-rejilla {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .ui-rejilla > .ui-campo--doble,
+  .ui-rejilla > .ui-campo--completo {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (min-width: 1200px) {
+  .ui-rejilla--tres {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .ui-rejilla--tres > .ui-campo--doble {
+    grid-column: span 2;
+  }
+}
+
+.ui-rejilla > * {
+  min-width: 0;
+}
+
+/* Un campo sin etiqueta propia (p. ej. una casilla) se alinea con la base de los controles de su fila. */
+.ui-rejilla > .ui-campo--alinear {
+  justify-content: flex-end;
+  min-height: var(--control-h-form);
+}
+
+/* Botones dentro del formulario: respuesta táctil breve (transform), sin desplazar el resto. */
+.ui-form :where(.btn) {
+  transition:
+    background-color var(--motion-fast) var(--ease-orbita),
+    border-color var(--motion-fast) var(--ease-orbita),
+    transform var(--motion-fast) var(--ease-orbita);
+}
+
+.ui-form :where(.btn):active {
+  transform: translateY(1px);
+}
+
+.ui-form :where(.btn[aria-disabled="true"]) {
+  opacity: 0.72;
+  cursor: progress;
+  pointer-events: none;
+}
+
+/* Panel: superficie de contenido (sin glass), borde neutro de 1px. */
+.ui-panel {
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  padding: var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+}
+
+/* Entrada de un bloque que aparece (formulario que se expande, panel que se abre). */
+.ui-entrar {
+  animation: ui-entrar var(--motion-slow) var(--ease-orbita) both;
+}
+
+@keyframes ui-entrar {
+  from {
+    opacity: 0;
+    transform: translateY(var(--motion-rise));
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Tarjeta de opción: un radio (o checkbox) presentado como tarjeta. Accesible: el input sigue enfocable y lo
+   anuncia el lector; la selección se marca con borde lima de 1px + halo suave, mosaico del icono en lima y una
+   marca de verificación (no solo color). Hover: se eleva 2px. */
+.opcion-tarjetas {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+  min-width: 0;
+}
+
+.opcion-tarjeta {
+  position: relative;
+  box-sizing: border-box;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--space-3);
+  row-gap: 2px;
+  align-items: center;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  cursor: pointer;
+  transition:
+    transform var(--motion-base) var(--ease-orbita),
+    border-color var(--motion-fast) var(--ease-orbita),
+    box-shadow var(--motion-base) var(--ease-orbita);
+}
+
+.opcion-tarjeta:hover {
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-card);
+  transform: translateY(var(--motion-lift));
+}
+
+.opcion-tarjeta input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  opacity: 0;
+}
+
+.opcion-tarjeta__icono {
+  grid-row: span 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  transition: background-color var(--motion-base) var(--ease-orbita), transform var(--motion-base) var(--ease-orbita);
+}
+
+.opcion-tarjeta__nombre {
+  min-width: 0;
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+
+.opcion-tarjeta__texto {
+  min-width: 0;
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+}
+
+.opcion-tarjeta__marca {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  opacity: 0;
+  transform: scale(0.6);
+  transition: opacity var(--motion-fast) var(--ease-orbita), transform var(--motion-base) var(--ease-orbita);
+}
+
+.opcion-tarjeta__marca .icon {
+  width: 14px;
+  height: 14px;
+  stroke-width: 2.25;
+}
+
+.opcion-tarjeta:has(input:checked) {
+  border-color: var(--border-selected);
+  box-shadow: var(--ring-selected);
+}
+
+.opcion-tarjeta:has(input:checked) .opcion-tarjeta__icono {
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.opcion-tarjeta:has(input:checked) .opcion-tarjeta__marca {
+  opacity: 1;
+  transform: none;
+}
+
+/* Foco de teclado: anillo de foco estándar (carbón), separado de la tarjeta; nunca lima sobre claro. */
+.opcion-tarjeta:has(input:focus-visible) {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 2px;
+}
+
+@media (max-width: 640px) {
+  .opcion-tarjetas {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .opcion-tarjeta,
+  .opcion-tarjeta:hover,
+  .opcion-tarjeta__marca,
+  .ui-form :where(.btn):active {
+    transform: none;
+  }
+
+  .ui-entrar {
+    animation: none;
+  }
+}
+
+/* ===================================================================== */
 /* 4. Badge y status badge                                               */
 /* ===================================================================== */
 
@@ -1107,7 +1466,8 @@
   z-index: var(--z-popover);
   min-width: 220px;
   max-width: calc(100vw - 2 * var(--space-3));
-  max-height: calc(100vh - var(--dock-clearance));
+  /* Los menús abren bajo la navegación superior: caben en lo que queda de la ventana. */
+  max-height: calc(100vh - var(--header-h) - var(--space-5));
   overflow-y: auto;
   padding: var(--space-2);
   background: var(--surface-glass-strong);

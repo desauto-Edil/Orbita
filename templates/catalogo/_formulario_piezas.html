@@ -1,0 +1,39 @@
+{% comment %} 4.G2E — las dos piezas del Formulario de un Proceso, nunca en el mismo editor: DATOS DE INICIO (lo que se
+   responde al crear el ticket) y COLECCIONES DE ÍTEMS (lo que evoluciona durante la ejecución). Ambas son OPCIONALES y
+   cada una muestra su propio estado: tener colecciones no significa que falten datos de inicio. Espera
+   `tarjetas_proceso`, `es_parrilla`, `servicio`. {% endcomment %}
+<nav class="svc-dual" aria-label="Formularios del proceso">
+  <a class="svc-dual__item{% if not es_parrilla %} is-active{% endif %}" href="{% url 'catalogo:studio' servicio.pk %}?tab=entrada"{% if not es_parrilla %} aria-current="page"{% endif %}>
+    <span class="svc-dual__kicker">Datos de inicio</span>
+    <strong>Lo que se responde al crear el ticket</strong>
+    <span class="svc-dual__estado">
+      {% if tarjetas_proceso.datos.configurada and tarjetas_proceso.datos.version and tarjetas_proceso.datos.campos %}
+        <span class="svc-pill svc-pill--ok">v{{ tarjetas_proceso.datos.version.numero }} activa</span>
+        {{ tarjetas_proceso.datos.campos }} campo{{ tarjetas_proceso.datos.campos|pluralize }} · {{ tarjetas_proceso.datos.obligatorios }} obligatorio{{ tarjetas_proceso.datos.obligatorios|pluralize }}
+      {% elif tarjetas_proceso.datos.borrador %}
+        <span class="svc-pill">Borrador sin activar</span>
+      {% else %}
+        <span class="svc-pill">No los usa (opcional)</span>
+      {% endif %}
+      {% if tarjetas_proceso.datos.borrador and tarjetas_proceso.datos.version %}<span class="svc-pill">Borrador</span>{% endif %}
+    </span>
+  </a>
+  <a class="svc-dual__item{% if es_parrilla %} is-active{% endif %}" href="{% url 'catalogo:studio' servicio.pk %}?tab=entrada&amp;uso=parrilla"{% if es_parrilla %} aria-current="page"{% endif %}>
+    <span class="svc-dual__kicker">Colecciones de ítems</span>
+    <strong>Elementos del proceso: ítems que se completan, revisan y generan tareas</strong>
+    <span class="svc-dual__estado">
+      {% comment %} Bloque 2: TODAS las colecciones activas, cada una con su versión y su borrador. {% endcomment %}
+      {% for coleccion in tarjetas_proceso.colecciones %}
+        <span class="svc-dual__linea">
+          «{{ coleccion.nombre }}» ·
+          {% if coleccion.activa_valida %}<span class="svc-pill svc-pill--ok">v{{ coleccion.version.numero }} activa</span> {{ coleccion.campos }} columna{{ coleccion.campos|pluralize }}{% else %}<span class="svc-pill">Sin columnas activas</span>{% endif %}
+          {% if coleccion.borrador %}<span class="svc-pill">Borrador sin activar</span>{% endif %}
+        </span>
+      {% empty %}
+        <span class="svc-pill">No las usa (opcional)</span>
+      {% endfor %}
+      {% if tarjetas_proceso.tareas.activa %}<span class="svc-pill">Genera tareas</span>{% endif %}
+      {% if tarjetas_proceso.revisiones %}<span class="svc-pill">Revisión por conjunto ({{ tarjetas_proceso.revisiones|length }})</span>{% endif %}
+    </span>
+  </a>
+</nav>

@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+
+{% comment %}
+  Bloque 3 — una colección de ítems del ticket para quien PARTICIPA en ella (o consulta el ticket). Espera `ticket`,
+  `servicio`, `parrilla` (ver `apps/tickets/parrilla.py::tabla`) y `ws_next` (las acciones vuelven aquí). Reutiliza
+  la misma tabla operable del detalle; no muestra el resto del ticket.
+{% endcomment %}
+
+{% block title %}{{ titulo_pagina }} — {{ sistema.nombre }}{% endblock %}
+
+{% block content %}
+  <nav class="breadcrumb" aria-label="Ruta de navegación">
+    <a href="{% url 'core:mi_trabajo' %}">Mi trabajo</a>
+    <span class="breadcrumb__separator" aria-hidden="true">/</span>
+    <span class="breadcrumb__current">{{ servicio.nombre }} · {{ ticket.codigo|default:"" }}{% if ticket.etiqueta %} · {{ ticket.etiqueta }}{% endif %}</span>
+  </nav>
+
+  <header class="page-header">
+    <h1>{{ parrilla.nombre_elemento }}</h1>
+    <p class="text-muted">
+      {{ servicio.nombre }} · {{ ticket.get_estado_display }}.
+      {% if parrilla.puede_operar and not parrilla.puede_editar %}Participas en esta colección: puedes agregar y editar sus ítems, adjuntar archivos y registrar versiones.{% endif %}
+    </p>
+  </header>
+
+  {% include "tickets/_parrilla.html" %}
+{% endblock %}

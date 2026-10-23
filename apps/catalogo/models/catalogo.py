@@ -129,6 +129,12 @@ class Servicio(RegistroBase):
     # Admin): un servicio con tickets no puede dejar de serlo, así el origen de un
     # ticket se deduce siempre de `TicketServicio.servicio` sin duplicarlo.
     es_ticket_general = models.BooleanField(default=False)
+    # Fase 2 del modelo configurable — en un PROCESO los datos de inicio pueden pertenecer a la EJECUCIÓN: el
+    # proceso se inicia sin exigir el formulario completo y quien lo atiende lo diligencia después
+    # (guardar avance / completar diligenciamiento, `apps.tickets.datos_inicio`). Un Proceso programado
+    # siempre funciona así. En False (lo de siempre) el formulario se completa al iniciar. Se congela en el
+    # Ticket al crearlo.
+    datos_inicio_en_ejecucion = models.BooleanField(default=False)
 
     class Meta:
         constraints = [

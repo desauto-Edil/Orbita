@@ -36,9 +36,30 @@ urlpatterns = [
     path("<int:pk>/cancelar/", views.cancelar_view, name="cancelar"),
     path("<int:pk>/reabrir/", views.reabrir_view, name="reabrir"),
     path("<int:pk>/eliminar/", views.eliminar_borrador_view, name="eliminar"),
+    path("<int:pk>/colecciones/<slug:clave>/", views.coleccion_view, name="coleccion"),
     path("<int:pk>/elementos/agregar/", views.elemento_agregar_view, name="elemento_agregar"),
     path("<int:pk>/elementos/<int:elemento_id>/guardar/", views.elemento_guardar_view, name="elemento_guardar"),
+    path("<int:pk>/elementos/<int:elemento_id>/editar/", views.elemento_tarea_view, name="elemento_tarea"),
     path("<int:pk>/elementos/<int:elemento_id>/retirar/", views.elemento_retirar_view, name="elemento_retirar"),
+    path(
+        "<int:pk>/elementos/<int:elemento_id>/archivos/<int:campo_id>/adjuntar/",
+        views.elemento_archivo_adjuntar_view, name="elemento_archivo_adjuntar",
+    ),
+    path("<int:pk>/elementos/alcance/cerrar/", views.alcance_cerrar_view, name="alcance_cerrar"),
+    path("<int:pk>/elementos/extraordinario/", views.elemento_extraordinario_view, name="elemento_extraordinario"),
+    path("<int:pk>/elementos/<int:elemento_id>/salida/", views.elemento_salida_view, name="elemento_salida"),
+    path("<int:pk>/elementos/<int:elemento_id>/version/", views.elemento_version_view, name="elemento_version"),
+    # Fase 2 — historial de versiones de un ítem, datos de inicio en la ejecución y recorridos por ítem.
+    path("<int:pk>/elementos/<int:elemento_id>/versiones/", views.elemento_versiones_view, name="elemento_versiones"),
+    path("<int:pk>/datos-inicio/", views.datos_inicio_view, name="datos_inicio"),
+    path(
+        "<int:pk>/recorridos/<int:instancia_id>/reintentar/", views.recorrido_reintentar_view,
+        name="recorrido_reintentar",
+    ),
+    path(
+        "<int:pk>/elementos/archivos/<int:adjunto_id>/retirar/",
+        views.elemento_archivo_retirar_view, name="elemento_archivo_retirar",
+    ),
     path("<int:pk>/tareas-elementos/reintentar/", views.reintentar_tareas_view, name="reintentar_tareas"),
     path("<int:pk>/entregables/<int:entregable_id>/elementos/", views.revision_conjunto_view, name="revision_conjunto"),
     path(

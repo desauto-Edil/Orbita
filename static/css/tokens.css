@@ -41,6 +41,15 @@
   --palette-neutral-900: #17181b;
   --palette-neutral-950: #17181b;
 
+  /* Fase 4.B — grises NEUTROS (sin tinte cálido) para fondos, paneles y bordes. La identidad (carbón +
+     lima) no cambia; lo cálido queda solo en la paleta neutral original, que siguen usando los textos. */
+  --palette-gray-0: #fdfdfd;
+  --palette-gray-25: #f8f9fa;
+  --palette-gray-50: #f2f3f5;
+  --palette-gray-100: #eceef1;
+  --palette-gray-200: #e2e4e8;
+  --palette-gray-300: #cdd1d6;
+
   --palette-lime-50: #f6ffd0;
   --palette-lime-100: #ecfba0;
   --palette-lime-300: #e4ff6b;
@@ -68,16 +77,18 @@
 
   /* Superficies. El contenido principal vive en superficies sólidas; el
      glass queda para elementos flotantes (dock, header, popovers, modales). */
-  --surface-page: var(--palette-neutral-50);
-  --surface-card: var(--palette-neutral-0);
+  /* Fase 4.B: fondo gris muy claro y neutro (ya no crema), superficies blancas suavizadas y paneles
+     secundarios neutros. Ver docs/design/ORBITA_DESIGN.md. */
+  --surface-page: var(--palette-gray-50);
+  --surface-card: var(--palette-gray-0);
   --surface-raised: var(--palette-neutral-0);
-  --surface-sunken: #f7f6f1;
-  --surface-hover: var(--palette-neutral-100);
+  --surface-sunken: var(--palette-gray-25);
+  --surface-hover: var(--palette-gray-100);
   --surface-glass: rgba(255, 255, 255, 0.72);
   --surface-glass-strong: rgba(255, 255, 255, 0.9);
   --surface-glass-inverse: rgba(23, 24, 27, 0.78);
   --surface-inverse: var(--palette-neutral-950);
-  --surface-glass-fallback: #f7f6f1;
+  --surface-glass-fallback: #f8f9fa;
   --surface-glass-inverse-fallback: #1c1d21;
   --overlay-backdrop: rgba(23, 24, 27, 0.42);
 
@@ -91,8 +102,8 @@
   --text-link: var(--text-primary);
 
   /* Bordes */
-  --border-subtle: #e7e4da;
-  --border-strong: var(--palette-neutral-300);
+  --border-subtle: var(--palette-gray-200);
+  --border-strong: var(--palette-gray-300);
   --border-focus: var(--palette-neutral-900);
   --border-glass: rgba(23, 24, 27, 0.08);
   --border-glass-inverse: rgba(255, 255, 255, 0.1);
@@ -133,6 +144,9 @@
   --shadow-md: 0 6px 20px rgba(23, 24, 27, 0.08);
   --shadow-lg: 0 20px 48px rgba(23, 24, 27, 0.14);
   --shadow-float: 0 10px 32px rgba(23, 24, 27, 0.14);
+  /* Fase 4.B — tarjeta compacta: borde + sombra mínima (la separación la da el borde, no la elevación). */
+  --shadow-card: 0 1px 2px rgba(17, 24, 39, 0.04);
+  --shadow-selected: 0 0 0 2px var(--palette-neutral-900), 0 6px 16px rgba(17, 24, 39, 0.10);
 
   /* Blur (solo para superficies glass) */
   --blur-sm: 10px;
@@ -187,6 +201,30 @@
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
 
+  /* Componentes de formulario Órbita (ámbito opcional `.ui-form`, ver ORBITA_DESIGN.md §5.2). */
+  --control-h-form: 44px;
+  --radius-control: 10px;
+  --textarea-min-h: 110px;
+  --surface-control: var(--surface-card);
+  --border-control: var(--border-subtle);
+  --border-control-hover: var(--border-strong);
+  --ring-focus: 0 0 0 3px rgba(23, 24, 27, 0.12);
+  --ring-error: 0 0 0 3px rgba(168, 49, 47, 0.14);
+  /* Selección: acento lima con contorno controlado (1px + halo suave), nunca bordes carbón gruesos. */
+  --border-selected: var(--palette-lime-700);
+  --ring-selected: 0 0 0 3px var(--palette-lime-100);
+  --icon-select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234a483f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  /* Movimiento Órbita: fluido (desacelera al llegar), continuo (lo que aparece nace de lo que se tocó),
+     conectado (mismas curvas en toda la pantalla) y equilibrado (desplazamientos de 2–8 px). Solo
+     transform y opacity para entradas; nunca animaciones en bucle. */
+  --motion-fast: 150ms;
+  --motion-base: 200ms;
+  --motion-slow: 240ms;
+  --ease-orbita: cubic-bezier(0.22, 1, 0.36, 1);
+  --motion-rise: 8px;
+  --motion-lift: -2px;
+
   /* Capas */
   --z-base: 1;
   --z-header: 30;
@@ -198,13 +236,22 @@
   --z-skip-link: 100;
 
   /* Layout */
-  --header-h: 64px;
-  --dock-h: 44px;
-  --dock-offset: 24px;
-  --dock-clearance: 120px;
+  /* Navegación global flotante SUPERIOR (única): `--header-h` es el espacio que el contenido reserva arriba
+     (barra + su separación del borde y del contenido). Ya no hay dock inferior: lo que reservaba abajo
+     (`--dock-clearance`, `--dock-reserve`) queda como un margen de respiro normal, no un hueco artificial. */
+  --nav-h: 56px;
+  --nav-offset: 12px;
+  --header-h: calc(var(--nav-h) + 2 * var(--nav-offset));
+  --dock-h: 40px;
+  --dock-offset: var(--nav-offset);
+  --dock-clearance: var(--space-6);
   --content-narrow: 760px;
   --content-wide: 1200px;
   --content-portal: 1360px;
+  /* Fase 4.B — margen inferior del Studio (con la navegación arriba, nada flota abajo). */
+  --dock-reserve: var(--space-4);
+  --studio-nav-w: 220px;
+  --studio-inspector-w: 360px;
 
   /* ------------------------------------------------------------------ */
   /* 3. Alias legados (no usar en código nuevo)                           */

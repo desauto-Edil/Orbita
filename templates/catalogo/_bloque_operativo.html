@@ -1,0 +1,159 @@
+{% comment %} Una fila de bloque de la configuración por fases (Studio › Flujo). Fase 2: un contenedor (recorrido por
+   ítem / actividades en paralelo) muestra dentro sus bloques —con esta misma plantilla— y el panel para
+   agregar más, por rama. Variables: fila, servicio, editable_ejecucion. {% endcomment %}
+<li class="svc-block-row{% if fila.bloque.contenedor_id %} svc-block-row--contenido{% endif %}">
+  <div class="svc-block-row__main">
+    <span class="svc-block-row__order">{{ fila.bloque.orden }}</span>
+    <strong>{{ fila.bloque.nombre }}</strong>
+    <span class="svc-tag svc-tag--accent">{{ fila.tipo_empresarial_display }}</span>
+    {% if fila.rama_display %}<span class="svc-tag">{{ fila.rama_display }}</span>{% endif %}
+    <span>{{ fila.resumen }}</span>
+  </div>
+  {% if editable_ejecucion %}
+    <div class="svc-row-actions">
+      <span class="svc-order-actions">
+        <form method="post" action="{% url 'catalogo:studio_bloque_mover' servicio.pk fila.bloque.pk %}">
+          {% csrf_token %}<input type="hidden" name="direccion" value="subir">
+          <button type="submit" class="btn btn--ghost btn--sm" title="Subir: se ejecuta antes" aria-label="Subir «{{ fila.bloque.nombre }}»">↑</button>
+        </form>
+        <form method="post" action="{% url 'catalogo:studio_bloque_mover' servicio.pk fila.bloque.pk %}">
+          {% csrf_token %}<input type="hidden" name="direccion" value="bajar">
+          <button type="submit" class="btn btn--ghost btn--sm" title="Bajar: se ejecuta después" aria-label="Bajar «{{ fila.bloque.nombre }}»">↓</button>
+        </form>
+      </span>
+      <button type="button" class="btn btn--ghost btn--sm" data-action="toggle-panel" data-target="panel-bloque-{{ fila.bloque.pk }}">Editar</button>
+      <form method="post" action="{% url 'catalogo:studio_bloque_eliminar' servicio.pk fila.bloque.pk %}">
+        {% csrf_token %}
+        <button type="submit" class="btn btn--ghost btn--sm">Eliminar</button>
+      </form>
+    </div>
+
+    <div id="panel-bloque-{{ fila.bloque.pk }}" class="svc-inline-editor" hidden>
+      <form method="post" action="{% url 'catalogo:studio_bloque_editar' servicio.pk fila.bloque.pk %}" class="form">
+        {% csrf_token %}
+        <div class="svc-form-grid svc-form-grid--two">
+          <div class="field">{{ fila.form_editar.nombre.label_tag }}{{ fila.form_editar.nombre }}</div>
+          <div class="field">{{ fila.form_editar.descripcion.label_tag }}{{ fila.form_editar.descripcion }}</div>
+        </div>
+        {% if fila.tipo_empresarial == "ACTIVIDAD" %}
+          {% include "catalogo/_actividad_responsable.html" with form=fila.form_configurar %}
+          {% include "catalogo/_actividad_ampliada.html" with form=fila.form_configurar %}
+        {% elif fila.tipo_empresarial == "GACETA" %}
+          <div class="field">{{ fila.form_configurar.gaceta.label_tag }}{{ fila.form_configurar.gaceta }}</div>
+          <label class="choice">{{ fila.form_configurar.presentar_items }} {{ fila.form_configurar.presentar_items.label }}</label>
+          <div class="field">{{ fila.form_configurar.esperar.label_tag }}{{ fila.form_configurar.esperar }}</div>
+        {% elif fila.tipo_empresarial == "RECORRIDO_ITEMS" %}
+          {% include "catalogo/_recorrido_config.html" with form=fila.form_configurar %}
+        {% elif fila.tipo_empresarial == "ENTREGABLE" %}
+          <div class="field">{{ fila.form_configurar.definicion.label_tag }}{{ fila.form_configurar.definicion }}</div>
+          <p class="svc-note">El flujo continuará cuando este entregable del ticket esté completado.</p>
+        {% elif fila.tipo_empresarial == "ESPERA" %}
+          <p class="svc-note">Espera configurada anteriormente. Ya no se pueden crear esperas nuevas.</p>
+          <div class="svc-form-grid svc-form-grid--three">
+            <div class="field">{{ fila.form_configurar.modo.label_tag }}{{ fila.form_configurar.modo }}</div>
+            <div class="field">{{ fila.form_configurar.duracion_valor.label_tag }}{{ fila.form_configurar.duracion_valor }} {{ fila.form_configurar.duracion_unidad }}</div>
+            <div class="field">{{ fila.form_configurar.fecha_objetivo.label_tag }}{{ fila.form_configurar.fecha_objetivo }}</div>
+          </div>
+        {% elif fila.tipo_empresarial == "APROBACION" %}
+          {% include "catalogo/_aprobacion_config.html" with form=fila.form_configurar filas=fila.filas_aprobadores cantidad=fila.cantidad_aprobadores con_columna=fila.en_recorrido en_recorrido=fila.en_recorrido ruta_form=None %}
+        {% endif %}
+        {% if fila.form_cierre %}
+          <details class="svc-advanced"{% if fila.form_cierre.cierra_alcance.value %} open{% endif %}>
+            <summary>Opciones avanzadas: alcance de las colecciones</summary>
+            {% include "catalogo/_cierre_alcance.html" with form=fila.form_cierre %}
+          </details>
+        {% endif %}
+        <button type="submit" class="btn btn--primary">Guardar cambios en el borrador</button>
+      </form>
+
+      {% if fila.tipo_empresarial == "APROBACION" and fila.form_ruta %}
+        <form method="post" action="{% url 'catalogo:studio_ruta_aprobacion_guardar' servicio.pk fila.bloque.pk %}" class="form">
+          {% csrf_token %}
+          <h4>Rutas: ¿a dónde sigue según la decisión?</h4>
+          {% if fila.en_recorrido %}
+            <p class="svc-note">Dentro del recorrido de un ítem: rechazar o excluir terminan el recorrido de ESE ítem y lo sacan del alcance; los demás ítems siguen.</p>
+          {% endif %}
+          <div class="svc-form-grid svc-form-grid--three">
+            <div class="field">{{ fila.form_ruta.destino_aprobada.label_tag }}{{ fila.form_ruta.destino_aprobada }}</div>
+            <div class="field">{{ fila.form_ruta.destino_devuelta.label_tag }}{{ fila.form_ruta.destino_devuelta }}</div>
+            {% if fila.form_ruta.destino_rechazada %}
+              <div class="field">{{ fila.form_ruta.destino_rechazada.label_tag }}{{ fila.form_ruta.destino_rechazada }}</div>
+            {% endif %}
+          </div>
+          <button type="submit" class="btn btn--secondary">Guardar rutas</button>
+        </form>
+      {% elif fila.tipo_empresarial == "APROBACION" %}
+        <p class="svc-note">Actividad general en paralelo: termina con la decisión, sin rutas. Su resultado queda disponible para una decisión posterior.</p>
+      {% endif %}
+
+      {% if fila.tipo_empresarial == "DECISION" %}
+        <h4>Condiciones</h4>
+        {% include "catalogo/_variables_decision.html" %}
+        {% for item_cond in fila.condicionales %}
+          <form method="post" action="{% url 'catalogo:studio_condicional_editar' servicio.pk fila.bloque.pk item_cond.transicion.pk %}" class="form">
+            {% csrf_token %}
+            <div class="field">Si {{ item_cond.form.variable }} {{ item_cond.form.operador }} {{ item_cond.form.valor }}</div>
+            <div class="field">Prioridad {{ item_cond.form.prioridad }}</div>
+            <div class="field">Entonces {{ item_cond.form.destino }}</div>
+            <button type="submit" class="btn btn--secondary">Guardar condición</button>
+            <button type="submit" class="btn btn--ghost" formaction="{% url 'catalogo:studio_condicional_eliminar' servicio.pk fila.bloque.pk item_cond.transicion.pk %}">Eliminar</button>
+          </form>
+        {% endfor %}
+        <form method="post" action="{% url 'catalogo:studio_condicional_crear' servicio.pk fila.bloque.pk %}" class="form">
+          {% csrf_token %}
+          <div class="field">Si {{ fila.form_condicional_nuevo.variable }} {{ fila.form_condicional_nuevo.operador }} {{ fila.form_condicional_nuevo.valor }}</div>
+          <div class="field">Prioridad {{ fila.form_condicional_nuevo.prioridad }}</div>
+          <div class="field">Entonces {{ fila.form_condicional_nuevo.destino }}</div>
+          <button type="submit" class="btn btn--secondary">Agregar condición</button>
+        </form>
+        <form method="post" action="{% url 'catalogo:studio_fallback_guardar' servicio.pk fila.bloque.pk %}" class="form">
+          {% csrf_token %}
+          <div class="field">{{ fila.form_fallback.destino.label_tag }}{{ fila.form_fallback.destino }}</div>
+          <button type="submit" class="btn btn--secondary">Guardar ruta alternativa</button>
+        </form>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  {% if fila.es_contenedor %}
+    <div class="svc-contenedor">
+      {% if fila.contenidos %}
+        <ul class="svc-block-list svc-block-list--anidada">
+          {% for fila in fila.contenidos %}
+            {% include "catalogo/_bloque_operativo.html" %}
+          {% endfor %}
+        </ul>
+      {% else %}
+        <div class="svc-empty">Todavía no tiene pasos. Agrega al menos una actividad.</div>
+      {% endif %}
+      {% if editable_ejecucion %}
+        {% for rama, etiqueta_rama, grupos in fila.ramas_intenciones %}
+          <div class="svc-contenedor__agregar">
+            <strong>Agregar actividad · {{ etiqueta_rama }}:</strong>
+            {% for grupo in grupos %}
+              {% for item in grupo.opciones %}
+                {% if item.disponible %}
+                  <button type="button" class="btn btn--ghost btn--sm" data-action="toggle-panel" data-target="panel-nuevo-{{ fila.bloque.pk }}-{{ rama }}-{{ item.opcion.codigo }}" title="{{ item.opcion.descripcion }}">+ {{ grupo.intencion.etiqueta }}</button>
+                  <div id="panel-nuevo-{{ fila.bloque.pk }}-{{ rama }}-{{ item.opcion.codigo }}" class="svc-inline-editor" hidden>
+                    <form method="post" action="{% url 'catalogo:studio_bloque_crear' servicio.pk %}" class="form">
+                      {% csrf_token %}
+                      <input type="hidden" name="contenedor_id" value="{{ fila.bloque.pk }}">
+                      <input type="hidden" name="rama" value="{{ rama }}">
+                      <p class="svc-help">{{ grupo.intencion.etiqueta }}: {{ item.opcion.descripcion }}</p>
+                      {% if rama == "ITEM" %}
+                        {% include "catalogo/_bloque_operativo_nuevo.html" with codigo=item.opcion.tipo_bloque opcion=item.opcion decision_condicion=fila.form_decision_item decision_otro=fila.form_decision_item_otro ruta_form=fila.form_ruta_item en_recorrido=True %}
+                      {% else %}
+                        {% include "catalogo/_bloque_operativo_nuevo.html" with codigo=item.opcion.tipo_bloque opcion=item.opcion decision_condicion=None decision_otro=None ruta_form=None en_recorrido=False %}
+                      {% endif %}
+                      <button type="submit" class="btn btn--primary">Agregar al borrador</button>
+                    </form>
+                  </div>
+                {% endif %}
+              {% endfor %}
+            {% endfor %}
+          </div>
+        {% endfor %}
+      {% endif %}
+    </div>
+  {% endif %}
+</li>

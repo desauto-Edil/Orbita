@@ -65,6 +65,18 @@
         {% endif %}
       </section>
 
+      {% if item_aprobado %}
+        {# Fase 2 — la aprobación es del recorrido de UN ítem: qué ítem es y sus valores (solo lectura). #}
+        <section class="card" id="item-aprobado">
+          <h2>{{ item_aprobado.nombre_elemento }} #{{ item_aprobado.elemento.numero }}</h2>
+          <dl class="work-facts">
+            {% for fila in item_aprobado.valores %}<div><dt>{{ fila.etiqueta }}</dt><dd>{{ fila.texto }}</dd></div>{% endfor %}
+          </dl>
+          {% if esquema.permite_exclusion %}<p class="text-muted">Puedes excluir este ítem del alcance: solo afecta a este ítem.</p>{% endif %}
+          {% if item_aprobado.gaceta %}<p>Gaceta: <a href="{% url 'gacetas:detalle' item_aprobado.gaceta.pk %}#item-{{ item_aprobado.elemento.pk }}">{{ item_aprobado.gaceta.nombre }}</a>{% if item_aprobado.ronda.version %} · versión {{ item_aprobado.ronda.version.numero }} · ronda {{ item_aprobado.ronda.numero }}{% endif %} (observaciones y versiones anteriores)</p>{% endif %}
+        </section>
+      {% endif %}
+
       {% if entregable_revisado %}
         <section class="card" id="entregable-revisado">
           <h2>Entregable que se revisa</h2>
@@ -98,6 +110,7 @@
             <div class="field">
               <label for="id_observacion">Observación</label>
               {{ decision_form.observacion }}
+              {% if esquema.justificacion_al_aprobar %}<span class="text-muted">También se pide al aprobar.</span>{% endif %}
             </div>
             <button type="submit" class="btn btn--primary">Registrar decisión</button>
           </form>

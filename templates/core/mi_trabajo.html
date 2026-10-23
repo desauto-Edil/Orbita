@@ -67,11 +67,11 @@
           {% for fila in filas %}
             <li>
               <a class="work-row work-row--compact" href="{{ fila.url }}"{% if fila.vista_url %} data-vista="{{ fila.vista_url }}"{% endif %}>
-                <span class="work-row__kind" aria-hidden="true">{% if fila.tipo == "tarea" %}{% include "components/icon.html" with name="trabajo" size="sm" %}{% else %}{% include "components/icon.html" with name="check-circle" size="sm" %}{% endif %}</span>
+                <span class="work-row__kind" aria-hidden="true">{% if fila.tipo == "tarea" %}{% include "components/icon.html" with name="trabajo" size="sm" %}{% elif fila.tipo == "coleccion" %}{% include "components/icon.html" with name="list" size="sm" %}{% else %}{% include "components/icon.html" with name="check-circle" size="sm" %}{% endif %}</span>
                 <span class="work-row__main">
                   <span class="work-row__title">{{ fila.titulo }}</span>
                   <span class="work-row__meta">
-                    {% if fila.tipo == "tarea" %}Tarea{% elif fila.tipo == "revision" %}Revisión de elementos · {{ fila.detalle }}{% if fila.pendientes %} · {{ fila.pendientes }} pendiente{{ fila.pendientes|pluralize }}{% endif %}{% if fila.devueltos %} · {{ fila.devueltos }} devuelto{{ fila.devueltos|pluralize }}{% endif %}{% else %}Aprobación{% endif %}{% if fila.por_tomar %} · disponible para tomar{% endif %}{% if fila.fecha_relevante %} · {% if fila.vencida %}<span class="work-row__late">venció el {{ fila.fecha_relevante|date:"j M" }}</span>{% else %}vence el {{ fila.fecha_relevante|date:"j M, H:i" }}{% endif %}{% endif %}
+                    {% if fila.tipo == "tarea" %}Tarea{% elif fila.tipo == "coleccion" %}Participas en la colección · {{ fila.detalle }}{% elif fila.tipo == "revision" %}Revisión de elementos · {{ fila.detalle }}{% if fila.pendientes %} · {{ fila.pendientes }} pendiente{{ fila.pendientes|pluralize }}{% endif %}{% if fila.devueltos %} · {{ fila.devueltos }} devuelto{{ fila.devueltos|pluralize }}{% endif %}{% else %}Aprobación{% endif %}{% if fila.por_tomar %} · disponible para tomar{% endif %}{% if fila.fecha_relevante %} · {% if fila.vencida %}<span class="work-row__late">venció el {{ fila.fecha_relevante|date:"j M" }}</span>{% else %}vence el {{ fila.fecha_relevante|date:"j M, H:i" }}{% endif %}{% endif %}
                   </span>
                 </span>
                 <span class="work-row__state"><span class="work-dot work-dot--{{ fila.estado_clase|default:'neutral' }}" aria-hidden="true"></span>{{ fila.estado }}</span>

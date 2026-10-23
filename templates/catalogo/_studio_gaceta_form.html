@@ -1,0 +1,64 @@
+{% comment %} Fase 3 / 4.B — campos de una gaceta (crear o editar), organizados en pasos (`form[data-pasos]` en studio.js;
+   sin JS se ven todos). Enviar siempre manda la gaceta completa. Espera `form`. {% endcomment %}
+<fieldset class="svc-fieldset" data-paso="Identidad y colecciones">
+  <legend>Identidad y colecciones</legend>
+  <div class="svc-form-grid svc-form-grid--two">
+    <div class="field">{{ form.nombre.label_tag }}{{ form.nombre }}</div>
+    <div class="field">{{ form.descripcion.label_tag }}{{ form.descripcion }}</div>
+  </div>
+  <div class="field">{{ form.colecciones.label_tag }}{{ form.colecciones }}</div>
+</fieldset>
+<fieldset class="svc-fieldset" data-paso="Ingreso y apertura">
+  <legend>Ingreso y apertura</legend>
+  <div class="field">{{ form.ingreso.label_tag }}{{ form.ingreso }}</div>
+  <div class="field">{{ form.condicion_variable.label_tag }}<span class="svc-inline">{{ form.condicion_variable }} {{ form.condicion_operador }} {{ form.condicion_valor }}</span></div>
+  <label class="choice">{{ form.exige_item_completo }} {{ form.exige_item_completo.label }}</label>
+  <div class="field">{{ form.apertura.label_tag }}{{ form.apertura }}</div>
+  <p class="svc-help">«Cuando el flujo llega a su bloque» exige el paso «Coordinar una gaceta» en el Flujo; «al terminar su recorrido», un recorrido por ítem de esas colecciones. El Studio lo comprueba antes de activar.</p>
+</fieldset>
+<fieldset class="svc-fieldset" data-paso="Participantes">
+  <legend>Participantes</legend>
+  <div class="svc-form-grid svc-form-grid--two">
+    <div class="field">{{ form.revisores_usuarios.label_tag }}{{ form.revisores_usuarios }}</div>
+    <div class="field">{{ form.revisores_equipos.label_tag }}{{ form.revisores_equipos }}</div>
+  </div>
+  <p class="svc-help">Los revisores registran observaciones; no deciden.</p>
+</fieldset>
+<fieldset class="svc-fieldset" data-paso="Revisión y aprobación">
+  <legend>Revisión y aprobación</legend>
+  <div class="svc-form-grid svc-form-grid--two">
+    <div class="field">{{ form.aprobadores_usuarios.label_tag }}{{ form.aprobadores_usuarios }}</div>
+    <div class="field">{{ form.aprobadores_equipos.label_tag }}{{ form.aprobadores_equipos }}</div>
+  </div>
+  <div class="field">{{ form.politica.label_tag }}{{ form.politica }}</div>
+  <div class="field">{{ form.plazo_revision_cantidad.label_tag }}<span class="svc-inline">{{ form.plazo_revision_cantidad }} {{ form.plazo_revision_unidad }} {{ form.plazo_revision_habiles }} {{ form.plazo_revision_habiles.label }}</span></div>
+  <label class="choice">{{ form.aceptacion_automatica }} {{ form.aceptacion_automatica.label }}</label>
+  <label class="choice">{{ form.permite_exclusion }} {{ form.permite_exclusion.label }}</label>
+  <label class="choice">{{ form.justificacion_al_aprobar }} {{ form.justificacion_al_aprobar.label }}</label>
+  <p class="svc-help">Los aprobadores deciden (aprobar, devolver, rechazar y, si se permite, excluir). Un ítem en corrección nunca se acepta automáticamente.</p>
+</fieldset>
+<fieldset class="svc-fieldset" data-paso="Coordinación y cierre">
+  <legend>Coordinación y cierre</legend>
+  <div class="svc-form-grid svc-form-grid--two">
+    <div class="field">{{ form.coordinador_usuario.label_tag }}{{ form.coordinador_usuario }}</div>
+    <div class="field">{{ form.coordinador_equipo.label_tag }}{{ form.coordinador_equipo }}</div>
+  </div>
+  <p class="svc-help">Quien coordina presenta ítems, cierra el periodo, resuelve la gaceta y puede excluir un ítem. Si lo dejas vacío, coordina quien atiende el ticket (responsable individual). No es el aprobador ni quien corrige.</p>
+  <label class="choice">{{ form.obligatoria }} {{ form.obligatoria.label }}</label>
+  <p class="svc-help">Con la condición «Las gacetas están resueltas», una gaceta obligatoria que nunca se abrió impide resolver el ticket; una opcional no lo bloquea solo por existir.</p>
+  <div class="field">{{ form.al_resolver_pendientes.label_tag }}{{ form.al_resolver_pendientes }}</div>
+  <label class="choice">{{ form.resolucion_automatica }} {{ form.resolucion_automatica.label }}</label>
+  <p class="svc-help">El cierre del periodo termina las observaciones; la resolución fija el resultado de lo pendiente.</p>
+</fieldset>
+<fieldset class="svc-fieldset" data-paso="Opciones avanzadas">
+  <legend>Opciones avanzadas: corrección</legend>
+  <div class="field">{{ form.plazo_correccion_cantidad.label_tag }}<span class="svc-inline">{{ form.plazo_correccion_cantidad }} {{ form.plazo_correccion_unidad }} {{ form.plazo_correccion_habiles }} {{ form.plazo_correccion_habiles.label }}</span></div>
+  <div class="field">{{ form.responsable_correccion_columna.label_tag }}{{ form.responsable_correccion_columna }}</div>
+  {% if form.columnas_editables.field.choices %}
+    <fieldset class="svc-fieldset">
+      <legend>{{ form.columnas_editables.label }}</legend>
+      {% for opcion in form.columnas_editables %}<label class="choice">{{ opcion.tag }} {{ opcion.choice_label }}</label>{% endfor %}
+    </fieldset>
+    <p class="svc-help">Mientras la corrección siga abierta, quien la recibe modifica solo estas columnas del ítem devuelto. Sin ninguna, quien corrige responde y reenvía, pero no modifica el ítem.</p>
+  {% endif %}
+</fieldset>

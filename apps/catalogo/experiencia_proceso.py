@@ -38,6 +38,7 @@ SECCION_FLUJO = ("ejecucion", "Flujo", "ejecucion", "")
 _TIPOS_BLOQUE = {
     "ACTIVIDAD": "Actividad", "ENTREGABLE": "Entregable", "APROBACION": "Aprobación", "ESPERA": "Espera",
     "DECISION": "Decisión", "TAREAS_ELEMENTOS": "Tareas por elemento",
+    "GRUPO_ACTIVIDADES": "Actividades en paralelo", "RECORRIDO_ITEMS": "Recorrido por ítem", "GACETA": "Gaceta",
 }
 
 
@@ -102,7 +103,7 @@ def _contar(version):
     return len(campos), sum(1 for c in campos if c.obligatorio)
 
 
-def tarjetas_formulario(servicio):
+def tarjetas_formulario(servicio, ev=None):
     """Dos tarjetas, una por cada formulario del Proceso (nunca se mezclan en un mismo editor):
 
     - DATOS DE INICIO: lo que se responde al crear el Ticket.
@@ -116,6 +117,15 @@ def tarjetas_formulario(servicio):
         "version": inicial, "campos": campos, "obligatorios": obligatorios, "borrador": borrador_inicial,
         "programado": programacion_activa_de(servicio) is not None,
     }
+
+    # Bloque 2: TODAS las colecciones activas (no solo la por defecto), con la misma lectura que la evaluación central.
+    from apps.catalogo.evaluacion import piezas_formulario
+
+    if ev is not None:  # la misma lectura de la evaluación de esta petición
+        pieza_datos, colecciones = ev.datos_inicio, ev.colecciones
+    else:
+        pieza_datos, colecciones = piezas_formulario(servicio)
+    datos["configurada"] = pieza_datos.configurada
 
     definicion = definicion_de(servicio)
     version = version_de_columnas(servicio) if definicion is not None else None
@@ -151,7 +161,9 @@ def tarjetas_formulario(servicio):
             "columnas": [etiquetas.get(c, c) for c in claves],
             "revisores": [_persona(u) for u in usuarios] + [e.nombre for e in equipos],
         })
-    return {"datos": datos, "elementos": elementos, "tareas": tareas, "revisiones": revisiones}
+    return {
+        "datos": datos, "elementos": elementos, "colecciones": colecciones, "tareas": tareas, "revisiones": revisiones,
+    }
 
 
 def organizar_salida(servicio, definiciones):
@@ -208,6 +220,14 @@ def _espera_de(bloque, tareas_activas):
         return "Genera una tarea por elemento y espera a que todas se completen."
     if bloque.tipo == BloqueOperativo.Tipo.ESPERA:
         return "Espera programada."
+    if bloque.tipo == BloqueOperativo.Tipo.GRUPO_ACTIVIDADES:
+        return "Lanza sus actividades en paralelo y espera a que terminen todas."
+    if bloque.tipo == BloqueOperativo.Tipo.RECORRIDO_ITEMS:
+        return "Cada ítem hace su propio recorrido; espera a que no quede ninguno en curso."
+    if bloque.tipo == BloqueOperativo.Tipo.GACETA:
+        if (bloque.configuracion or {}).get("esperar", "RESOLUCION") == "RESOLUCION":
+            return "Abre la gaceta y espera a que se resuelva."
+        return "Abre la gaceta y continúa sin esperar."
     return "Se evalúa sola, sin esperar a nadie."
 
 
@@ -242,6 +262,13 @@ def recorrido_flujo(servicio, configuracion, resumen_de_bloque):
         .prefetch_related("transiciones_salientes__bloque_destino")
         .order_by("fase__orden", "orden", "pk")
     )
+    # Fase 2: cada bloque contenido aparece justo después de su contenedor.
+    principales = [b for b in bloques if b.contenedor_id is None]
+    por_contenedor = {}
+    for b in bloques:
+        if b.contenedor_id:
+            por_contenedor.setdefault(b.contenedor_id, []).append(b)
+    bloques = [x for b in principales for x in [b, *por_contenedor.get(b.pk, [])]]
     for numero, bloque in enumerate(bloques, start=1):
         rutas = [_ruta(t) for t in sorted(bloque.transiciones_salientes.all(), key=lambda t: (t.prioridad, t.pk))]
         nota = ""
@@ -252,9 +279,13 @@ def recorrido_flujo(servicio, configuracion, resumen_de_bloque):
             )
         elif bloque.tipo == BloqueOperativo.Tipo.APROBACION and bloque.entregable_revisado_id:
             nota = f"Revisa el entregable «{bloque.entregable_revisado.nombre}»."
+        tipo = _TIPOS_BLOQUE.get(bloque.tipo, bloque.tipo)
+        if bloque.contenedor_id:
+            # Fase 2: un paso dentro de un recorrido o grupo se lee como parte de él.
+            tipo = f"↳ {tipo} ({'para cada ítem' if bloque.rama == 'ITEM' else 'en paralelo'})"
         filas.append({
             "numero": numero, "fase": bloque.fase.nombre, "bloque": bloque,
-            "tipo": _TIPOS_BLOQUE.get(bloque.tipo, bloque.tipo),
+            "tipo": tipo,
             "responsable": resumen_de_bloque(bloque),
             "espera": _espera_de(bloque, tareas is not None),
             "nota": nota, "rutas": rutas,
@@ -265,10 +296,10 @@ def recorrido_flujo(servicio, configuracion, resumen_de_bloque):
 # --- Publicar: resumen y errores por sección ------------------------------------------------------------
 
 
-def resumen_publicacion(servicio, configuracion_activa, configuracion_borrador):
+def resumen_publicacion(servicio, configuracion_activa, configuracion_borrador, ev=None):
     """Tarjetas del resumen del Proceso en Publicar. Cada una dice si está lista, qué contiene y desde
     dónde se corrige. Informativas: lo que BLOQUEA la publicación sigue siendo `validar_publicacion`."""
-    tarjetas_f = tarjetas_formulario(servicio)
+    tarjetas_f = tarjetas_formulario(servicio, ev)
     programacion = programacion_activa_de(servicio)
     tarjetas = []
 
@@ -313,37 +344,51 @@ def resumen_publicacion(servicio, configuracion_activa, configuracion_borrador):
         "estado": "ok" if responsables else "neutro", "lineas": lineas,
     })
 
-    datos = tarjetas_f["datos"]
+    # Bloque 2: datos de inicio y colecciones salen de la MISMA evaluación que la navegación
+    # (`apps.catalogo.evaluacion`). Una tarjeta solo «pide atención» por un bloqueo real de su sección (lo agrega
+    # `studio._verificacion`); un borrador que se activará al publicar se informa, no se marca como error.
+    if ev is None:
+        from apps.catalogo import evaluacion
+
+        ev = evaluacion.evaluar(servicio)
+    datos = ev.datos_inicio
+    if datos.configurada and datos.activa_valida:
+        linea_datos = (
+            f"Versión {datos.version.numero} activa · {datos.campos} campo{'s' if datos.campos != 1 else ''}"
+            f" ({datos.obligatorios} obligatorio{'s' if datos.obligatorios != 1 else ''})."
+        )
+        estado_datos = "ok"
+    elif datos.borrador:
+        estado_datos, linea_datos = "ok", "Borrador de datos de inicio: entrará en vigor al publicar."
+    else:
+        estado_datos, linea_datos = "neutro", "Sin datos de inicio: el proceso no pide información al crearse."
+    if datos.borrador and datos.activa_valida:
+        linea_datos += " Hay cambios sin activar: entrarán en vigor al publicar."
     tarjetas.append({
-        "titulo": "Datos de inicio", "seccion": SECCION_DATOS,
-        "estado": "ok" if datos["version"] is not None else "pendiente",
-        "lineas": [
-            f"Versión {datos['version'].numero} activa · {datos['campos']} campo{'s' if datos['campos'] != 1 else ''}"
-            f" ({datos['obligatorios']} obligatorio{'s' if datos['obligatorios'] != 1 else ''})."
-            if datos["version"] is not None else "Sin una versión activa del formulario de inicio."
-        ],
+        "titulo": "Datos de inicio", "seccion": SECCION_DATOS, "estado": estado_datos, "lineas": [linea_datos],
     })
 
-    elementos = tarjetas_f["elementos"]
-    if elementos["usa"]:
+    if ev.colecciones:
+        lineas = []
+        for coleccion in ev.colecciones:
+            if coleccion.activa_valida:
+                linea = (
+                    f"«{coleccion.nombre}»: versión {coleccion.version.numero} activa · {coleccion.campos} "
+                    f"columna{'s' if coleccion.campos != 1 else ''} ({coleccion.obligatorios} obligatoria"
+                    f"{'s' if coleccion.obligatorios != 1 else ''})."
+                )
+            else:
+                linea = f"«{coleccion.nombre}»: sin una versión activa de columnas."
+            if coleccion.borrador:
+                linea += " Borrador de columnas: entrará en vigor al publicar."
+            lineas.append(linea)
         tarjetas.append({
-            "titulo": "Elementos del proceso", "seccion": SECCION_ELEMENTOS,
-            "estado": "ok" if elementos["version"] is not None and elementos["columnas"] else "pendiente",
-            "lineas": [
-                f"«{elementos['nombre']}»: "
-                + (
-                    f"versión {elementos['version'].numero} activa · {elementos['columnas']} "
-                    f"columna{'s' if elementos['columnas'] != 1 else ''} ({elementos['obligatorias']} obligatoria"
-                    f"{'s' if elementos['obligatorias'] != 1 else ''})."
-                    if elementos["version"] is not None else "sin una versión activa de columnas."
-                ),
-                *(["Hay un borrador de columnas sin activar."] if elementos["borrador"] else []),
-            ],
+            "titulo": "Elementos del proceso", "seccion": SECCION_ELEMENTOS, "estado": "ok", "lineas": lineas,
         })
     else:
         tarjetas.append({
             "titulo": "Elementos del proceso", "seccion": SECCION_ELEMENTOS, "estado": "neutro",
-            "lineas": ["No usa elementos estructurados (opcional)."],
+            "lineas": ["No usa colecciones de ítems (opcional)."],
         })
 
     simples = [d for d in servicio.definiciones_entregables.filter(activo=True).exclude(tipo=ELEMENTOS)]
@@ -387,35 +432,22 @@ def resumen_publicacion(servicio, configuracion_activa, configuracion_borrador):
             for bloque in config.bloques.all():
                 por_tipo[_TIPOS_BLOQUE.get(bloque.tipo, bloque.tipo)] += 1
             lineas.append(
-                ("Configuración activa" if configuracion_activa is not None else "Borrador sin activar")
+                ("Configuración activa" if configuracion_activa is not None else "Borrador: entrará en vigor al publicar")
                 + f" v{config.numero}: "
                 + (", ".join(f"{n} {t.lower()}" for t, n in por_tipo.items()) or "sin bloques")
                 + "."
             )
-            estado = "ok" if configuracion_activa is not None else "pendiente"
+            # Bloque 2: un borrador no es un error; si no se pudiera activar, `_verificacion` añade su bloqueo.
+            estado = "ok"
         else:
             lineas.append("Todavía sin configuración de ejecución.")
     tarjetas.append({"titulo": "Flujo asociado", "seccion": SECCION_FLUJO, "estado": estado, "lineas": lineas})
 
-    # Avisos informativos de coherencia (no bloquean: lo que bloquea es validar_publicacion).
-    avisos = []
-    if config is not None:
-        tipos = set(config.bloques.values_list("tipo", flat=True))
-        if tareas["activa"] and BloqueOperativo.Tipo.TAREAS_ELEMENTOS not in tipos:
-            avisos.append(
-                "Las tareas por elemento están configuradas, pero ningún bloque del flujo las genera: "
-                "agrega el bloque «Tareas por elemento» en la sección Flujo."
-            )
-        conjuntos_en_flujo = set(
-            config.bloques.filter(tipo=BloqueOperativo.Tipo.ENTREGABLE, definicion_entregable__tipo=ELEMENTOS)
-            .values_list("definicion_entregable_id", flat=True)
-        )
-        for revision in tarjetas_f["revisiones"]:
-            if revision["definicion"].pk not in conjuntos_en_flujo:
-                avisos.append(
-                    f"La revisión «{revision['definicion'].nombre}» no tiene un bloque Entregable en el flujo: "
-                    "los elementos no se revisarán en ningún paso."
-                )
+    # Avisos de coherencia que no bloquean (Fase 4.A: los da el detector de dependencias; las obligatorias se
+    # muestran como pendientes de publicación, no aquí).
+    from apps.catalogo import dependencias
+
+    avisos = [d.mensaje for d in dependencias.detectar(servicio) if not d.bloquea]
     return {"tarjetas": tarjetas, "avisos": avisos}
 
 
@@ -431,6 +463,11 @@ def errores_por_seccion(servicio, mensajes, traducir=lambda m: m):
         clasificados[mensaje] = SECCION_ELEMENTOS
     for mensaje in errores_de_conjuntos(servicio):
         clasificados[mensaje] = SECCION_SALIDA
+    # Fase 4.A: las gacetas se configuran en Salida (antes caían por defecto en Flujo).
+    from apps.catalogo.gacetas import errores_de_gacetas
+
+    for mensaje in errores_de_gacetas(servicio):
+        clasificados[mensaje] = SECCION_SALIDA
     if programacion_activa_de(servicio) is not None:
         for mensaje in errores_de_compatibilidad(servicio):
             if "campos obligatorios" in mensaje:
@@ -445,7 +482,20 @@ def errores_por_seccion(servicio, mensajes, traducir=lambda m: m):
     for mensaje in mensajes:
         seccion = clasificados.get(mensaje)
         if seccion is None:
-            if "formulario con una versión ACTIVA" in mensaje:
+            # Fase 4.A: los mensajes pueden venir de la publicación SIMULADA (tras activar borradores), así que
+            # además de la coincidencia exacta se reconoce el prefijo de cada validador.
+            if mensaje.startswith(("La estructura de elementos", "La colección «", "Tareas por elemento:", "Colección «")):
+                seccion = SECCION_ELEMENTOS
+            elif mensaje.startswith(("Gaceta «", "Entregable «")):
+                seccion = SECCION_SALIDA
+            elif mensaje.startswith(("Datos de inicio", "Formulario de inicio", "Los datos de inicio")):
+                seccion = SECCION_DATOS
+            elif mensaje.startswith(("Nadie puede", "Falta el responsable inicial", "El responsable inicial",
+                                     "El usuario responsable inicial", "El equipo responsable inicial")):
+                # Bloque 2: visibilidad y responsables se corrigen en Básico.
+                seccion = SECCION_GENERAL
+        if seccion is None:
+            if "formulario con una versión ACTIVA" in mensaje or mensaje.startswith("Los datos de inicio"):
                 seccion = SECCION_DATOS
             elif "prórroga" in mensaje.lower() or "Tipo de catálogo" in mensaje:
                 seccion = SECCION_GENERAL

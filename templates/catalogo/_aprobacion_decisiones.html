@@ -1,0 +1,7 @@
+{% comment %} Fase 2 / 4.A — decisiones permitidas de una APROBACION (opciones avanzadas). Excluir solo existe en el recorrido
+   de un ítem; la casilla se ofrece igual al crear que al editar. {% endcomment %}
+<label class="choice">{{ form.justificacion_al_aprobar }} {{ form.justificacion_al_aprobar.label }}</label>
+{% if en_recorrido or form.permite_exclusion.value %}
+  <label class="choice">{{ form.permite_exclusion }} {{ form.permite_exclusion.label }}</label>
+{% endif %}
+<p class="svc-note">Siempre se puede aprobar, devolver o rechazar (devolver y rechazar piden observación).</p>

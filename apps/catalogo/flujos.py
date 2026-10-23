@@ -133,6 +133,28 @@ def _fases_para_presentacion(version, editable):
     return resultado
 
 
+def _fases_en_uso_por_pk(workflow, version):
+    from apps.catalogo.reconciliacion import fases_en_uso
+
+    if version is None:
+        return {}
+    uso = fases_en_uso(workflow)
+    resultado = {}
+    for fase in version.fases.all():
+        servicios = uso.get(fase.clave) if fase.clave else uso.get(f"nombre:{fase.nombre.strip().lower()}")
+        if servicios:
+            resultado[fase.pk] = [s.nombre for s in servicios]
+    return resultado
+
+
+def _servicios_afectados(borrador):
+    from apps.catalogo.reconciliacion import servicios_afectados_por
+
+    if borrador is None:
+        return []
+    return [servicio.nombre for servicio, _claves in servicios_afectados_por(borrador)]
+
+
 def _contexto_lienzo(request, workflow, caps):
     versiones = list(workflow.versiones.order_by("-numero"))
     activa = workflow.version_activa
@@ -168,10 +190,16 @@ def _contexto_lienzo(request, workflow, caps):
         "errores_publicacion": errores,
         "publicable": publicable and caps["administrar_flujos"],
         "fases": _fases_para_presentacion(mostrada, editable),
+        # Fase 4.A — fases con actividades en Servicios (eliminarla o publicar sin ella obliga a esos Servicios a
+        # decidir qué hacer con sus actividades al actualizar; nunca se borran solas) y quiénes quedarían afectados.
+        "fases_en_uso": _fases_en_uso_por_pk(workflow, mostrada),
+        "servicios_afectados": _servicios_afectados(borrador),
         "fase_form_nueva": FaseForm(prefix="fase-nueva") if editable else None,
         "form_datos": WorkflowForm(initial={"nombre": workflow.nombre, "descripcion": workflow.descripcion}),
         "titulo_pagina": workflow.nombre,
     }
+    for fila in contexto["fases"]:
+        fila["en_uso_por"] = contexto["fases_en_uso"].get(fila["fase"].pk, [])
     servicio_retorno_id = request.session.get(f"retorno_servicio_flujo_{workflow.pk}")
     servicio_retorno = None
     if servicio_retorno_id and caps.get("gestionar_servicios"):

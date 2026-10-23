@@ -1,76 +1,99 @@
 {% extends "base.html" %}
 {% load static %}
 
-{% block title %}{{ servicio.nombre }} - Servicios - Disenador - {{ sistema.nombre }}{% endblock %}
+{% block title %}{{ servicio.nombre }} - Studio - {{ sistema.nombre }}{% endblock %}
 
-{% block content_modifier %}content-area--service-workspace{% endblock %}
+{% block content_modifier %}content-area--studio{% endblock %}
 
-{% block extra_head %}<link rel="stylesheet" href="{% static 'css/disenador.css' %}">{% endblock %}
+{% block extra_head %}
+  <link rel="stylesheet" href="{% static 'css/disenador.css' %}">
+  <link rel="stylesheet" href="{% static 'css/studio.css' %}">
+{% endblock %}
 
-{% block extra_scripts %}<script src="{% static 'js/studio.js' %}" defer></script>{% endblock %}
+{% block extra_scripts %}
+  <script src="{% static 'js/studio.js' %}" defer></script>
+  {% if tab == "ejecucion" %}<script src="{% static 'js/lienzo.js' %}" defer></script>{% endif %}
+{% endblock %}
 
 {% block content %}
-<div class="service-workspace">
-  <header class="service-editor-bar">
-    <nav class="service-breadcrumb" aria-label="Ruta de navegacion">
-      <a href="{% url 'core:disenador_servicios' %}">
-        {% include "components/icon.html" with name="chevron-left" size="sm" %}
-        Servicios
-      </a>
-      <span aria-hidden="true">/</span>
-      <span class="breadcrumb__current">{{ servicio.nombre }}</span>
-    </nav>
-
-    <div class="service-editor-bar__main">
-      <div class="service-editor-bar__identity">
-        <h1>{{ servicio.nombre }}</h1>
-        <p>
-          {{ servicio.get_tipo_display }}
-          {% if servicio.categoria %} · {{ servicio.categoria.nombre }}{% endif %}
-          · {% if servicio.activo %}Publicado{% else %}Borrador{% endif %}
+{% comment %} Fase 4.B — Application Shell del Studio: encabezado, navegación de cinco secciones, área de trabajo y barra de
+   acciones ESTABLES; solo cambia el área de trabajo. Se integra con el header y el dock globales (no los duplica:
+   el Studio termina por encima del dock, `--dock-reserve`). Ver docs/design/ORBITA_DESIGN.md. {% endcomment %}
+<div class="studio-app" data-studio data-servicio="{{ servicio.pk }}" data-tab="{{ tab }}">
+  <header class="studio-app__cabecera">
+    <div class="studio-app__identidad">
+      <a class="btn-icon btn-icon--sm" href="{% url 'core:disenador_servicios' %}" aria-label="Salir del Studio a Servicios y procesos" data-studio-navegacion>{% include "components/icon.html" with name="chevron-left" size="sm" %}</a>
+      <div>
+        <h1 class="studio-app__titulo">{{ servicio.nombre }}</h1>
+        <p class="studio-app__meta">
+          <span class="chip chip--neutral">{{ servicio.get_tipo_display }}</span>
+          {% if servicio.categoria %}<span class="studio-app__categoria">{{ servicio.categoria.nombre }}</span>{% endif %}
+          <span class="estado {% if servicio.activo %}estado--complete{% else %}estado--empty{% endif %}">{% if servicio.activo %}Publicado{% else %}Borrador{% endif %}</span>
         </p>
       </div>
-      <div class="service-editor-bar__actions" aria-label="Acciones del servicio">
-        <a class="btn btn--secondary" href="{% url 'core:disenador_servicios' %}">Volver</a>
-        <a class="btn btn--secondary" href="{% url 'catalogo:studio' servicio.pk %}?tab=publicacion">Publicar</a>
-      </div>
+    </div>
+    <div class="studio-app__cabecera-acciones">
+      <span class="guardado" data-estado-guardado data-estado="limpio" role="status" aria-live="polite"><span class="guardado__punto" aria-hidden="true"></span><span data-estado-texto>Sin cambios</span></span>
+      <a class="btn btn--ghost btn--sm" href="{% url 'core:disenador_servicios' %}" data-studio-navegacion>Salir</a>
     </div>
   </header>
 
-  <div class="service-shell">
-    <aside class="service-rail" aria-label="Secciones del configurador">
-      <div class="service-rail__head">
-        <span class="service-rail__eyebrow">Configuracion</span>
-        <strong>{{ servicio.get_tipo_display }}</strong>
-        <span>{% if servicio.activo %}Publicado{% else %}En borrador{% endif %}</span>
-      </div>
-
-      <nav class="service-steps">
-        {% for item in secciones %}
-          <a class="service-step service-step--{{ item.estado }}{% if tab == item.clave %} is-active{% endif %}" href="{% url 'core:disenador_servicio' servicio.pk %}?tab={{ item.clave }}"{% if tab == item.clave %} aria-current="page"{% endif %}>
-            <span class="service-step__index">0{{ forloop.counter }}</span>
-            <span class="service-step__body">
-              <span class="service-step__label">{{ item.etiqueta }}</span>
-              <span class="service-step__state">{{ item.texto }}</span>
+  <nav class="studio-app__nav" aria-label="Secciones del Studio" data-studio-navegacion>
+    <ol class="studio-pasos">
+      {% for item in secciones %}
+        <li>
+          <a class="studio-paso{% if tab == item.clave %} is-activo{% endif %}" href="{% url 'core:disenador_servicio' servicio.pk %}?tab={{ item.clave }}" title="{{ item.texto }}"{% if tab == item.clave %} aria-current="page"{% endif %}>
+            <span class="studio-paso__indice">0{{ forloop.counter }}</span>
+            <span class="studio-paso__cuerpo">
+              <span class="studio-paso__nombre">{{ item.etiqueta }}</span>
+              <span class="estado estado--{{ item.estado }}">{{ item.estado_etiqueta }}</span>
             </span>
           </a>
-        {% endfor %}
-      </nav>
-    </aside>
+        </li>
+      {% endfor %}
+    </ol>
+    <div class="studio-progreso" role="group" aria-label="Progreso">
+      <span class="studio-progreso__texto">{{ navegacion.listas }} de {{ navegacion.total }} secciones listas</span>
+      <span class="studio-progreso__barra" aria-hidden="true"><span style="width: {{ navegacion.porcentaje }}%"></span></span>
+    </div>
+  </nav>
 
-    <main class="service-main" id="studio-panel">
-      {% if tab == "general" %}
-        {% include "catalogo/studio_general.html" %}
-      {% elif tab == "entrada" %}
-        {% include "catalogo/studio_entrada.html" %}
-      {% elif tab == "ejecucion" %}
-        {% include "catalogo/studio_ejecucion.html" %}
-      {% elif tab == "salida" %}
-        {% include "catalogo/studio_salida.html" %}
-      {% elif tab == "publicacion" %}
-        {% include "catalogo/studio_publicacion.html" %}
+  <section class="studio-app__trabajo{% if tab == 'ejecucion' %} studio-app__trabajo--lienzo{% endif %}" id="studio-panel" aria-label="{% for item in secciones %}{% if item.clave == tab %}{{ item.etiqueta }}{% endif %}{% endfor %}">
+    {% if tab == "general" %}
+      {% include "catalogo/studio_general.html" %}
+    {% elif tab == "entrada" %}
+      {% include "catalogo/studio_entrada.html" %}
+    {% elif tab == "ejecucion" %}
+      {% include "catalogo/studio_ejecucion.html" %}
+    {% elif tab == "salida" %}
+      {% include "catalogo/studio_salida.html" %}
+    {% elif tab == "publicacion" %}
+      {% include "catalogo/studio_publicacion.html" %}
+    {% endif %}
+  </section>
+
+  {% comment %} Fase 4.A/4.B — navegación guiada. Atrás / Continuar / Omitir son enlaces: no guardan, no activan ni publican;
+     omitir no borra nada. «Guardar» envía el formulario con cambios de esta sección (si hay uno solo). {% endcomment %}
+  <footer class="studio-app__pie service-guide" aria-label="Navegación entre secciones" data-studio-navegacion>
+    <div class="studio-app__pie-izquierda">
+      {% if navegacion.anterior %}
+        <a class="btn btn--ghost" href="{% url 'core:disenador_servicio' servicio.pk %}?tab={{ navegacion.anterior.clave }}">Atrás: {{ navegacion.anterior.etiqueta }}</a>
       {% endif %}
-    </main>
-  </div>
+      <span class="service-guide__pos">Sección {{ navegacion.posicion }} de {{ navegacion.total }}</span>
+    </div>
+    <div class="studio-app__pie-centro">
+      <span class="guardado" data-estado-guardado data-estado="limpio"><span class="guardado__punto" aria-hidden="true"></span><span data-estado-texto>Sin cambios</span></span>
+      {% if tab != "publicacion" %}<button type="button" class="btn btn--secondary" data-guardar disabled>Guardar</button>{% endif %}
+    </div>
+    <div class="studio-app__pie-derecha">
+      {% if navegacion.siguiente %}
+        {% if navegacion.omitible %}
+          <a class="btn btn--ghost" href="{% url 'core:disenador_servicio' servicio.pk %}?tab={{ navegacion.siguiente.clave }}" title="Esta sección es opcional: puedes dejarla así. No se borra nada.">Omitir</a>
+        {% endif %}
+        <a class="btn btn--primary" href="{% url 'core:disenador_servicio' servicio.pk %}?tab={{ navegacion.siguiente.clave }}">Continuar: {{ navegacion.siguiente.etiqueta }}</a>
+      {% endif %}
+    </div>
+    <p class="studio-app__pie-ayuda">Continuar solo cambia de sección: lo guardado sigue en borrador hasta que lo actives o publiques.</p>
+  </footer>
 </div>
 {% endblock %}
