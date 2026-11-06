@@ -195,7 +195,7 @@
                   · actualizado hace {{ ticket.actualizado_en|timesince }}
                 </span>
               </span>
-              <span class="badge badge--dot {% if ticket.estado == 'BORRADOR' %}badge--warning{% elif ticket.estado == 'RESUELTO' or ticket.estado == 'CERRADO' %}badge--success{% else %}badge--info{% endif %}">{{ ticket.get_estado_display }}</span>
+              <span class="estado-etiqueta estado-etiqueta--{{ ticket.estado|lower }}">{{ ticket.get_estado_display }}</span>
             </a>
           </li>
         {% endfor %}

@@ -1,0 +1,4 @@
+<span class="avatar" aria-hidden="true">
+  <span>{{ persona.get_username|slice:":1"|upper }}</span>
+  {% if persona.google_foto_url %}<img src="{{ persona.google_foto_url }}" alt="" referrerpolicy="no-referrer" loading="lazy">{% endif %}
+</span>

@@ -3,7 +3,7 @@
 
 from apps.gacetas import autorizacion
 from apps.gacetas.models import GacetaTicket, ParticipacionItemGaceta
-from apps.gacetas.operaciones import estado_operativo, resumen
+from apps.gacetas.operaciones import resumen
 
 
 def gacetas_visibles_para(usuario):
@@ -19,59 +19,19 @@ def gacetas_visibles_para(usuario):
     ]
 
 
-def _aprobacion_pendiente_de(usuario, ronda):
-    from apps.aprobaciones.autorizacion import puede_aprobar
-
-    if ronda is None or ronda.esquema_id is None or ronda.esquema.resultado is not None:
-        return None
-    for aprobacion in ronda.esquema.participaciones.all():
-        if puede_aprobar(usuario, aprobacion):
-            return aprobacion
-    return None
-
-
-def detalle(usuario, gaceta):
-    """Todo lo que pinta la página de una gaceta: resumen, plazos, permisos de coordinación y, por cada ítem,
-    estado de gaceta y operativo, valores, rondas (con su versión), observaciones y lo que `usuario` puede
-    hacer (observar, responder, reenviar, decidir en su aprobación, excluir)."""
+def presentables(gaceta):
+    """Ítems que el coordinador puede presentar a mano: en el alcance de las colecciones de la gaceta y aún sin
+    presentar. Solo con la gaceta ABIERTA (la operación `presentar` vuelve a validarlo todo)."""
     from apps.tickets import parrilla as parrilla_ops
 
-    coordinador = autorizacion.puede_coordinar(usuario, gaceta)
-    filas = []
-    for participacion in ParticipacionItemGaceta.objects.filter(gaceta=gaceta).select_related(
-        "elemento__parrilla", "presentada_por", "decidida_por"
-    ).order_by("elemento__parrilla__orden", "elemento__numero"):
-        participacion.gaceta = gaceta
-        rondas = list(participacion.rondas.select_related("version", "esquema", "tarea_correccion").order_by("numero"))
-        actual = rondas[-1] if rondas else None
-        filas.append({
-            "participacion": participacion,
-            "elemento": participacion.elemento,
-            "valores": parrilla_ops.tabla_de_elemento(participacion.elemento),
-            "archivos": parrilla_ops.archivos_de(participacion.elemento),
-            "estado_operativo": estado_operativo(participacion.elemento),
-            "rondas": rondas,
-            "observaciones": list(participacion.observaciones.select_related("autor", "respondida_por", "ronda")),
-            "puede_observar": autorizacion.puede_observar(usuario, participacion),
-            "puede_corregir": autorizacion.puede_corregir(usuario, participacion),
-            "puede_excluir": coordinador and not participacion.es_final,
-            "aprobacion_pendiente": _aprobacion_pendiente_de(usuario, actual),
-        })
-    presentables = []
-    if coordinador and gaceta.estado == GacetaTicket.Estado.ABIERTA:
-        ya = {f["elemento"].pk for f in filas}
-        for parrilla in parrilla_ops.parrillas_de(gaceta.ticket):
-            if parrilla.clave in (gaceta.configuracion.get("colecciones") or []):
-                presentables.extend(e for e in parrilla_ops.elementos_en_alcance(parrilla) if e.pk not in ya)
-    return {
-        "gaceta": gaceta,
-        "resumen": resumen(gaceta),
-        "filas": filas,
-        "coordinador": coordinador,
-        "presentables": presentables,
-        "es_revisor": autorizacion.es_revisor(usuario, gaceta),
-        "es_aprobador": autorizacion.es_aprobador(usuario, gaceta),
-    }
+    if gaceta.estado != GacetaTicket.Estado.ABIERTA:
+        return []
+    ya = set(ParticipacionItemGaceta.objects.filter(gaceta=gaceta).values_list("elemento_id", flat=True))
+    elementos = []
+    for parrilla in parrilla_ops.parrillas_de(gaceta.ticket):
+        if parrilla.clave in (gaceta.configuracion.get("colecciones") or []):
+            elementos.extend(e for e in parrilla_ops.elementos_en_alcance(parrilla) if e.pk not in ya)
+    return elementos
 
 
 def del_ticket(usuario, ticket):

@@ -51,9 +51,13 @@ from apps.tareas.models import (
 
 
 def _registrar_historial(tarea, tipo_evento, actor, **datos):
-    return HistorialTarea.objects.create(
+    entrada = HistorialTarea.objects.create(
         tarea=tarea, tipo_evento=tipo_evento, actor=actor, datos=datos or None
     )
+    from apps.notificaciones.eventos import publicar
+
+    publicar(f"TAREA:{tipo_evento}", actor=actor, tarea=tarea)
+    return entrada
 
 
 def _auditar_cambio_responsable(
@@ -133,6 +137,10 @@ def crear_tarea(
         datos_anteriores=None,
         datos_nuevos={"titulo": tarea.titulo, "estado": tarea.estado, "origen": tarea.origen},
     )
+    if tarea.usuario_responsable_id or tarea.equipo_responsable_id:
+        from apps.notificaciones.eventos import publicar
+
+        publicar("TAREA:CREADA", actor=creada_por, tarea=tarea)
     return tarea
 
 
@@ -411,6 +419,42 @@ def cancelar_tarea(tarea, actor, *, motivo=""):
     _registrar_historial(tarea, HistorialTarea.TipoEvento.CANCELADA, actor, motivo=(motivo or "").strip())
     _auditar_cambio_estado(tarea, actor, estado_anterior)
     return tarea
+
+
+_SIN_CAMBIO = object()
+
+
+@transaction.atomic
+def reprogramar_tarea(tarea, actor, *, fecha_prevista=_SIN_CAMBIO, fecha_limite=_SIN_CAMBIO, motivo=""):
+    """Bloque 5.4 — mueve `fecha_prevista` y/o `fecha_limite` de una Tarea ABIERTA porque cambió el dato del que
+    salen. Primitiva del dominio (sin `puede_*` interno, igual que `cancelar_tarea`): quien llama ya autorizó el
+    cambio del dato. Una fecha no indicada no se toca; una Tarea COMPLETADA o CANCELADA no cambia; si las fechas
+    ya son esas no hace nada (idempotente). Registra historial (REPROGRAMADA, con valores anterior y nuevo) y
+    auditoría. Devuelve `True` si cambió algo."""
+    tarea = Tarea.objects.select_for_update().get(pk=tarea.pk)
+    if tarea.estado in Tarea.ESTADOS_CERRADOS:
+        return False
+    anterior, nuevo = {}, {}
+    for campo, valor in (("fecha_prevista", fecha_prevista), ("fecha_limite", fecha_limite)):
+        if valor is _SIN_CAMBIO or getattr(tarea, campo) == valor:
+            continue
+        actual = getattr(tarea, campo)
+        # En la hora local, para leer igual el valor anterior (de la BD) y el nuevo.
+        anterior[campo] = timezone.localtime(actual).isoformat() if actual is not None else None
+        nuevo[campo] = timezone.localtime(valor).isoformat() if valor is not None else None
+        setattr(tarea, campo, valor)
+    if not nuevo:
+        return False
+    tarea.save(update_fields=[*nuevo, "actualizado_en"])
+    _registrar_historial(
+        tarea, HistorialTarea.TipoEvento.REPROGRAMADA, actor, anterior=anterior, nuevo=nuevo, motivo=(motivo or "").strip()
+    )
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=tarea,
+        origen=RegistroAuditoria.Origen.USUARIO if actor is not None else RegistroAuditoria.Origen.SISTEMA,
+        usuario=actor, datos_anteriores=anterior, datos_nuevos=nuevo,
+    )
+    return True
 
 
 @transaction.atomic

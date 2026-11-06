@@ -73,7 +73,7 @@
             {% for fila in item_aprobado.valores %}<div><dt>{{ fila.etiqueta }}</dt><dd>{{ fila.texto }}</dd></div>{% endfor %}
           </dl>
           {% if esquema.permite_exclusion %}<p class="text-muted">Puedes excluir este ítem del alcance: solo afecta a este ítem.</p>{% endif %}
-          {% if item_aprobado.gaceta %}<p>Gaceta: <a href="{% url 'gacetas:detalle' item_aprobado.gaceta.pk %}#item-{{ item_aprobado.elemento.pk }}">{{ item_aprobado.gaceta.nombre }}</a>{% if item_aprobado.ronda.version %} · versión {{ item_aprobado.ronda.version.numero }} · ronda {{ item_aprobado.ronda.numero }}{% endif %} (observaciones y versiones anteriores)</p>{% endif %}
+          {% if item_aprobado.gaceta %}<p>Gaceta: <a href="{% url 'tickets:espacio' item_aprobado.gaceta.ticket_id %}#pieza-{{ item_aprobado.elemento.pk }}">{{ item_aprobado.gaceta.nombre }}</a>{% if item_aprobado.ronda.version %} · versión {{ item_aprobado.ronda.version.numero }} · ronda {{ item_aprobado.ronda.numero }}{% endif %} (observaciones y versiones anteriores)</p>{% endif %}
         </section>
       {% endif %}
 

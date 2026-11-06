@@ -1,0 +1,25 @@
+{% comment %}Respuesta del solicitante a una entrega formal: aceptar u observar (operaciones de `entregas`).{% endcomment %}
+<ul class="plain-list">
+  {% for resultado in accion.entrega.resultados.all %}
+    <li>
+      <strong>{{ resultado.nombre }}</strong>
+      {% if resultado.tipo == "TEXTO" %}<p>{{ resultado.texto|linebreaksbr }}</p>
+      {% elif resultado.tipo == "ENLACE" %}<p><a href="{{ resultado.enlace }}" rel="noopener noreferrer">{{ resultado.enlace }}</a></p>
+      {% elif resultado.tipo == "ARCHIVO" %}{% for archivo in resultado.adjuntos.all %}<p><a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a></p>{% endfor %}
+      {% elif resultado.tipo == "CONFIRMACION" %}<p class="text-muted">Confirmado</p>{% endif %}
+    </li>
+  {% empty %}
+    <li class="text-muted">Esta entrega no incluyó resultados específicos.</li>
+  {% endfor %}
+</ul>
+<div class="ws-acciones esp-panel__pie">
+  <form method="post" action="{% url 'tickets:aceptar_entrega' ticket.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}"><button type="submit" class="btn btn--primary">Todo está correcto</button></form>
+</div>
+<details class="esp-plegable">
+  <summary>Tengo observaciones</summary>
+  <form method="post" action="{% url 'tickets:observar_entrega' ticket.pk %}" class="form">
+    {% csrf_token %}<input type="hidden" name="next" value="{{ base }}">
+    <div class="field"><label for="obs-entrega">¿Qué debemos ajustar?</label><textarea id="obs-entrega" name="observaciones" rows="3" required></textarea></div>
+    <button type="submit" class="btn btn--secondary">Enviar observaciones</button>
+  </form>
+</details>

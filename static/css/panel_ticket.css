@@ -1,0 +1,293 @@
+/* =====================================================================
+   Panel contextual del ticket — Conversación | Historial
+   ---------------------------------------------------------------------
+   UN panel derecho compartido por todos los servicios y procesos
+   (`templates/tickets/_panel_ticket.html`, `static/js/panel_ticket.js`).
+   Encabezado (pestañas + cerrar) fijo; cada pestaña desplaza solo su
+   contenido; el compositor del chat queda al pie. Integrado en el layout
+   en escritorio amplio (≥1280 px, 380 px), superpuesto en portátil y
+   tableta, a pantalla completa en móvil. Solo tokens semánticos: seis
+   acentos, claro/oscuro; avatares y pestañas son los componentes globales.
+   ===================================================================== */
+
+/* 1. Acceso desde la cabecera del espacio ------------------------------- */
+
+.tp-acceso { position: relative; }
+
+.tp-acceso__cuenta {
+  display: inline-grid;
+  place-items: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1;
+}
+
+.tp-acceso[aria-expanded="true"] { background: var(--surface-hover); color: var(--text-primary); }
+
+/* 2. Panel --------------------------------------------------------------- */
+
+.tp {
+  position: sticky;
+  top: calc(var(--header-h) + var(--space-3));
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--header-h) - var(--space-6));
+  height: calc(100dvh - var(--header-h) - var(--space-6));
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.tp[hidden] { display: none; }
+
+.tp__cabeza {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-2) 0 var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.tp__pestanas.tabs { border-bottom: 0; }
+.tp__pestanas .tabs__tab { height: var(--control-h-md); padding-inline: var(--space-3); font-size: var(--font-size-small); }
+.tp__pestanas .tabs__tab:focus-visible { outline: none; box-shadow: inset var(--ring-focus); border-radius: var(--radius-sm); }
+
+.tp__cerrar { flex: none; width: var(--control-h-sm); height: var(--control-h-sm); margin-bottom: var(--space-1); }
+.tp__cerrar:hover { background: var(--surface-hover); color: var(--text-primary); }
+.tp__cerrar:focus-visible { outline: none; box-shadow: var(--ring-focus); }
+
+.tp__vista {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.tp__vista[hidden] { display: none; }
+.tp__vista:focus-visible { outline: none; box-shadow: inset var(--ring-focus); }
+
+.tp__vacio { margin: 0; padding: var(--space-5) var(--space-4); color: var(--text-muted); font-size: var(--font-size-small); text-align: center; }
+
+/* 3. Conversación --------------------------------------------------------- */
+
+.tp-chat__mensajes {
+  position: relative; /* cada zona que se desplaza contiene a sus descendientes absolutos (`.sr-only`) */
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  gap: var(--space-4);
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-4);
+}
+
+.tp-chat__mensajes:focus-visible { outline: none; box-shadow: inset var(--ring-focus); }
+
+.tp-chat__estado {
+  margin: auto 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+  text-align: center;
+}
+
+.tp-chat__estado:empty { display: none; }
+.tp-chat__estado.is-error { color: var(--status-danger); }
+
+.tp-msj {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  column-gap: var(--space-3);
+  align-items: start;
+}
+
+.tp-msj__cabeza {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0 var(--space-2);
+  margin: 0 0 var(--space-1);
+  font-size: var(--font-size-small);
+}
+
+.tp-msj__autor { font-weight: var(--font-weight-semibold); color: var(--text-primary); }
+.tp-msj__hora { font-size: var(--font-size-caption); color: var(--text-muted); }
+
+.tp-msj__texto {
+  justify-self: start;
+  max-width: 100%;
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: 4px var(--radius-md) var(--radius-md) var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tp-msj--mio .tp-msj__texto { background: var(--color-primary-soft); }
+.tp-msj.is-pendiente .tp-msj__texto { opacity: 0.6; }
+.tp-msj__aviso { grid-column: 2; margin: var(--space-1) 0 0; font-size: var(--font-size-caption); color: var(--text-muted); }
+.tp-msj.is-fallido .tp-msj__aviso { color: var(--status-danger); }
+
+.tp-chat__conexion {
+  flex: none;
+  margin: 0;
+  padding: var(--space-1) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.tp-chat__compositor {
+  display: grid;
+  flex: none;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+}
+
+.tp-chat__compositor textarea {
+  width: 100%;
+  min-height: var(--control-h-md);
+  max-height: 160px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-small);
+  line-height: 1.45;
+  resize: none;
+}
+
+.tp-chat__compositor textarea:focus { outline: none; border-color: var(--border-focus); box-shadow: var(--ring-focus); }
+
+.tp-chat__enviar { width: var(--control-h-md); height: var(--control-h-md); padding: 0; justify-content: center; }
+
+.tp-chat__error {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--status-danger);
+}
+
+.tp-chat__solo-lectura {
+  flex: none;
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+/* 4. Historial: línea de tiempo vertical --------------------------------- */
+
+.tp-historial { position: relative; overflow-y: auto; overscroll-behavior: contain; padding: var(--space-4); }
+
+.tl { margin: 0; padding: 0; list-style: none; }
+
+.tl__evento {
+  position: relative;
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  column-gap: var(--space-3);
+  padding-bottom: var(--space-4);
+}
+
+/* Línea vertical sutil que une los avatares. */
+.tl__evento:not(:last-child)::before {
+  content: "";
+  position: absolute;
+  top: 36px;
+  bottom: 4px;
+  left: 15.5px;
+  width: 1px;
+  background: var(--border-subtle);
+}
+
+.tl__avatar { display: inline-flex; }
+.tl__avatar .avatar { width: 32px; height: 32px; }
+
+.tl__cuerpo { min-width: 0; padding-top: 5px; }
+.tl__linea { margin: 0; font-size: var(--font-size-small); line-height: 1.4; }
+.tl__actor { font-weight: var(--font-weight-semibold); color: var(--text-primary); }
+.tl__accion { color: var(--text-secondary); }
+.tl__objeto { font-weight: var(--font-weight-medium); color: var(--text-primary); overflow-wrap: anywhere; }
+.tl__detalle { margin: 2px 0 0; font-size: var(--font-size-caption); color: var(--text-secondary); overflow-wrap: anywhere; }
+.tl__fecha { display: block; margin-top: 2px; font-size: var(--font-size-caption); color: var(--text-muted); }
+
+/* 5. Colocación según el ancho --------------------------------------------- */
+
+/* Escritorio amplio: columna del layout (el área central se adapta). */
+@media (min-width: 1280px) {
+  .tb-pagina.has-tp { grid-template-columns: minmax(0, 1fr) 380px; }
+  /* Con el panel de contexto (solicitud / ítem) también abierto, este se superpone para no quitar legibilidad. */
+  .tb-pagina--con-panel.has-tp { grid-template-columns: minmax(0, 1fr) minmax(320px, 380px); }
+  .tb-pagina--con-panel .tp {
+    position: fixed;
+    z-index: var(--z-popover);
+    top: calc(var(--header-h) + var(--space-2));
+    right: var(--space-3);
+    bottom: var(--space-3);
+    width: 380px;
+    height: auto;
+    box-shadow: var(--shadow-float);
+  }
+}
+
+/* Portátil y tableta: superpuesto, sin quitar ancho al contenido. */
+@media (max-width: 1279px) {
+  .tp {
+    position: fixed;
+    z-index: var(--z-popover);
+    top: calc(var(--header-h) + var(--space-2));
+    right: var(--space-3);
+    bottom: var(--space-3);
+    width: min(380px, calc(100vw - 2 * var(--space-3)));
+    height: auto;
+    box-shadow: var(--shadow-float);
+  }
+}
+
+/* Móvil: vista completa bajo la navegación. */
+@media (max-width: 639px) {
+  .tp {
+    top: var(--header-h);
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto;
+    border-inline: 0;
+    border-bottom: 0;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+
+  html.tp-bloqueo { overflow: hidden; }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .tp:not([hidden]) { animation: tp-entrar var(--duration-base) var(--ease-out); }
+
+  @keyframes tp-entrar {
+    from { opacity: 0; transform: translateX(var(--space-3)); }
+    to { opacity: 1; transform: none; }
+  }
+}

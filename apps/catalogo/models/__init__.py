@@ -19,6 +19,7 @@ from .parrilla import (
 )
 from .programacion import ProgramacionProceso
 from .gacetas import DefinicionGaceta, ReglaFinalizacion
+from .demo import RecursoDemo
 
 __all__ = [
     "BloqueOperativo",
@@ -34,6 +35,7 @@ __all__ = [
     "ParticipanteColeccion",
     "PosicionVisualBloque",
     "ProgramacionProceso",
+    "RecursoDemo",
     "ReglaFinalizacion",
     "RevisorDefinicion",
     "TerminoServicio",

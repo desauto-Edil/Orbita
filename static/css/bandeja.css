@@ -1,0 +1,563 @@
+/* =====================================================================
+   Bandeja de tickets compartida — «Mi trabajo» y «Mis tickets»
+   ---------------------------------------------------------------------
+   Lista estructurada contenida en UNA superficie (como la Cola y el
+   espacio del ticket): rótulos discretos, filas separadas por una línea
+   fina, sin divisores verticales, cuadrícula, zebra ni tarjetas por fila. En escritorio ocupa la altura
+   disponible y solo las filas se desplazan (§3b). Dos composiciones:
+   completa (inspector cerrado) y compacta (inspector abierto o pantalla
+   angosta: fase y estado pasan bajo el nombre). El inspector es la misma
+   superficie a la derecha, no una tarjeta flotante. Solo tokens
+   semánticos: seis acentos, claro/oscuro. Comportamiento en
+   `static/js/bandeja.js`.
+   ===================================================================== */
+
+/* 1. Distribución --------------------------------------------------------- */
+
+.bt {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+.bt__lista {
+  min-width: 0;
+  container: bandeja / inline-size;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+@media (min-width: 1024px) {
+  .bt.has-inspector { grid-template-columns: minmax(0, 1fr) clamp(340px, 30vw, 420px); }
+}
+
+/* 2. Composición completa ---------------------------------------------------
+   Encabezado y filas comparten la MISMA rejilla (columnas y `column-gap`): la alineación es exacta. Solo hay
+   separadores horizontales entre registros; nunca divisores verticales. */
+
+.bt-encabezado,
+.bt-fila__enlace {
+  display: grid;
+  align-items: center;
+  column-gap: var(--space-5);
+  padding-inline: var(--space-5) var(--space-4);
+}
+
+/* Inspector cerrado — Mi trabajo: Ticket | Fase | Tu situación | Estado | Fecha · Mis tickets: Ticket | Fase o
+   novedad | Estado | Fecha. Las columnas de texto se reparten el ancho; estado y fecha tienen el suyo. */
+.bt--trabajo .bt-encabezado,
+.bt--trabajo .bt-fila__enlace {
+  grid-template-columns: minmax(0, 2.4fr) minmax(0, 1fr) minmax(0, 1.6fr) 128px 88px 16px;
+}
+
+.bt--tickets .bt-encabezado,
+.bt--tickets .bt-fila__enlace {
+  grid-template-columns: minmax(0, 2.4fr) minmax(0, 1.6fr) 128px 88px 16px;
+}
+
+/* Encabezado: cabecera de la tabla, no otra fila — una BARRA redondeada inset dentro de la superficie (separada
+   de los bordes por `--bt-encabezado-margen`), con un tono más contrastado que el cuerpo (la tinta mezclada con la
+   superficie: se adapta a claro/oscuro sin color fijo), 38 px, 12 px/600 en texto secundario, sin bordes ni
+   sombra. Su relleno horizontal descuenta el margen, así sus columnas coinciden exactamente con las de las filas. */
+.bt { --bt-encabezado-margen: var(--space-2); }
+
+.bt-encabezado {
+  min-height: 38px;
+  margin: var(--bt-encabezado-margen) var(--bt-encabezado-margen) var(--space-1);
+  padding-inline: calc(var(--space-5) - var(--bt-encabezado-margen)) calc(var(--space-4) - var(--bt-encabezado-margen));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--text-primary) 6%, var(--surface-card));
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.01em;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.bt-encabezado .bt-celda--fecha,
+.bt-fila .bt-celda--fecha { justify-self: end; text-align: right; }
+
+.bt-filas { list-style: none; margin: 0; padding: 0; }
+
+.bt-fila { position: relative; }
+.bt-fila + .bt-fila { border-top: 1px solid var(--border-subtle); }
+
+.bt-fila__enlace {
+  min-height: 64px;
+  padding-block: var(--space-3);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+  text-decoration: none;
+}
+
+.bt-fila__enlace:hover { background: var(--surface-hover); }
+.bt-fila__enlace:focus-visible { outline: none; box-shadow: inset var(--ring-focus); background: var(--surface-hover); }
+
+/* Selección persistente: tinte del acento y marca lateral (el acento nunca es color de texto). */
+.bt-fila.is-selected .bt-fila__enlace { background: var(--color-primary-soft); }
+
+.bt-fila.is-selected::before {
+  content: "";
+  position: absolute;
+  inset-block: 0;
+  left: 0;
+  width: 3px;
+  background: var(--border-selected);
+}
+
+.bt-celda { min-width: 0; }
+
+.bt-celda--ticket { display: grid; gap: 3px; }
+
+.bt-fila__nombre {
+  overflow: hidden;
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bt-fila.is-atencion .bt-fila__nombre { font-weight: var(--font-weight-semibold); }
+
+.bt-fila__meta,
+.bt-fila__compacto {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 var(--space-2);
+  min-width: 0;
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.bt-fila__meta > * + *::before { content: "·"; margin-right: var(--space-2); color: var(--text-muted); }
+
+/* Fase y estado bajo el nombre: solo en la composición compacta. */
+.bt-fila__compacto { display: none; gap: var(--space-1) var(--space-2); margin-top: 2px; color: var(--text-secondary); }
+
+/* Truncar solo cuando no cabe. */
+.bt-celda--fase {
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bt-celda--situacion { display: grid; gap: var(--space-1); justify-items: start; }
+
+.bt-fila__siguiente {
+  max-width: 100%;
+  overflow: hidden;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bt-fila__siguiente.is-accion { color: var(--text-primary); font-weight: var(--font-weight-medium); }
+.bt-fila__novedad { color: var(--text-secondary); }
+
+.bt-fila__mas {
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
+/* Fecha: el valor manda; debajo, su rótulo en texto o, si venció / está por vencer, la etiqueta semántica (que
+   se adapta al ancho de la columna: `.estado-etiqueta` trunca, la columna no crece). */
+.bt-celda--fecha { display: grid; gap: 2px; justify-items: end; white-space: nowrap; }
+.bt-fecha__valor { font-weight: var(--font-weight-medium); color: var(--text-primary); }
+.bt-fecha__etiqueta { font-size: var(--font-size-caption); font-weight: var(--font-weight-regular); color: var(--text-muted); }
+
+.bt-fila__ir { display: inline-flex; color: var(--text-muted); }
+.bt-fila__enlace:hover .bt-fila__ir,
+.bt-fila.is-selected .bt-fila__ir { color: var(--text-primary); }
+
+/* Estado, situación y vencimientos usan el componente global `.estado-etiqueta` (components.css §4.1). */
+
+/* 3. Composición compacta --------------------------------------------------
+   Inspector abierto (escritorio) o bandeja angosta (tableta). Mi trabajo: Ticket | Tu situación | Fecha (fase y
+   estado bajo el nombre) · Mis tickets: Ticket | Fase o novedad | Fecha (estado bajo el nombre). */
+
+@media (min-width: 1024px) {
+  .bt.has-inspector .bt-encabezado,
+  .bt.has-inspector .bt-fila__enlace {
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) 80px 16px;
+    column-gap: var(--space-4);
+  }
+
+  .bt.has-inspector .bt-celda--estado,
+  .bt--trabajo.has-inspector .bt-celda--fase { display: none; }
+  .bt.has-inspector .bt-fila__compacto { display: flex; }
+  .bt.has-inspector .bt-fila__nombre { white-space: normal; overflow-wrap: anywhere; }
+  .bt--tickets.has-inspector .bt-celda--fase { white-space: normal; }
+}
+
+@container bandeja (max-width: 820px) {
+  .bt .bt-encabezado,
+  .bt .bt-fila__enlace {
+    grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) 80px 16px;
+    column-gap: var(--space-4);
+  }
+
+  .bt-fila .bt-celda--estado,
+  .bt-encabezado .bt-celda--estado,
+  .bt--trabajo .bt-celda--fase { display: none; }
+  .bt--tickets .bt-celda--fase { white-space: normal; }
+  .bt-fila__compacto { display: flex; }
+  .bt-fila__nombre { white-space: normal; overflow-wrap: anywhere; }
+}
+
+/* Móvil: una columna; situación y fecha en la última línea. */
+@container bandeja (max-width: 520px) {
+  .bt-encabezado { display: none; }
+
+  .bt .bt__lista .bt-fila__enlace {
+    grid-template-columns: minmax(0, 1fr) auto 16px;
+    grid-template-areas: "ticket ticket ir" "situacion fecha ir";
+    row-gap: var(--space-2);
+    padding-inline: var(--space-4) var(--space-3);
+  }
+
+  .bt-fila .bt-celda--ticket { grid-area: ticket; }
+  .bt--trabajo .bt-celda--situacion,
+  .bt--tickets .bt-celda--fase { grid-area: situacion; }
+  .bt-fila .bt-celda--fecha { grid-area: fecha; align-self: end; }
+  .bt-fila .bt-fila__ir { grid-area: ir; }
+}
+
+/* 3b. Altura disponible (escritorio) ----------------------------------------
+   Solo los REGISTROS se desplazan. La vista (`<main>`, `content-area--bandeja`, que la plantilla añade solo cuando
+   hay filas) mide exactamente el alto bajo la navegación global. Título, búsqueda y filtros no crecen
+   (`flex: none`); la bandeja toma el resto (`min-height: 0`); dentro de la lista el encabezado queda FUERA del
+   contenedor que se desplaza y `ul.bt-filas` es el ÚNICO con `overflow-y: auto`. La página no se desplaza, así
+   que nada pasa por detrás del header global. El inspector ocupa el mismo alto y desplaza solo su cuerpo.
+
+   Causa del fallo anterior: `.content-area` es `flex: 1` (base 0 %) dentro de `.app-shell`, que solo tiene
+   `min-height: 100vh`; con un contenedor de alto indefinido esa base se resuelve por CONTENIDO y anula `height`,
+   así que la vista crecía con la lista y desplazaba la página. Aquí la vista deja de flexionar (`flex: none`).
+
+   En tableta, móvil o pantallas bajas el desplazamiento sigue siendo el natural de la página. */
+
+@media (min-width: 1024px) and (min-height: 560px) {
+  .content-area--bandeja {
+    flex: none;
+    height: calc(100vh - var(--header-h));
+    height: calc(100dvh - var(--header-h));
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .content-area--bandeja > * { flex: none; }
+
+  .content-area--bandeja > .bt {
+    flex: 1 1 0;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  /* La lista mide lo que sus filas hasta el alto disponible: sin hueco en blanco y sin crecer de más. */
+  .content-area--bandeja .bt__lista {
+    display: flex;
+    flex-direction: column;
+    align-self: start;
+    max-height: 100%;
+    min-height: 0;
+  }
+
+  /* El canal de la barra de desplazamiento se reserva SIEMPRE en las filas (`scrollbar-gutter: stable`) y el
+     encabezado reserva el mismo ancho a su derecha: así la barra nunca descuadra las columnas. */
+  .content-area--bandeja .bt-encabezado {
+    flex: none;
+    padding-right: calc(var(--space-4) - var(--bt-encabezado-margen) + var(--scrollbar-size));
+  }
+
+  .content-area--bandeja .bt-filas {
+    position: relative; /* contiene a sus descendientes absolutos (`.sr-only`): no alargan la página */
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+  }
+
+  .content-area--bandeja .bt-inspector {
+    position: static;
+    align-self: stretch;
+    height: auto;
+    min-height: 0;
+  }
+
+  /* Mi trabajo: lo que no pertenece a ningún ticket, plegado bajo la bandeja; abierto, se desplaza solo. */
+  .content-area--bandeja > .bj-sueltos { margin-top: 0; }
+  .content-area--bandeja > .bj-sueltos[open] { max-height: 32%; overflow-y: auto; overscroll-behavior: contain; }
+}
+
+/* 4. Inspector -------------------------------------------------------------- */
+
+.bt-inspector {
+  position: sticky;
+  top: calc(var(--header-h) + var(--space-3));
+  display: flex;
+  flex-direction: column;
+  height: calc(100vh - var(--header-h) - var(--space-6));
+  height: calc(100dvh - var(--header-h) - var(--space-6));
+  min-height: 0;
+  overflow: hidden;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.bt-inspector[hidden] { display: none; }
+.bt-inspector.is-loading .bt-inspector__contenido { opacity: 0.55; }
+
+.bt-inspector__cargando {
+  margin: 0;
+  padding: var(--space-5);
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+}
+
+.bt-inspector__contenido,
+.bt-ins { display: flex; flex: 1; min-height: 0; flex-direction: column; }
+
+/* Encabezado compacto, diferenciado por el mismo fondo de los rótulos de la bandeja. */
+.bt-ins__cabecera {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-3) var(--space-3) var(--space-3) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-sunken);
+}
+
+.bt-ins__volver {
+  display: none;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-self: start;
+  gap: var(--space-1);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+}
+
+.bt-ins__volver:hover { color: var(--text-primary); }
+.bt-ins__volver:focus-visible { outline: none; box-shadow: var(--ring-focus); border-radius: var(--radius-sm); }
+
+.bt-ins__titulos { display: grid; gap: 2px; min-width: 0; padding-top: var(--space-1); }
+
+.bt-ins__titulo {
+  margin: 0;
+  font-size: var(--font-size-body-lg);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+
+.bt-ins__titulo:focus { outline: none; }
+
+.bt-ins__contexto {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.bt-ins__contexto > * + *::before { content: "·"; margin-right: var(--space-2); }
+
+.bt-ins__cuerpo {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 0 var(--space-5) var(--space-2);
+}
+
+/* Resumen inicial: estado · situación · fecha en una franja. */
+.bt-ins__resumen {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: var(--space-3) var(--space-4);
+  margin: 0;
+  padding-block: var(--space-4);
+}
+
+.bt-ins__resumen > div { display: grid; gap: 3px; min-width: 0; align-content: start; }
+.bt-ins__resumen dt { font-size: var(--font-size-caption); color: var(--text-muted); }
+.bt-ins__resumen dd { margin: 0; font-size: var(--font-size-small); font-weight: var(--font-weight-medium); }
+.bt-ins__resumen .estado-etiqueta { white-space: normal; }
+.bt-ins__fecha { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-1) var(--space-2); }
+
+.bt-ins__seccion { padding-block: var(--space-4); border-top: 1px solid var(--border-subtle); }
+
+.bt-ins__subtitulo {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-3);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+
+.bt-ins__cuenta { font-weight: var(--font-weight-regular); color: var(--text-muted); }
+
+.bt-ins__pendientes,
+.bt-ins__actividad { list-style: none; margin: 0; padding: 0; }
+
+/* Pendientes: destacados por tipografía y un punto, sin bloques de color. */
+.bt-ins__pendientes { display: grid; gap: var(--space-3); }
+
+.bt-ins__pendientes > li {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  padding-left: var(--space-4);
+  font-size: var(--font-size-small);
+}
+
+.bt-ins__pendientes > li::before {
+  content: "";
+  position: absolute;
+  top: 0.55em;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--text-primary);
+}
+
+.bt-ins__pendiente-titulo { font-weight: var(--font-weight-medium); }
+
+.bt-ins__pendiente-meta,
+.bt-ins__evento-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.bt-ins__pendiente-meta > * + *::before,
+.bt-ins__evento-meta > * + *::before { content: "·"; margin-right: var(--space-2); }
+
+.bt-ins__datos { display: grid; gap: var(--space-2); margin: 0; font-size: var(--font-size-small); }
+
+.bt-ins__datos > div {
+  display: grid;
+  grid-template-columns: minmax(96px, 0.8fr) minmax(0, 1.6fr);
+  gap: var(--space-3);
+}
+
+.bt-ins__datos dt { color: var(--text-muted); }
+.bt-ins__datos dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+.bt-ins__datos--apilados > div { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+
+/* Plegables: el resumen es el título de la sección, con un indicador discreto. */
+.bt-ins__plegable { padding-block: var(--space-3); }
+
+.bt-ins__plegable > summary {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  list-style: none;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.bt-ins__plegable > summary::-webkit-details-marker { display: none; }
+.bt-ins__plegable > summary .bt-ins__subtitulo { margin: 0; }
+
+.bt-ins__plegable > summary::after {
+  content: "";
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-inline: var(--space-1);
+  border-right: 1.5px solid var(--text-muted);
+  border-bottom: 1.5px solid var(--text-muted);
+  transform: translateY(-2px) rotate(45deg);
+}
+
+.bt-ins__plegable[open] > summary { margin-bottom: var(--space-3); }
+.bt-ins__plegable[open] > summary::after { transform: translateY(2px) rotate(-135deg); }
+.bt-ins__plegable > summary:hover .bt-ins__subtitulo { color: var(--text-secondary); }
+.bt-ins__plegable > summary:focus-visible { outline: none; box-shadow: var(--ring-focus); }
+
+.bt-ins__actividad { display: grid; gap: var(--space-3); font-size: var(--font-size-small); }
+.bt-ins__actividad > li { display: grid; gap: 2px; }
+.bt-ins__evento { font-weight: var(--font-weight-medium); }
+
+.bt-ins__pie {
+  display: flex;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+}
+
+.bt-ins__pie .btn { flex: 1; justify-content: center; }
+
+/* 5. Tableta y móvil: el inspector se superpone sin tapar la navegación ------- */
+
+@media (max-width: 1023px) {
+  .bt-inspector {
+    position: fixed;
+    z-index: var(--z-popover);
+    top: calc(var(--header-h) + var(--space-2));
+    right: var(--space-3);
+    bottom: var(--space-3);
+    width: min(420px, calc(100vw - 2 * var(--space-3)));
+    height: auto;
+    box-shadow: var(--shadow-float);
+  }
+}
+
+@media (max-width: 639px) {
+  .bt-inspector {
+    top: var(--header-h);
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    border-inline: 0;
+    border-bottom: 0;
+  }
+
+  .bt-ins__volver { display: inline-flex; }
+  .bt-ins__cerrar { display: none; }
+  .bt-ins__cabecera { padding-inline: var(--space-4); }
+  .bt-ins__cuerpo,
+  .bt-ins__pie { padding-inline: var(--space-4); }
+
+  html.bt-bloqueo { overflow: hidden; }
+}
+
+/* 6. Movimiento: solo si la persona no pidió reducirlo ---------------------- */
+
+@media (prefers-reduced-motion: no-preference) {
+  .bt-fila__enlace { transition: background-color var(--duration-fast) var(--ease-standard); }
+  .bt-inspector:not([hidden]) { animation: bt-entrar var(--duration-base) var(--ease-out); }
+
+  @keyframes bt-entrar {
+    from { opacity: 0; transform: translateX(var(--space-3)); }
+    to { opacity: 1; transform: none; }
+  }
+}

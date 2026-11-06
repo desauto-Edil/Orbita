@@ -6,6 +6,7 @@ sin separar base/development/production todavía (se revisita cuando exista
 una necesidad concreta de producción real).
 """
 
+import sys
 from pathlib import Path
 
 import environ
@@ -22,6 +23,8 @@ DEBUG = env("DEBUG")
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 
 INSTALLED_APPS = [
+    # Servidor ASGI (Conversación del ticket en tiempo real). Va primero: así `runserver` sirve HTTP y WebSocket.
+    "daphne",
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
@@ -30,6 +33,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "django.contrib.humanize",
     "django_celery_beat",
+    "channels",
     "apps.core",
     "apps.catalogo",
     "apps.tickets",
@@ -37,6 +41,7 @@ INSTALLED_APPS = [
     "apps.workflows",
     "apps.aprobaciones",
     "apps.gacetas",
+    "apps.notificaciones",
 ]
 
 if DEBUG:
@@ -75,6 +80,7 @@ TEMPLATES = [
                 "django.contrib.messages.context_processors.messages",
                 "apps.core.context_processors.navegacion",
                 "apps.core.context_processors.sistema",
+                "apps.notificaciones.context_processors.notificaciones",
             ],
         },
     },
@@ -88,6 +94,18 @@ DATABASES = {
 }
 
 REDIS_URL = env("REDIS_URL", default="redis://redis:6379/0")
+
+# Capa de canales (Django Channels) para la Conversación del ticket en tiempo real. Redis solo DISTRIBUYE los avisos
+# entre procesos; los mensajes se guardan en PostgreSQL (`ComentarioTicket`). Las pruebas usan la capa en memoria
+# para no depender de un Redis compartido.
+CHANNEL_LAYERS = {
+    "default": {
+        "BACKEND": "channels_redis.core.RedisChannelLayer",
+        "CONFIG": {"hosts": [env("CHANNELS_REDIS_URL", default=REDIS_URL)]},
+    }
+}
+if len(sys.argv) > 1 and sys.argv[1] == "test":
+    CHANNEL_LAYERS = {"default": {"BACKEND": "channels.layers.InMemoryChannelLayer"}}
 
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
@@ -158,3 +176,36 @@ MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+
+# Google: credenciales independientes para identidad y correo.
+# Gmail permanece pendiente; el acceso Google usa únicamente los scopes de identidad.
+APP_BASE_URL = env("APP_BASE_URL", default="http://127.0.0.1:8000").rstrip("/")
+GOOGLE_OAUTH_CLIENT_ID = env("GOOGLE_OAUTH_CLIENT_ID", default="")
+GOOGLE_OAUTH_CLIENT_SECRET = env("GOOGLE_OAUTH_CLIENT_SECRET", default="")
+GOOGLE_OAUTH_REDIRECT_URI = env(
+    "GOOGLE_OAUTH_REDIRECT_URI", default=f"{APP_BASE_URL}/auth/google/callback/"
+)
+GOOGLE_OAUTH_ALLOWED_DOMAINS = env.list(
+    "GOOGLE_OAUTH_ALLOWED_DOMAINS", default=["edilandina.com", "gammaingenieros.com"]
+)
+GOOGLE_OAUTH_SCOPES = ("openid", "email", "profile")
+
+GMAIL_SERVICE_ACCOUNT_EMAIL = env("GMAIL_SERVICE_ACCOUNT_EMAIL", default="")
+GMAIL_SERVICE_ACCOUNT_CLIENT_ID = env("GMAIL_SERVICE_ACCOUNT_CLIENT_ID", default="")
+GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY_ID = env("GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY_ID", default="")
+# El PEM se guarda en una sola línea del .env con saltos de línea literales \\n.
+GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY = env(
+    "GMAIL_SERVICE_ACCOUNT_PRIVATE_KEY", default=""
+).replace("\\n", "\n")
+GMAIL_SENDER_EMAIL = env("GMAIL_SENDER_EMAIL", default="")
+GMAIL_SCOPES = ("https://www.googleapis.com/auth/gmail.send",)
+# Notificaciones (Sprint 7, adelanto): el correo de los avisos solo sale con el interruptor encendido (apagado por
+# defecto para que desarrollo y pruebas no escriban a personas reales) y, si se define, todo correo se redirige a un
+# buzón de pruebas (el destinatario real queda registrado en `EnvioCorreo`).
+NOTIFICACIONES_CORREO_ACTIVO = env.bool("NOTIFICACIONES_CORREO_ACTIVO", default=False)
+CORREO_REDIRIGIR_A = env("CORREO_REDIRIGIR_A", default="")
+GMAIL_AUTH_MODE = env("GMAIL_AUTH_MODE", default="service_account")
+GMAIL_REFRESH_TOKEN = env("GMAIL_REFRESH_TOKEN", default="")
+GMAIL_OAUTH_REDIRECT_URI = env(
+    "GMAIL_OAUTH_REDIRECT_URI", default=f"{APP_BASE_URL}/auth/gmail/callback/"
+)

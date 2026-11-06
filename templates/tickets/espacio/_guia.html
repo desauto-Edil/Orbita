@@ -1,0 +1,12 @@
+{% comment %}
+  UX-3 — lo que FALTA para completar la acción, en una línea compacta junto al formulario (sin panel de
+  asistencia). Espera `accion.requisitos_pendientes` (la vista ya quitó lo cumplido y lo que la lista de
+  verificación muestra por sí misma). `cumplido` False = pendiente; None = regla que aplica al decidir.
+{% endcomment %}
+<ul class="esp-requisitos" aria-label="Para completar">
+  {% for requisito in accion.requisitos_pendientes %}
+    <li class="esp-requisito{% if requisito.cumplido is False %} esp-requisito--falta{% else %} esp-requisito--regla{% endif %}">
+      <span class="esp-requisito__marca" aria-hidden="true"></span>{{ requisito.texto }}{% if requisito.cumplido is False %}<span class="sr-only"> (pendiente)</span>{% endif %}
+    </li>
+  {% endfor %}
+</ul>

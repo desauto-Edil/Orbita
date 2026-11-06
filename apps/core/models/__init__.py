@@ -1,3 +1,4 @@
+from .accesos import AccesoUsuario
 from .auditoria import RegistroAuditoria
 from .base import RegistroBase
 from .identidad import PerfilOrganizacional, Usuario
@@ -34,4 +35,5 @@ __all__ = [
     "AsignacionRol",
     "RegistroAuditoria",
     "ConfiguracionSistema",
+    "AccesoUsuario",
 ]

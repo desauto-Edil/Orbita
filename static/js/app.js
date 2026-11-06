@@ -15,6 +15,13 @@
 (function () {
   "use strict";
 
+  // Si Google no puede entregar la foto, conservar las iniciales del avatar.
+  document.addEventListener("error", function (event) {
+    if (event.target.matches && event.target.matches(".avatar img")) {
+      event.target.remove();
+    }
+  }, true);
+
   /* ------------------------------ Popovers ------------------------------ */
 
   function panelDe(disparador) {

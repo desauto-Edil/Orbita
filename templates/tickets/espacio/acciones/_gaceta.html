@@ -1,0 +1,25 @@
+{% comment %}Revisar las piezas de una gaceta: valores, archivos, versión presentada y observaciones; observar es `gacetas:observar` con `next` = el espacio.{% endcomment %}
+<ul class="esp-piezas">
+  {% for pieza in accion.piezas %}
+    <li class="esp-pieza">
+      <h4 class="esp-guia__titulo">{{ pieza.elemento.parrilla.nombre_elemento|default:"Ítem" }} #{{ pieza.elemento.numero }}{% if pieza.ronda %} <span class="badge">Ronda {{ pieza.ronda.numero }}{% if pieza.ronda.version %} · versión {{ pieza.ronda.version.numero }}{% endif %}</span>{% endif %}</h4>
+      <dl class="esp-item__datos">{% for fila in pieza.valores %}<dt>{{ fila.etiqueta }}</dt><dd>{{ fila.texto }}</dd>{% endfor %}</dl>
+      {% if pieza.archivos %}
+        <div class="tb-archivos tb-archivos--grandes">{% for archivo in pieza.archivos %}{% include "tickets/espacio/tablero/_archivo.html" with archivo=archivo grande=True %}{% endfor %}</div>
+      {% endif %}
+      {% if pieza.observaciones %}
+        <ul class="esp-observaciones">
+          {% for obs in pieza.observaciones %}
+            <li><strong>{{ obs.autor.get_full_name|default:obs.autor.get_username }}</strong> <span class="text-muted">{{ obs.creada_en|date:"d/m H:i" }}</span><br>{{ obs.texto }}{% if obs.respuesta %}<br><span class="text-muted">Respuesta: {{ obs.respuesta }}</span>{% endif %}</li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      <form method="post" action="{% url 'gacetas:observar' pieza.participacion.pk %}" class="form">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+        <div class="field"><label for="obs-g-{{ pieza.participacion.pk }}">Observación</label><textarea id="obs-g-{{ pieza.participacion.pk }}" name="texto" rows="2" required></textarea></div>
+        <button type="submit" class="btn btn--secondary btn--sm">Registrar observación</button>
+      </form>
+    </li>
+  {% endfor %}
+</ul>
+

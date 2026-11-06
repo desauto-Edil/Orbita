@@ -1,0 +1,49 @@
+{% load humanize %}
+{% comment %}
+  Campana del encabezado (CU-035): número de avisos sin leer y un panel con los más recientes. Cada aviso se abre
+  por `notificaciones:abrir` (lo marca como leído y lleva a su objeto, que vuelve a autorizar). Sin JS, el botón es
+  un enlace al centro de notificaciones.
+{% endcomment %}
+<div class="notif-campana popover-host">
+  <button type="button"
+          class="btn-icon app-header__boton notif-campana__boton"
+          data-popover-toggle="panel-notificaciones"
+          aria-haspopup="dialog"
+          aria-expanded="false"
+          aria-controls="panel-notificaciones"
+          aria-label="Notificaciones{% if notif_sin_leer %}, {{ notif_sin_leer }} sin leer{% endif %}">
+    {% include "components/icon.html" with name="bell" %}
+    {% if notif_sin_leer %}<span class="notif-campana__cuenta" aria-hidden="true">{% if notif_sin_leer > 9 %}9+{% else %}{{ notif_sin_leer }}{% endif %}</span>{% endif %}
+  </button>
+  <div class="popover notif-panel" id="panel-notificaciones" role="dialog" aria-label="Notificaciones" hidden>
+    <div class="notif-panel__cabecera">
+      <span class="notif-panel__titulo">Notificaciones</span>
+      {% if notif_sin_leer %}
+        <form method="post" action="{% url 'notificaciones:todas_leidas' %}">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+          <button type="submit" class="notif-panel__accion">Marcar todo como leído</button>
+        </form>
+      {% endif %}
+    </div>
+    {% if notif_recientes %}
+      <ul class="notif-panel__lista">
+        {% for n in notif_recientes %}
+          <li>
+            <a class="notif-item{% if not n.leida %} is-sin-leer{% endif %}" href="{% url 'notificaciones:abrir' n.pk %}">
+              <span class="notif-item__marca{% if n.es_alerta %} notif-item__marca--alerta{% endif %}" aria-hidden="true">{% include "components/icon.html" with name=n.es_alerta|yesno:"clock,bell" size="sm" %}</span>
+              <span class="notif-item__texto">
+                <span class="notif-item__titulo">{{ n.titulo }}{% if not n.leida %}<span class="sr-only"> (sin leer)</span>{% endif %}</span>
+                <span class="notif-item__resumen">{{ n.resumen|truncatechars:110 }}</span>
+                <time class="notif-item__fecha" datetime="{{ n.creada_en|date:'c' }}">{{ n.creada_en|naturaltime }}</time>
+              </span>
+            </a>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p class="notif-panel__vacio">No tienes notificaciones todavía. Aquí verás lo que pase con tus tickets y tu trabajo.</p>
+    {% endif %}
+    <a class="notif-panel__pie" href="{% url 'notificaciones:centro' %}">Ver todas las notificaciones</a>
+  </div>
+</div>

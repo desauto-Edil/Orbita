@@ -3,8 +3,9 @@
   centro (`layout/dock.html`, decididos por `apps.core.navegacion`) y notificaciones + menú de usuario a la
   derecha. Sustituye al header tradicional y al dock inferior: no hay otra navegación global.
 
-  Búsqueda y notificaciones todavía no tienen backend (Sprint 8/9 del roadmap): se muestran DESHABILITADAS y
-  rotuladas «próximamente» para fijar su lugar sin aparentar ser operativas ni inventar funcionalidad.
+  La búsqueda global todavía no tiene backend (Sprint 8): se muestra DESHABILITADA y rotulada «próximamente».
+  Notificaciones (Sprint 7, adelanto): campana con el número sin leer y un panel con las más recientes
+  (`notificaciones/_campana.html`).
 {% endcomment %}
 <header class="app-header">
   <div class="app-header__inicio">
@@ -22,11 +23,7 @@
   {% include "layout/dock.html" %}
 
   <div class="app-header__actions">
-    <span data-tooltip="Notificaciones: próximamente" data-tooltip-pos="bottom">
-      <button type="button" class="btn-icon app-header__boton" disabled aria-label="Notificaciones (próximamente)">
-        {% include "components/icon.html" with name="bell" %}
-      </button>
-    </span>
+    {% include "notificaciones/_campana.html" %}
 
     <div class="user-menu popover-host">
       <button type="button"
@@ -35,7 +32,7 @@
               aria-haspopup="menu"
               aria-expanded="false"
               aria-controls="menu-usuario">
-        <span class="avatar" aria-hidden="true">{{ request.user.get_username|slice:":1"|upper }}</span>
+        {% include "components/avatar.html" with persona=request.user %}
         <span class="user-menu__name">{{ request.user.get_full_name|default:request.user.get_username }}</span>
         {% include "components/icon.html" with name="chevron-down" size="sm" %}
         <span class="sr-only">Menú de usuario</span>

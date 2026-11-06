@@ -102,6 +102,11 @@ def _tiene_trabajo_personal(usuario):
 
     if colecciones_de_participante(usuario).exists():
         return True
+    # UX-1: revisar las piezas de una gaceta también es trabajo suyo (lo encuentra en Trabajo).
+    from apps.tickets.bandeja import hay_revision_de_gaceta
+
+    if hay_revision_de_gaceta(usuario):
+        return True
     # 4.F3: los tickets que la persona atiende son su trabajo (no los que solicitó).
     if Ticket.objects.filter(usuario_responsable=usuario, estado=Ticket.Estado.EN_ATENCION).exists():
         return True
@@ -236,7 +241,7 @@ def grupos_mas(elementos):
     return grupos
 
 
-def construir_navegacion(usuario, resolver_match):
+def construir_navegacion(usuario, resolver_match, destino=None):
     """Todo lo que necesitan el dock, "Más" y las pestañas de Trabajo, con
     cada capacidad evaluada una sola vez por request.
 
@@ -264,6 +269,10 @@ def construir_navegacion(usuario, resolver_match):
 
     elementos = _construir_elementos(usuario, acceso_cola, acceso_cola or trabajo_personal)
     activo = item_activo(elementos, resolver_match)
+    # UX-1: el espacio del ticket es UNA vista para quien solicita y para quien trabaja; la vista indica a qué
+    # destino pertenece en esta visita (solo si ese destino está entre los visibles del usuario).
+    if destino and any(item["url_name"] == destino for item in elementos):
+        activo = destino
     for item in elementos:
         item["activo"] = item["url_name"] == activo
 
@@ -273,9 +282,14 @@ def construir_navegacion(usuario, resolver_match):
         # 4.F3: [Mi trabajo] [Cola]; Mi trabajo primero. Con acceso a la Cola siempre hay dos vistas útiles
         # (Mi trabajo puede estar vacío, pero es el lugar al que llega lo que se toma de la Cola).
         pestanas = [
-            {"etiqueta": "Mi trabajo", "url_name": VISTA_MI_TRABAJO, "activa": vista != VISTA_COLA and vista != "tickets:resumen"},
+            {"etiqueta": "Mi trabajo", "url_name": VISTA_MI_TRABAJO, "activa": vista != VISTA_COLA and vista != "tickets:resumen", "total": None},
             {"etiqueta": "Cola", "url_name": VISTA_COLA, "activa": vista in (VISTA_COLA, "tickets:resumen")},
         ]
+        # Contador de la Cola: los tickets disponibles para tomar, con la MISMA lista que muestra la Cola
+        # (`trabajo.tickets_para_tomar`, calculada una vez por petición). Solo dentro de Trabajo.
+        from apps.tickets.trabajo import tickets_para_tomar
+
+        pestanas[1]["total"] = len(tickets_para_tomar(usuario))
 
     return {
         "nav_items": elementos,

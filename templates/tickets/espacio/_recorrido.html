@@ -1,0 +1,55 @@
+{% comment %}
+  UX-4 — recorrido gráfico SIEMPRE visible. Quien consulta el ticket ve sus fases (completadas, actual, previstas y
+  cuántas veces se volvió a una) y, por cada colección que se recorre, cuántos ítems hay en cada paso (cada ítem
+  avanza a su ritmo). Quien no consulta el ticket ve el recorrido del ítem de su misión (en la misión misma).
+{% endcomment %}
+{% if proceso %}
+  <section class="esp-ruta esp-superficie" aria-labelledby="esp-ruta-t">
+    <header class="esp-ruta__cabeza">
+      <h2 id="esp-ruta-t" class="esp-ruta__titulo">Recorrido</h2>
+      <span class="text-muted tabular">{% if proceso.terminado %}Flujo terminado{% else %}{{ proceso.completadas }}/{{ proceso.total }} fases{% endif %}</span>
+    </header>
+    <ol class="esp-fases">
+      {% for paso in proceso.fases %}
+        <li class="esp-fases__fase esp-fases__fase--{{ paso.situacion }}"{% if paso.situacion == "actual" %} aria-current="step"{% endif %}>
+          <span class="esp-fases__marca" aria-hidden="true">{% if paso.situacion == "completada" %}✓{% endif %}</span>
+          <span class="esp-fases__nombre">{{ paso.nombre }}</span>
+          <span class="esp-fases__estado">{% if paso.situacion == "completada" %}Hecha{% elif paso.situacion == "actual" %}En curso{% elif paso.situacion == "no_aplico" %}No fue necesaria{% else %}Pendiente{% endif %}{% if paso.visitas > 1 %} · {{ paso.visitas }} veces{% endif %}</span>
+        </li>
+      {% endfor %}
+    </ol>
+    {% for coleccion in colecciones %}
+      {% if coleccion.etapas %}
+        <div class="esp-etapas" aria-label="{{ coleccion.tabla.nombre_elemento|default:'Ítems' }} por paso">
+          <p class="esp-etapas__titulo">{{ coleccion.tabla.nombre_elemento|default:"Ítems" }} por paso</p>
+          <ol class="esp-etapas__lista">
+            {% for etapa in coleccion.etapas %}
+              <li class="esp-etapas__etapa{% if etapa.cantidad %} tiene{% endif %}">
+                <span class="esp-etapas__cantidad tabular">{{ etapa.cantidad }}</span>
+                <span class="esp-etapas__nombre">{{ etapa.nombre }}</span>
+                {% if etapa.devueltos %}<span class="esp-etapas__devueltos tabular">{{ etapa.devueltos }} devuelta{{ etapa.devueltos|pluralize }}</span>{% endif %}
+              </li>
+            {% endfor %}
+          </ol>
+        </div>
+      {% endif %}
+    {% endfor %}
+    {% if proceso.devoluciones %}
+      {% with ultima=proceso.devoluciones|last %}<p class="esp-ruta__nota">↺ {{ proceso.devoluciones|length }} devolución{{ proceso.devoluciones|length|pluralize:"es" }} en el flujo principal · la última, en «{{ ultima.bloque }}»</p>{% endwith %}
+    {% endif %}
+    {% if proceso.con_error %}<div class="esp-aviso" role="status">{% include "components/icon.html" with name="alert" size="sm" %}<p>El flujo se detuvo y requiere revisión.</p></div>{% endif %}
+  </section>
+{% elif ruta_estados %}
+  {# Un ticket sin flujo por fases (atención directa): su ruta son sus estados. #}
+  <section class="esp-ruta esp-superficie" aria-labelledby="esp-ruta-t">
+    <header class="esp-ruta__cabeza"><h2 id="esp-ruta-t" class="esp-ruta__titulo">Recorrido</h2></header>
+    <ol class="esp-fases">
+      {% for paso in ruta_estados %}
+        <li class="esp-fases__fase esp-fases__fase--{{ paso.situacion }}"{% if paso.situacion == "actual" %} aria-current="step"{% endif %}>
+          <span class="esp-fases__nombre">{{ paso.nombre }}</span>
+          <span class="esp-fases__estado">{% if paso.situacion == "completada" %}Hecho{% elif paso.situacion == "actual" %}Ahora{% else %}Pendiente{% endif %}</span>
+        </li>
+      {% endfor %}
+    </ol>
+  </section>
+{% endif %}

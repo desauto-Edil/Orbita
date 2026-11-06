@@ -1,0 +1,8 @@
+<ul class="plain-list">{% for mensaje in accion.correccion.mensajes %}<li>{{ mensaje }}</li>{% endfor %}</ul>
+<div class="ws-acciones esp-panel__pie">
+  <a class="btn btn--secondary" href="{{ base }}?pestana=elementos">Ir a los elementos</a>
+  {% if accion.puede_reintentar %}
+    <form method="post" action="{% url 'tickets:reintentar_tareas' ticket.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}"><button type="submit" class="btn btn--primary">Reintentar generación de tareas</button></form>
+  {% endif %}
+</div>
+{% if accion.correccion.reintentos %}<p class="ws-nota">Reintentos sin éxito: {{ accion.correccion.reintentos }}. Nada se reintenta solo.</p>{% endif %}

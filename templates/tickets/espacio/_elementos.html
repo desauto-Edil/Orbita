@@ -1,0 +1,66 @@
+{% comment %}
+  Pestaña Elementos: una tabla compacta por colección consultable (`espacio.elementos`). Cada fila lee SU recorrido
+  y SUS gacetas; nunca se mezclan estados entre ítems. «Abrir» lleva a la ficha del ítem en este mismo espacio.
+{% endcomment %}
+{% for coleccion in colecciones %}
+  {% with tabla=coleccion.tabla %}
+    <section class="esp-superficie esp-coleccion" aria-labelledby="col-{{ tabla.parrilla.clave }}">
+      <header class="esp-coleccion__cabeza">
+        <h2 id="col-{{ tabla.parrilla.clave }}" class="ws-sub">{{ tabla.nombre_elemento|default:"Elementos" }} <span class="work-count">{{ coleccion.filas|length }}</span></h2>
+        <p class="text-muted">
+          {% if tabla.alcance.cerrado %}Alcance cerrado{% else %}Alcance abierto{% endif %}{% if tabla.n_incompletas %} · {{ tabla.n_incompletas }} incompleto{{ tabla.n_incompletas|pluralize }}{% endif %}{% if tabla.n_retirados %} · {{ tabla.n_retirados }} retirado{{ tabla.n_retirados|pluralize }}{% endif %}
+        </p>
+      </header>
+
+      {% if coleccion.filas %}
+        <div class="esp-tabla">
+          <table class="table">
+            <thead><tr><th scope="col">Elemento</th><th scope="col">Fecha</th><th scope="col">Estado</th>{% if rel.consulta %}<th scope="col">Lo tiene</th>{% endif %}<th scope="col">Pendientes</th><th scope="col"><span class="sr-only">Acción</span></th></tr></thead>
+            <tbody>
+              {% for fila in coleccion.filas %}
+                <tr>
+                  <td><strong>#{{ fila.elemento.numero }}</strong>{% if fila.etiqueta %} <span class="esp-tabla__etiqueta">{{ fila.etiqueta }}</span>{% endif %}</td>
+                  <td>{{ fila.fecha|default:"—" }}</td>
+                  <td>
+                    {% if fila.salida %}<span class="badge badge--danger">{{ fila.salida.get_tipo_display }}</span>
+                    {% elif fila.recorrido %}<span class="badge{% if fila.recorrido.con_error %} badge--danger{% elif fila.recorrido.en_curso %} badge--info{% else %} badge--success{% endif %}">{{ fila.recorrido.estado }}</span>{% if fila.recorrido.paso and fila.recorrido.en_curso %} <span class="text-muted">{{ fila.recorrido.paso }}</span>{% endif %}
+                    {% else %}<span class="text-muted">Sin recorrido</span>{% endif %}
+                  </td>
+                  {% if rel.consulta %}<td>{{ fila.responsable|default:"—" }}</td>{% endif %}
+                  <td>{% if fila.pendientes %}{{ fila.pendientes|join:", " }}{% else %}<span class="text-muted">—</span>{% endif %}</td>
+                  <td class="esp-tabla__acciones"><a href="{{ url_panel }}elemento&amp;item={{ fila.elemento.pk }}">Detalles</a><a class="btn btn--secondary btn--sm" href="{{ base }}?elemento={{ fila.elemento.pk }}">Abrir ficha</a></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <p class="text-muted">Todavía no hay {{ tabla.nombre_elemento|lower|default:"elementos" }}.</p>
+      {% endif %}
+
+      {% if tabla.puede_operar and not tabla.alcance.cerrado %}
+        <details class="esp-plegable">
+          <summary>Agregar {{ tabla.nombre_elemento|lower|default:"elemento" }}</summary>
+          <form method="post" action="{% url 'tickets:elemento_agregar' ticket.pk %}" class="form">
+            {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}"><input type="hidden" name="coleccion" value="{{ tabla.parrilla.clave }}">
+            {% include "tickets/_parrilla_campos.html" with celdas=tabla.celdas_nuevas %}
+            <button type="submit" class="btn btn--secondary btn--sm">Agregar</button>
+          </form>
+        </details>
+      {% endif %}
+      {% if tabla.puede_editar and not tabla.alcance.cerrado %}
+        <form method="post" action="{% url 'tickets:alcance_cerrar' ticket.pk %}" class="esp-inline" onsubmit="return confirm('Después de cerrar el alcance ya no se agregan ni retiran ítems por la vía ordinaria. ¿Continuar?');">
+          {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}"><input type="hidden" name="coleccion" value="{{ tabla.parrilla.clave }}">
+          <button type="submit" class="btn btn--ghost btn--sm">Cerrar el alcance</button>
+        </form>
+      {% endif %}
+      {% if rel.consulta %}
+        <p class="ws-nota">Retirar, excluir y altas extraordinarias: <a href="{% url 'tickets:detalle' ticket.pk %}#elementos">gestión avanzada de la colección</a>.</p>
+      {% elif coleccion.participante %}
+        <p class="ws-nota"><a href="{% url 'tickets:coleccion' ticket.pk tabla.parrilla.clave %}">Ver la colección completa</a></p>
+      {% endif %}
+    </section>
+  {% endwith %}
+{% empty %}
+  <p class="text-muted">Este ticket no tiene colecciones que puedas consultar.</p>
+{% endfor %}

@@ -613,7 +613,11 @@ class EstrategiaGaceta(EstrategiaSinConfiguracion):
     """Fase 3 — bloque GACETA (solo configuración por fases): abre la gaceta del ticket, presenta sus ítems si se
     configuró y, si debe esperar, queda EN_ESPERA (motivo GACETA) hasta que la gaceta se resuelva
     (`apps.gacetas.integracion.continuar_por_gaceta`). No es el único ingreso de ítems a la gaceta. Se registra
-    con una clave propia (`GACETA_BLOQUE`) para no habilitar la etapa GACETA del modo LEGACY."""
+    con una clave propia (`GACETA_BLOQUE`) para no habilitar la etapa GACETA del modo LEGACY.
+
+    Bloque 5.2 — en la rama ITEM de un recorrido (la subinstancia de un ítem) es la revisión colaborativa DE ESE
+    ítem: lo presenta solo a él y espera su aprobación individual (`integracion.entrar_item`; la reanuda
+    `integracion.continuar_por_item`). En el flujo principal el comportamiento no cambia."""
 
     ejecutable = True
 
@@ -627,7 +631,16 @@ class EstrategiaGaceta(EstrategiaSinConfiguracion):
             )
         bloque = getattr(_definicion(instancia_etapa), "bloque", None)
         try:
-            esperar, datos = integracion.entrar_al_bloque(ticket, bloque)
+            if getattr(bloque, "rama", "") == "ITEM":
+                elemento = getattr(getattr(instancia_etapa, "instancia_workflow", None), "elemento", None)
+                if elemento is None:
+                    return ResultadoEjecucionEtapa(
+                        estado=ResultadoEjecucion.ERROR,
+                        mensaje_error="Este paso revisa un ítem, pero la ejecución no es el recorrido de un ítem.",
+                    )
+                esperar, datos = integracion.entrar_item(ticket, bloque, elemento)
+            else:
+                esperar, datos = integracion.entrar_al_bloque(ticket, bloque)
         except ValidationError as exc:
             return ResultadoEjecucionEtapa(estado=ResultadoEjecucion.ERROR, mensaje_error=" ".join(exc.messages))
         if esperar:

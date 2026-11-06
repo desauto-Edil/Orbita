@@ -235,3 +235,159 @@
   background: var(--surface-page);
   font-size: var(--font-size-body-lg);
 }
+
+/* --- General: estilo de color (Fase visual) ------------------------------ */
+/* Cada tarjeta y la vista previa llevan su propio `data-tema` (tokens.css §4): la muestra, el borde y el
+   halo de selección se ven con el acento de ESE estilo. Las tarjetas reutilizan `.opcion-tarjeta`. */
+
+.config-tema {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.config-tema__opciones {
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  margin-top: var(--space-3);
+}
+
+.config-tema__muestra,
+.opcion-tarjeta:has(input:checked) .config-tema__muestra {
+  background: var(--gradient-brand);
+  box-shadow: inset 0 0 0 1px var(--border-glass);
+}
+
+.config-tema__origen {
+  margin-left: var(--space-1);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-regular);
+  color: var(--text-muted);
+}
+
+.config-tema-vista {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-page);
+}
+
+.config-tema-vista__fila {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.config-tema-vista__fila .btn {
+  pointer-events: none;
+}
+
+.config-tema-vista__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  font-size: var(--font-size-small);
+  color: var(--text-primary);
+}
+
+.config-tema-vista__item--elegido {
+  border-color: var(--border-selected);
+  background: var(--color-primary-soft);
+  box-shadow: var(--ring-selected);
+}
+
+.config-tema-vista__punto {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  box-shadow: inset 0 0 0 1px var(--border-glass);
+}
+
+.config-tema-vista__punto--apagado {
+  background: var(--border-strong);
+}
+
+/* --- General: logos por modo (Fase visual) ----------------------------------------------------- */
+
+.config-logos {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+
+.config-logos__rejilla {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-4);
+  margin-top: var(--space-3);
+}
+
+.config-logo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.config-logo__muestra {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 88px;
+  padding: var(--space-4);
+  border: 1px solid var(--muestra-claro-borde);
+  border-radius: var(--radius-md);
+  background: var(--muestra-claro-fondo);
+  color: var(--muestra-claro-texto);
+}
+
+.config-logo--oscuro .config-logo__muestra {
+  border-color: var(--muestra-oscuro-borde);
+  background: var(--muestra-oscuro-fondo);
+  color: var(--muestra-oscuro-texto);
+}
+
+.config-logo__muestra img {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-sm);
+  object-fit: contain;
+}
+
+.config-logo__nombre {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-weight-semibold);
+}
+
+.config-logo__etiqueta {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-primary);
+}
+
+.config-logo input[type="file"] {
+  max-width: 100%;
+}
+
+@media (max-width: 639px) {
+  .config-logos__rejilla {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

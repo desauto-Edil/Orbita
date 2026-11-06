@@ -79,3 +79,30 @@ def fase_actual(ticket):
         return ""
     datos = progreso(ticket)
     return datos["actual"] if datos else ""
+
+
+def fases_actuales(tickets):
+    """`{ticket_id: nombre de la fase actual}` para una LISTA de tickets en dos consultas (bandejas de Mi trabajo y
+    Mis tickets). Misma regla que `fase_actual` (ticket abierto, flujo por fases sin terminar, última fase
+    recorrida), sin consultar ticket por ticket. Los tickets sin fase actual no aparecen."""
+    from apps.workflows.models import InstanciaEtapa
+
+    abiertos = [
+        t for t in tickets if t.instancia_workflow_id is not None and t.estado in ("RADICADO", "EN_ATENCION")
+    ]
+    if not abiertos:
+        return {}
+    ids = {t.instancia_workflow_id for t in abiertos}
+    vigentes = set(
+        InstanciaWorkflow.objects.filter(pk__in=ids, configuracion_ejecucion_version__isnull=False)
+        .exclude(estado=InstanciaWorkflow.Estado.COMPLETADA)
+        .values_list("pk", flat=True)
+    )
+    ultimas = {}
+    for instancia_id, nombre in (
+        InstanciaEtapa.objects.filter(instancia_workflow_id__in=vigentes, fase_workflow__isnull=False)
+        .order_by("instancia_workflow_id", "orden")
+        .values_list("instancia_workflow_id", "fase_workflow__nombre")
+    ):
+        ultimas[instancia_id] = nombre
+    return {t.pk: ultimas[t.instancia_workflow_id] for t in abiertos if t.instancia_workflow_id in ultimas}

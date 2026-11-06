@@ -139,7 +139,11 @@ class EstrategiaNumerica(EstrategiaCampo):
 
 
 class EstrategiaTemporal(EstrategiaCampo):
-    claves_configuracion = frozenset({"fecha_minima", "fecha_maxima"})
+    """`dentro_del_periodo` (UX-4, solo columnas de una colección): la fecha debe caer dentro del periodo de la
+    ejecución programada del Ticket (`EjecucionProgramada.periodo_inicio/periodo_fin`). La Strategy no conoce el
+    Ticket: la regla la aplica `apps.tickets.parrilla` al guardar el valor; aquí solo se valida la clave."""
+
+    claves_configuracion = frozenset({"fecha_minima", "fecha_maxima", "dentro_del_periodo"})
 
     def __init__(self, *, incluye_hora=False):
         self.incluye_hora = incluye_hora
@@ -159,6 +163,8 @@ class EstrategiaTemporal(EstrategiaCampo):
             raise ValidationError("Formato de fecha inválido.") from exc
 
     def _validar_configuracion(self, configuracion):
+        if not isinstance(configuracion.get("dentro_del_periodo", False), bool):
+            raise ValidationError("dentro_del_periodo debe ser verdadero o falso.")
         minima = self._parsear(configuracion.get("fecha_minima"))
         maxima = self._parsear(configuracion.get("fecha_maxima"))
         if minima is not None and maxima is not None and minima > maxima:

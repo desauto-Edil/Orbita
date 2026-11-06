@@ -43,7 +43,7 @@ from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.http import FileResponse, HttpResponse, HttpResponseNotAllowed
-from django.shortcuts import get_object_or_404, redirect, render
+from django.shortcuts import get_object_or_404, render
 from django.template.loader import render_to_string
 from django.utils import timezone
 from django.views.decorators.http import require_GET
@@ -52,6 +52,8 @@ from apps.core.redirecciones import volver_a
 from apps.tareas import operaciones
 from apps.tareas.autorizacion import (
     delegado_actual,
+    es_creadora,
+    es_responsable_actual,
     puede_asignar_tarea,
     puede_comentar_tarea,
     puede_completar_tarea,
@@ -134,6 +136,19 @@ def _ticket_de_la_tarea(tarea, usuario):
     return ticket
 
 
+def _ticket_espacio_de(tarea, usuario):
+    """UX-1 — id del Ticket al que pertenece la Tarea si `usuario` puede trabajarla allí (es su responsable o
+    delegada, la creó o puede tomarla), o `None`. Solo navegación: el espacio vuelve a autorizar al abrirse."""
+    from apps.tickets.vinculos import origen_de_tareas
+
+    if not (
+        es_responsable_actual(usuario, tarea) or es_creadora(usuario, tarea) or puede_tomar_tarea(usuario, tarea)
+    ):
+        return None
+    origen = origen_de_tareas([tarea.pk]).get(tarea.pk)
+    return origen["ticket_id"] if origen is not None else None
+
+
 @login_required
 @require_GET
 def vista_previa_view(request, pk):
@@ -185,6 +200,8 @@ def detalle_view(request, pk):
         "tarea": tarea,
         "vencida": _es_vencida(tarea, ahora),
         "ticket_vinculado": _ticket_de_la_tarea(tarea, request.user),
+        # UX-1: el espacio del ticket se abre por la relación directa con la tarea (sin ganar el resto del ticket).
+        "ticket_espacio_id": _ticket_espacio_de(tarea, request.user),
         # Bloque 3.1: el ítem que esta tarea abierta permite editar (solo las columnas que autoriza).
         "elemento_editable": elemento_de_tarea(tarea, request.user),
         "delegado_actual": delegado_actual(tarea, ahora=ahora),
@@ -304,7 +321,7 @@ def asignar_view(request, pk):
     form = AsignacionTareaForm(request.POST)
     if not form.is_valid():
         messages.error(request, "Revise los datos del formulario de asignación.")
-        return redirect("tareas:detalle", pk=pk)
+        return volver_a(request, "tareas:detalle", pk)
     try:
         operaciones.asignar_tarea(
             tarea, request.user, usuario=form.cleaned_data["usuario"], equipo=form.cleaned_data["equipo"]
@@ -313,7 +330,7 @@ def asignar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Tarea asignada.")
-    return redirect("tareas:detalle", pk=pk)
+    return volver_a(request, "tareas:detalle", pk)
 
 
 @login_required
@@ -326,7 +343,7 @@ def reasignar_view(request, pk):
     form = ReasignacionTareaForm(request.POST)
     if not form.is_valid():
         messages.error(request, "Revise los datos del formulario de reasignación.")
-        return redirect("tareas:detalle", pk=pk)
+        return volver_a(request, "tareas:detalle", pk)
     try:
         operaciones.reasignar_tarea(
             tarea, request.user, usuario=form.cleaned_data["usuario"], equipo=form.cleaned_data["equipo"]
@@ -335,7 +352,7 @@ def reasignar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Tarea reasignada.")
-    return redirect("tareas:detalle", pk=pk)
+    return volver_a(request, "tareas:detalle", pk)
 
 
 @login_required
@@ -348,7 +365,7 @@ def delegar_view(request, pk):
     form = DelegacionTareaForm(request.POST)
     if not form.is_valid():
         messages.error(request, "Revise los datos del formulario de delegación.")
-        return redirect("tareas:detalle", pk=pk)
+        return volver_a(request, "tareas:detalle", pk)
     try:
         operaciones.delegar_tarea(
             tarea,
@@ -362,7 +379,7 @@ def delegar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Tarea delegada.")
-    return redirect("tareas:detalle", pk=pk)
+    return volver_a(request, "tareas:detalle", pk)
 
 
 @login_required
@@ -375,7 +392,7 @@ def crear_subtarea_view(request, pk):
     form = SubtareaForm(request.POST)
     if not form.is_valid():
         messages.error(request, "Revise los datos de la subtarea.")
-        return redirect("tareas:detalle", pk=pk)
+        return volver_a(request, "tareas:detalle", pk)
     try:
         operaciones.crear_subtarea(
             tarea_padre,
@@ -390,7 +407,7 @@ def crear_subtarea_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Subtarea creada.")
-    return redirect("tareas:detalle", pk=pk)
+    return volver_a(request, "tareas:detalle", pk)
 
 
 @login_required
@@ -403,14 +420,14 @@ def comentar_view(request, pk):
     form = ComentarioTareaForm(request.POST)
     if not form.is_valid():
         messages.error(request, "El comentario no puede estar vacío.")
-        return redirect("tareas:detalle", pk=pk)
+        return volver_a(request, "tareas:detalle", pk)
     try:
         operaciones.comentar_tarea(tarea, request.user, form.cleaned_data["contenido"])
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Comentario agregado.")
-    return redirect("tareas:detalle", pk=pk)
+    return volver_a(request, "tareas:detalle", pk)
 
 
 @login_required
@@ -432,14 +449,14 @@ def adjuntar_evidencia_view(request, pk):
     form = EvidenciaTareaForm(request.POST, request.FILES)
     if not form.is_valid():
         messages.error(request, "Debe seleccionar un archivo.")
-        return redirect("tareas:detalle", pk=pk)
+        return volver_a(request, "tareas:detalle", pk)
     try:
         operaciones.adjuntar_evidencia_tarea(request.user, form.cleaned_data["archivo"], tarea=tarea)
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Evidencia adjuntada.")
-    return redirect("tareas:detalle", pk=pk)
+    return volver_a(request, "tareas:detalle", pk)
 
 
 @login_required

@@ -545,10 +545,14 @@ class VistasYStudioTests(_EscenarioGacetasMixin, TestCase):
 
     def test_el_revisor_ve_la_gaceta_sin_acceder_al_ticket_y_un_ajeno_no(self):
         self._entrar(self.observador)
+        # La página propia de la gaceta se retiró: su URL lleva a la gaceta dentro del espacio del ticket.
         respuesta = self.client.get(reverse("gacetas:detalle", args=[self.gaceta.pk]))
-        self.assertEqual(respuesta.status_code, 200)
-        self.assertContains(respuesta, "Banner")
-        self.assertTrue(respuesta.context["filas"][0]["puede_observar"])
+        destino = reverse("tickets:espacio", args=[self.ticket.pk]) + f"#gaceta-{self.gaceta.pk}"
+        self.assertRedirects(respuesta, destino, fetch_redirect_response=False)
+        espacio = self.client.get(reverse("tickets:espacio", args=[self.ticket.pk]))
+        self.assertEqual(espacio.status_code, 200)
+        tarjeta = espacio.context["galerias"][0]["tarjetas"][0]
+        self.assertTrue(tarjeta["puede_observar"])
         self.assertIn(self.gaceta, self.client.get(reverse("gacetas:lista")).context["gacetas"])
         self.assertEqual(self.client.get(reverse("tickets:detalle", args=[self.ticket.pk])).status_code, 403)
         self._entrar(self.ajeno)

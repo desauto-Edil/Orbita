@@ -1,0 +1,9 @@
+{% with solicitud=accion.solicitud %}
+  {% for adjunto in solicitud.adjuntos.all %}<p><a href="{% url 'tickets:descargar_adjunto' adjunto.pk %}">{{ adjunto.nombre_original }}</a></p>{% endfor %}
+  <form method="post" action="{% url 'tickets:responder_solicitud' ticket.pk solicitud.pk %}" enctype="multipart/form-data" class="form">
+    {% csrf_token %}<input type="hidden" name="next" value="{{ base }}">
+    <div class="field"><label for="resp-{{ solicitud.pk }}">Tu respuesta</label><textarea id="resp-{{ solicitud.pk }}" name="contenido" rows="3" required></textarea></div>
+    <div class="field"><label for="resp-arch-{{ solicitud.pk }}">Adjuntar archivo (opcional)</label><input id="resp-arch-{{ solicitud.pk }}" type="file" name="archivo"></div>
+    <button type="submit" class="btn btn--primary">Enviar respuesta</button>
+  </form>
+{% endwith %}

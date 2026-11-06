@@ -1,0 +1,49 @@
+{% comment %}
+  UX-4 — misión «Prepara y envía…» (`espacio._accion_borradores`): registrar ítems como BORRADOR (no avanzan),
+  enviar cada uno a aprobación cuando tiene lo que se exige (`tickets:elemento_enviar` → `recorridos.enviar_elemento`,
+  que guarda, valida y envía en una operación) y, cuando ya no habrá más, cerrar el alcance (`tickets:alcance_cerrar`).
+  La lista muestra qué le falta a cada borrador; el servidor vuelve a validarlo todo.
+{% endcomment %}
+{% with parrilla=accion.parrilla tabla=accion.tabla %}
+  {% if accion.borradores %}
+    <ul class="esp-borradores" aria-label="Por enviar">
+      {% for b in accion.borradores %}
+        <li class="esp-borrador">
+          <a class="esp-borrador__nombre" href="{{ base }}?elemento={{ b.elemento.pk }}#item-{{ b.elemento.pk }}">{{ b.nombre }}</a>
+          {% if b.faltan %}
+            <span class="esp-borrador__falta">Falta: {{ b.faltan|join:", " }}</span>
+            <a class="btn btn--ghost btn--sm" href="{{ base }}?elemento={{ b.elemento.pk }}#item-{{ b.elemento.pk }}">Completar</a>
+          {% else %}
+            <span class="esp-borrador__listo">{% include "components/icon.html" with name="check" size="sm" %}Lista para enviar</span>
+            <form method="post" action="{% url 'tickets:elemento_enviar' ticket.pk b.elemento.pk %}">
+              {% csrf_token %}<input type="hidden" name="next" value="{{ base }}">
+              <button type="submit" class="btn btn--primary btn--sm">Enviar a aprobación</button>
+            </form>
+          {% endif %}
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="text-muted">No tienes {{ parrilla.nombre_elemento|lower|default:"ítems" }} por enviar.</p>
+  {% endif %}
+
+  {% if accion.puede_agregar and tabla.puede_operar %}
+    <details class="esp-plegable"{% if not accion.borradores %} open{% endif %}>
+      <summary>{% include "components/icon.html" with name="plus" size="sm" %} Nueva {{ parrilla.nombre_elemento|lower|default:"ítem" }}</summary>
+      <form method="post" action="{% url 'tickets:elemento_agregar' ticket.pk %}" class="form">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ base }}"><input type="hidden" name="coleccion" value="{{ parrilla.clave }}">
+        {% include "tickets/_parrilla_campos.html" with celdas=tabla.celdas_nuevas %}
+        <div class="form-actions"><button type="submit" class="btn btn--secondary">Guardar borrador</button></div>
+      </form>
+    </details>
+  {% endif %}
+
+  {% if accion.puede_cerrar %}
+    <div class="ws-acciones esp-panel__pie">
+      <form method="post" action="{% url 'tickets:alcance_cerrar' ticket.pk %}" onsubmit="return confirm('Después de cerrar el alcance ya no se agregan {{ parrilla.nombre_elemento|lower|default:"ítems" }} por la vía ordinaria. ¿Continuar?');">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ base }}"><input type="hidden" name="coleccion" value="{{ parrilla.clave }}">
+        <button type="submit" class="btn btn--ghost">{% include "components/icon.html" with name="lock" size="sm" %}No habrá más: cerrar el alcance</button>
+      </form>
+    </div>
+  {% endif %}
+{% endwith %}

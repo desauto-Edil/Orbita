@@ -156,6 +156,60 @@ def elementos_en_alcance(parrilla):
     )
 
 
+def nombre_de(elemento):
+    """UX-4 — nombre legible de un ítem: su primera columna de texto con valor (p. ej. el copy), corta; si no tiene,
+    «<Publicación> #n». Nunca un id."""
+    base = f"{elemento.parrilla.nombre_elemento or 'Ítem'} #{elemento.numero}"
+    tipos = {c.pk: c.tipo for c in elemento.parrilla.formulario_version.campos.all()}
+    for valor in elemento.valores.select_related("campo").order_by("campo__orden", "campo__pk"):
+        if tipos.get(valor.campo_id) in (Campo.TipoCampo.TEXTO, Campo.TipoCampo.TEXTO_LARGO) and valor.valor:
+            texto = " ".join(str(valor.valor).split())
+            return texto if len(texto) <= 48 else texto[:45] + "…"
+    return base
+
+
+@dataclass(frozen=True)
+class PeriodoTicket:
+    inicio: date
+    fin: date
+    etiqueta: str
+
+
+def periodo_de(ticket):
+    """UX-4 — periodo CONGELADO de la ejecución programada del Ticket (`EjecucionProgramada`), o `None` si el
+    Ticket no nació de una programación. Es la única fuente de «el mes de la parrilla»: `Ticket.etiqueta` solo
+    es su nombre."""
+    from apps.tickets.models import EjecucionProgramada
+
+    fila = (
+        EjecucionProgramada.objects.filter(ticket_id=ticket.pk)
+        .values_list("periodo_inicio", "periodo_fin", "etiqueta").first()
+    )
+    return PeriodoTicket(*fila) if fila is not None else None
+
+
+def exige_periodo(campo):
+    """¿La columna exige una fecha dentro del periodo del Ticket? (`Campo.configuracion["dentro_del_periodo"]`)."""
+    return campo.tipo in (Campo.TipoCampo.FECHA, Campo.TipoCampo.FECHA_HORA) and bool(
+        (campo.configuracion or {}).get("dentro_del_periodo")
+    )
+
+
+def _exigir_dentro_del_periodo(campo, valor, periodo):
+    """La fecha (o fecha-hora, en la hora local) de una columna con `dentro_del_periodo` debe caer en el periodo
+    de la ejecución programada. Sin periodo (Ticket manual) la regla no aplica: no se inventa uno."""
+    if periodo is None or valor is None or not exige_periodo(campo):
+        return
+    dia = timezone.localtime(valor).date() if isinstance(valor, datetime) and timezone.is_aware(valor) else (
+        valor.date() if isinstance(valor, datetime) else valor
+    )
+    if not periodo.inicio <= dia <= periodo.fin:
+        raise ValidationError(
+            f"«{campo.etiqueta}»: la fecha debe estar dentro de {periodo.etiqueta} "
+            f"({periodo.inicio:%d/%m/%Y} a {periodo.fin:%d/%m/%Y})."
+        )
+
+
 def colecciones_de_participante(usuario):
     """Bloque 3 — colecciones de tickets EN ATENCIÓN en las que `usuario` participa (persona congelada o miembro
     activo de un equipo activo congelado) sin ser el responsable individual del ticket. Es su trabajo en «Mi
@@ -212,19 +266,23 @@ class Completitud:
         return [c.etiqueta for c in self.faltantes] + [c.etiqueta for c, _ in self.invalidos]
 
 
-def completitud_de(elemento, columnas=None):
+def completitud_de(elemento, columnas=None, exigidas=None):
     """«¿Este elemento está completo según su estructura?» Mira las columnas obligatorias de la
     versión CONGELADA: faltante = sin valor; inválido = con un valor que su Strategy ya no acepta
     (p. ej. una persona desactivada después). Las columnas opcionales no cuentan. No escribe nada y no
     depende del estado del Ticket ni de quién consulta. `columnas` evita volver a leerlas al
-    evaluar muchas filas."""
+    evaluar muchas filas.
+
+    UX-4: con `exigidas` (claves de columna) se evalúan SOLO esas columnas, sean o no obligatorias: es lo que
+    una etapa exige antes de avanzar (p. ej. enviar una idea o la pieza a aprobación)."""
     if columnas is None:
         columnas = columnas_de(elemento.parrilla)
     valores = {v.campo_id: v for v in elemento.valores.all()}
     con_archivo = set(elemento.archivos.filter(retirado_en__isnull=True).values_list("campo_elemento_id", flat=True))
     faltantes, invalidos = [], []
+    exigidas = set(exigidas) if exigidas is not None else None
     for campo in columnas:
-        if not campo.obligatorio:
+        if (campo.clave not in exigidas) if exigidas is not None else not campo.obligatorio:
             continue
         if campo.tipo == Campo.TipoCampo.ARCHIVO:
             # Completa con al menos un archivo vigente en esa columna.
@@ -364,6 +422,8 @@ def _aplicar_valores(elemento, parrilla, valores, protegidas=None, protegidas_ta
     protegidas = protegidas or {}
     resueltos = _resolver_campos(parrilla, valores)
     existentes = {v.campo_id: v for v in elemento.valores.select_related("campo")}
+    # UX-4: el periodo solo se lee si alguna columna escrita lo exige.
+    periodo = periodo_de(parrilla.ticket) if any(exige_periodo(c) for c, _ in resueltos.values()) else None
     anterior, nuevo = {}, {}
     for pk, (campo, crudo) in resueltos.items():
         existente = existentes.get(pk)
@@ -385,6 +445,7 @@ def _aplicar_valores(elemento, parrilla, valores, protegidas=None, protegidas_ta
         except ValidationError as exc:
             raise ValidationError(f"«{campo.etiqueta}»: {' '.join(exc.messages)}")
         normalizado = estrategia.normalizar(crudo)
+        _exigir_dentro_del_periodo(campo, normalizado, periodo)
         instancia = existente or ValorElemento(elemento=elemento, campo=campo)
         _asignar(instancia, campo, normalizado)
         if pk in protegidas and instancia.valor != actual:
@@ -559,8 +620,28 @@ def actualizar_valores(elemento, actor, valores):
             elemento, actor, RegistroAuditoria.Accion.ACTUALIZAR,
             {"numero": elemento.numero, "valores": anterior}, {"numero": elemento.numero, "valores": nuevo},
         )
+        # Bloque 5.4: las Tareas abiertas del ítem cuya fecha sale de una columna cambiada se reprograman.
+        from apps.tickets.reprogramacion import sincronizar_fechas
+
+        sincronizar_fechas(elemento, actor, nuevo.keys())
         _ingreso_automatico(elemento, actor)
     return elemento
+
+
+@transaction.atomic
+def guardar_filas(ticket, actor, *, clave=None, cambios=None, nuevos=None):
+    """UX-4 — «Guardar borrador» de una tabla: en UNA transacción actualiza las filas existentes (`cambios`:
+    `{elemento: {campo_id: valor}}`) y agrega las nuevas no vacías (`nuevos`: `[{campo_id: valor}]`), con las
+    operaciones y validaciones de siempre (`actualizar_valores`, `crear_elemento`). Un error en cualquier fila no
+    deja nada guardado. Devuelve las filas creadas."""
+    for elemento, valores in (cambios or {}).items():
+        if valores:
+            actualizar_valores(elemento, actor, valores)
+    creados = []
+    for valores in nuevos or []:
+        if any(not _es_valor_vacio(v) for v in valores.values()):
+            creados.append(crear_elemento(ticket, actor, valores, clave=clave))
+    return creados
 
 
 @transaction.atomic
@@ -1090,7 +1171,7 @@ def tabla_de_elemento(elemento):
     filas = []
     for campo in columnas:
         celda = _celda(campo, por_campo.get(campo.pk), bases, archivos=[a for a in archivos if a.campo_elemento_id == campo.pk])
-        filas.append({"etiqueta": campo.etiqueta, "texto": celda["texto"] or "—"})
+        filas.append({"etiqueta": campo.etiqueta, "texto": celda["texto"] or "—", "clave": campo.clave, "tipo": campo.tipo})
     return filas
 
 

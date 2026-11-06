@@ -3,104 +3,85 @@
 
 {% block title %}Mi trabajo — {{ sistema.nombre }}{% endblock %}
 
-{% block content_modifier %}content-area--wide{% endblock %}
+{% block content_modifier %}content-area--operativo{% if tab == "todo" and bandeja.filas %} content-area--bandeja{% endif %}{% endblock %}
 
-{% block extra_head %}<link rel="stylesheet" href="{% static 'css/trabajo.css' %}">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/trabajo.css' %}"><link rel="stylesheet" href="{% static 'css/espacio.css' %}"><link rel="stylesheet" href="{% static 'css/bandeja.css' %}">{% endblock %}
 
 {% block content %}
-  <header class="page-header">
-    <div>
-      <h1 class="page-header__title">Mi trabajo</h1>
-      <p class="page-header__subtitle">Los tickets que atiendes, y las tareas y aprobaciones que requieren tu atención.</p>
-    </div>
+  <header class="op-cabecera">
+    <h1 class="op-cabecera__titulo">Mi trabajo</h1>
+    {% include "layout/trabajo_tabs.html" %}
   </header>
 
-  {% include "layout/trabajo_tabs.html" %}
+  {% if tab == "todo" %}
+    {# Bandeja única: UNA fila por ticket (`apps/tickets/bandeja.py`), filtros y búsqueda locales e inspector lateral. #}
+    <div class="op-barra">
+      <form class="search op-barra__buscar" method="get" role="search">
+        <span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" size="sm" %}</span>
+        <label class="sr-only" for="bj-q">Buscar en Mi trabajo</label>
+        <input class="search__input" id="bj-q" type="search" name="q" value="{{ bandeja.q }}" placeholder="Buscar por código, nombre o proceso">
+        {% if bandeja.ver != "todos" %}<input type="hidden" name="ver" value="{{ bandeja.ver }}">{% endif %}
+      </form>
+      <nav class="segmented" aria-label="Filtrar Mi trabajo">
+        <a class="segmented__item" href="?{% if bandeja.q %}q={{ bandeja.q|urlencode }}{% endif %}"{% if bandeja.ver == "todos" %} aria-current="page"{% endif %}>Todos <span class="work-count">{{ bandeja.total }}</span></a>
+        <a class="segmented__item" href="?ver=atencion{% if bandeja.q %}&amp;q={{ bandeja.q|urlencode }}{% endif %}"{% if bandeja.ver == "atencion" %} aria-current="page"{% endif %}>Requieren atención <span class="work-count">{{ bandeja.total_atencion }}</span></a>
+        <a class="segmented__item" href="?ver=seguimiento{% if bandeja.q %}&amp;q={{ bandeja.q|urlencode }}{% endif %}"{% if bandeja.ver == "seguimiento" %} aria-current="page"{% endif %}>En seguimiento <span class="work-count">{{ bandeja.total_seguimiento }}</span></a>
+      </nav>
+    </div>
 
-  {% if tarjetas %}
-    <section class="ticket-cards" aria-labelledby="mt-tickets">
-      <h2 id="mt-tickets" class="ws-sub">Tickets que atiendes <span class="work-count">{{ tarjetas|length }}</span></h2>
-      <ul class="ticket-cards__grid">
-        {% for tarjeta in tarjetas %}
-          <li class="ticket-card">
-            <p class="ticket-card__code">{{ tarjeta.ticket.codigo|default:"Sin código" }}</p>
-            <h3 class="ticket-card__title">{{ tarjeta.servicio.nombre }}</h3>
-            {% if tarjeta.ticket.etiqueta %}<p class="ticket-etiqueta text-muted">{{ tarjeta.ticket.etiqueta }}</p>{% endif %}
-            <p class="ticket-card__chips">
-              <span class="badge badge--info badge--dot">{{ tarjeta.ticket.get_estado_display }}</span>
-              {% if tarjeta.fase %}<span class="badge">{{ tarjeta.fase }}</span>{% endif %}
-              {% if tarjeta.ticket.fecha_objetivo_vigente %}<span class="badge">Objetivo {{ tarjeta.ticket.fecha_objetivo_vigente|date:"d M" }}</span>{% endif %}
-            </p>
-            <p class="ticket-card__now">
-              {% if tarjeta.bloque %}<strong>{{ tarjeta.bloque }}</strong> · {{ tarjeta.bloque_tipo }}{% if tarjeta.pendiente %}<br><span class="text-muted">{{ tarjeta.pendiente }}</span>{% endif %}
-              {% elif tarjeta.terminado %}<strong>Flujo terminado</strong><br><span class="text-muted">Falta resolver y entregar el ticket.</span>
-              {% else %}<span class="text-muted">Sin flujo de trabajo asociado.</span>{% endif %}
-            </p>
-            {% if tarjeta.fases_total %}
-              <progress class="progress" max="{{ tarjeta.fases_total }}" value="{{ tarjeta.fases_completadas }}" aria-label="Fases completadas">{{ tarjeta.porcentaje }}%</progress>
-              <p class="ticket-card__prog">{{ tarjeta.fases_completadas }} de {{ tarjeta.fases_total }} fases</p>
-            {% endif %}
-            <a class="btn btn--primary btn--sm" href="{% url 'tickets:trabajo' tarjeta.ticket.pk %}">Continuar</a>
-          </li>
-        {% endfor %}
-      </ul>
-    </section>
-  {% endif %}
-
-  <div class="work-toolbar">
-    <nav class="segmented" aria-label="Qué ver en Mi trabajo">
-      <a class="segmented__item" href="{% url 'core:mi_trabajo' %}?tab=todo"{% if tab == "todo" %} aria-current="page"{% endif %}>Todo <span class="work-count">{{ total }}</span></a>
-      <a class="segmented__item" href="{% url 'core:mi_trabajo' %}?tab=tareas"{% if tab == "tareas" %} aria-current="page"{% endif %}>Tareas <span class="work-count">{{ total_tareas }}</span></a>
-      <a class="segmented__item" href="{% url 'core:mi_trabajo' %}?tab=aprobaciones"{% if tab == "aprobaciones" %} aria-current="page"{% endif %}>Aprobaciones <span class="work-count">{{ total_aprobaciones }}</span></a>
-      {% if total_revisiones or tab == "revisiones" %}<a class="segmented__item" href="{% url 'core:mi_trabajo' %}?tab=revisiones"{% if tab == "revisiones" %} aria-current="page"{% endif %}>Revisiones <span class="work-count">{{ total_revisiones }}</span></a>{% endif %}
-    </nav>
-    <span class="work-toolbar__links">
-      <a href="{% url 'tareas:lista' %}">Ver todas las tareas</a>
-      <a href="{% url 'aprobaciones:lista' %}">Ver todas las aprobaciones</a>
-    </span>
-  </div>
-
-  {% if filas %}
-    <div class="work-split" data-trabajo>
-      <div class="work-split__list">
-        <ul class="work-list" aria-label="Trabajo pendiente">
-          {% for fila in filas %}
-            <li>
-              <a class="work-row work-row--compact" href="{{ fila.url }}"{% if fila.vista_url %} data-vista="{{ fila.vista_url }}"{% endif %}>
-                <span class="work-row__kind" aria-hidden="true">{% if fila.tipo == "tarea" %}{% include "components/icon.html" with name="trabajo" size="sm" %}{% elif fila.tipo == "coleccion" %}{% include "components/icon.html" with name="list" size="sm" %}{% else %}{% include "components/icon.html" with name="check-circle" size="sm" %}{% endif %}</span>
-                <span class="work-row__main">
-                  <span class="work-row__title">{{ fila.titulo }}</span>
-                  <span class="work-row__meta">
-                    {% if fila.tipo == "tarea" %}Tarea{% elif fila.tipo == "coleccion" %}Participas en la colección · {{ fila.detalle }}{% elif fila.tipo == "revision" %}Revisión de elementos · {{ fila.detalle }}{% if fila.pendientes %} · {{ fila.pendientes }} pendiente{{ fila.pendientes|pluralize }}{% endif %}{% if fila.devueltos %} · {{ fila.devueltos }} devuelto{{ fila.devueltos|pluralize }}{% endif %}{% else %}Aprobación{% endif %}{% if fila.por_tomar %} · disponible para tomar{% endif %}{% if fila.fecha_relevante %} · {% if fila.vencida %}<span class="work-row__late">venció el {{ fila.fecha_relevante|date:"j M" }}</span>{% else %}vence el {{ fila.fecha_relevante|date:"j M, H:i" }}{% endif %}{% endif %}
-                  </span>
-                </span>
-                <span class="work-row__state"><span class="work-dot work-dot--{{ fila.estado_clase|default:'neutral' }}" aria-hidden="true"></span>{{ fila.estado }}</span>
-              </a>
-            </li>
-          {% endfor %}
-        </ul>
-        {% include "layout/_paginacion.html" with extra="tab" valor=tab %}
-      </div>
-
-      {# Vista previa: solo con JS y en pantallas amplias; sin ella cada fila abre su detalle. #}
-      <aside class="work-preview" aria-label="Vista previa" aria-live="polite" data-trabajo-vista hidden>
-        <div class="work-preview__empty" data-trabajo-vacio>
-          <span aria-hidden="true">{% include "components/icon.html" with name="eye" %}</span>
-          <p>Elige un elemento de la lista para verlo aquí sin salir de tu trabajo.</p>
+    {% if bandeja.filas %}
+      <div class="bt bt--trabajo" data-bandeja>
+        <div class="bt__lista">
+          {% include "tickets/bandeja/_encabezado.html" with situacion=True %}
+          <ul class="bt-filas" aria-label="Tickets de Mi trabajo">
+            {% for grupo in bandeja.filas %}{% include "tickets/bandeja/_fila_trabajo.html" %}{% endfor %}
+          </ul>
         </div>
-        <div class="work-preview__body" data-trabajo-contenido hidden></div>
-      </aside>
-    </div>
-  {% elif not tarjetas or tab != "todo" %}
-    <div class="empty-state">
-      <p>
-        {% if tab == "tareas" %}No tienes tareas pendientes.
-        {% elif tab == "aprobaciones" %}No tienes aprobaciones pendientes.
-        {% elif tab == "revisiones" %}No tienes revisiones pendientes.
-        {% else %}No tienes trabajo pendiente.{% endif %}
-      </p>
-    </div>
+        {% include "tickets/bandeja/_inspector.html" %}
+      </div>
+    {% else %}
+      <div class="empty-state">
+        <p>{% if bandeja.q or bandeja.ver != "todos" %}Ningún ticket coincide con la búsqueda.{% else %}No tienes trabajo pendiente.{% endif %}</p>
+        {% if bandeja.q or bandeja.ver != "todos" %}<p><a href="{% url 'core:mi_trabajo' %}">Ver todo</a></p>{% endif %}
+      </div>
+    {% endif %}
+
+    {# Pendientes que no pertenecen a ningún ticket: nunca se mezclan con los tickets (ver el informe de UX-2). #}
+    {% if bandeja.sueltos %}
+      <details class="bj-sueltos">
+        <summary>Sin ticket asociado <span class="work-count">{{ bandeja.sueltos|length }}</span></summary>
+        <ul class="work-list" aria-label="Pendientes sin ticket">
+          {% for fila in bandeja.sueltos %}{% include "tickets/espacio/_fila_tecnica.html" %}{% endfor %}
+        </ul>
+      </details>
+    {% endif %}
+
+  {% else %}
+    {# --- Bandejas técnicas (compatibilidad de URL `?tab=`): ya no se ofrecen en la navegación visible --- #}
+    <p class="esp-volver"><a href="{% url 'core:mi_trabajo' %}">← Mi trabajo por ticket</a></p>
+    {% if filas %}
+      <div class="work-split" data-trabajo>
+        <div class="work-split__list">
+          <ul class="work-list" aria-label="Trabajo pendiente">
+            {% for fila in filas %}{% include "tickets/espacio/_fila_tecnica.html" %}{% endfor %}
+          </ul>
+          {% include "layout/_paginacion.html" with extra="tab" valor=tab %}
+        </div>
+        <aside class="work-preview" aria-label="Vista previa" aria-live="polite" data-trabajo-vista hidden>
+          <button type="button" class="work-preview__cerrar" data-trabajo-cerrar aria-label="Cerrar la vista previa">{% include "components/icon.html" with name="x" size="sm" %}</button>
+          <div class="work-preview__body" data-trabajo-contenido hidden></div>
+        </aside>
+      </div>
+    {% else %}
+      <div class="empty-state">
+        <p>
+          {% if tab == "tareas" %}No tienes tareas pendientes.
+          {% elif tab == "aprobaciones" %}No tienes aprobaciones pendientes.
+          {% else %}No tienes revisiones pendientes.{% endif %}
+        </p>
+      </div>
+    {% endif %}
   {% endif %}
 {% endblock %}
 
-{% block extra_scripts %}<script src="{% static 'js/trabajo.js' %}" defer></script>{% endblock %}
+{% block extra_scripts %}<script src="{% static 'js/trabajo.js' %}" defer></script><script src="{% static 'js/bandeja.js' %}" defer></script>{% endblock %}

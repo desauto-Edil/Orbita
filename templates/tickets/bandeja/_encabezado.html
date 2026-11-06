@@ -1,0 +1,9 @@
+{% comment %}Bandeja compartida — rótulos de las columnas (solo visuales: cada celda lleva su rótulo para lectores de pantalla). Espera `situacion` (bool): Mi trabajo muestra «Tu situación».{% endcomment %}
+<div class="bt-encabezado" aria-hidden="true">
+  <span class="bt-celda bt-celda--ticket">Ticket</span>
+  <span class="bt-celda bt-celda--fase">{% if situacion %}Fase{% else %}Fase o novedad{% endif %}</span>
+  {% if situacion %}<span class="bt-celda bt-celda--situacion">Tu situación</span>{% endif %}
+  <span class="bt-celda bt-celda--estado">Estado</span>
+  <span class="bt-celda bt-celda--fecha">Fecha</span>
+  <span class="bt-fila__ir"></span>
+</div>

@@ -1,0 +1,17 @@
+{% autoescape off %}{{ sistema.nombre }}
+
+Hola {{ nombre }},
+
+{{ notificacion.titulo }}
+{{ notificacion.resumen }}
+{% if notificacion.extracto %}
+«{{ notificacion.extracto }}»
+{% endif %}
+{% if notificacion.ticket and notificacion.ticket.consecutivo %}Ticket: {{ notificacion.ticket.codigo }}
+{% endif %}{% for etiqueta, valor in notificacion.hechos %}{{ etiqueta }}: {{ valor }}
+{% endfor %}{% if enlace %}
+Ver en {{ sistema.nombre }}: {{ enlace }}
+{% endif %}
+--
+Recibes este correo porque {{ motivo }}.
+{% endautoescape %}

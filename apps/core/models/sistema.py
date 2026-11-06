@@ -2,6 +2,9 @@ from django.core.exceptions import ValidationError
 from django.core.validators import FileExtensionValidator
 from django.db import models
 
+from apps.core.temas import OPCIONES as OPCIONES_TEMA
+from apps.core.temas import TEMA_POR_DEFECTO
+
 from .base import RegistroBase
 
 NOMBRE_POR_DEFECTO = "Órbita"
@@ -26,7 +29,7 @@ def validar_logo(archivo):
 
 
 class ConfiguracionSistema(RegistroBase):
-    """Identidad configurable de la plataforma (nombre y logo): una sola fila.
+    """Identidad configurable de la plataforma (nombre, logos claro/oscuro y estilo de acento): una sola fila.
 
     «Configuración antes que código»: cambiar cómo se llama o qué logo muestra
     la plataforma no exige tocar templates ni redesplegar. `actual()` nunca
@@ -42,6 +45,14 @@ class ConfiguracionSistema(RegistroBase):
         blank=True,
         validators=[FileExtensionValidator(EXTENSIONES_LOGO), validar_logo],
     )
+    # Fase visual: logo para el modo oscuro (opcional). Sin él, el modo oscuro usa `logo`.
+    logo_oscuro = models.FileField(
+        upload_to="sistema/",
+        blank=True,
+        validators=[FileExtensionValidator(EXTENSIONES_LOGO), validar_logo],
+    )
+    # Fase visual: estilo de acento curado (`apps/core/temas.py`); el color vive en tokens.css.
+    tema = models.CharField(max_length=20, choices=OPCIONES_TEMA, default=TEMA_POR_DEFECTO)
 
     class Meta:
         verbose_name = "configuración del sistema"

@@ -1,0 +1,37 @@
+{% comment %}
+  UX-4c — una etapa del recorrido en SOLO LECTURA (`espacio.vista_etapa`): los ítems que están en ella o ya pasaron
+  por ella, su situación en esa etapa y sus datos tal como están. No hay formularios: lo aprobado o enviado no se
+  edita desde aquí; lo que toca hacer sigue en la misión. Espera `vista_etapa` y `base`.
+{% endcomment %}
+<section class="et" id="etapa" aria-labelledby="et-t">
+  <header class="et__cabeza">
+    <div>
+      <p class="et__eyebrow">{% include "components/icon.html" with name="eye" size="sm" %} Solo lectura</p>
+      <h2 class="et__titulo" id="et-t">{{ vista_etapa.nombre }}</h2>
+      <p class="et__meta">{{ vista_etapa.nombre_elemento }} en esta etapa o que ya pasaron por ella: <span class="tabular">{{ vista_etapa.items|length }}</span>. Lo aprobado o enviado solo se consulta.</p>
+    </div>
+    <a class="btn btn--secondary btn--sm" href="{{ base }}">{% include "components/icon.html" with name="chevron-left" size="sm" %}Volver a tu misión</a>
+  </header>
+
+  {% if vista_etapa.items %}
+    <ul class="et__lista">
+      {% for item in vista_etapa.items %}
+        <li class="et__item">
+          <details class="et__plegable">
+            <summary class="et__fila">
+              <span class="et__nombre">{{ item.nombre }}</span>
+              <span class="et__fecha tabular">{{ item.fecha|default:"Sin fecha" }}</span>
+              <span class="estado-etiqueta estado-etiqueta--{{ item.tono }}">{{ item.situacion }}</span>
+              <span class="et__abrir" aria-hidden="true">{% include "components/icon.html" with name="chevron-down" size="sm" %}</span>
+            </summary>
+            <dl class="et__datos">
+              {% for dato in item.datos %}<div><dt>{{ dato.etiqueta }}</dt><dd>{{ dato.texto }}</dd></div>{% endfor %}
+            </dl>
+          </details>
+        </li>
+      {% endfor %}
+    </ul>
+  {% else %}
+    <p class="text-muted">Ningún {{ vista_etapa.nombre_elemento|lower }} ha llegado a esta etapa.</p>
+  {% endif %}
+</section>

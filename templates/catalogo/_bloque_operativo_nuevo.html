@@ -33,6 +33,9 @@
   <p class="svc-note">Usa las columnas elegidas en Formulario › Colecciones › Tareas por elemento. El flujo espera a que todas las tareas estén completas.</p>
 {% elif codigo == "GRUPO_ACTIVIDADES" %}
   <p class="svc-note">Después de agregarlo, añade dentro las tareas o aprobaciones que se hacen al mismo tiempo. El flujo continúa cuando terminan todas.</p>
+{% elif codigo == "GACETA" and opcion.codigo == "gaceta_item" %}
+  <div class="field"><label for="{{ form_gaceta_bloque_nuevo.gaceta.id_for_label }}">Gaceta que revisa el ítem:</label>{{ form_gaceta_bloque_nuevo.gaceta }}</div>
+  <p class="svc-note">Al llegar, el ítem entra a la gaceta (si aún no estaba) y su recorrido espera: si lo aprueban, sigue al siguiente paso; si lo devuelven, va a corrección y sigue esperando; si lo rechazan o excluyen, su recorrido termina. Los demás ítems avanzan a su ritmo. La gaceta no puede tener plazo de revisión ni aceptación o resolución automáticas.</p>
 {% elif codigo == "GACETA" %}
   <div class="field">{{ form_gaceta_bloque_nuevo.gaceta.label_tag }}{{ form_gaceta_bloque_nuevo.gaceta }}</div>
   <label class="choice">{{ form_gaceta_bloque_nuevo.presentar_items }} {{ form_gaceta_bloque_nuevo.presentar_items.label }}</label>

@@ -19,6 +19,47 @@ body {
   font-size: var(--font-size-body);
   line-height: var(--line-height-base);
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* UX-3 — cifras tabulares donde se comparan números: fechas, códigos, cantidades y tablas. */
+time,
+table,
+progress,
+.num,
+.tabular {
+  font-variant-numeric: var(--font-numeric);
+}
+
+/* Barras de desplazamiento discretas en toda la plataforma: carril transparente e indicador redondeado con
+   el acento atenuado (`--scrollbar-*`). Solo cambia el aspecto: el desplazamiento, la rueda, el teclado y el
+   arrastre siguen siendo los nativos, y nunca se ocultan donde el contenido lo necesita. WebKit/Blink usan los
+   pseudoelementos (dan el grosor exacto); Firefox, que no los tiene, las propiedades estándar (heredadas; su grosor «thin» lo decide el navegador y no ofrece estado hover). Las
+   estándar no se declaran en Blink porque anularían los pseudoelementos. */
+::-webkit-scrollbar {
+  width: var(--scrollbar-size);
+  height: var(--scrollbar-size);
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border-radius: var(--radius-pill);
+  background: var(--scrollbar-thumb);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+@supports not selector(::-webkit-scrollbar) {
+  html {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
 }
 
 /* `hidden` siempre gana: varios componentes (popover, panel, modal) usan el
@@ -38,7 +79,7 @@ h2,
 h3,
 h4 {
   margin: 0 0 var(--space-2);
-  font-weight: var(--font-weight-bold);
+  font-weight: var(--font-weight-semibold);
   line-height: var(--line-height-tight);
   color: var(--text-primary);
   letter-spacing: -0.01em;
@@ -49,9 +90,9 @@ h2 { font-size: var(--font-size-section-title); }
 h3 { font-size: var(--font-size-card-title); }
 h4 { font-size: var(--font-size-body); }
 
-.t-display { font-size: var(--font-size-display); font-weight: var(--font-weight-bold); line-height: 1.15; letter-spacing: -0.02em; }
-.t-page-title { font-size: var(--font-size-page-title); font-weight: var(--font-weight-bold); line-height: var(--line-height-tight); letter-spacing: -0.01em; }
-.t-section-title { font-size: var(--font-size-section-title); font-weight: var(--font-weight-bold); line-height: var(--line-height-tight); }
+.t-display { font-size: var(--font-size-display); font-weight: var(--font-weight-semibold); line-height: 1.15; letter-spacing: -0.02em; }
+.t-page-title { font-size: var(--font-size-page-title); font-weight: var(--font-weight-semibold); line-height: var(--line-height-tight); letter-spacing: -0.01em; }
+.t-section-title { font-size: var(--font-size-section-title); font-weight: var(--font-weight-semibold); line-height: var(--line-height-tight); }
 .t-card-title { font-size: var(--font-size-card-title); font-weight: var(--font-weight-semibold); line-height: var(--line-height-tight); }
 .t-body { font-size: var(--font-size-body); }
 .t-small { font-size: var(--font-size-small); }

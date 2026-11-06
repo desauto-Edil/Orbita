@@ -1,0 +1,84 @@
+{% load plazos %}{% comment %}
+  Inspector lateral compartido por «Mi trabajo» (`desde == "trabajo"`) y «Mis tickets» (`desde == "tickets"`).
+  Composición en `apps/tickets/inspector.py`; solo lectura. Tres zonas: encabezado fijo, cuerpo con su propio
+  desplazamiento y pie fijo con la acción principal (siempre visible). Bloques, en este orden y ningún otro:
+  resumen (estado · tu situación [Mi trabajo] · fecha objetivo) → tus pendientes [Mi trabajo, si hay] →
+  Información general → Descripción → Actividad reciente. Las secciones plegables empiezan abiertas y no se
+  dibujan sin datos. Quien no consulta el ticket (relación solo con una pieza, `consulta` = False) ve el
+  encabezado, el resumen y sus pendientes.
+{% endcomment %}
+{% with plazo=ticket|estado_plazo %}
+<div class="bt-ins" data-inspector-raiz data-ticket="{{ ticket.pk }}">
+  <header class="bt-ins__cabecera">
+    <button type="button" class="bt-ins__volver" data-inspector-cerrar>
+      {% include "components/icon.html" with name="chevron-left" size="sm" %}Volver a la lista
+    </button>
+    <div class="bt-ins__titulos">
+      <h2 class="bt-ins__titulo" id="bt-ins-titulo" tabindex="-1">{{ servicio.nombre }}</h2>
+      <p class="bt-ins__contexto">
+        <span class="tabular">{% if borrador %}Borrador{% else %}{{ ticket.codigo|default:"Sin código" }}{% endif %}</span>
+        <span>{{ ticket.get_tipo_display }}</span>
+      </p>
+    </div>
+    <button type="button" class="btn-icon bt-ins__cerrar" data-inspector-cerrar aria-label="Cerrar el detalle">
+      {% include "components/icon.html" with name="x" size="sm" %}
+    </button>
+  </header>
+
+  <div class="bt-ins__cuerpo">
+    <dl class="bt-ins__resumen">
+      <div>
+        <dt>Estado</dt>
+        <dd><span class="estado-etiqueta estado-etiqueta--{{ ticket.estado|lower }}">{% if borrador %}Sin enviar{% else %}{{ ticket.get_estado_display }}{% endif %}</span></dd>
+      </div>
+      {% if desde == "trabajo" %}
+        <div>
+          <dt>Tu situación</dt>
+          <dd><span class="estado-etiqueta estado-etiqueta--{{ situacion }}">{% if situacion == "atencion" %}Requiere tu atención{% else %}En seguimiento{% endif %}</span></dd>
+        </div>
+      {% endif %}
+      {% if ticket.fecha_objetivo_vigente %}
+        <div>
+          <dt>Fecha objetivo</dt>
+          <dd class="bt-ins__fecha">
+            <span class="tabular">{{ ticket.fecha_objetivo_vigente|date:"j M Y" }}</span>
+            {% if plazo == "vencido" %}<span class="estado-etiqueta estado-etiqueta--vencido">Venció</span>
+            {% elif plazo == "por_vencer" %}<span class="estado-etiqueta estado-etiqueta--por_vencer">Por vencer</span>{% endif %}
+          </dd>
+        </div>
+      {% endif %}
+    </dl>
+
+    {% if desde == "trabajo" and acciones %}
+      <section class="bt-ins__seccion" aria-labelledby="bt-ins-pendientes">
+        <h3 class="bt-ins__subtitulo" id="bt-ins-pendientes">Tus pendientes <span class="bt-ins__cuenta tabular">{{ acciones|length }}</span></h3>
+        <ul class="bt-ins__pendientes">
+          {% for accion in acciones %}
+            <li>
+              <span class="bt-ins__pendiente-titulo">{{ accion.titulo }}</span>
+              {% if accion.subtitulo or accion.vence %}
+                <span class="bt-ins__pendiente-meta">
+                  {% if accion.subtitulo %}<span>{{ accion.subtitulo }}</span>{% endif %}
+                  {% if accion.vence %}<span class="tabular">Vence {{ accion.vence|date:"j M" }}</span>{% endif %}
+                </span>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+
+    {% if consulta %}
+      {% include "tickets/bandeja/_ins_general.html" %}
+      {% include "tickets/bandeja/_ins_descripcion.html" %}
+      {% include "tickets/bandeja/_ins_actividad.html" %}
+    {% elif borrador %}
+      {% include "tickets/bandeja/_ins_descripcion.html" %}
+    {% endif %}
+  </div>
+
+  <footer class="bt-ins__pie">
+    <a class="btn btn--primary" href="{{ accion_principal.url }}">{{ accion_principal.etiqueta }}{% include "components/icon.html" with name="arrow-right" size="sm" %}</a>
+  </footer>
+</div>
+{% endwith %}

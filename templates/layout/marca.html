@@ -1,5 +1,11 @@
 {% comment %}
   Marca de la plataforma: el logo configurado en Configuración › General o, si
   no hay, la inicial del nombre del sistema. Decorativa: el nombre va al lado.
+  Fase visual: con logo para modo oscuro se pintan las dos versiones y el modo
+  efectivo (`<html data-modo>`, layout.css) muestra solo una; sin él, el modo
+  oscuro usa la misma marca del modo claro.
 {% endcomment %}
-{% if sistema.logo %}<img class="app-header__brand-logo" src="{% url 'core:logo' %}?v={{ sistema.actualizado_en|date:'U' }}" alt="">{% else %}<span class="app-header__brand-mark" aria-hidden="true">{{ sistema.inicial }}</span>{% endif %}
+{% if sistema.logo_oscuro %}
+  <span class="marca-modo marca-modo--claro">{% if sistema.logo %}<img class="app-header__brand-logo" src="{% url 'core:logo' %}?v={{ sistema.actualizado_en|date:'U' }}" alt="">{% else %}<span class="app-header__brand-mark" aria-hidden="true">{{ sistema.inicial }}</span>{% endif %}</span>
+  <span class="marca-modo marca-modo--oscuro"><img class="app-header__brand-logo" src="{% url 'core:logo_oscuro' %}?v={{ sistema.actualizado_en|date:'U' }}" alt=""></span>
+{% elif sistema.logo %}<img class="app-header__brand-logo" src="{% url 'core:logo' %}?v={{ sistema.actualizado_en|date:'U' }}" alt="">{% else %}<span class="app-header__brand-mark" aria-hidden="true">{{ sistema.inicial }}</span>{% endif %}

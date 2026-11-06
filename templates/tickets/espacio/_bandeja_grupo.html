@@ -1,0 +1,33 @@
+{% load plazos %}{% comment %}
+  UX-3 — una fila de «Mi trabajo» por ticket (`apps/tickets/bandeja.py::Grupo`). Espera `grupo`.
+  Toda la fila es UN enlace al espacio del ticket (Tab + Enter desde el teclado): nombre primero; código, etiqueta y
+  participación como línea secundaria; siguiente acción, estado y vencimiento. Sin botón por fila.
+{% endcomment %}
+{% with ticket=grupo.ticket siguiente=grupo.siguiente %}
+<li>
+  <a class="bj-fila{% if grupo.requiere_atencion %} bj-fila--atencion{% endif %}" href="{{ grupo.url }}">
+    <span class="bj-fila__ticket">
+      <span class="bj-fila__nombre">{{ ticket.detalle_servicio.servicio.nombre }}</span>
+      <span class="bj-fila__secundario">
+        <span class="tabular">{{ ticket.codigo|default:"Sin código" }}</span>{% if ticket.etiqueta %}<span>{{ ticket.etiqueta }}</span>{% endif %}<span class="bj-fila__rol"><span class="sr-only">Tu participación: </span>{{ grupo.participacion|join:" · " }}</span>
+      </span>
+    </span>
+    <span class="bj-fila__siguiente">
+      <span class="sr-only">{% if grupo.requiere_atencion %}Siguiente acción: {% else %}En seguimiento: {% endif %}</span>
+      {% if siguiente %}
+        <span class="bj-fila__accion-texto{% if not siguiente.accion %} is-espera{% endif %}">{{ siguiente.titulo }}</span>
+        {% if grupo.acciones|length > 1 %}<span class="bj-fila__mas tabular">+{{ grupo.acciones|length|add:"-1" }}</span>{% endif %}
+      {% else %}
+        <span class="bj-fila__accion-texto is-espera">Sin acciones ahora</span>
+      {% endif %}
+    </span>
+    <span class="bj-fila__estado"><span class="sr-only">Estado: </span><span class="estado-etiqueta estado-etiqueta--{{ ticket.estado|lower }}">{{ ticket.get_estado_display }}</span></span>
+    {% with plazo=ticket|estado_plazo %}
+    <span class="bj-fila__vence tabular{% if grupo.vencido or plazo == 'vencido' %} is-vencido{% elif plazo == 'por_vencer' %} is-por-vencer{% endif %}">
+      {% if grupo.proximo_vencimiento %}<span class="sr-only">Vencimiento: </span>{% if grupo.vencido %}Venció {% elif plazo == 'por_vencer' %}Por vencer · {% endif %}{{ grupo.proximo_vencimiento|date:"j M" }}{% elif plazo == "vencido" %}Ticket vencido{% elif plazo == "por_vencer" %}Por vencer{% else %}<span class="sr-only">Sin vencimiento</span>{% endif %}
+    </span>
+    {% endwith %}
+    <span class="bj-fila__ir" aria-hidden="true">{% include "components/icon.html" with name="chevron-right" size="sm" %}</span>
+  </a>
+</li>
+{% endwith %}

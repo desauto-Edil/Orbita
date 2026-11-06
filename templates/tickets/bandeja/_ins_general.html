@@ -1,0 +1,12 @@
+{% comment %}Inspector — información general (solo para quien consulta el ticket): quién lo tiene, quién lo solicita y cuándo se radicó. Plegable, abierta por defecto.{% endcomment %}
+<details class="bt-ins__seccion bt-ins__plegable" open>
+  <summary><h3 class="bt-ins__subtitulo">Información general</h3></summary>
+  <dl class="bt-ins__datos">
+    <div>
+      <dt>Lo tiene</dt>
+      <dd>{% if responsable.equipo %}{{ responsable.equipo }}{% if responsable.persona %} · {{ responsable.persona }}{% endif %}{% elif responsable.persona %}{{ responsable.persona }}{% else %}Sin asignar{% endif %}</dd>
+    </div>
+    {% if solicitante %}<div><dt>Solicita</dt><dd>{{ solicitante }}</dd></div>{% endif %}
+    {% if ticket.radicado_en %}<div><dt>Radicado el</dt><dd><time class="tabular" datetime="{{ ticket.radicado_en|date:'c' }}">{{ ticket.radicado_en|date:"j M Y, H:i" }}</time></dd></div>{% endif %}
+  </dl>
+</details>

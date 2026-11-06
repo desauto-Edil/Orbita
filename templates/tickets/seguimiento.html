@@ -45,10 +45,10 @@
       {% endif %}
     </dl>
     {% if solicitudes_pendientes %}
-      <p class="alert alert--warning" role="status">El equipo te pidió más información. <a href="{% url 'tickets:detalle' ticket.pk %}#solicitudes">Respóndela aquí</a>.</p>
+      <p class="alert alert--warning" role="status">El equipo te pidió más información. <a href="{% url 'tickets:espacio' ticket.pk %}">Respóndela aquí</a>.</p>
     {% endif %}
     {% if puede_responder_entrega %}
-      <p class="alert alert--info" role="status">Tienes una entrega por revisar. <a href="{% url 'tickets:detalle' ticket.pk %}">Aceptarla o enviar observaciones</a>.</p>
+      <p class="alert alert--info" role="status">Tienes una entrega por revisar. <a href="{% url 'tickets:espacio' ticket.pk %}?accion=entrega">Aceptarla o enviar observaciones</a>.</p>
     {% endif %}
   </section>
 
@@ -89,6 +89,6 @@
   {% if puede_ver_operacion %}
     <p class="seg-nota"><a href="{% url 'tickets:detalle' ticket.pk %}">Abrir la vista de atención de este ticket</a></p>
   {% elif es_solicitante %}
-    <p class="seg-nota"><a href="{% url 'tickets:detalle' ticket.pk %}">Comentar o ver la comunicación del ticket</a></p>
+    <p class="seg-nota"><a href="{% url 'tickets:espacio' ticket.pk %}?pestana=informacion#conversacion">Comentar o ver la comunicación del ticket</a></p>
   {% endif %}
 {% endblock %}

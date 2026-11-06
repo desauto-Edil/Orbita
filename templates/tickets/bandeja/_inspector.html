@@ -1,0 +1,9 @@
+{% comment %}
+  Bandeja compartida — contenedor del inspector lateral. El contenido (`_inspector_contenido.html`) lo pide
+  `static/js/bandeja.js` a `tickets:inspector` al elegir una fila; sin JS el panel nunca aparece y cada fila es un
+  enlace. En escritorio forma parte del layout (reduce la bandeja); en tableta y móvil se superpone.
+{% endcomment %}
+<aside class="bt-inspector" id="bt-inspector" aria-label="Detalle del ticket seleccionado" data-inspector-panel hidden>
+  <p class="bt-inspector__cargando" data-inspector-cargando hidden>Cargando…</p>
+  <div class="bt-inspector__contenido" data-inspector-contenido></div>
+</aside>

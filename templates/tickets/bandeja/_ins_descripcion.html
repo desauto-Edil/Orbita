@@ -1,0 +1,11 @@
+{% comment %}Inspector — descripción: los campos del formulario congelado del ticket con su respuesta legible, en el orden original; los que no tienen respuesta se omiten. Plegable, abierta por defecto; sin respuestas no se dibuja.{% endcomment %}
+{% if respuestas %}
+  <details class="bt-ins__seccion bt-ins__plegable" open>
+    <summary><h3 class="bt-ins__subtitulo">Descripción</h3></summary>
+    <dl class="bt-ins__datos bt-ins__datos--apilados">
+      {% for item in respuestas %}
+        <div><dt>{{ item.campo.etiqueta }}</dt><dd>{% include "tickets/_campo_valor.html" %}</dd></div>
+      {% endfor %}
+    </dl>
+  </details>
+{% endif %}

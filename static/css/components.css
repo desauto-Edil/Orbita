@@ -110,7 +110,7 @@
 
 .btn--danger:hover {
   background: var(--status-danger);
-  color: var(--palette-neutral-0);
+  color: var(--text-on-status);
 }
 
 .btn[disabled],
@@ -358,7 +358,7 @@
   width: 40px;
   height: 24px;
   border-radius: var(--radius-pill);
-  background: var(--palette-neutral-300);
+  background: var(--control-track);
   transition: background-color var(--duration-fast) var(--ease-standard);
   flex-shrink: 0;
 }
@@ -904,13 +904,66 @@
 .badge--danger  { background: var(--status-danger-soft);  color: var(--status-danger); }
 .badge--info    { background: var(--status-info-soft);    color: var(--status-info); }
 
-/* Status badge: punto + texto. El estado nunca depende solo del color. */
-.badge--dot::before {
-  content: "";
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
+/* `badge--dot` (punto + texto) se retiró: los estados son etiquetas suaves sin punto. La clase se conserva
+   inerte en plantillas antiguas; el texto sigue siendo la señal (el color nunca es la única). */
+
+/* 4.1 Etiqueta semántica de estado y situación (soft badge) ---------------
+   UN componente para todo lo que comunica un estado del dominio o la situación de la persona: fondo pastel
+   suave, texto contrastado (AA sobre su fondo, en claro y oscuro), píldora compacta y SIN punto. Los colores
+   salen solo de `--status-*` y no dependen del acento configurable. Las variantes por estado del dominio están
+   centralizadas aquí (nunca por pantalla); la plantilla elige la variante con la clave real
+   (`estado-etiqueta--{{ ticket.estado|lower }}`). Catálogo en `ORBITA_DESIGN.md` §4.4. */
+.estado-etiqueta {
+  --_fondo: var(--status-neutral-soft);
+  --_texto: var(--status-neutral);
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 22px;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--_fondo);
+  color: var(--_texto);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
+/* Tonos base (para estados que no son del ticket: gacetas, ítems, aprobaciones, tareas). */
+.estado-etiqueta--aviso { --_fondo: var(--status-warning-soft); --_texto: var(--status-warning); }
+.estado-etiqueta--info { --_fondo: var(--status-info-soft); --_texto: var(--status-info); }
+.estado-etiqueta--exito { --_fondo: var(--status-success-soft); --_texto: var(--status-success); }
+.estado-etiqueta--peligro { --_fondo: var(--status-danger-soft); --_texto: var(--status-danger); }
+.estado-etiqueta--neutro { --_fondo: var(--status-neutral-soft); --_texto: var(--status-neutral); }
+
+/* Estados del Ticket (clave de `Ticket.Estado` en minúsculas). */
+.estado-etiqueta--radicado { --_fondo: var(--status-warning-soft); --_texto: var(--status-warning); }
+.estado-etiqueta--en_atencion { --_fondo: var(--status-info-soft); --_texto: var(--status-info); }
+.estado-etiqueta--resuelto,
+.estado-etiqueta--cerrado,
+.estado-etiqueta--aprobado { --_fondo: var(--status-success-soft); --_texto: var(--status-success); }
+.estado-etiqueta--cancelado,
+.estado-etiqueta--rechazado { --_fondo: var(--status-danger-soft); --_texto: var(--status-danger); }
+.estado-etiqueta--borrador { --_fondo: var(--status-neutral-soft); --_texto: var(--status-neutral); }
+
+/* Situación de la persona y plazos. «Requiere tu atención» es ámbar con énfasis (peso y contorno fino). */
+.estado-etiqueta--atencion {
+  --_fondo: var(--status-warning-soft);
+  --_texto: var(--status-warning);
+  font-weight: var(--font-weight-semibold);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--status-warning) 32%, transparent);
+}
+
+.estado-etiqueta--seguimiento { --_fondo: var(--status-slate-soft); --_texto: var(--status-slate); }
+.estado-etiqueta--vencido { --_fondo: var(--status-danger-soft); --_texto: var(--status-danger); font-weight: var(--font-weight-semibold); }
+.estado-etiqueta--por_vencer { --_fondo: var(--status-warning-soft); --_texto: var(--status-warning); }
+
+@media (forced-colors: active) {
+  .estado-etiqueta { border: 1px solid CanvasText; }
 }
 
 /* ===================================================================== */
@@ -1028,13 +1081,13 @@
 .messages .alert {
   align-items: center;
   padding: var(--space-3);
-  border: 1px solid rgba(255, 255, 255, 0.68);
+  border: 1px solid rgb(var(--rgb-vidrio) / 0.68);
   border-radius: var(--radius-lg);
-  background: rgba(255, 255, 255, 0.68);
+  background: rgb(var(--rgb-vidrio) / 0.68);
   -webkit-backdrop-filter: blur(22px) saturate(140%);
   backdrop-filter: blur(22px) saturate(140%);
   color: var(--color-carbon);
-  box-shadow: 0 18px 48px rgba(23, 24, 27, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.78);
+  box-shadow: 0 18px 48px rgb(var(--rgb-sombra) / 0.14), inset 0 1px 0 rgb(var(--rgb-brillo) / 0.78);
   animation: toast-in var(--duration-base) var(--ease-out);
 }
 
@@ -1046,11 +1099,11 @@
   height: 28px;
   margin-top: 0;
   border-radius: var(--radius-pill);
-  background: rgba(255, 255, 255, 0.58);
+  background: rgb(var(--rgb-vidrio) / 0.58);
 }
 
 .messages .alert--success .alert__icon {
-  background: rgba(215, 255, 62, 0.28);
+  background: color-mix(in srgb, var(--color-primary) 28%, transparent);
   color: var(--status-success);
 }
 
@@ -1061,7 +1114,7 @@
 }
 
 .messages .alert__close:hover {
-  background: rgba(243, 241, 234, 0.8);
+  background: color-mix(in srgb, var(--surface-sunken) 80%, transparent);
 }
 
 @keyframes toast-in {
@@ -1272,6 +1325,35 @@
   margin-bottom: var(--space-5);
 }
 
+.auth-card__divider {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-5) 0;
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+}
+
+.auth-card__divider::before,
+.auth-card__divider::after {
+  content: "";
+  height: 1px;
+  flex: 1;
+  background: var(--border-subtle);
+}
+
+.auth-card__google svg { flex-shrink: 0; }
+
+.avatar:has(img) { position: relative; overflow: hidden; }
+.avatar img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+
+.auth-card__status {
+  margin-top: var(--space-3);
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+  text-align: center;
+}
+
 .breadcrumb {
   display: flex;
   align-items: center;
@@ -1352,7 +1434,10 @@
   display: flex;
   gap: var(--space-1);
   border-bottom: 1px solid var(--border-subtle);
+  /* Solo desplazamiento horizontal cuando las pestañas no caben (pantallas angostas). `overflow-y: hidden`
+     evita la barra vertical artificial que causaba el subrayado de la pestaña activa. */
   overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .tabs__tab {
@@ -1379,7 +1464,7 @@
   position: absolute;
   left: var(--space-3);
   right: var(--space-3);
-  bottom: -1px;
+  bottom: 0;
   height: 2px;
   border-radius: 2px;
   background: transparent;
@@ -1719,7 +1804,7 @@
 }
 
 .progress::-webkit-progress-bar {
-  background: var(--palette-neutral-200);
+  background: var(--progress-track);
   border-radius: var(--radius-pill);
 }
 
@@ -1727,14 +1812,14 @@
    interno oscuro suave para que el avance se lea con claridad. */
 .progress::-webkit-progress-value {
   background: var(--color-primary);
-  box-shadow: inset 0 0 0 1px rgba(23, 24, 27, 0.35);
+  box-shadow: inset 0 0 0 1px rgb(var(--rgb-sombra) / 0.35);
   border-radius: var(--radius-pill);
   transition: width var(--duration-slow) var(--ease-standard);
 }
 
 .progress::-moz-progress-bar {
   background: var(--color-primary);
-  box-shadow: inset 0 0 0 1px rgba(23, 24, 27, 0.35);
+  box-shadow: inset 0 0 0 1px rgb(var(--rgb-sombra) / 0.35);
   border-radius: var(--radius-pill);
 }
 

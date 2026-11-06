@@ -1,0 +1,7 @@
+<div class="ws-acciones esp-panel__pie">
+  {% if accion.puede_tomar %}
+    <form method="post" action="{% url 'tickets:tomar' ticket.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}"><button type="submit" class="btn btn--primary">Tomar ticket</button></form>
+  {% elif accion.puede_iniciar %}
+    <form method="post" action="{% url 'tickets:iniciar_atencion' ticket.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}"><button type="submit" class="btn btn--primary">Iniciar atención</button></form>
+  {% endif %}
+</div>

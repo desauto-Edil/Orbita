@@ -1,0 +1,67 @@
+{% comment %}
+  UX-4b — elaborar o corregir varios ítems en una tabla (`espacio.filas_de_mision`): cada fila muestra el ítem, la
+  observación si viene devuelto, lo que esta persona puede escribir o adjuntar en ESE ítem y dos botones: «Guardar
+  borrador» (no avanza) y el avance (`tickets:tarea_avanzar`: guarda y completa en una operación; su texto dice qué
+  sigue: «Enviar a aprobación», «Enviar a revisión»…).
+{% endcomment %}
+<div class="tb">
+  <div class="tb-envoltura">
+    <table class="tb-tabla tb-tabla--items">
+      <thead>
+        <tr><th scope="col">{{ mision.nombre_item|capfirst }}</th><th scope="col">Detalle</th><th scope="col">Lo que haces aquí</th><th scope="col"><span class="sr-only">Acción</span></th></tr>
+      </thead>
+      <tbody>
+        {% for fila in filas_mision %}
+          {% with tarea=fila.accion.tarea formulario="tb-av-"|add:fila.accion.clave %}
+            <tr class="{% if fila.devuelto %}is-devuelta{% endif %}">
+              <th scope="row" class="tb-item">
+                <span class="tb-item__nombre">{{ fila.nombre }}</span>
+                {% if fila.accion.recorrido_item %}{% include "tickets/espacio/_pasos_item.html" with item=fila.accion.recorrido_item compacto=True %}{% endif %}
+                {% if fila.accion.vence %}<span class="tb-vence tabular">Vence {{ fila.accion.vence|date:"j M" }}</span>{% endif %}
+              </th>
+              <td>
+                {% if fila.observacion %}<p class="tb-observacion">↺ {{ fila.observacion }}</p>{% endif %}
+                {% if fila.devuelto and fila.anotaciones %}{% with an=fila.anotaciones.0 %}
+                  <a class="tb-anotacion" href="{% url 'tickets:anotacion' an.pk %}" target="_blank" rel="noopener" title="Lo que señaló {{ an.autor.get_full_name|default:an.autor.get_username }}">
+                    <img src="{% url 'tickets:anotacion' an.pk %}" alt="Anotación de la revisión" loading="lazy"><span>Ver lo que se señaló</span>
+                  </a>
+                {% endwith %}{% endif %}
+                <dl class="tb-datos">{% for v in fila.valores %}{% if v.texto != "—" %}<div><dt>{{ v.etiqueta }}</dt><dd>{{ v.texto|truncatechars:140 }}</dd></div>{% endif %}{% endfor %}</dl>
+              </td>
+              <td class="tb-trabajo">
+                {% for celda in fila.editables %}
+                  <label class="tb-campo"><span>{{ celda.campo.etiqueta }}</span>{% include "tickets/espacio/tablero/_celda.html" with nombre=celda.nombre %}</label>
+                {% endfor %}
+                {% for celda in fila.archivos_editables %}
+                  <div class="tb-campo">
+                    <span>{{ celda.campo.etiqueta }}</span>
+                    {% if celda.archivos %}<div class="tb-archivos">{% for archivo in celda.archivos %}{% include "tickets/espacio/tablero/_archivo.html" with archivo=archivo %}{% endfor %}</div>{% endif %}
+                    {% with ext=celda.campo.configuracion.extensiones_permitidas maximo=celda.campo.configuracion.tamano_maximo_mb %}
+                      <input type="file" name="archivo_{{ celda.campo.pk }}" form="{{ formulario }}" aria-label="{{ celda.campo.etiqueta }}"{% if ext %} accept="{% for e in ext %}.{{ e }}{% if not forloop.last %},{% endif %}{% endfor %}"{% endif %}>
+                      {% if ext or maximo %}<span class="tb-ayuda">{% if ext %}Admite {{ ext|join:", " }}{% endif %}{% if ext and maximo %} · {% endif %}{% if maximo %}hasta {{ maximo }} MB{% endif %}</span>{% endif %}
+                    {% endwith %}
+                  </div>
+                {% endfor %}
+                {% if fila.faltan %}<p class="tb-falta">Falta {{ fila.faltan|join:", "|lower }}</p>{% endif %}
+              </td>
+              <td class="tb-botones tb-botones--columna">
+                {% if fila.accion.puede_completar %}
+                  {% if fila.editables %}<button type="submit" form="{{ formulario }}" formaction="{% url 'tickets:elemento_guardar' ticket.pk fila.elemento.pk %}" class="btn btn--ghost btn--sm">Guardar borrador</button>{% endif %}
+                  <button type="submit" form="{{ formulario }}" class="btn btn--primary btn--sm">{{ fila.accion.etiqueta_avance }}</button>
+                {% elif fila.accion.puede_tomar %}
+                  <button type="submit" form="tb-tomar-{{ tarea.pk }}" class="btn btn--primary btn--sm">Tomar</button>
+                {% endif %}
+              </td>
+            </tr>
+          {% endwith %}
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% for fila in filas_mision %}
+  <form id="tb-av-{{ fila.accion.clave }}" method="post" action="{% url 'tickets:tarea_avanzar' ticket.pk fila.accion.tarea.pk %}" enctype="multipart/form-data" hidden>
+    {% csrf_token %}<input type="hidden" name="next" value="{{ base }}#mision"><input type="hidden" name="elemento" value="{{ fila.elemento.pk }}">
+  </form>
+  {% if fila.accion.puede_tomar %}<form id="tb-tomar-{{ fila.accion.tarea.pk }}" method="post" action="{% url 'tareas:tomar' fila.accion.tarea.pk %}" hidden>{% csrf_token %}<input type="hidden" name="next" value="{{ base }}#mision"></form>{% endif %}
+{% endfor %}

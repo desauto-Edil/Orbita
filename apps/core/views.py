@@ -42,14 +42,19 @@ from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
 from django.utils import timezone
-from django.views.decorators.http import require_GET
+from django.views.decorators.http import require_GET, require_POST
 
 from apps.aprobaciones.consultas import aprobaciones_pendientes_para
 from apps.aprobaciones.models import Aprobacion
 from apps.catalogo import busqueda
-from apps.core import disenador, inicio
+from apps.core import accesos, disenador, inicio
+from apps.core import perfil as perfil_ops
+from apps.core.models import Usuario
+from apps.core.redirecciones import volver_a
+from apps.tickets import bandeja as bandeja_ops
 from apps.tickets import parrilla as parrilla_ops
 from apps.tickets import revision_elementos as revision_ops
+from apps.tickets import seguimiento
 from apps.tickets import trabajo as trabajo_ops
 from apps.tareas.consultas import tareas_asignadas_a, tareas_disponibles_para_tomar
 from apps.tareas.models import Tarea
@@ -96,7 +101,9 @@ def login_view(request):
         auth_login(request, form.get_user())
         return redirect(settings.LOGIN_REDIRECT_URL)
 
-    return render(request, "cuentas/login.html", {"form": form})
+    from apps.core.google_auth import configurado
+
+    return render(request, "cuentas/login.html", {"form": form, "google_login_disponible": configurado()})
 
 
 @login_required
@@ -108,21 +115,45 @@ def logout_view(request):
 
 @login_required
 def perfil_view(request):
-    """CU-003 — Consultar perfil (RQF-003, RQF-016, RQF-017, RN-004). Solo lectura."""
+    """CU-003 — Consultar perfil (RQF-003, RQF-016, RQF-017, RN-004). Solo lectura.
+
+    Fase visual: identidad (foto de Google), organización (áreas, unidades y equipos), últimos
+    accesos (registrados por CU-001, `apps.core.accesos`), compañeros (`apps.core.perfil`) y la
+    preferencia personal de apariencia."""
     usuario = request.user
-    areas = usuario.areas.filter(activo=True).select_related("area")
+    areas = usuario.areas.filter(activo=True, area__activo=True).select_related("area")
     unidades_negocio = usuario.unidades_negocio.filter(activo=True).select_related("unidad_negocio")
+    area_principal = areas.filter(es_principal=True).first()
+    from apps.notificaciones import preferencias as notif_preferencias
 
     contexto = {
         "usuario": usuario,
         "perfil": getattr(usuario, "perfil_organizacional", None),
         "areas": areas,
         "unidades_negocio": unidades_negocio,
-        "area_principal": areas.filter(es_principal=True).first(),
+        "equipos": perfil_ops.equipos_de(usuario),
+        "area_principal": area_principal,
         "unidad_principal": unidades_negocio.filter(es_principal=True).first(),
+        "accesos": accesos.ultimos_accesos(usuario, request),
+        "companeros": perfil_ops.companeros_de(usuario, area_principal),
+        "apariencias": Usuario.Apariencia.choices,
+        # CU-037 (Sprint 7, adelanto): qué grupos de avisos quiere recibir también por correo.
+        "notif_preferencias": notif_preferencias.de(usuario),
         "titulo_pagina": "Mi perfil",
     }
     return render(request, "cuentas/perfil.html", contexto)
+
+
+@login_required
+@require_POST
+def apariencia_view(request):
+    """Preferencia personal de modo claro/oscuro (Fase visual, CU-003). Solo la propia persona,
+    solo un valor de la lista cerrada; no es configuración de la plataforma ni se audita."""
+    valor = request.POST.get("apariencia", "")
+    if valor in Usuario.Apariencia.values and valor != request.user.apariencia:
+        request.user.apariencia = valor
+        request.user.save(update_fields=["apariencia"])
+    return volver_a(request, "core:perfil")
 
 
 @login_required
@@ -334,6 +365,9 @@ def mi_trabajo_view(request):
     para tomar"). Se combinan con `|` sobre el mismo QuerySet de `Tarea` y
     se aplica `.distinct()` — deduplicación real por identidad de fila en
     SQL, no un ajuste de presentación después de construir los dicts.
+
+    UX-1: la pestaña por defecto agrupa los pendientes por TICKET (`apps.tickets.bandeja`); las demás pestañas
+    conservan la lista técnica de siempre.
     """
     tab = request.GET.get("tab")
     if tab not in ("todo", "tareas", "aprobaciones", "revisiones"):
@@ -363,15 +397,56 @@ def mi_trabajo_view(request):
 
     # 4.F3: «Mi trabajo» empieza por los TICKETS que la persona atiende (no los que solicitó): cada
     # tarjeta lleva a la experiencia operativa. Tareas y aprobaciones sueltas siguen debajo.
-    tarjetas = [trabajo_ops.tarjeta(usuario, ticket) for ticket in trabajo_ops.tickets_a_cargo(usuario)[:MI_TRABAJO_TICKETS]]
+    a_cargo = list(trabajo_ops.tickets_a_cargo(usuario))
+    tarjetas = [trabajo_ops.tarjeta(usuario, ticket) for ticket in a_cargo[:MI_TRABAJO_TICKETS]]
 
     ahora = timezone.now()
-    filas_tareas = [_fila_tarea(tarea, ahora) for tarea in tareas_qs]
-    filas_aprobaciones = [_fila_aprobacion(aprobacion) for aprobacion in aprobaciones_qs]
+    tareas = list(tareas_qs)
+    aprobaciones = list(aprobaciones_qs)
+    revisiones = revision_ops.revisiones_pendientes_para(usuario)
+    colecciones = list(parrilla_ops.colecciones_de_participante(usuario))
+    filas_tareas = [_fila_tarea(tarea, ahora) for tarea in tareas]
+    filas_aprobaciones = [_fila_aprobacion(aprobacion) for aprobacion in aprobaciones]
     # 4.G2C2: revisiones de conjuntos de elementos asignadas a la persona (misma bandeja).
-    filas_revisiones = [_fila_revision(r) for r in revision_ops.revisiones_pendientes_para(usuario)]
+    filas_revisiones = [_fila_revision(r) for r in revisiones]
     # Bloque 3: colecciones en las que participa (sin ser responsable del ticket); solo en «Todo».
-    filas_colecciones = [_fila_coleccion(p) for p in parrilla_ops.colecciones_de_participante(usuario)]
+    filas_colecciones = [_fila_coleccion(p) for p in colecciones]
+
+    # UX-1: la vista por defecto agrupa todo por TICKET (una entrada por ticket); las pestañas técnicas
+    # (Tareas / Aprobaciones / Revisiones) siguen listando cada pendiente por separado.
+    bandeja = None
+    if tab == "todo":
+        bandeja = bandeja_ops.construir(
+            usuario, tareas=tareas, aprobaciones=aprobaciones, revisiones=revisiones,
+            colecciones=colecciones, a_cargo=a_cargo,
+        )
+        bandeja["sueltos"] = [
+            _fila_tarea(objeto, ahora) if tipo == "tarea" else _fila_aprobacion(objeto)
+            for tipo, objeto in bandeja["sueltos"]
+        ]
+        # UX-2: búsqueda y filtro sencillos sobre la bandeja ya construida (no consultan nada más).
+        bandeja["total_atencion"] = len(bandeja["atencion"])
+        bandeja["total_seguimiento"] = len(bandeja["seguimiento"])
+        texto = (request.GET.get("q") or "").strip()[:80]
+        ver = request.GET.get("ver")
+        if ver not in ("atencion", "seguimiento"):
+            ver = "todos"
+        for grupo_clave in ("atencion", "seguimiento"):
+            if ver not in ("todos", grupo_clave):
+                bandeja[grupo_clave] = []
+            else:
+                bandeja[grupo_clave] = [g for g in bandeja[grupo_clave] if g.coincide(texto)]
+        bandeja["q"] = texto
+        bandeja["ver"] = ver
+        # Bandeja única: una fila por ticket, primero lo que requiere atención (ya ordenado por vencimiento) y luego
+        # lo que está en seguimiento. La clasificación es la de `bandeja.construir`; aquí solo se presenta.
+        filas = bandeja["atencion"] + bandeja["seguimiento"]
+        fases = seguimiento.fases_actuales([g.ticket for g in filas])
+        for grupo in filas:
+            grupo.fase = fases.get(grupo.ticket.pk, "")
+            grupo.situacion = "atencion" if grupo.requiere_atencion else "seguimiento"
+        bandeja["filas"] = filas
+        bandeja["total"] = bandeja["total_atencion"] + bandeja["total_seguimiento"]
 
     if tab == "tareas":
         filas = filas_tareas
@@ -393,6 +468,7 @@ def mi_trabajo_view(request):
         "filas": pagina.object_list,
         "pagina": pagina,
         "tarjetas": tarjetas,
+        "bandeja": bandeja,
         "total": len(filas_tareas) + len(filas_aprobaciones) + len(filas_revisiones) + len(filas_colecciones),
         # Directo de las listas ya construidas — ninguna consulta adicional
         # solo para contar (punto 11).

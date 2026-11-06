@@ -13,5 +13,7 @@
   <div class="field" data-mostrar-si="-tipo=MULTILISTA">{{ form.maximo_selecciones.label_tag }}{{ form.maximo_selecciones }}</div>
 </div>
 <label class="choice" data-mostrar-si="-tipo=NUMERO">{{ form.permite_decimales }} {{ form.permite_decimales.label_tag }}</label>
+<label class="choice" data-mostrar-si="-tipo=FECHA,FECHA_HORA">{{ form.dentro_del_periodo }} {{ form.dentro_del_periodo.label_tag }}</label>
+<p class="svc-help" data-mostrar-si="-tipo=FECHA,FECHA_HORA">{{ form.dentro_del_periodo.help_text }}</p>
 <label class="choice" data-mostrar-si="-tipo=USUARIO,AREA,UNIDAD,EQUIPO">{{ form.solo_activos }} {{ form.solo_activos.label_tag }}</label>
 <p class="svc-help" data-mostrar-si="-tipo=LISTA,MULTILISTA">Las opciones de la lista se agregan después de guardar, en «Opciones».</p>

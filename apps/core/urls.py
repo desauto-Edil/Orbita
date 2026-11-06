@@ -1,6 +1,8 @@
 from django.urls import path
 
 from apps.core import views
+from apps.core import google_auth
+from apps.core import gmail_auth
 from apps.core import views_configuracion as config
 from apps.catalogo import studio as catalogo_studio
 
@@ -10,8 +12,13 @@ urlpatterns = [
     path("", views.inicio_view, name="inicio"),
     path("salud/", views.salud, name="salud"),
     path("login/", views.login_view, name="login"),
+    path("auth/google/", google_auth.iniciar, name="google_login"),
+    path("auth/google/callback/", google_auth.callback, name="google_callback"),
+    path("auth/gmail/", gmail_auth.conectar, name="gmail_conectar"),
+    path("auth/gmail/callback/", gmail_auth.callback, name="gmail_callback"),
     path("logout/", views.logout_view, name="logout"),
     path("perfil/", views.perfil_view, name="perfil"),
+    path("perfil/apariencia/", views.apariencia_view, name="apariencia"),
     path("explorar/", views.explorar_view, name="explorar"),
     path("necesito/", views.necesidad_view, name="necesidad"),
     path("mi-trabajo/", views.mi_trabajo_view, name="mi_trabajo"),
@@ -22,6 +29,7 @@ urlpatterns = [
     path("disenador/servicios/nuevo/", catalogo_studio.studio_crear_view, name="disenador_servicio_crear"),
     path("disenador/servicios/<int:pk>/", catalogo_studio.studio_view, name="disenador_servicio"),
     path("logo/", config.logo_view, name="logo"),
+    path("logo/oscuro/", config.logo_oscuro_view, name="logo_oscuro"),
     path("configuracion/", config.configuracion_view, name="configuracion"),
     path("configuracion/general/", config.general_view, name="configuracion_general"),
     path("configuracion/usuarios/", config.usuarios_view, name="configuracion_usuarios"),

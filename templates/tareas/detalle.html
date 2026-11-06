@@ -31,6 +31,9 @@
       {% if ticket_vinculado %}
         <p class="text-muted">Parte del ticket <a href="{% url 'tickets:detalle' ticket_vinculado.pk %}">{{ ticket_vinculado.detalle_servicio.servicio.nombre }}</a></p>
       {% endif %}
+      {% if ticket_espacio_id %}
+        <p><a class="btn btn--primary btn--sm" href="{% url 'tickets:espacio' ticket_espacio_id %}?accion=tarea-{{ tarea.pk }}">Trabajar en el espacio del ticket</a></p>
+      {% endif %}
       {% if elemento_editable %}
         <p><a class="btn btn--secondary btn--sm" href="{% url 'tickets:elemento_tarea' elemento_editable.parrilla.ticket_id elemento_editable.pk %}?tarea={{ tarea.pk }}">Editar {{ elemento_editable.parrilla.nombre_elemento|default:"ítem"|lower }} #{{ elemento_editable.numero }}</a></p>
       {% endif %}
@@ -287,6 +290,7 @@
               <li>
                 {{ evento.get_tipo_evento_display }}
                 <span>{{ evento.actor|default:"Sistema" }} · {{ evento.creado_en|date:"d/m/Y H:i" }}</span>
+                {% if evento.tipo_evento == "REPROGRAMADA" and evento.datos.motivo %}<span class="text-muted">{{ evento.datos.motivo }}</span>{% endif %}
               </li>
             {% empty %}
               <li class="text-muted">Sin eventos.</li>

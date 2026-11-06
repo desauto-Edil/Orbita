@@ -105,9 +105,10 @@ class BloqueOperativo(RegistroBase):
     )
     TIPOS_CONTENEDOR = ("GRUPO_ACTIVIDADES", "RECORRIDO_ITEMS")
     # Qué puede ir DENTRO de un contenedor, por rama. Un recorrido de ítem es una secuencia (actividades,
-    # aprobaciones y decisiones); una rama general es una sola actividad o aprobación que corre en paralelo.
+    # aprobaciones, decisiones y, Bloque 5.1, la revisión del ítem en una gaceta); una rama general es una sola
+    # actividad o aprobación que corre en paralelo.
     TIPOS_POR_RAMA = {
-        "ITEM": ("ACTIVIDAD", "APROBACION", "DECISION"),
+        "ITEM": ("ACTIVIDAD", "APROBACION", "DECISION", "GACETA"),
         "GENERAL": ("ACTIVIDAD", "APROBACION"),
     }
     # Entregables que una aprobación puede REVISAR (4.E2): los que tienen un contenido que

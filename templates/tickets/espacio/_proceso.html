@@ -1,0 +1,90 @@
+{% comment %}
+  Pestaña Proceso (solo quien consulta el ticket): fases completadas, actual y previstas, devoluciones registradas,
+  pasos de la fase actual, recorridos por ítem (estado general ≠ estado de cada ítem), gacetas y condiciones de
+  cierre. No es el diagrama del diseñador: solo lo que ocurrió y lo que queda abierto.
+{% endcomment %}
+{% if proceso %}
+  <section class="esp-superficie" aria-labelledby="proc-fases-t">
+    <h2 id="proc-fases-t" class="ws-sub">Recorrido · {{ proceso.completadas }} de {{ proceso.total }} fases</h2>
+    <ol class="esp-recorrido">
+      {% for paso in proceso.fases %}
+        <li class="esp-etapa esp-etapa--{{ paso.situacion }}"{% if paso.situacion == "actual" %} aria-current="step"{% endif %}>
+          <span class="esp-etapa__marca" aria-hidden="true">{% if paso.situacion == "completada" %}✓{% elif paso.situacion == "actual" %}●{% else %}○{% endif %}</span>
+          <span class="esp-etapa__nombre">{{ paso.nombre }}</span>
+          <span class="esp-etapa__estado">{% if paso.situacion == "completada" %}Completada{% elif paso.situacion == "actual" %}En curso{% elif paso.situacion == "no_aplico" %}No fue necesaria{% else %}Prevista{% endif %}{% if paso.visitas > 1 %} · recorrida {{ paso.visitas }} veces{% endif %}</span>
+        </li>
+      {% endfor %}
+    </ol>
+    {% if proceso.hay_pendientes %}<p class="ws-nota">Las fases previstas se habilitan solas cuando el flujo llega a ellas; no todas se recorren siempre.</p>{% endif %}
+    {% if proceso.con_error %}<p class="alert alert--danger">El flujo se detuvo por un error y requiere revisión.</p>{% endif %}
+  </section>
+
+  {% if proceso.bloques and not proceso.terminado %}
+    <section class="esp-superficie" aria-labelledby="proc-actual-t">
+      <h2 id="proc-actual-t" class="ws-sub">Ahora en {{ proceso.actual|default:"la fase actual" }}</h2>
+      <ol class="ws-lista">
+        {% for fila in proceso.bloques %}
+          <li class="ws-bloque ws-bloque--{{ fila.situacion }}">
+            <span class="ws-bloque__marca" aria-hidden="true">{% if fila.situacion == "completado" %}✓{% elif fila.situacion == "actual" %}●{% elif fila.situacion == "con_error" %}!{% else %}○{% endif %}</span>
+            <span class="ws-bloque__nombre">{{ fila.nombre }}</span>
+            <span class="badge ws-tipo ws-tipo--{{ fila.tipo_codigo|lower }}">{{ fila.tipo }}</span>
+            {% if fila.detalle %}<span class="ws-bloque__detalle">{{ fila.detalle }}</span>{% endif %}
+          </li>
+        {% endfor %}
+      </ol>
+    </section>
+  {% endif %}
+
+  {% if proceso.devoluciones %}
+    <section class="esp-superficie" aria-labelledby="proc-dev-t">
+      <h2 id="proc-dev-t" class="ws-sub">Devoluciones y correcciones</h2>
+      <ul class="esp-historia">
+        {% for dev in proceso.devoluciones %}
+          <li>«{{ dev.bloque }}» devolvió{% if dev.destino %} a «{{ dev.destino }}»{% endif %}{% if dev.fecha %} <span class="text-muted">{{ dev.fecha|date:"d/m H:i" }}</span>{% endif %}</li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endif %}
+
+  {% for contenedor in proceso.recorridos %}
+    <section class="esp-superficie" aria-labelledby="proc-rec-{{ contenedor.ejecucion.pk }}">
+      <h2 id="proc-rec-{{ contenedor.ejecucion.pk }}" class="ws-sub">{{ contenedor.bloque.nombre }} <span class="badge">{{ contenedor.tipo }}</span></h2>
+      <p class="text-muted">{{ contenedor.progreso.completados }} completado{{ contenedor.progreso.completados|pluralize }} de {{ contenedor.progreso.total }} · {{ contenedor.progreso.en_curso }} en curso{% if contenedor.progreso.con_error %} · {{ contenedor.progreso.con_error }} detenido{{ contenedor.progreso.con_error|pluralize }}{% endif %}{% if contenedor.progreso.excluidos or contenedor.progreso.rechazados %} · {{ contenedor.progreso.excluidos|add:contenedor.progreso.rechazados }} fuera del alcance{% endif %}{% if contenedor.progreso.pendiente_alcance %} · espera el cierre del alcance{% endif %}</p>
+      <ul class="esp-historia">
+        {% for fila in contenedor.filas %}
+          <li>
+            {% if fila.elemento %}<a href="{{ base }}?elemento={{ fila.elemento.pk }}">{{ fila.etiqueta }}</a>{% else %}{{ fila.etiqueta }}{% endif %}
+            · <span class="badge{% if fila.con_error %} badge--danger{% elif fila.en_curso %} badge--info{% else %} badge--success{% endif %}">{{ fila.estado }}</span>
+            {% if fila.paso and fila.en_curso %}· {{ fila.paso }}{% endif %}{% if fila.responsable and fila.en_curso %} · {{ fila.responsable }}{% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    </section>
+  {% endfor %}
+{% endif %}
+
+{% if gacetas_ticket %}
+  <section class="esp-superficie" aria-labelledby="proc-gac-t">
+    <h2 id="proc-gac-t" class="ws-sub">Gacetas</h2>
+    <ul class="esp-historia">
+      {% for g in gacetas_ticket %}
+        <li>
+          {% if g.puede_ver %}<a href="{% url 'tickets:espacio' g.gaceta.ticket_id %}#gaceta-{{ g.gaceta.pk }}">{{ g.gaceta.nombre }}</a>{% else %}{{ g.gaceta.nombre }}{% endif %}
+          · <span class="badge">{{ g.gaceta.get_estado_display }}</span>
+          <span class="text-muted">{{ g.resumen.aprobados }} aprobado{{ g.resumen.aprobados|pluralize }} · {{ g.resumen.en_revision }} en revisión · {{ g.resumen.en_correccion }} en corrección</span>
+        </li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endif %}
+
+{% if condiciones_cierre %}
+  <section class="esp-superficie" aria-labelledby="proc-cierre-t">
+    <h2 id="proc-cierre-t" class="ws-sub">Condiciones para finalizar</h2>
+    <ul class="esp-requisitos">
+      {% for regla in condiciones_cierre %}
+        <li class="esp-requisito{% if regla.cumple %} esp-requisito--ok{% else %} esp-requisito--falta{% endif %}"><span class="esp-requisito__marca" aria-hidden="true">{% if regla.cumple %}✓{% else %}○{% endif %}</span><span>{{ regla.descripcion }}{% if not regla.cumple %} — <span class="text-muted">{{ regla.detalle }}</span>{% endif %}</span></li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endif %}

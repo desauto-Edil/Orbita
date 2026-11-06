@@ -56,6 +56,15 @@ SECCIONES = (
         "descripcion": "Nombre y logo de la plataforma.",
     },
     {
+        # Sprint 7 (adelanto): valores generales de alertas y recordatorios (cada Servicio puede cambiarlos).
+        "clave": "notificaciones",
+        "etiqueta": "Notificaciones",
+        "url_name": "notificaciones:configuracion",
+        "capacidad": "sistema",
+        "icono": "bell",
+        "descripcion": "Cuándo se avisa lo que está por vencer, los recordatorios y el escalamiento.",
+    },
+    {
         "clave": "usuarios",
         "etiqueta": "Usuarios",
         "url_name": "core:configuracion_usuarios",

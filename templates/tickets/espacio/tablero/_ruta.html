@@ -1,0 +1,35 @@
+{% comment %}
+  UX-4b — el recorrido, siempre visible: una línea de etapas de izquierda a derecha (`espacio.ruta`). Cada etapa
+  dice si ya pasó (✓), cuántos ítems hay en ella ahora y cuántos volvieron (↺); la etapa de TU misión se marca.
+  La barra se llena con lo terminado. UX-4c: las etapas del recorrido de los ítems a las que ya llegó alguno son
+  enlaces (`?etapa=`) que muestran sus ítems en SOLO LECTURA (`espacio.vista_etapa`); la elegida se marca y un
+  segundo clic vuelve a la misión.
+{% endcomment %}
+{% if ruta %}
+  <section class="rt" aria-label="Recorrido">
+    <ol class="rt-lista" style="--rt-pasos: {{ ruta.etapas|length }}">
+      {% for etapa in ruta.etapas %}
+        <li class="rt-etapa rt-etapa--{{ etapa.situacion }}{% if etapa.mia %} is-mia{% endif %}{% if etapa.vista %} is-vista{% endif %}"{% if etapa.situacion == "actual" %} aria-current="step"{% endif %}>
+          {% if etapa.navegable %}<a class="rt-ir" href="{{ base }}{% if not etapa.vista %}?etapa={{ etapa.clave|urlencode }}{% endif %}"{% if etapa.vista %} aria-pressed="true"{% endif %} title="{% if etapa.vista %}Volver a tu misión{% else %}Ver esta etapa (solo lectura){% endif %}">{% else %}<span class="rt-ir">{% endif %}
+          <span class="rt-punto" aria-hidden="true">
+            {% if etapa.situacion == "completada" %}{% include "components/icon.html" with name="check" size="sm" %}
+            {% elif etapa.cantidad %}<span class="tabular">{{ etapa.cantidad }}</span>{% endif %}
+          </span>
+          <span class="rt-nombre">{{ etapa.nombre }}</span>
+          <span class="rt-detalle">
+            {% if etapa.mia %}<span class="rt-tu">Tu misión</span>
+            {% elif etapa.situacion == "completada" %}Hecho
+            {% elif etapa.cantidad %}<span class="tabular">{{ etapa.cantidad }}</span> aquí
+            {% elif etapa.situacion == "actual" %}En curso
+            {% elif etapa.pasaron %}<span class="tabular">{{ etapa.pasaron }}</span> ya pas{{ etapa.pasaron|pluralize:"ó,aron" }}
+            {% else %}Pendiente{% endif %}
+            {% if etapa.devueltos %}<span class="rt-vuelta tabular">↺ {{ etapa.devueltos }}</span>{% endif %}
+          </span>
+          <span class="sr-only">{% if etapa.situacion == "completada" %}(hecha){% elif etapa.situacion == "actual" %}(en curso){% else %}(pendiente){% endif %}{% if etapa.navegable and not etapa.vista %} — ver sus ítems en solo lectura{% elif etapa.vista %} — mostrando sus ítems; volver a tu misión{% endif %}</span>
+          {% if etapa.navegable %}</a>{% else %}</span>{% endif %}
+        </li>
+      {% endfor %}
+    </ol>
+    <div class="rt-barra" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ ruta.avance }}" aria-label="Avance"><span style="width: {{ ruta.avance }}%"></span></div>
+  </section>
+{% endif %}

@@ -37,6 +37,72 @@
 Los grises cálidos de la paleta original (`--palette-neutral-*`) siguen dando el tono del texto; los fondos y
 bordes pasan a la paleta neutra `--palette-gray-*`.
 
+### 2.1 Estilos de acento (Configuración › General)
+
+El acento es lo ÚNICO configurable del color. Se elige entre estilos **curados** (nunca un color libre) en
+Configuración › General, junto al logo (`ConfiguracionSistema.tema`, auditado). `base.html` lo aplica con
+`<html data-tema="…">` y `tokens.css` §4 redefine para cada estilo `--color-primary` (+ `-hover`, `-active`,
+`-soft`, `-soft-hover`), `--gradient-brand`, `--border-selected` y `--ring-selected`. Carbón, superficies,
+textos, foco y estados no cambian con el estilo.
+
+| Estilo | Clave | Acento (500) | Carácter |
+|---|---|---|---|
+| Lima (original, por defecto) | `lima` | `#d7ff3e` | Enérgica y tecnológica |
+| Menta | `menta` | `#4ff0a8` | Fresca y serena |
+| Cielo | `cielo` | `#62d6ff` | Clara y confiable |
+| Ámbar | `ambar` | `#ffc53d` | Cálida y optimista |
+| Coral | `coral` | `#ff8f6e` | Cercana y vibrante |
+| Lavanda | `lavanda` | `#b9a6ff` | Creativa y tranquila |
+
+Reglas: cada estilo tiene la misma escala (`--palette-<clave>-50/100/300/500/600/700`: 50–300 mezcla con
+blanco, 600–700 mezcla con tinta) y TODOS sus pasos cumplen contraste AA con `--color-on-primary` (tinta) encima.
+Las reglas del acento valen para cualquier estilo: nunca superficie grande, nunca color de texto ni de foco.
+Agregar un estilo = su escala y su bloque `[data-tema]` en `tokens.css` + su entrada en `apps/core/temas.py`.
+Ningún componente escribe el acento fijo: las transparencias se expresan con
+`color-mix(in srgb, var(--color-primary) N%, transparent)`. El mismo atributo `data-tema` en un elemento aplica el
+estilo solo a esa zona (muestras y vista previa de Configuración).
+
+### 2.2 Modo oscuro
+
+La apariencia es una preferencia personal (Mi perfil › Apariencia: Automático · Claro · Oscuro), guardada en
+`Usuario.apariencia`. `base.html` pone `<html data-modo="claro|oscuro">`; Automático se resuelve antes de pintar
+con `prefers-color-scheme` y sigue sus cambios (sin JS se ve claro). `tokens.css` §5 redefine solo la capa
+semántica bajo `[data-modo="oscuro"]`:
+
+| Rol | Claro | Oscuro |
+|---|---|---|
+| Fondo general | `#f2f3f5` | `#111214` |
+| Superficie | `#fdfdfd` | `#18191c` |
+| Superficie elevada | `#ffffff` | `#1f2024` |
+| Borde / borde fuerte | `#e2e4e8` / `#cdd1d6` | `#2c2e33` / `#3b3d43` |
+| Texto | carbón `#17181b` | `#eceef1` (secundario `#b9bbc1`, atenuado `#8f9299`) |
+| Superficie inversa | carbón | `#eceef1` con texto carbón |
+
+Reglas: el acento conserva su color y el texto OSCURO encima en ambos modos; en oscuro sus variantes suaves se
+mezclan con la superficie (`color-mix`) y la selección usa el propio acento. Estados y etiquetas tienen su versión
+oscura con contraste AA sobre su fondo suave. El foco es claro (`#eceef1`) en oscuro. Las sombras se vuelven
+negras y más densas: en oscuro la separación la da sobre todo el borde.
+
+Logos: Configuración › General admite un logo por modo, lado a lado y cada uno sobre el fondo de su modo
+(`--muestra-claro-*` / `--muestra-oscuro-*`, fijos a propósito). El de modo oscuro es opcional; sin él se usa el
+de modo claro. `layout/marca.html` pinta ambos y `.marca-modo--claro|--oscuro` (layout.css) deja ver el del modo
+efectivo.
+
+Ningún CSS fuera de `tokens.css` escribe un color: una transparencia se escribe con un canal
+(`rgb(var(--rgb-tinta) / .08)` para trazos y textos, `--rgb-vidrio` para superficies translúcidas, `--rgb-sombra`
+para sombras y `--rgb-brillo` para reflejos interiores) o con `color-mix(in srgb, var(--token) N%, transparent)`.
+
+### 2.3 Correo de los avisos
+
+Los correos de notificaciones y alertas (`templates/correo/notificacion.html|txt`) son la ÚNICA excepción a «ningún
+color fuera de `tokens.css`»: los clientes de correo no leen variables CSS ni hojas externas, así que los estilos van
+en línea con los literales de la identidad (carbón `#17181B`, fondo `#F2F3F5`, superficie `#FDFDFD`, borde
+`#E2E4E8`, texto secundario `#706E64`). Siempre en modo claro y SIEMPRE con el logo del modo claro incrustado
+(`cid:`); sin logo, la inicial del nombre sobre carbón. Estructura: logo + nombre · tarjeta con saludo, título, una
+frase, extracto (si hay que corregir), 3–5 datos clave y UN botón píldora carbón «Ver en {{ sistema.nombre }}» ·
+pie con el motivo. El acento no se usa en el correo (cambia por estilo y no garantiza contraste en todos los
+clientes).
+
 ## 3. Tipografía
 
 Inter (o la fuente de interfaz del sistema). Pesos 400/500/600; 700 solo en cifras o marca.
@@ -70,7 +136,8 @@ Sin títulos gigantes dentro de las herramientas. Interletrado ligeramente cerra
 | Input / selector | Alto 36–40 px, borde `--border-strong`, foco carbón 2 px. |
 | Checkbox / radio | Nativos estilizados; los grupos de opciones excluyentes se muestran como **segmentos** (píldoras). |
 | Selección múltiple | Componente `data-multiselect`: chips de lo elegido + buscador + lista con casillas; mantiene el `<select multiple>` original sincronizado (sin JS sigue funcionando). |
-| Chip / estado | Píldora 12 px; estados con punto de color + texto (Completa, En progreso, Opcional, Requiere atención, Sin configurar). |
+| Etiqueta de estado | `.estado-etiqueta`: píldora suave SIN punto (fondo `--status-*-soft`, texto `--status-*`), para todo estado del dominio o situación de la persona. Ver §5.4. |
+| Chip / estado del Studio | Píldora 12 px; el estado de configuración de cada sección del Studio (Completa, En progreso, Opcional, Requiere atención, Sin configurar) conserva su punto: es un indicador de navegación por pasos, no un estado del dominio. |
 | Tarjeta | Superficie + borde + `--shadow-card`, radio 12 px, padding 12–16 px. No todo es una tarjeta: listas compactas y filas para colecciones largas. |
 | Panel lateral (inspector) | Derecha, ancho `--studio-inspector-w`, encabezado fijo, contenido con scroll local, acciones al pie. |
 | Navegación secundaria | Segmentos horizontales dentro de una sección; solo un grupo visible a la vez. |
@@ -78,6 +145,132 @@ Sin títulos gigantes dentro de las herramientas. Interletrado ligeramente cerra
 | Mensajes de validación | Bajo el campo o en el inspector, con el nombre del campo que falla. |
 | Estado vacío | Una frase de qué falta y una acción. |
 | Barra de acciones | Pie del Studio: Atrás · estado de guardado + Guardar · Omitir · Continuar. |
+
+## 5.4 Etiquetas semánticas de estado y situación
+
+UN componente global, `.estado-etiqueta` (`static/css/components.css` §4.1): fondo pastel suave, texto
+contrastado (AA sobre su fondo en claro y oscuro), radio píldora, 12 px, peso 500 y **sin punto**. Los colores
+salen solo de `--status-*` (`tokens.css`), son independientes del acento configurable y se redefinen en modo
+oscuro; con `forced-colors` la etiqueta gana un borde. Ninguna pantalla define estilos de estado propios: la
+plantilla elige la variante con la clave real (`estado-etiqueta--{{ ticket.estado|lower }}`).
+
+| Variante | Tono | Uso |
+|---|---|---|
+| `--radicado` | ámbar | Ticket radicado / «Sin tomar» en la Cola |
+| `--en_atencion` | azul | Ticket en atención |
+| `--resuelto` · `--cerrado` · `--aprobado` | verde | Finalizado o aprobado |
+| `--cancelado` · `--rechazado` | rojo | Cancelado, rechazado, excluido del alcance |
+| `--borrador` (y la base sin variante) | gris | Borrador, retirado, sin estado |
+| `--atencion` | ámbar con énfasis (600 + contorno fino) | «Requiere tu atención» / «Requiere tu respuesta» |
+| `--seguimiento` | gris azulado | «En seguimiento» |
+| `--vencido` | rojo (600) | Fecha vencida («Venció») |
+| `--por_vencer` | ámbar | Fecha próxima a vencer |
+| `--aviso` · `--info` · `--exito` · `--peligro` · `--neutro` | tonos base | Estados que no son del ticket (gacetas, ítems) |
+
+Tokens nuevos: `--status-neutral(-soft)` y `--status-slate(-soft)`. `badge--dot` se retiró (la clase queda inerte
+en plantillas antiguas: el `.badge` sigue siendo la píldora genérica). Los puntos que representan NODOS, pasos o
+conexiones (lienzo, recorrido de fases, línea de tiempo, estado de las secciones del Studio) no son etiquetas y
+se conservan.
+
+## 5.5 Barras de desplazamiento
+
+Globales (`static/css/base.css`): 6 px (`--scrollbar-size`), carril transparente e indicador redondeado con el
+acento activo atenuado (`--scrollbar-thumb`, mezcla con `--border-strong`; en hover `--scrollbar-thumb-hover`). En
+WebKit/Blink con los pseudoelementos `::-webkit-scrollbar*`; en Firefox con `scrollbar-width: thin` y
+`scrollbar-color` (sin hover propio). Solo cambia el aspecto: el desplazamiento sigue siendo el nativo y nunca se
+oculta donde el contenido lo necesita. Un contenedor con `overflow-x: auto` (pestañas, segmentos) declara también
+`overflow-y: hidden` para no generar una barra vertical artificial (el subrayado de `.tabs__tab` va dentro de la
+caja). Un panel con desplazamiento propio (inspector, resumen de la Cola) usa `overscroll-behavior: contain`.
+
+## 5.6 Bandejas operativas (Mi trabajo · Mis tickets · Cola)
+
+Las tres son listas contenidas en UNA superficie (`--surface-card`, borde fino, `--radius-lg`), filas separadas por
+una línea, sin zebra ni tarjetas por fila. Nombre del ticket como elemento principal; código y contexto, metadatos
+secundarios; estado, situación y vencimiento como `.estado-etiqueta`; fase como texto secundario. La Cola muestra
+SOLO lo disponible para tomar (sin segmento de supervisión), con su contador en la pestaña «Cola» y en el
+encabezado («No hay tickets pendientes por tomar» si no hay).
+
+**Patrón de bandeja reutilizable** (`templates/tickets/bandeja/`, `static/css/bandeja.css`; hoy Mi trabajo y Mis
+tickets, la Cola conserva su lista propia):
+
+- **Estructura:** `.bt` (rejilla lista + inspector) › `.bt__lista` (superficie contenida, `container: bandeja`) ›
+  `.bt-encabezado` + `ul.bt-filas` › `li.bt-fila` › `a.bt-fila__enlace` con celdas `.bt-celda--*`. Encabezado y filas
+  comparten la MISMA `grid-template-columns` y `column-gap` por variante (`.bt--trabajo`, `.bt--tickets`): la
+  alineación es exacta.
+- **Columnas:** inspector cerrado — Mi trabajo: Ticket | Fase | Tu situación | Estado | Fecha; Mis tickets: Ticket |
+  Fase o novedad | Estado | Fecha. Inspector abierto (o bandeja angosta) — Mi trabajo: Ticket | Tu situación | Fecha;
+  Mis tickets: Ticket | Fase o novedad | Fecha (lo que sale de la rejilla pasa bajo el nombre). Las columnas no
+  se ensanchan por las etiquetas: `.estado-etiqueta` se adapta y trunca solo si no cabe.
+- **Separadores y densidad:** solo horizontales entre registros (`--border-subtle`); nunca divisores verticales,
+  zebra ni rejilla. Filas compactas (`--space-3` vertical, mínimo 64 px).
+- **Encabezado:** cabecera, no otra fila — una BARRA redondeada (`--radius-md`) inset dentro de la superficie
+  (margen `--bt-encabezado-margen` = `--space-2`), con un tono más contrastado que el cuerpo
+  (`color-mix(--text-primary 6 %, --surface-card)`: se adapta a claro/oscuro), 38 px, 12 px/600 en
+  `--text-secondary`, sin bordes ni sombra. Su relleno horizontal descuenta el margen para que sus columnas
+  coincidan exactamente con las de las filas.
+- **Desplazamiento (escritorio ≥1024 px y ≥560 px de alto):** la plantilla añade `content-area--bandeja` al `<main>`
+  cuando hay filas. La vista mide `100dvh − --header-h` y no se desplaza (nada pasa por detrás del header global);
+  título, búsqueda y filtros no crecen (`flex: none`); la bandeja toma el resto (`min-height: 0`); el encabezado
+  queda FUERA del contenedor que se desplaza y `ul.bt-filas` es el ÚNICO con `overflow-y: auto` (la lista mide lo
+  que sus filas hasta el alto disponible, así que la barra aparece solo si no caben). Las filas reservan el canal
+  de la barra (`scrollbar-gutter: stable`) y el encabezado el mismo ancho (`--scrollbar-size`): la barra no
+  descuadra las columnas. El inspector ocupa el mismo alto, con encabezado y pie fijos y cuerpo propio. En
+  tableta, móvil o pantallas bajas el desplazamiento es el natural de la página.
+
+**Inspector lateral** (Mi trabajo y Mis tickets): encabezado fijo (nombre, código, tipo, cerrar) · cuerpo con
+desplazamiento local · pie fijo con la acción principal (Mi trabajo «Abrir espacio de trabajo», Mis tickets «Ver
+ticket», borrador «Continuar»), siempre visible. Bloques, en orden y ningún otro: resumen (estado · tu situación
+[solo Mi trabajo] · fecha objetivo) → tus pendientes [solo Mi trabajo, si hay] → Información general (lo tiene,
+solicita, radicado el) → Descripción (respuestas del formulario en su orden, sin vacíos) → Actividad reciente
+(historial real, del más reciente al más antiguo). Las tres últimas son plegables y empiezan abiertas. Avance,
+fases y entregables viven solo en el espacio completo del ticket.
+
+## 5.7 Espacio del ticket: encabezado persistente y panel del ticket
+
+- **Encabezado persistente** (escritorio ≥1024 × 720, `content-area--espacio`): regreso, nombre, estado, código,
+  responsable, fecha objetivo, recorrido y el banner de «Tu misión» quedan inmóviles; debajo, UNA zona que se
+  desplaza (`tb-cuerpo`). Entre 720 y 880 px de alto el encabezado se compacta (menos aire, objetivo de la misión
+  en dos líneas). Con menos altura, en tableta o móvil, el desplazamiento es el natural de la página. Estructura
+  flex/grid con `min-height: 0`, sin `sticky` ni posiciones absolutas.
+- **Panel del ticket** (`.tp`): la Conversación es de todos los involucrados; el Historial solo aparece para quien
+  consulta el ticket. UNA superficie con borde fino, sin sombra en el layout; pestañas con el componente
+  `.tabs`; cerrar con `.btn-icon`. 380 px dentro del layout desde 1280 px (el centro se adapta); superpuesto
+  (`--shadow-float`) en portátil y tableta o si ya hay otro panel abierto; vista completa bajo la navegación en
+  móvil. Encabezado fijo; cada pestaña desplaza solo su contenido.
+- **Conversación:** mensajes con avatar de 32 px (`.avatar`), autor (600), hora (caption, muted) y el texto en una
+  burbuja suave (`--surface-sunken`; los propios en `--color-primary-soft`), sin tarjetas por mensaje; compositor
+  fijo al pie (textarea que crece hasta 160 px; Enter envía, Mayús+Enter nueva línea). Estados de carga, vacío,
+  error y reconexión en una línea discreta.
+- **No leídos:** contador pequeño en el acceso «Conversación» (`.tp-acceso__cuenta`, acento con
+  `--color-on-primary`: es un indicador), sin ventanas emergentes.
+- **Historial:** línea de tiempo vertical (`.tl`) de todo lo ocurrido en el ticket y sus piezas: avatar de 32 px
+  (Sistema = avatar neutro con el icono de ajustes), actor (600) + acción (texto secundario) + objeto entre «»
+  (500), detalle en caption y fecha; una línea vertical de 1 px
+  (`--border-subtle`) une los avatares. Sin badges por evento ni tarjetas.
+
+## 5.8 Recorrido navegable y etapas en solo lectura
+
+- Las etapas del recorrido de los ítems a las que ya llegó alguno son enlaces discretos (subrayado del nombre al
+  pasar, anillo de foco); la elegida se marca con `--color-primary-soft`. La etapa elegida reemplaza la misión en la
+  zona que se desplaza por una superficie (`.et`) con el rótulo «Solo lectura» (icono `eye`), el nombre de la
+  etapa, «Volver a tu misión» y una fila plegable por ítem (nombre, fecha, `.estado-etiqueta` con su situación en
+  esa etapa); al abrirla, sus datos en rejilla. Nada editable.
+- Misión de gaceta: la zona que se desplaza muestra solo esa gaceta.
+
+## 5.9 Piezas: galería visual y visor
+
+- **Tarjeta** (`.pz`): solo lo visual — imagen o fotograma del video (cubre la tarjeta, 4:5), archivo con su icono
+  o, sin archivos, el nombre del ítem; chips de fecha (arriba a la izquierda) y estado (arriba a la derecha,
+  `.pz__estado`, misma escala que `.estado-etiqueta`). Rejilla `auto-fill` de 180 px; dos columnas en móvil.
+- **Visor** (`.pz-visor`, `<dialog>`): 1240 × 860 máx.; el medio a la izquierda sobre `--surface-escenario`
+  (oscuro en ambos modos, `--text-escenario` encima) y la información a la derecha (380 px): encabezado y pie fijos,
+  cuerpo con su propio desplazamiento. En pantallas < 900 px, el medio arriba y la información debajo, a pantalla
+  completa. Cierra con el botón, Escape o un clic fuera.
+- **Revisión**: Aprobar (primario) · Corregir (secundario) · Eliminar (fantasma en `--status-danger`), con un
+  comentario obligatorio. **Anotación** (solo aprobación de un ítem, sobre imagen): barra flotante bajo la imagen con
+  lápiz, resaltador, tres colores de estado, deshacer y borrar; un aviso discreto (`--status-info`) indica que el
+  dibujo viaja con la revisión.
+- **Gaceta**: el menú «Coordinar» (encabezado de la gaceta, popover) sustituye a la página propia de la gaceta.
 
 ## 5.1 Iconografía
 
@@ -262,3 +455,19 @@ ninguno. Sin datos de inicio, la pieza se muestra «No los usa (opcional)» y la
 sí necesita su formulario de entrada activo. Los datos de entrada de un Proceso pueden ser el formulario de inicio O una colección: con uno de los dos activo, la sección Formulario está «Completa».
 
 **Flujo.** El lienzo no muestra con quién se comparte la plantilla ni un enlace a ella: ocupan espacio y no se necesitan al configurar.
+
+## 12. Vistas generales del Diseñador (Resumen · Flujos · Servicios y procesos)
+
+Mismas reglas que el Studio, en `static/css/disenador.css` (bloque «Vistas generales»), sin glass, degradados ni
+elevación al pasar el cursor:
+
+- **Fondo y ancho:** el gris de la aplicación (`--surface-page`), contenido hasta 1280 px.
+- **Cabecera:** antetítulo en mayúsculas pequeñas, título de pantalla (28 px, 600) y una frase; la acción principal
+  (lima) a la derecha. La navegación local son segmentos sobre `--surface-sunken`; el activo, sobre `--surface-card`.
+- **Tarjeta de servicio o flujo:** superficie con borde sutil, radio 12 px, mosaico de icono (Servicio →
+  `hand-helping`, Proceso → `workflow`, Proceso programado → `calendar-clock`), nombre (16 px, 600) y una línea de
+  contexto. Debajo, en una franja `--surface-sunken`, lo configurado de verdad: formulario o datos de inicio con su
+  número de campos y colecciones, el flujo y los entregables (nunca textos fijos); en un flujo, sus fases. Al pie,
+  separado por un borde, los estados (píldora con punto y texto) y una sola acción secundaria.
+- **Configuración secundaria (Ticket general):** un panel debajo de la biblioteca con su estado, un resumen y la
+  acción de habilitar; los destinos y formularios avanzados van plegados.

@@ -23,7 +23,7 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
 
-from apps.core import configuracion
+from apps.core import configuracion, temas
 from apps.core.auditoria import auditar_guardado, serializar
 from apps.core.forms import (
     AreaForm,
@@ -138,26 +138,42 @@ def general_view(request):
         messages.success(request, "La identidad del sistema se actualizó.")
         return redirect("core:configuracion_general")
     contexto["form"] = form
+    # Estilos curados (Fase visual) y el elegido: el enviado si el formulario volvió con errores.
+    contexto["temas"] = [
+        {"clave": clave, "nombre": nombre, "descripcion": descripcion}
+        for clave, (nombre, descripcion) in temas.TEMAS.items()
+    ]
+    elegido = form["tema"].value()
+    contexto["tema_elegido"] = elegido if elegido in temas.TEMAS else form.instance.tema
     return render(request, "configuracion/general.html", contexto)
+
+
+def _servir_logo(archivo):
+    if not archivo:
+        raise Http404
+    try:
+        abierto = archivo.open("rb")
+    except FileNotFoundError as error:
+        raise Http404 from error
+    tipo = mimetypes.guess_type(archivo.name)[0] or "application/octet-stream"
+    respuesta = FileResponse(abierto, content_type=tipo)
+    respuesta["X-Content-Type-Options"] = "nosniff"
+    # La URL lleva la fecha de actualización (`?v=`), así que puede cachearse.
+    respuesta["Cache-Control"] = "public, max-age=86400"
+    return respuesta
 
 
 @require_GET
 def logo_view(request):
     """Logo configurado. Sin autenticación: también se muestra en el inicio de
     sesión. Solo sirve el archivo de `ConfiguracionSistema`, validado al subir."""
-    logo = ConfiguracionSistema.actual().logo
-    if not logo:
-        raise Http404
-    try:
-        archivo = logo.open("rb")
-    except FileNotFoundError as error:
-        raise Http404 from error
-    tipo = mimetypes.guess_type(logo.name)[0] or "application/octet-stream"
-    respuesta = FileResponse(archivo, content_type=tipo)
-    respuesta["X-Content-Type-Options"] = "nosniff"
-    # La URL lleva la fecha de actualización (`?v=`), así que puede cachearse.
-    respuesta["Cache-Control"] = "public, max-age=86400"
-    return respuesta
+    return _servir_logo(ConfiguracionSistema.actual().logo)
+
+
+@require_GET
+def logo_oscuro_view(request):
+    """Logo para el modo oscuro (Fase visual), con las mismas reglas que `logo_view`."""
+    return _servir_logo(ConfiguracionSistema.actual().logo_oscuro)
 
 
 # --- Usuarios ---------------------------------------------------------------

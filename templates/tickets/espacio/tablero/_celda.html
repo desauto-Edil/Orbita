@@ -1,0 +1,17 @@
+{% comment %}Un control compacto para una celda de tabla. Espera `celda` y `nombre` (atributo name); `formulario` (opcional) asocia el control a un formulario externo.{% endcomment %}
+{% if celda.tipo == "TEXTO_LARGO" %}
+  <textarea class="tb-control" name="{{ nombre }}" rows="2"{% if formulario %} form="{{ formulario }}"{% endif %} aria-label="{{ celda.campo.etiqueta }}">{{ celda.valor }}</textarea>
+{% elif celda.tipo == "BOOLEANO" %}
+  <input type="checkbox" name="{{ nombre }}"{% if celda.marcado %} checked{% endif %}{% if formulario %} form="{{ formulario }}"{% endif %} aria-label="{{ celda.campo.etiqueta }}">
+{% elif celda.tipo == "LISTA" or celda.tipo == "USUARIO" or celda.tipo == "AREA" or celda.tipo == "UNIDAD" %}
+  <select class="tb-control" name="{{ nombre }}"{% if formulario %} form="{{ formulario }}"{% endif %} aria-label="{{ celda.campo.etiqueta }}">
+    <option value="">—</option>
+    {% for valor, etiqueta, marcada in celda.opciones %}<option value="{{ valor }}"{% if marcada %} selected{% endif %}>{{ etiqueta }}</option>{% endfor %}
+  </select>
+{% elif celda.tipo == "MULTILISTA" %}
+  <select class="tb-control" name="{{ nombre }}" multiple size="3"{% if formulario %} form="{{ formulario }}"{% endif %} aria-label="{{ celda.campo.etiqueta }}">
+    {% for valor, etiqueta, marcada in celda.opciones %}<option value="{{ valor }}"{% if marcada %} selected{% endif %}>{{ etiqueta }}</option>{% endfor %}
+  </select>
+{% else %}
+  <input class="tb-control" type="{{ celda.input_type }}" name="{{ nombre }}" value="{{ celda.valor }}"{% if celda.tipo == "NUMERO" %} step="any"{% endif %}{% if periodo and celda.campo.configuracion.dentro_del_periodo %}{% if celda.tipo == "FECHA" %} min="{{ periodo.inicio|date:'Y-m-d' }}" max="{{ periodo.fin|date:'Y-m-d' }}"{% else %} min="{{ periodo.inicio|date:'Y-m-d' }}T00:00" max="{{ periodo.fin|date:'Y-m-d' }}T23:59"{% endif %} title="Dentro de {{ periodo.etiqueta }}"{% endif %}{% if formulario %} form="{{ formulario }}"{% endif %} aria-label="{{ celda.campo.etiqueta }}">
+{% endif %}

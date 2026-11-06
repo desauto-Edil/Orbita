@@ -1,0 +1,220 @@
+{% comment %} Sprint 7 (adelanto) — Studio › Notificaciones (CU-036): Avisos base · Por etapa · Recordatorios. Pertenece al
+   Servicio/Proceso (nunca al flujo compartido); cada ticket congela esta configuración al nacer. Un apartado a la vez
+   (`data-subnav-ambito`); sin JS se ven todos. Cada formulario guarda con su propia operación. {% endcomment %}
+<section class="svc-section notif-studio" data-subnav-ambito="notificaciones">
+  <header class="svc-section__head">
+    <div>
+      <p class="svc-kicker">Notificaciones</p>
+      <h2>Avisos y recordatorios</h2>
+      <p>Quién se entera de qué, en qué momento del {% if es_proceso %}proceso{% else %}servicio{% endif %} y cómo se recuerda lo pendiente. Siempre se avisa en {{ sistema.nombre }}; el correo es opcional, salvo lo que exige una acción.</p>
+    </div>
+  </header>
+
+  <p class="subpanel__ayuda">¿Qué quieres configurar?</p>
+  <div class="subnav" role="tablist" aria-label="Apartados de notificaciones">
+    <button type="button" class="subnav__item" role="tab" data-subnav-ir="base">Avisos base</button>
+    <button type="button" class="subnav__item" role="tab" data-subnav-ir="etapa">Por etapa{% if notif_reglas %} <span class="chip">{{ notif_reglas|length }}</span>{% endif %}</button>
+    <button type="button" class="subnav__item" role="tab" data-subnav-ir="recordatorios">Recordatorios</button>
+  </div>
+
+  {# --- A. Avisos base --- #}
+  <div class="subpanel" data-subpanel="base" role="tabpanel">
+    <h3 class="subpanel__titulo">Avisos base</h3>
+    <p class="svc-help">Los avisos que {{ sistema.nombre }} envía siempre en el centro de notificaciones. Elige cuáles salen también por correo. Lo que exige una acción siempre llega por correo.</p>
+    <form method="post" action="{% url 'notificaciones:studio_base' servicio.pk %}" class="form">
+      {% csrf_token %}
+      <div class="notif-avisos" role="list">
+        {% regroup notif_avisos_base by grupo as grupos %}
+        {% for grupo in grupos %}
+          <fieldset class="notif-avisos__grupo">
+            <legend>{% if grupo.grouper == "TICKETS" %}Para quien solicita{% elif grupo.grouper == "ATENCION" %}Para quien atiende{% elif grupo.grouper == "TRABAJO" %}Actividades y aprobaciones{% else %}Gacetas{% endif %}</legend>
+            {% for aviso in grupo.list %}
+              <div class="notif-aviso" role="listitem">
+                <span class="notif-aviso__nombre">{{ aviso.etiqueta }}</span>
+                {% if aviso.requiere_accion %}
+                  <span class="chip notif-aviso__fijo" title="Exige una acción: siempre se envía por correo">{% include "components/icon.html" with name="mail" size="sm" %} Correo siempre</span>
+                {% else %}
+                  <label class="choice notif-aviso__correo"><input type="checkbox" name="correo_{{ aviso.clave }}"{% if aviso.correo %} checked{% endif %}> Correo</label>
+                {% endif %}
+              </div>
+            {% endfor %}
+          </fieldset>
+        {% endfor %}
+      </div>
+      <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar avisos</button></div>
+    </form>
+  </div>
+
+  {# --- B. Avisos por etapa --- #}
+  <div class="subpanel" data-subpanel="etapa" role="tabpanel">
+    <div class="campo-lista__cabecera">
+      <h3 class="subpanel__titulo">Avisos por etapa</h3>
+      <button type="button" class="btn btn--primary btn--sm" data-action="toggle-panel" data-target="panel-regla-nueva">+ Aviso por etapa</button>
+    </div>
+    <p class="svc-help">«Cuando pase esto en esta etapa, avisar a estas personas». Usan las fases, actividades y gacetas del flujo de este {% if es_proceso %}proceso{% else %}servicio{% endif %}.</p>
+
+    {% if notif_reglas %}
+      <ul class="notif-reglas">
+        {% for regla in notif_reglas %}
+          <li class="notif-regla{% if regla.pk in notif_huerfanas %} notif-regla--atencion{% endif %}">
+            <div class="notif-regla__texto">
+              <span class="notif-regla__cuando">{{ regla.get_momento_display }}: <strong>{{ regla.nombre_objetivo|default:regla.clave_objetivo }}</strong></span>
+              <span class="notif-regla__quien">Avisar a {% if regla.destinatario == "USUARIO" %}{{ regla.usuario.get_full_name|default:regla.usuario.username }}{% elif regla.destinatario == "EQUIPO" %}el equipo {{ regla.equipo.nombre }}{% else %}{{ regla.get_destinatario_display|lower }}{% endif %} · {% if regla.correo %}en {{ sistema.nombre }} y por correo{% else %}solo en {{ sistema.nombre }}{% endif %}</span>
+              {% if regla.mensaje %}<span class="notif-regla__mensaje">«{{ regla.mensaje }}»</span>{% endif %}
+              {% if regla.pk in notif_huerfanas %}<span class="estado estado--attention">Esa etapa ya no existe en el flujo: retira este aviso o vuelve a crearlo.</span>{% endif %}
+            </div>
+            <form method="post" action="{% url 'notificaciones:studio_regla_retirar' servicio.pk regla.pk %}" data-confirmar="¿Retirar este aviso? Los tickets ya creados lo conservan.">
+              {% csrf_token %}
+              <button type="submit" class="btn btn--ghost btn--sm">Retirar</button>
+            </form>
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <div class="svc-empty">Sin avisos por etapa (opcional).</div>
+    {% endif %}
+
+    <article id="panel-regla-nueva" class="svc-panel svc-panel--drawer" hidden>
+      <div class="svc-panel__head"><div><h3>Nuevo aviso por etapa</h3><p>Responde tres preguntas: cuándo, a quién y cómo.</p></div></div>
+      {% if not notif_objetivos.fases and not notif_objetivos.actividades and not notif_objetivos.gacetas %}
+        <div class="svc-empty">Primero configura el flujo: los avisos por etapa eligen entre sus fases y actividades.</div>
+      {% else %}
+      <form method="post" action="{% url 'notificaciones:studio_regla_crear' servicio.pk %}" class="form">
+        {% csrf_token %}
+        <fieldset class="svc-subpanel">
+          <legend>¿Cuándo?</legend>
+          <div class="svc-form-grid svc-form-grid--two">
+            <div class="field">
+              <label for="notif-momento">Momento</label>
+              <select id="notif-momento" name="momento" required>
+                {% for valor, etiqueta in notif_momentos %}
+                  {% if valor == "FASE_ALCANZADA" and notif_objetivos.fases or valor == "GACETA_ABIERTA" and notif_objetivos.gacetas or valor == "GACETA_RESUELTA" and notif_objetivos.gacetas or valor == "ACTIVIDAD_INICIADA" and notif_objetivos.actividades or valor == "ACTIVIDAD_COMPLETADA" and notif_objetivos.actividades or valor == "APROBACION_DEVUELTA" and notif_objetivos.actividades %}
+                    <option value="{{ valor }}">{{ etiqueta }}</option>
+                  {% endif %}
+                {% endfor %}
+              </select>
+            </div>
+            <div class="field" data-mostrar-si="momento=FASE_ALCANZADA">
+              <label for="notif-fase">Fase</label>
+              <select id="notif-fase" name="objetivo_fase">{% for clave, nombre in notif_objetivos.fases %}<option value="{{ clave }}">{{ nombre }}</option>{% endfor %}</select>
+            </div>
+            <div class="field" data-mostrar-si="momento=ACTIVIDAD_INICIADA,ACTIVIDAD_COMPLETADA,APROBACION_DEVUELTA">
+              <label for="notif-actividad">Actividad</label>
+              <select id="notif-actividad" name="objetivo_actividad">{% for clave, nombre, fase, tipo in notif_objetivos.actividades %}<option value="{{ clave }}">{{ nombre }} · {{ fase }}</option>{% endfor %}</select>
+            </div>
+            <div class="field" data-mostrar-si="momento=GACETA_ABIERTA,GACETA_RESUELTA">
+              <label for="notif-gaceta">Gaceta</label>
+              <select id="notif-gaceta" name="objetivo_gaceta">{% for clave, nombre in notif_objetivos.gacetas %}<option value="{{ clave }}">{{ nombre }}</option>{% endfor %}</select>
+            </div>
+          </div>
+        </fieldset>
+        <fieldset class="svc-subpanel">
+          <legend>¿A quién?</legend>
+          <div class="svc-form-grid svc-form-grid--two">
+            <div class="field">
+              <label for="notif-destinatario">Destinatario</label>
+              <select id="notif-destinatario" name="destinatario" required>
+                {% for valor, etiqueta in notif_destinatarios %}<option value="{{ valor }}">{{ etiqueta }}</option>{% endfor %}
+              </select>
+              <small class="text-muted">«Responsable de la actividad» solo aplica a actividades; «Quien coordina la gaceta», a gacetas.</small>
+            </div>
+            <div class="field" data-mostrar-si="destinatario=USUARIO">
+              <label for="notif-usuario">Persona</label>
+              <select id="notif-usuario" name="usuario"><option value="">Elige una persona</option>{% for u in notif_usuarios %}<option value="{{ u.pk }}">{{ u.get_full_name|default:u.username }}</option>{% endfor %}</select>
+            </div>
+            <div class="field" data-mostrar-si="destinatario=EQUIPO">
+              <label for="notif-equipo">Equipo</label>
+              <select id="notif-equipo" name="equipo"><option value="">Elige un equipo</option>{% for e in notif_equipos %}<option value="{{ e.pk }}">{{ e.nombre }}</option>{% endfor %}</select>
+            </div>
+            <div class="field" data-mostrar-si="destinatario=CAMPO_FORMULARIO">
+              <label for="notif-campo-formulario">Campo del formulario</label>
+              <select id="notif-campo-formulario" name="campo_formulario"><option value="">Elige un campo de persona o equipo</option>{% for clave, etiqueta, origen in notif_campos_persona %}{% if origen == "formulario" %}<option value="{{ clave }}">{{ etiqueta }}</option>{% endif %}{% endfor %}</select>
+            </div>
+            <div class="field" data-mostrar-si="destinatario=COLUMNA_ITEM">
+              <label for="notif-campo-item">Columna del ítem</label>
+              <select id="notif-campo-item" name="campo_item"><option value="">Elige una columna de persona o equipo</option>{% for clave, etiqueta, origen in notif_campos_persona %}{% if origen == "item" %}<option value="{{ clave }}">{{ etiqueta }}</option>{% endif %}{% endfor %}</select>
+              <small class="text-muted">Para actividades que recorren cada ítem.</small>
+            </div>
+          </div>
+        </fieldset>
+        <fieldset class="svc-subpanel">
+          <legend>¿Cómo?</legend>
+          <label class="choice"><input type="checkbox" name="correo" checked> También por correo</label>
+          <div class="field">
+            <label for="notif-mensaje">Mensaje adicional <span class="config-opcional">opcional</span></label>
+            <input id="notif-mensaje" type="text" name="mensaje" maxlength="280" placeholder="Por ejemplo: revisa la pieza antes del viernes">
+          </div>
+        </fieldset>
+        <div class="form-actions"><button type="submit" class="btn btn--primary">Agregar aviso</button></div>
+      </form>
+      {% endif %}
+    </article>
+  </div>
+
+  {# --- C. Recordatorios --- #}
+  <div class="subpanel" data-subpanel="recordatorios" role="tabpanel">
+    <h3 class="subpanel__titulo">Recordatorios y vencimientos</h3>
+    <p class="svc-help">Vacío = usa el valor general de la plataforma (Configuración › Notificaciones), que se muestra como ejemplo.</p>
+    <form method="post" action="{% url 'notificaciones:studio_recordatorios' servicio.pk %}" class="form">
+      {% csrf_token %}
+      <div class="svc-form-grid svc-form-grid--two">
+        {% for p in notif_parametros %}
+          <div class="field">
+            <label for="notif-{{ p.campo }}">{{ p.etiqueta|capfirst }}</label>
+            {% if p.booleano %}
+              <select id="notif-{{ p.campo }}" name="{{ p.campo }}">
+                <option value=""{% if p.propio is None %} selected{% endif %}>Como el general ({% if p.global %}sí{% else %}no{% endif %})</option>
+                <option value="si"{% if p.propio is True %} selected{% endif %}>Sí</option>
+                <option value="no"{% if p.propio is False %} selected{% endif %}>No</option>
+              </select>
+            {% else %}
+              <input id="notif-{{ p.campo }}" type="number" min="0" name="{{ p.campo }}" value="{{ p.propio|default_if_none:'' }}" placeholder="{{ p.global }}">
+            {% endif %}
+          </div>
+        {% endfor %}
+      </div>
+      <fieldset class="svc-subpanel">
+        <legend>Al escalar, avisar a</legend>
+        <div class="svc-form-grid svc-form-grid--two">
+          <div class="field">
+            <label for="notif-escalar-a">Destino del escalamiento</label>
+            <select id="notif-escalar-a" name="escalar_a">
+              {% for valor, etiqueta in notif_escalar_a %}<option value="{{ valor }}"{% if notif_config.escalar_a == valor %} selected{% endif %}>{{ etiqueta }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="field" data-mostrar-si="escalar_a=USUARIO">
+            <label for="notif-escalar-usuario">Persona</label>
+            <select id="notif-escalar-usuario" name="escalar_usuario"><option value="">Elige una persona</option>{% for u in notif_usuarios %}<option value="{{ u.pk }}"{% if notif_config.escalar_usuario_id == u.pk %} selected{% endif %}>{{ u.get_full_name|default:u.username }}</option>{% endfor %}</select>
+          </div>
+          <div class="field" data-mostrar-si="escalar_a=EQUIPO">
+            <label for="notif-escalar-equipo">Equipo</label>
+            <select id="notif-escalar-equipo" name="escalar_equipo"><option value="">Elige un equipo</option>{% for e in notif_equipos %}<option value="{{ e.pk }}"{% if notif_config.escalar_equipo_id == e.pk %} selected{% endif %}>{{ e.nombre }}</option>{% endfor %}</select>
+          </div>
+        </div>
+      </fieldset>
+      <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar recordatorios</button></div>
+    </form>
+
+    {% if notif_actividades_propias %}
+      <section class="notif-propios" aria-labelledby="notif-propios-titulo">
+        <h4 id="notif-propios-titulo" class="subpanel__titulo">Recordatorio propio de una actividad <span class="config-opcional">opcional</span></h4>
+        <p class="svc-help">Para una actividad que necesita otro ritmo. Deja los tres valores vacíos para volver a los de arriba.</p>
+        <ul class="notif-reglas">
+          {% for a in notif_actividades_propias %}
+            <li class="notif-regla">
+              <form method="post" action="{% url 'notificaciones:studio_actividad' servicio.pk %}" class="notif-propio">
+                {% csrf_token %}
+                <input type="hidden" name="clave_bloque" value="{{ a.clave }}">
+                <span class="notif-regla__cuando"><strong>{{ a.nombre }}</strong> · {{ a.fase }}</span>
+                <label>Días antes <input type="number" min="0" max="60" name="dias_antes" value="{{ a.dias_antes|default_if_none:'' }}"></label>
+                <label>Repetir cada <input type="number" min="1" max="30" name="repetir_cada_dias" value="{{ a.repetir_cada_dias|default_if_none:'' }}"></label>
+                <label>Máximo <input type="number" min="1" max="10" name="maximo" value="{{ a.maximo|default_if_none:'' }}"></label>
+                <button type="submit" class="btn btn--ghost btn--sm">Guardar</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      </section>
+    {% endif %}
+  </div>
+</section>

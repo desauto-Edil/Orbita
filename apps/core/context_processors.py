@@ -8,7 +8,8 @@ def navegacion(request):
     (pestañas locales de Trabajo) y, por compatibilidad, `nav_items` /
     `nav_item_activo`. Toda la lógica de qué ve cada usuario vive en
     `apps.core.navegacion`."""
-    return construir_navegacion(request.user, request.resolver_match)
+    # UX-1: una vista compartida por dos destinos (el espacio del ticket) puede indicar a cuál pertenece.
+    return construir_navegacion(request.user, request.resolver_match, destino=getattr(request, "nav_destino", None))
 
 
 def sistema(request):

@@ -1,0 +1,51 @@
+{% comment %}Decidir una aprobación (flujo, gaceta o prórroga) sin salir del ticket: misma operación y formulario de `aprobaciones:decidir`.{% endcomment %}
+{% with aprobacion=accion.aprobacion %}
+  {% if accion.entregable_revisado %}
+    {% with er=accion.entregable_revisado %}
+      <div class="esp-revisado">
+        <h4 class="esp-guia__titulo">Lo que revisas: «{{ er.nombre }}»{% if er.revision > 1 %} <span class="badge">Revisión {{ er.revision }}</span>{% endif %}</h4>
+        {% if er.ver_contenido %}
+          {% if er.texto %}<p class="esp-revisado__texto">{{ er.texto|linebreaksbr }}</p>{% endif %}
+          {% if er.enlace %}<p><a href="{{ er.enlace }}" rel="noopener noreferrer">{{ er.enlace }}</a></p>{% endif %}
+          {% if er.archivos %}<div class="tb-archivos tb-archivos--grandes">{% for archivo in er.archivos %}{% include "tickets/espacio/tablero/_archivo.html" with archivo=archivo grande=True %}{% endfor %}</div>{% endif %}
+          {% if not er.texto and not er.enlace and not er.archivos %}<p class="text-muted">Aún no tiene contenido.</p>{% endif %}
+        {% endif %}
+      </div>
+    {% endwith %}
+  {% endif %}
+  {% if accion.item %}
+    <div class="esp-revisado">
+      <h4 class="esp-guia__titulo">Lo que decides{% if accion.item.ronda %} · ronda {{ accion.item.ronda.numero }}{% endif %}</h4>
+      <dl class="esp-item__datos">{% for fila in accion.item.valores %}<dt>{{ fila.etiqueta }}</dt><dd>{{ fila.texto }}</dd>{% endfor %}</dl>
+      {% if accion.item_archivos %}
+        <div class="tb-archivos tb-archivos--grandes">{% for archivo in accion.item_archivos %}{% include "tickets/espacio/tablero/_archivo.html" with archivo=archivo grande=True %}{% endfor %}</div>
+      {% endif %}
+      <p class="ws-nota"><a href="{{ base }}?elemento={{ accion.item.elemento.pk }}#items">Ver la ficha completa (versiones y observaciones)</a></p>
+    </div>
+  {% endif %}
+
+  {% if accion.participaciones|length > 1 %}
+    <p class="text-muted">Participan: {% for p in accion.participaciones %}{% if p.aprobador_usuario %}{{ p.aprobador_usuario.get_full_name|default:p.aprobador_usuario.get_username }}{% elif p.aprobador_equipo %}{{ p.aprobador_equipo }}{% endif %} ({{ p.get_estado_display|lower }}){% if not forloop.last %}, {% endif %}{% endfor %} · {{ accion.esquema.get_modo_display }}</p>
+  {% endif %}
+
+  {% if accion.form %}
+    {# UX-4: una decisión = un botón. Misma operación y validaciones de `aprobaciones:decidir`. #}
+    <form method="post" action="{% url 'aprobaciones:decidir' aprobacion.pk %}" class="form esp-decision">
+      {% csrf_token %}<input type="hidden" name="next" value="{{ base }}">
+      <div class="field">
+        <label for="obs-{{ aprobacion.pk }}">Observación <span class="text-muted">(necesaria para devolver, rechazar o excluir)</span></label>
+        <textarea id="obs-{{ aprobacion.pk }}" name="observacion" rows="3"></textarea>
+      </div>
+      <div class="ws-acciones esp-panel__pie">
+        {% for valor, etiqueta in accion.form.fields.decision.choices %}
+          {% if valor %}
+            <button type="submit" name="decision" value="{{ valor }}" class="btn {% if valor == 'APROBADA' %}btn--primary{% elif valor == 'DEVUELTA' %}btn--secondary{% else %}btn--ghost{% endif %}">{% if valor == "APROBADA" %}Aprobar{% elif valor == "DEVUELTA" %}Devolver{% elif valor == "RECHAZADA" %}Rechazar{% elif valor == "EXCLUIDA" %}Excluir{% else %}{{ etiqueta }}{% endif %}</button>
+          {% endif %}
+        {% endfor %}
+        <a class="btn btn--ghost esp-panel__pie-secundario" href="{% url 'aprobaciones:detalle' aprobacion.pk %}">Detalle de la aprobación</a>
+      </div>
+    </form>
+  {% else %}
+    <div class="ws-acciones esp-panel__pie"><a class="btn btn--ghost" href="{% url 'aprobaciones:detalle' aprobacion.pk %}">Detalle de la aprobación</a></div>
+  {% endif %}
+{% endwith %}

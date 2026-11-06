@@ -1,0 +1,82 @@
+{% extends "base.html" %}
+{% load static humanize %}
+
+{% block title %}Notificaciones — {{ sistema.nombre }}{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/notificaciones.css' %}">{% endblock %}
+
+{% block content %}
+{% comment %}
+  CU-035 — Centro de notificaciones: lo que pasó con tus tickets y tu trabajo, agrupado por día. Filtros locales
+  (Todas · Sin leer · Requieren acción, y por grupo); abrir un aviso lo marca como leído y lleva a su objeto.
+{% endcomment %}
+<header class="page-header">
+  <div>
+    <h1 class="page-header__title">Notificaciones</h1>
+    <p class="page-header__subtitle">{% if sin_leer %}{{ sin_leer }} sin leer.{% else %}Estás al día.{% endif %} Elige qué avisos te llegan por correo en <a href="{% url 'core:perfil' %}#notificaciones">Mi perfil</a>.</p>
+  </div>
+  <div class="page-header__actions">
+    {% if sin_leer %}
+      <form method="post" action="{% url 'notificaciones:todas_leidas' %}">
+        {% csrf_token %}
+        <input type="hidden" name="next" value="{{ request.get_full_path }}">
+        <button type="submit" class="btn btn--secondary">Marcar todo como leído</button>
+      </form>
+    {% endif %}
+  </div>
+</header>
+
+<nav class="notif-filtros" aria-label="Filtrar notificaciones">
+  <div class="segmented" role="group" aria-label="Estado">
+    <a class="segmented__item{% if not ver %} is-active{% endif %}" href="?{% if grupo %}grupo={{ grupo }}{% endif %}"{% if not ver %} aria-current="true"{% endif %}>Todas</a>
+    <a class="segmented__item{% if ver == 'sin_leer' %} is-active{% endif %}" href="?ver=sin_leer{% if grupo %}&grupo={{ grupo }}{% endif %}"{% if ver == 'sin_leer' %} aria-current="true"{% endif %}>Sin leer</a>
+    <a class="segmented__item{% if ver == 'accion' %} is-active{% endif %}" href="?ver=accion{% if grupo %}&grupo={{ grupo }}{% endif %}"{% if ver == 'accion' %} aria-current="true"{% endif %}>Requieren acción</a>
+  </div>
+  <div class="notif-filtros__grupos">
+    <a class="chip{% if not grupo %} is-active{% endif %}" href="?{% if ver %}ver={{ ver }}{% endif %}">Todos los temas</a>
+    {% for valor, etiqueta in grupos %}
+      <a class="chip{% if grupo == valor %} is-active{% endif %}" href="?grupo={{ valor }}{% if ver %}&ver={{ ver }}{% endif %}">{{ etiqueta }}</a>
+    {% endfor %}
+  </div>
+</nav>
+
+{% if filas %}
+  <ol class="notif-lista">
+    {% for fila in filas %}
+      {% ifchanged fila.dia %}<li class="notif-lista__dia" aria-hidden="true">{% if fila.dia_etiqueta %}{{ fila.dia_etiqueta }}{% else %}{{ fila.dia|date:"l j \d\e F" }}{% endif %}</li>{% endifchanged %}
+      {% with n=fila.n %}
+        <li class="notif-fila{% if not n.leida %} is-sin-leer{% endif %}">
+          <a class="notif-fila__enlace" href="{% url 'notificaciones:abrir' n.pk %}">
+            <span class="notif-item__marca{% if n.es_alerta %} notif-item__marca--alerta{% endif %}" aria-hidden="true">{% include "components/icon.html" with name=n.es_alerta|yesno:"clock,bell" size="sm" %}</span>
+            <span class="notif-fila__texto">
+              <span class="notif-fila__titulo">{{ n.titulo }}{% if n.requiere_accion and not n.leida %} <span class="chip chip--accion">Requiere acción</span>{% endif %}{% if not n.leida %}<span class="sr-only"> (sin leer)</span>{% endif %}</span>
+              <span class="notif-fila__resumen">{{ n.resumen }}</span>
+              {% if n.extracto %}<span class="notif-fila__extracto">«{{ n.extracto }}»</span>{% endif %}
+              <span class="notif-fila__meta">{% if n.ticket and n.ticket.consecutivo %}<span class="num">{{ n.ticket.codigo }}</span> · {% endif %}{{ n.get_grupo_display }} · <time datetime="{{ n.creada_en|date:'c' }}" title="{{ n.creada_en|date:'j \d\e F \d\e Y, H:i' }}">{{ n.creada_en|naturaltime }}</time></span>
+            </span>
+          </a>
+          {% if not n.leida %}
+            <form method="post" action="{% url 'notificaciones:leida' n.pk %}" class="notif-fila__leida">
+              {% csrf_token %}
+              <input type="hidden" name="next" value="{{ request.get_full_path }}">
+              <button type="submit" class="btn-icon btn-icon--sm" aria-label="Marcar «{{ n.titulo }}» como leída" data-tooltip="Marcar como leída">{% include "components/icon.html" with name="check" size="sm" %}</button>
+            </form>
+          {% endif %}
+        </li>
+      {% endwith %}
+    {% endfor %}
+  </ol>
+  {% if pagina.has_other_pages %}
+    <nav class="notif-paginacion" aria-label="Páginas">
+      {% if pagina.has_previous %}<a class="btn btn--ghost" href="?pagina={{ pagina.previous_page_number }}{% if ver %}&ver={{ ver }}{% endif %}{% if grupo %}&grupo={{ grupo }}{% endif %}">Más recientes</a>{% endif %}
+      <span class="text-muted">Página {{ pagina.number }} de {{ pagina.paginator.num_pages }}</span>
+      {% if pagina.has_next %}<a class="btn btn--ghost" href="?pagina={{ pagina.next_page_number }}{% if ver %}&ver={{ ver }}{% endif %}{% if grupo %}&grupo={{ grupo }}{% endif %}">Anteriores</a>{% endif %}
+    </nav>
+  {% endif %}
+{% else %}
+  <div class="empty-state">
+    <span class="state__icon">{% include "components/icon.html" with name="bell" %}</span>
+    <h2 class="state__title">{% if ver or grupo %}Nada con este filtro{% else %}Sin notificaciones{% endif %}</h2>
+    <p>{% if ver or grupo %}Prueba con «Todas».{% else %}Aquí verás lo que pase con tus tickets, tus actividades y tus aprobaciones.{% endif %}</p>
+  </div>
+{% endif %}
+{% endblock %}

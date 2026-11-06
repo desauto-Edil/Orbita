@@ -103,6 +103,9 @@ def _abrir_bloqueada(gaceta, actor=None):
     gaceta.save(update_fields=["estado", "abierta_en", "vence_revision_en", "actualizado_en"])
     _auditar(gaceta, actor, RegistroAuditoria.Accion.ACTUALIZAR, {"estado": "PENDIENTE"},
              {"estado": gaceta.estado, "vence_revision_en": gaceta.vence_revision_en})
+    from apps.notificaciones.eventos import publicar
+
+    publicar("GACETA:ABIERTA", actor=actor, ticket_id=gaceta.ticket_id, gaceta=gaceta)
     return gaceta
 
 
@@ -265,8 +268,31 @@ def _cerrar_esquema(ronda, actor):
         anular_esquema_aprobacion(esquema, actor)
 
 
+def _quien_hizo_la_ultima_actividad(elemento):
+    """UX-4 — quien completó la última actividad del recorrido de `elemento` (p. ej. quien produjo la pieza), si
+    sigue activo; `None` si no hay. Solo Tareas del flujo de ese ítem: nunca otras del Ticket."""
+    from apps.tareas.models import Tarea
+    from apps.workflows.models import TareaWorkflow
+
+    vinculo = (
+        TareaWorkflow.objects.filter(
+            instancia_etapa__instancia_workflow__elemento=elemento, tarea__estado=Tarea.Estado.COMPLETADA,
+        ).select_related("tarea__completada_por", "tarea__usuario_responsable").order_by("-tarea__completada_en").first()
+    )
+    if vinculo is None:
+        return None
+    for persona in (vinculo.tarea.completada_por, vinculo.tarea.usuario_responsable):
+        if persona is not None and persona.is_active:
+            return persona
+    return None
+
+
 def _responsable_de_correccion(participacion):
     cfg = participacion.gaceta.configuracion or {}
+    if cfg.get("responsable_correccion_origen") == "ULTIMA_ACTIVIDAD":
+        persona = _quien_hizo_la_ultima_actividad(participacion.elemento)
+        if persona is not None:
+            return persona, None
     columna = cfg.get("responsable_correccion_columna") or ""
     if columna:
         valor = participacion.elemento.valores.select_related("campo", "valor_usuario", "valor_equipo").filter(
@@ -327,6 +353,10 @@ def observar(participacion, actor, texto):
              {"participacion_id": participacion.pk, "ronda": ronda.numero, "texto": texto})
     if participacion.estado == Estado.EN_REVISION:
         _enviar_a_correccion(participacion, ronda, actor, resultado_ronda=RondaRevisionGaceta.Resultado.OBSERVADA)
+    from apps.notificaciones.eventos import publicar
+
+    publicar("GACETA:OBSERVACION", actor=actor, ticket_id=gaceta.ticket_id, gaceta=gaceta, observacion=observacion,
+             participacion=participacion)
     return observacion
 
 
@@ -389,6 +419,9 @@ def reenviar(participacion, actor, comentario=""):
     ronda = _abrir_ronda(participacion, actor, motivo)
     _auditar(participacion, actor, RegistroAuditoria.Accion.ACTUALIZAR, {"estado": "EN_CORRECCION"},
              {"estado": participacion.estado, "ronda": ronda.numero, "version": ronda.version.numero})
+    from apps.notificaciones.eventos import publicar
+
+    publicar("GACETA:NUEVA_RONDA", actor=actor, ticket_id=gaceta.ticket_id, gaceta=gaceta, participacion=participacion)
     return participacion
 
 
@@ -423,6 +456,11 @@ def _finalizar(participacion, actor, estado, justificacion=""):
         )
     _auditar(participacion, actor, RegistroAuditoria.Accion.ACTUALIZAR, None,
              {"estado": estado, "justificacion": justificacion, "gaceta": participacion.gaceta.clave})
+    if estado == Estado.APROBADA:
+        # Bloque 5.2: si el recorrido del ítem espera esta aprobación en su paso de gaceta, sigue (solo el suyo).
+        from apps.gacetas.integracion import continuar_por_item
+
+        continuar_por_item(participacion)
 
 
 def _decision_que_cerro(esquema):
@@ -545,14 +583,28 @@ def cerrar_periodo(gaceta, actor=None):
         raise PermissionDenied("Solo quien coordina la gaceta cierra el periodo de revisión.")
     if gaceta.estado != GacetaTicket.Estado.ABIERTA:
         return gaceta
+    _exigir_cierre_permitido(gaceta, resolver=False)
     gaceta.estado = GacetaTicket.Estado.PERIODO_CERRADO
     gaceta.periodo_cerrado_en = timezone.now()
     gaceta.save(update_fields=["estado", "periodo_cerrado_en", "actualizado_en"])
     aceptadas = _aceptar_automaticamente(gaceta)
     _auditar(gaceta, actor, RegistroAuditoria.Accion.ACTUALIZAR, {"estado": "ABIERTA"},
              {"estado": gaceta.estado, "aceptadas_automaticamente": aceptadas})
+    from apps.notificaciones.eventos import publicar
+
+    publicar("GACETA:PERIODO_CERRADO", actor=actor, ticket_id=gaceta.ticket_id, gaceta=gaceta)
     _resolver_si_corresponde(gaceta)
     return gaceta
+
+
+def _exigir_cierre_permitido(gaceta, *, resolver):
+    """Bloque 5.3: una gaceta que los recorridos usan como paso por ítem no cierra su periodo (ningún ítem más
+    podría entrar) ni se resuelve antes de tiempo. Las gacetas generales no cambian."""
+    from apps.gacetas.integracion import bloqueos_de_cierre
+
+    motivos = bloqueos_de_cierre(gaceta, resolver=resolver)
+    if motivos:
+        raise ValidationError(motivos)
 
 
 def pendientes_de(gaceta):
@@ -602,6 +654,9 @@ def _resolver_bloqueada(gaceta, actor, justificacion, *, automatica):
     gaceta.resolucion = {**resumen(gaceta), "resuelta": True, "automatica": automatica, "justificacion": justificacion}
     gaceta.save(update_fields=["estado", "resuelta_en", "resuelta_por", "resolucion", "actualizado_en"])
     _auditar(gaceta, actor, RegistroAuditoria.Accion.ACTUALIZAR, {"estado": "PERIODO_CERRADO"}, gaceta.resolucion)
+    from apps.notificaciones.eventos import publicar
+
+    publicar("GACETA:RESUELTA", actor=actor, ticket_id=gaceta.ticket_id, gaceta=gaceta)
     from apps.gacetas.integracion import continuar_por_gaceta
 
     continuar_por_gaceta(gaceta)
@@ -619,6 +674,7 @@ def resolver(gaceta, actor, justificacion=""):
         raise ValidationError("La gaceta ya está resuelta o cancelada.")
     if gaceta.estado == GacetaTicket.Estado.PENDIENTE:
         raise ValidationError("La gaceta todavía no se abrió.")
+    _exigir_cierre_permitido(gaceta, resolver=True)
     if gaceta.estado == GacetaTicket.Estado.ABIERTA:
         gaceta.estado = GacetaTicket.Estado.PERIODO_CERRADO
         gaceta.periodo_cerrado_en = timezone.now()
@@ -632,6 +688,10 @@ def _resolver_si_corresponde(gaceta):
     a sus aprobadores."""
     if gaceta.estado != GacetaTicket.Estado.PERIODO_CERRADO or not gaceta.configuracion.get("resolucion_automatica"):
         return None
+    from apps.gacetas.integracion import bloqueos_de_cierre
+
+    if bloqueos_de_cierre(gaceta, resolver=True):
+        return None  # Bloque 5.3: se reintenta cuando ya no falte nada por llegar ni por decidir.
     pendientes = pendientes_de(gaceta)
     regla = gaceta.configuracion.get("al_resolver_pendientes", "IMPEDIR")
     if pendientes:

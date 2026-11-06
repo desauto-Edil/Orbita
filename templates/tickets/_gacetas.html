@@ -5,7 +5,7 @@
     <ul>
       {% for fila in gacetas_ticket %}
         <li>
-          {% if fila.puede_ver %}<a href="{% url 'gacetas:detalle' fila.gaceta.pk %}">{{ fila.gaceta.nombre }}</a>{% else %}{{ fila.gaceta.nombre }}{% endif %}
+          {% if fila.puede_ver %}<a href="{% url 'tickets:espacio' fila.gaceta.ticket_id %}#gaceta-{{ fila.gaceta.pk }}">{{ fila.gaceta.nombre }}</a>{% else %}{{ fila.gaceta.nombre }}{% endif %}
           <span class="badge">{{ fila.gaceta.get_estado_display }}</span>
           {{ fila.resumen.total }} ítem(s) · {{ fila.resumen.aprobados }} aprobado(s) · {{ fila.resumen.en_revision }} en revisión ·
           {{ fila.resumen.en_correccion }} en corrección · {{ fila.resumen.rechazados }} rechazado(s) · {{ fila.resumen.excluidos }} excluido(s)

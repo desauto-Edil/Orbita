@@ -1,0 +1,3 @@
+{% comment %}Revisión de un conjunto de elementos (4.G2C1): la pantalla de revisión agrupa todos los elementos con su decisión individual.{% endcomment %}
+<p class="ws-ahora__dato"><strong>{{ accion.resumen.progreso }}</strong> aprobados · {{ accion.resumen.pendientes }} pendiente{{ accion.resumen.pendientes|pluralize }} · {{ accion.resumen.devueltos }} devuelto{{ accion.resumen.devueltos|pluralize }}</p>
+<div class="ws-acciones esp-panel__pie"><a class="btn btn--primary" href="{{ accion.url }}">Revisar los elementos</a></div>

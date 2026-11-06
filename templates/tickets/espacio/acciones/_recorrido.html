@@ -1,0 +1,4 @@
+<div class="ws-acciones esp-panel__pie">
+  {% if accion.fila.elemento %}<a class="btn btn--secondary" href="{{ base }}?elemento={{ accion.fila.elemento.pk }}">Abrir el ítem</a>{% endif %}
+  <form method="post" action="{% url 'tickets:recorrido_reintentar' ticket.pk accion.fila.instancia.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}"><button type="submit" class="btn btn--primary">Reintentar</button></form>
+</div>

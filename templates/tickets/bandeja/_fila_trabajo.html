@@ -1,0 +1,33 @@
+{% load plazos %}{% comment %}
+  Bandeja compartida — fila de «Mi trabajo»: UN ticket (`bandeja.Grupo`) con todo lo que la persona tiene en él.
+  Espera `grupo` (con `fase` y `situacion`, anotados en la vista). Sin JS la fila es un enlace al espacio del ticket;
+  con `static/js/bandeja.js` abre el inspector (`data-inspector`) y un segundo clic abre el espacio.
+  `bt-fila__compacto` repite fase y estado bajo el nombre: solo se ve (y se lee) en la composición compacta, cuando
+  las columnas de fase y estado se ocultan (inspector abierto o pantalla angosta).
+{% endcomment %}
+{% with ticket=grupo.ticket siguiente=grupo.siguiente plazo=grupo.ticket|estado_plazo %}
+<li class="bt-fila{% if grupo.requiere_atencion %} is-atencion{% endif %}{% if grupo.vencido or grupo.requiere_atencion and plazo == 'vencido' %} is-vencido{% endif %}" data-fila="{{ ticket.pk }}">
+  <a class="bt-fila__enlace" href="{{ grupo.url }}" data-inspector="{% url 'tickets:inspector' ticket.pk %}?desde=trabajo&amp;situacion={{ grupo.situacion }}">
+    <span class="bt-celda bt-celda--ticket">
+      <span class="bt-fila__nombre">{{ ticket.detalle_servicio.servicio.nombre }}</span>
+      <span class="bt-fila__meta">
+        <span class="tabular">{{ ticket.codigo|default:"Sin código" }}</span>{% if ticket.etiqueta %}<span>{{ ticket.etiqueta }}</span>{% endif %}<span><span class="sr-only">Tu participación: </span>{{ grupo.participacion|join:" · " }}</span>
+      </span>
+      <span class="bt-fila__compacto">
+        <span class="estado-etiqueta estado-etiqueta--{{ ticket.estado|lower }}"><span class="sr-only">Estado del ticket: </span>{{ ticket.get_estado_display }}</span>{% if grupo.fase %}<span><span class="sr-only">Fase: </span>{{ grupo.fase }}</span>{% endif %}
+      </span>
+    </span>
+    <span class="bt-celda bt-celda--fase">{% if grupo.fase %}<span class="sr-only">Fase: </span>{{ grupo.fase }}{% endif %}</span>
+    <span class="bt-celda bt-celda--situacion">
+      <span class="estado-etiqueta estado-etiqueta--{{ grupo.situacion }}">{% if grupo.requiere_atencion %}Requiere tu atención{% else %}En seguimiento{% endif %}</span>
+      {% if siguiente %}<span class="bt-fila__siguiente"><span class="sr-only">{% if grupo.requiere_atencion %}Siguiente acción: {% else %}Sigues: {% endif %}</span>{{ siguiente.titulo }}{% if grupo.acciones|length > 1 %} <span class="bt-fila__mas tabular">+{{ grupo.acciones|length|add:"-1" }}</span>{% endif %}</span>{% endif %}
+    </span>
+    <span class="bt-celda bt-celda--estado"><span class="sr-only">Estado del ticket: </span><span class="estado-etiqueta estado-etiqueta--{{ ticket.estado|lower }}">{{ ticket.get_estado_display }}</span></span>
+    <span class="bt-celda bt-celda--fecha tabular">
+      {% if grupo.proximo_vencimiento %}<span class="bt-fecha__valor">{{ grupo.proximo_vencimiento|date:"j M" }}</span>{% if grupo.vencido %}<span class="estado-etiqueta estado-etiqueta--vencido">Venció</span>{% elif plazo == 'por_vencer' %}<span class="estado-etiqueta estado-etiqueta--por_vencer">Por vencer</span>{% else %}<span class="bt-fecha__etiqueta">Vence</span>{% endif %}
+      {% elif ticket.fecha_objetivo_vigente %}<span class="bt-fecha__valor">{{ ticket.fecha_objetivo_vigente|date:"j M" }}</span>{% if plazo == 'vencido' %}<span class="estado-etiqueta estado-etiqueta--vencido">Venció</span>{% elif plazo == 'por_vencer' %}<span class="estado-etiqueta estado-etiqueta--por_vencer">Por vencer</span>{% else %}<span class="bt-fecha__etiqueta">Objetivo</span>{% endif %}{% endif %}
+    </span>
+    <span class="bt-fila__ir" aria-hidden="true">{% include "components/icon.html" with name="chevron-right" size="sm" %}</span>
+  </a>
+</li>
+{% endwith %}

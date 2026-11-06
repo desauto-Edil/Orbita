@@ -1,0 +1,13 @@
+{% comment %}
+  UX-4b — el lugar exacto donde se hace la misión elegida (`_mision.html` es su banner): la tabla de la lluvia de
+  ideas, la tabla de revisión, la de elaboración o la tarjeta de una acción. Va en la zona del espacio que se
+  desplaza; el banner queda en el encabezado persistente.
+{% endcomment %}
+{% if mision %}
+  <section class="ms ms-lugar" aria-labelledby="ms-t">
+    {% if mision.tipo == "lluvia" %}{% include "tickets/espacio/tablero/_tabla_lluvia.html" %}
+    {% elif mision.tipo == "revision" %}{% include "tickets/espacio/tablero/_tabla_revision.html" %}
+    {% elif mision.tipo == "items" %}{% include "tickets/espacio/tablero/_tabla_items.html" %}
+    {% elif seleccionada %}{% include "tickets/espacio/tablero/_accion.html" %}{% endif %}
+  </section>
+{% endif %}

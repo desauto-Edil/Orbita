@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Conectar Gmail — {{ sistema.nombre }}{% endblock %}
+
+{% block content %}
+  <section class="card">
+    <h1>Conectar Gmail</h1>
+    <p>Autoriza a Órbita a enviar correos desde <strong>{{ remitente }}</strong>.</p>
+    <p>Esta conexión es independiente del inicio de sesión y no solicita acceso para leer ni borrar mensajes.</p>
+    {% if gmail_conectado %}
+      <div class="alert alert--success" role="status">Hay una autorización guardada. Su funcionamiento se confirma con la prueba de envío.</div>
+    {% endif %}
+    <form method="post">
+      {% csrf_token %}
+      <button type="submit" class="btn btn--primary">{% if gmail_conectado %}Volver a autorizar Gmail{% else %}Autorizar envío con Gmail{% endif %}</button>
+    </form>
+    <p>Selecciona el buzón indicado y acepta el permiso de envío. Este paso no envía ningún correo.</p>
+  </section>
+{% endblock %}

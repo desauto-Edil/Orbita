@@ -28,6 +28,7 @@
         <h2 id="dis-biblioteca-flujos">Flujos</h2>
         <p>Diseña una vez el recorrido y reutilízalo donde lo necesites.</p>
       </div>
+      {% if flujos %}<span class="designer-count">{{ flujos|length }} en total</span>{% endif %}
     </div>
 
     {% if flujos %}
@@ -35,17 +36,11 @@
         {% for flujo in flujos %}
           <article class="designer-object designer-object--workflow" role="listitem">
             <div class="designer-object__top">
+              <span class="designer-tile" aria-hidden="true">{% include "components/icon.html" with name="workflow" %}</span>
               <div>
-                <h3>{{ flujo.nombre }}</h3>
+                <h3>{% if caps.consultar_flujos %}<a href="{% url 'flujos:lienzo' flujo.pk %}">{{ flujo.nombre }}</a>{% else %}{{ flujo.nombre }}{% endif %}</h3>
                 {% if flujo.descripcion %}<p>{{ flujo.descripcion|truncatechars:96 }}</p>{% endif %}
               </div>
-              <details class="designer-object-menu">
-                <summary aria-label="Más acciones">{% include "components/icon.html" with name="more" %}</summary>
-                <div class="designer-object-menu__content">
-                  {% if caps.consultar_flujos %}<a href="{% url 'flujos:lienzo' flujo.pk %}">Abrir</a>{% endif %}
-                  <span>{% if flujo.version_activa %}Publicado · v{{ flujo.version_activa.numero }}{% else %}Sin publicar{% endif %}</span>
-                </div>
-              </details>
             </div>
 
             <div class="designer-workflow-route" aria-label="Recorrido de fases">

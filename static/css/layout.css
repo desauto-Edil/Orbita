@@ -50,7 +50,7 @@
   backdrop-filter: blur(var(--blur-md));
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-pill);
-  box-shadow: var(--shadow-card), 0 8px 24px rgba(23, 24, 27, 0.06);
+  box-shadow: var(--shadow-card), 0 8px 24px rgb(var(--rgb-sombra) / 0.06);
 }
 
 .app-header__inicio {
@@ -79,6 +79,20 @@
 }
 
 /* Logo configurado (Configuración › General): ocupa el lugar de la marca. */
+/* Fase visual: marca con versión para modo oscuro (layout/marca.html). Solo se ve la del modo efectivo. */
+.marca-modo--claro {
+  display: contents;
+}
+
+.marca-modo--oscuro,
+[data-modo="oscuro"] .marca-modo--claro {
+  display: none;
+}
+
+[data-modo="oscuro"] .marca-modo--oscuro {
+  display: contents;
+}
+
 .app-header__brand-logo {
   width: 30px;
   height: 30px;
@@ -172,6 +186,14 @@
    textos — no se fuerza el mismo max-width estrecho a todo el contenido. */
 .content-area--wide {
   max-width: var(--content-wide);
+}
+
+/* UX-2 — vistas operativas (Trabajo, Cola, Mis tickets, espacio del ticket): canvas fluido que aprovecha
+   el ancho con un gutter moderado. Formularios y párrafos limitan su propia medida (`--measure-*`). */
+.content-area.content-area--operativo {
+  max-width: var(--content-operativo);
+  padding: var(--space-5) var(--gutter-operativo) var(--dock-clearance);
+  gap: var(--space-4);
 }
 
 /* Portada (Inicio): canvas amplio con gutters adaptativos; la composición
@@ -345,4 +367,153 @@
     transition: none;
     transform: none;
   }
+}
+
+/* --- Campana de notificaciones (Sprint 7, adelanto; CU-035) ---
+   Número sin leer sobre el icono (acento con texto oscuro: un indicador, nunca una superficie) y un panel con los
+   avisos más recientes; el centro completo está en notificaciones.css. */
+
+.notif-campana__boton {
+  position: relative;
+}
+
+.notif-campana__cuenta {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  box-shadow: 0 0 0 2px var(--surface-card);
+  font-size: 11px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.notif-panel {
+  width: min(380px, calc(100vw - 2 * var(--space-3)));
+  padding: 0;
+}
+
+.notif-panel__cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.notif-panel__titulo {
+  font-weight: var(--font-weight-semibold);
+}
+
+.notif-panel__accion {
+  border: none;
+  background: none;
+  padding: 0;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+
+.notif-panel__accion:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+.notif-panel__lista {
+  list-style: none;
+  margin: 0;
+  padding: var(--space-1);
+}
+
+.notif-item {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  color: inherit;
+  text-decoration: none;
+}
+
+.notif-item:hover {
+  background: var(--surface-hover);
+}
+
+.notif-item__marca {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+}
+
+.notif-item__marca--alerta {
+  background: var(--status-warning-soft);
+  color: var(--text-primary);
+}
+
+.is-sin-leer .notif-item__marca {
+  box-shadow: inset 0 0 0 2px var(--color-primary);
+}
+
+.notif-item__texto {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.notif-item__titulo {
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-primary);
+}
+
+.notif-item.is-sin-leer .notif-item__titulo {
+  font-weight: var(--font-weight-semibold);
+}
+
+.notif-item__resumen {
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
+.notif-item__fecha {
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.notif-panel__vacio {
+  margin: 0;
+  padding: var(--space-5) var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+  text-align: center;
+}
+
+.notif-panel__pie {
+  display: block;
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  text-align: center;
+  text-decoration: none;
+}
+
+.notif-panel__pie:hover {
+  background: var(--surface-hover);
 }

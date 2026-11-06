@@ -1,0 +1,90 @@
+{% autoescape on %}<!doctype html>
+{% comment %}
+  Correo de un aviso (apps.notificaciones.correo). Los clientes de correo no entienden variables CSS ni hojas de
+  estilo externas: los estilos van EN LÍNEA y los colores son literales de la identidad (carbón, superficie y
+  texto secundario de docs/design/ORBITA_DESIGN.md). Siempre lleva el logo del modo claro, incrustado (`cid:`);
+  sin logo configurado, la inicial del nombre. Resumen moderado + un solo botón.
+{% endcomment %}
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>{{ notificacion.titulo }}</title>
+</head>
+<body style="margin:0;padding:0;background:#F2F3F5;font-family:Inter,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#17181B;">
+  <span style="display:none;max-height:0;overflow:hidden;opacity:0;">{{ notificacion.resumen }}</span>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F2F3F5;">
+    <tr>
+      <td align="center" style="padding:32px 16px;">
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
+          <tr>
+            <td style="padding:0 4px 20px 4px;">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td style="vertical-align:middle;">
+                    {% if logo_cid %}
+                      <img src="cid:{{ logo_cid }}" alt="{{ sistema.nombre }}" height="36" style="display:block;height:36px;width:auto;max-width:180px;border:0;">
+                    {% else %}
+                      <span style="display:inline-block;width:36px;height:36px;line-height:36px;border-radius:10px;background:#17181B;color:#FDFDFD;text-align:center;font-weight:600;font-size:16px;">{{ sistema.inicial }}</span>
+                    {% endif %}
+                  </td>
+                  <td style="vertical-align:middle;padding-left:10px;font-size:16px;font-weight:600;letter-spacing:-0.01em;">{{ sistema.nombre }}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+          <tr>
+            <td style="background:#FDFDFD;border:1px solid #E2E4E8;border-radius:16px;padding:28px 28px 24px 28px;">
+              <p style="margin:0 0 6px 0;font-size:13px;color:#706E64;">Hola {{ nombre }},</p>
+              <h1 style="margin:0 0 12px 0;font-size:20px;line-height:1.3;font-weight:600;color:#17181B;">{{ notificacion.titulo }}</h1>
+              <p style="margin:0 0 20px 0;font-size:15px;line-height:1.55;color:#17181B;">{{ notificacion.resumen }}</p>
+
+              {% if notificacion.extracto %}
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px 0;">
+                  <tr>
+                    <td style="border-left:3px solid #17181B;background:#F2F3F5;border-radius:0 8px 8px 0;padding:12px 14px;font-size:14px;line-height:1.5;color:#17181B;">{{ notificacion.extracto }}</td>
+                  </tr>
+                </table>
+              {% endif %}
+
+              {% if notificacion.hechos %}
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 24px 0;font-size:14px;line-height:1.5;">
+                  {% if notificacion.ticket and notificacion.ticket.consecutivo %}
+                    <tr>
+                      <td style="padding:4px 12px 4px 0;color:#706E64;white-space:nowrap;width:130px;vertical-align:top;">Ticket</td>
+                      <td style="padding:4px 0;color:#17181B;font-weight:600;">{{ notificacion.ticket.codigo }}</td>
+                    </tr>
+                  {% endif %}
+                  {% for etiqueta, valor in notificacion.hechos %}
+                    <tr>
+                      <td style="padding:4px 12px 4px 0;color:#706E64;white-space:nowrap;width:130px;vertical-align:top;">{{ etiqueta }}</td>
+                      <td style="padding:4px 0;color:#17181B;">{{ valor }}</td>
+                    </tr>
+                  {% endfor %}
+                </table>
+              {% endif %}
+
+              {% if enlace %}
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="border-radius:999px;background:#17181B;">
+                      <a href="{{ enlace }}" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#FDFDFD;text-decoration:none;border-radius:999px;">Ver en {{ sistema.nombre }}</a>
+                    </td>
+                  </tr>
+                </table>
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:16px 8px 0 8px;font-size:12px;line-height:1.5;color:#706E64;">
+              Recibes este correo porque {{ motivo }}.{% if not notificacion.requiere_accion %} Puedes elegir qué avisos recibir por correo en <a href="{{ preferencias }}" style="color:#706E64;">Mi perfil</a>.{% endif %}
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>
+{% endautoescape %}

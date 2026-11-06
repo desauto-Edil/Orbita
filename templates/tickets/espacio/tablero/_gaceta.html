@@ -1,0 +1,51 @@
+{% comment %}
+  UX-4b — una gaceta como ESPACIO DE COLABORACIÓN (`espacio.gacetas_del_espacio`): siempre visible para quien
+  participa, con todas sus piezas (galería) y lo que a cada persona le toca en la tarjeta de cada pieza.
+  Espera `galeria`.
+{% endcomment %}
+{% with gaceta=galeria.gaceta info=galeria.info %}
+  <section class="gl-seccion{% if mision.tipo == 'gaceta' and mision.gaceta.pk == gaceta.pk %} is-mision{% endif %}" id="gaceta-{{ gaceta.pk }}" aria-labelledby="gaceta-{{ gaceta.pk }}-t">
+    <header class="gl-seccion__cabeza">
+      <div>
+        <p class="gl-seccion__eyebrow">Gaceta · espacio de colaboración</p>
+        <h2 id="gaceta-{{ gaceta.pk }}-t" class="gl-seccion__titulo">{{ gaceta.nombre }}</h2>
+        <p class="gl-seccion__meta">
+          <span class="estado-etiqueta{% if gaceta.estado == 'ABIERTA' %} estado-etiqueta--en_atencion{% elif gaceta.estado == 'RESUELTA' %} estado-etiqueta--resuelto{% elif gaceta.estado == 'CANCELADA' %} estado-etiqueta--cancelado{% endif %}">{{ gaceta.get_estado_display }}</span>
+          {% if info.coordina %}<span>Coordinas</span>{% elif info.aprobador %}<span>Apruebas</span>{% elif info.revisor %}<span>Revisas</span>{% endif %}
+          {% if gaceta.vence_revision_en %}<span class="tabular">Revisión hasta {{ gaceta.vence_revision_en|date:"j M, H:i" }}</span>{% endif %}
+          <span class="tabular">{{ galeria.tarjetas|length }} pieza{{ galeria.tarjetas|length|pluralize }}</span>
+          {% if galeria.por_hacer %}<span class="gl-seccion__tuyo tabular">{{ galeria.por_hacer }} por revisar de tu parte</span>{% endif %}
+        </p>
+        {% if gaceta.descripcion %}<p class="gl-seccion__desc">{{ gaceta.descripcion }}</p>{% endif %}
+      </div>
+      {% if galeria.coordina and gaceta.estado == "ABIERTA" or galeria.coordina and gaceta.estado == "PERIODO_CERRADO" %}
+        {# UX-5: lo que hacía la página propia de la gaceta (retirada) para quien coordina. #}
+        <details class="gl-coordinar">
+          <summary class="btn btn--ghost btn--sm">Coordinar {% include "components/icon.html" with name="chevron-down" size="sm" %}</summary>
+          <div class="gl-coordinar__panel">
+            {% if gaceta.estado == "ABIERTA" %}
+              <form method="post" action="{% url 'gacetas:cerrar_periodo' gaceta.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}#gaceta-{{ gaceta.pk }}">
+                <button type="submit" class="btn btn--secondary btn--sm">Cerrar el periodo de revisión</button>
+              </form>
+            {% endif %}
+            <form method="post" action="{% url 'gacetas:resolver' gaceta.pk %}" class="gl-coordinar__form">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}#gaceta-{{ gaceta.pk }}">
+              <label for="gl-res-{{ gaceta.pk }}">Resolver la gaceta</label>
+              <input id="gl-res-{{ gaceta.pk }}" name="justificacion" type="text" placeholder="Justificación">
+              <button type="submit" class="btn btn--primary btn--sm">Resolver</button>
+            </form>
+            {% if galeria.presentables %}
+              <form method="post" action="{% url 'gacetas:presentar' gaceta.pk %}" class="gl-coordinar__form">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}#gaceta-{{ gaceta.pk }}">
+                <label for="gl-pre-{{ gaceta.pk }}">Presentar una pieza</label>
+                <select id="gl-pre-{{ gaceta.pk }}" name="elemento_id">
+                  {% for elemento in galeria.presentables %}<option value="{{ elemento.pk }}">{{ elemento.parrilla.nombre_elemento|default:"Ítem" }} #{{ elemento.numero }}</option>{% endfor %}
+                </select>
+                <button type="submit" class="btn btn--secondary btn--sm">Presentar</button>
+              </form>
+            {% endif %}
+          </div>
+        </details>
+      {% endif %}
+    </header>
+    {% include "tickets/espacio/tablero/_galeria_gaceta.html" %}
+  </section>
+{% endwith %}

@@ -162,6 +162,10 @@ def _crear_borrador_de_servicio(usuario, servicio, *, origen=Ticket.Origen.MANUA
         materializar_gacetas(ticket, servicio)
         ticket.reglas_finalizacion = reglas_de(servicio)
         Ticket.objects.filter(pk=ticket.pk).update(reglas_finalizacion=ticket.reglas_finalizacion)
+    # Sprint 7 (adelanto): los avisos del Servicio/Proceso se congelan al nacer el ticket (como las reglas de cierre).
+    from apps.notificaciones.configuracion import congelar_en_ticket
+
+    congelar_en_ticket(ticket, servicio)
     return ticket
 
 
@@ -661,6 +665,13 @@ def comentar_ticket(ticket, actor, contenido, archivos=None):
     `Ticket.estado`."""
     if not puede_comentar_ticket(actor, ticket):
         raise PermissionDenied("No tiene autorización para comentar este ticket.")
+    return registrar_comentario(ticket, actor, contenido, archivos)
+
+
+def registrar_comentario(ticket, actor, contenido, archivos=None):
+    """Núcleo de un comentario del Ticket SIN autorizar: guarda el `ComentarioTicket` (y sus adjuntos) y publica el
+    aviso COMENTARIO. Lo llaman, ya autorizados, `comentar_ticket` (regla CU-018) y la Conversación del ticket
+    (`conversacion.enviar`, regla de participación)."""
     if not contenido or not contenido.strip():
         raise ValidationError("El comentario no puede estar vacío.")
 
@@ -669,6 +680,9 @@ def comentar_ticket(ticket, actor, contenido, archivos=None):
     )
     for archivo_subido in archivos or []:
         _crear_adjunto(Adjunto.TipoRelacion.COMENTARIO, {"comentario": comentario}, archivo_subido, actor)
+    from apps.notificaciones.eventos import publicar
+
+    publicar("TICKET:COMENTARIO", actor=actor, ticket=ticket, contenido=comentario.contenido)
     return comentario
 
 

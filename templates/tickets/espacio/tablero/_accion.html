@@ -1,0 +1,56 @@
+{% comment %}
+  Una acción concreta (tarea con verificación o evidencia, gaceta, entregable, atención, solicitud…): título,
+  instrucción, lo que falta, los controles de su operación y qué sigue. Espera `seleccionada`.
+{% endcomment %}
+    {% with accion=seleccionada %}
+      <article class="esp-tarea" id="accion-{{ accion.clave }}" aria-labelledby="accion-t">
+        <header class="esp-tarea__cabeza">
+          {% if accion.subtitulo or accion.estado %}<p class="esp-tarea__contexto">{{ accion.subtitulo }}{% if accion.subtitulo and accion.estado %} · {% endif %}{{ accion.estado }}</p>{% endif %}
+          <h3 id="accion-t" class="esp-tarea__titulo">{{ accion.titulo }}</h3>
+          {% if accion.que %}<p class="esp-tarea__instruccion">{{ accion.que|linebreaksbr }}</p>{% endif %}
+          {% if accion.vence or accion.informacion %}
+            <p class="esp-tarea__meta">
+              {% if accion.vence %}<span class="esp-vence tabular">{% include "components/icon.html" with name="clock" size="sm" %}Vence {{ accion.vence|date:"j M, H:i" }}</span>{% endif %}
+              {% for dato in accion.informacion %}<span>{{ dato }}</span>{% endfor %}
+            </p>
+          {% endif %}
+        </header>
+
+        {% if accion.recorrido_item %}
+          {% include "tickets/espacio/_pasos_item.html" with item=accion.recorrido_item compacto=False %}
+        {% endif %}
+
+        {% if accion.impedimentos %}
+          <div class="esp-aviso" role="status">
+            {% include "components/icon.html" with name="alert" size="sm" %}
+            <p>{{ accion.impedimentos|join:" " }}</p>
+          </div>
+        {% endif %}
+
+        {% if accion.requisitos_pendientes %}
+          {% include "tickets/espacio/_guia.html" %}
+        {% endif %}
+
+        <div class="esp-tarea__cuerpo">
+          {% if accion.tipo == "tarea" %}{% include "tickets/espacio/acciones/_tarea.html" %}
+          {% elif accion.tipo == "borradores" %}{% include "tickets/espacio/acciones/_borradores.html" %}
+          {% elif accion.tipo == "aprobacion" %}{% include "tickets/espacio/acciones/_aprobacion.html" %}
+          {% elif accion.tipo == "gaceta" %}{% include "tickets/espacio/acciones/_gaceta.html" %}
+          {% elif accion.tipo == "revision" %}{% include "tickets/espacio/acciones/_revision.html" %}
+          {% elif accion.tipo == "entregable" %}{% include "tickets/espacio/acciones/_entregable.html" %}
+          {% elif accion.tipo == "correccion" %}{% include "tickets/espacio/acciones/_correccion.html" %}
+          {% elif accion.tipo == "recorrido" %}{% include "tickets/espacio/acciones/_recorrido.html" %}
+          {% elif accion.tipo == "atencion" %}{% include "tickets/espacio/acciones/_atencion.html" %}
+          {% elif accion.tipo == "tomar" %}{% include "tickets/espacio/acciones/_tomar.html" %}
+          {% elif accion.tipo == "datos_inicio" %}{% include "tickets/_datos_inicio.html" with datos_inicio=accion.datos_inicio next_url=aqui %}
+          {% elif accion.tipo == "solicitud" %}{% include "tickets/espacio/acciones/_solicitud.html" %}
+          {% elif accion.tipo == "entrega" %}{% include "tickets/espacio/acciones/_entrega.html" %}
+          {% elif accion.tipo == "cerrar" %}{% include "tickets/espacio/acciones/_cerrar.html" %}
+          {% endif %}
+        </div>
+
+        {% if accion.despues %}
+          <p class="esp-despues">{% include "components/icon.html" with name="arrow-right" size="sm" %}<span><span class="esp-despues__etiqueta">Después:</span> {{ accion.despues|join:" " }}</span></p>
+        {% endif %}
+      </article>
+    {% endwith %}

@@ -1570,13 +1570,16 @@ class ColaAtencionViewTests(_EscenarioAtencionMixin, TestCase):
         respuesta = self.client.get(reverse("tickets:cola"))
         self.assertIn(self.ticket, respuesta.context["tickets"])
 
-    def test_gestor_de_area_lo_ve_en_supervision_y_no_como_algo_que_pueda_tomar(self):
-        # 4.F3: la Cola es lo que se PUEDE tomar; la supervisión por alcance (asignar) es un filtro aparte.
+    def test_gestor_de_area_no_lo_ve_en_la_cola_pero_conserva_la_supervision(self):
+        # La Cola es SOLO lo que se PUEDE tomar; la supervisión por alcance no se lista en ella, pero sus
+        # capacidades (ver el ticket por alcance, `puede_ver_en_cola`, y su resumen) no cambian.
         self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
-        self.assertNotIn(self.ticket, self.client.get(reverse("tickets:cola")).context["tickets"])
-        supervision = self.client.get(reverse("tickets:cola"), {"ver": "supervision"})
-        self.assertIn(self.ticket, supervision.context["tickets"])
-        self.assertNotContains(supervision, reverse("tickets:tomar", args=[self.ticket.pk]))
+        for parametros in ({}, {"ver": "supervision"}):
+            cola = self.client.get(reverse("tickets:cola"), parametros)
+            self.assertNotIn(self.ticket, cola.context["tickets"])
+            self.assertNotContains(cola, reverse("tickets:tomar", args=[self.ticket.pk]))
+        self.assertContains(cola, "No hay tickets pendientes por tomar")
+        self.assertEqual(self.client.get(reverse("tickets:resumen", args=[self.ticket.pk])).status_code, 200)
 
     def test_usuario_sin_autorizacion_no_ve_el_ticket(self):
         self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
@@ -9927,7 +9930,8 @@ class ConfirmacionYMisTicketsTests(_EscenarioAtencionMixin, TestCase):
         respuesta = self.client.get(reverse("tickets:mis_tickets"))
         self.assertEqual({t.pk for t in respuesta.context["tickets"]}, {self.ticket.pk, borrador.pk})
         self.assertContains(respuesta, self.ticket.codigo)
-        self.assertContains(respuesta, reverse("tickets:seguimiento", args=[self.ticket.pk]))
+        # UX-1: cada ticket se abre en el espacio unificado (el seguimiento sigue disponible por su URL).
+        self.assertContains(respuesta, f'href="{reverse("tickets:espacio", args=[self.ticket.pk])}"')
         self.assertContains(respuesta, "Ver ticket")
         self.assertContains(respuesta, self.servicio.nombre)
 
@@ -9948,7 +9952,7 @@ class ConfirmacionYMisTicketsTests(_EscenarioAtencionMixin, TestCase):
         respuesta = self.client.get(reverse("tickets:mis_tickets"))
         self.assertContains(respuesta, "Radicado")
         self.assertContains(respuesta, self.equipo.nombre)
-        self.assertContains(respuesta, "Objetivo:")
+        self.assertContains(respuesta, '<span class="bt-fecha__etiqueta">Objetivo</span>')
 
     def test_el_borrador_sigue_abriendose_para_continuar(self):
         borrador = crear_borrador(self.solicitante, self.servicio)
@@ -10035,7 +10039,7 @@ class SeguimientoSolicitanteTests(_EscenarioAtencionMixin, TestCase):
         solicitar_informacion(ticket, self.responsable_directo, "¿Puedes aclarar el motivo?")
         respuesta = self._ver(self.solicitante)
         self.assertContains(respuesta, "te pidió más información")
-        self.assertContains(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertContains(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]))
 
     def test_el_detalle_operativo_conserva_su_contenido_y_enlaza_al_seguimiento_del_solicitante(self):
         self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
@@ -10120,7 +10124,8 @@ class SeguimientoPorFasesTests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
         self._hasta_la_primera_revision(ticket, definicion)
         self.client.login(username=self.solicitante.get_username(), password=CLAVE_PRUEBA)
         respuesta = self.client.get(reverse("tickets:mis_tickets"))
-        self.assertContains(respuesta, "Fase: Revisión")
+        self.assertEqual(next(t for t in respuesta.context["tickets"] if t.pk == ticket.pk).fase_actual, "Revisión")
+        self.assertContains(respuesta, '<span class="sr-only">Fase: </span>Revisión')
         self.assertContains(respuesta, ticket.codigo)
 
 
@@ -12783,18 +12788,23 @@ class ConjuntoEnElFlujoTests(_EscenarioConjuntoEnFlujoMixin, TestCase):
         ticket, entregable = self._ticket_con_conjunto(con_bloque=True)
         a, b = self._completo(ticket, "A"), self._completo(ticket, "B")
         url = reverse("tickets:revision_conjunto", args=[ticket.pk, entregable.pk])
+        espacio = reverse("tickets:espacio", args=[ticket.pk])
         self._entrar(self.revisor)
-        self.assertNotContains(self.client.get(reverse("core:mi_trabajo")), url)  # aún no es su turno
+        self.assertNotContains(self.client.get(reverse("core:mi_trabajo") + "?tab=revisiones"), url)  # aún no es su turno
         self.assertEqual(revision_ops.revisiones_pendientes_para(self.revisor), [])
         self._completar_como(ticket, "Atender", self.analista)
+        # UX-2: la bandeja muestra el TICKET (una fila) con la revisión como siguiente acción; el detalle técnico
+        # de la revisión sigue en su bandeja (`?tab=revisiones`).
         pagina = self.client.get(reverse("core:mi_trabajo"))
-        self.assertContains(pagina, url)
+        self.assertContains(pagina, espacio)
         self.assertContains(pagina, "Piezas aprobadas")
-        self.assertContains(pagina, "0/2 aprobados")
         self.assertContains(pagina, "Revisión de elementos")
-        self.assertEqual(self.client.get(reverse("core:mi_trabajo") + "?tab=revisiones").context["total_revisiones"], 1)
+        tecnica = self.client.get(reverse("core:mi_trabajo") + "?tab=revisiones")
+        self.assertContains(tecnica, url)
+        self.assertContains(tecnica, "0/2 aprobados")
+        self.assertEqual(tecnica.context["total_revisiones"], 1)
         self._entrar(self.miembro)  # quien revisa por equipo la ve igual
-        self.assertContains(self.client.get(reverse("core:mi_trabajo")), url)
+        self.assertContains(self.client.get(reverse("core:mi_trabajo")), espacio)
         self._entrar(self.analista)  # el responsable no revisa: no la ve como revisión suya
         self.assertEqual(self.client.get(reverse("core:mi_trabajo")).context["total_revisiones"], 0)
         self._entrar(self.otro)

@@ -1,0 +1,52 @@
+{% comment %}
+  UX-4b — la lluvia de ideas como TABLA editable (`espacio.lluvia`): una fila por idea, las columnas del proceso, lo
+  que le falta a cada una y una fila nueva al final («+ Agregar» añade más). «Guardar borrador» guarda todas;
+  «Enviar … a aprobación» guarda, valida TODAS y las envía juntas, y cierra la lluvia (`tickets:tabla_borradores`).
+{% endcomment %}
+<form id="tb-lluvia" method="post" action="{% url 'tickets:tabla_borradores' ticket.pk lluvia.parrilla.clave %}" class="tb" data-tabla-editable>
+  {% csrf_token %}<input type="hidden" name="next" value="{{ base }}#mision">
+  <div class="tb-envoltura">
+    <table class="tb-tabla">
+      <thead>
+        <tr>
+          <th scope="col" class="tb-num">#</th>
+          {% for col in lluvia.columnas %}<th scope="col">{{ col.campo.etiqueta }}{% if col.exigida %} <abbr title="Necesario para enviar">*</abbr>{% endif %}</th>{% endfor %}
+          <th scope="col">Estado</th>
+          <th scope="col"><span class="sr-only">Quitar</span></th>
+        </tr>
+      </thead>
+      <tbody data-filas>
+        {% for fila in lluvia.filas %}
+          <tr class="{% if fila.faltan %}is-incompleta{% else %}is-lista{% endif %}">
+            <td class="tb-num tabular">{{ forloop.counter }}</td>
+            {% for celda in fila.celdas %}
+              <td>{% include "tickets/espacio/tablero/_celda.html" with nombre=celda.nombre %}</td>
+            {% endfor %}
+            <td class="tb-estado">{% if fila.faltan %}<span class="tb-falta">Falta {{ fila.faltan|join:", "|lower }}</span>{% else %}<span class="tb-lista">{% include "components/icon.html" with name="check" size="sm" %}Lista</span>{% endif %}</td>
+            <td class="tb-quitar-celda"><button type="submit" class="tb-quitar" form="tb-quitar-{{ fila.elemento.pk }}" aria-label="Quitar esta idea" title="Quitar">{% include "components/icon.html" with name="x" size="sm" %}</button></td>
+          </tr>
+        {% endfor %}
+        {% if lluvia.puede_agregar %}
+          <tr class="tb-nueva" data-plantilla data-indice="0">
+            <td class="tb-num">{% include "components/icon.html" with name="plus" size="sm" %}</td>
+            {% for celda in lluvia.nueva %}<td>{% include "tickets/espacio/tablero/_celda.html" with nombre=celda.nombre %}</td>{% endfor %}
+            <td class="tb-estado"><span class="text-muted">Nueva</span></td>
+            <td></td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+  <div class="tb-pie">
+    {% if lluvia.puede_agregar %}<button type="button" class="btn btn--ghost btn--sm" data-agregar-fila>{% include "components/icon.html" with name="plus" size="sm" %}Agregar otra</button>{% endif %}
+    <span class="tb-pie__espacio"></span>
+    <button type="submit" class="btn btn--secondary">Guardar borrador</button>
+    {% if lluvia.puede_enviar %}
+      <button type="submit" class="btn btn--primary" name="accion" value="enviar" data-confirmar="Se enviarán todas las ideas a aprobación y ya no podrás agregar más. ¿Continuar?">Enviar {{ lluvia.etapa|lower }} a aprobación {% include "components/icon.html" with name="arrow-right" size="sm" %}</button>
+    {% endif %}
+  </div>
+  <p class="tb-nota">Después: cada idea pasa a aprobación; las aprobadas siguen a elaboración y las devueltas vuelven a ti para corregirlas.</p>
+</form>
+{% for fila in lluvia.filas %}
+  <form id="tb-quitar-{{ fila.elemento.pk }}" method="post" action="{% url 'tickets:elemento_retirar' ticket.pk fila.elemento.pk %}" hidden>{% csrf_token %}<input type="hidden" name="next" value="{{ base }}#mision"></form>
+{% endfor %}

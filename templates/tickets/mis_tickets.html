@@ -1,51 +1,61 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block title %}Mis tickets — {{ sistema.nombre }}{% endblock %}
 
-{% block content_modifier %}content-area--wide{% endblock %}
+{% block content_modifier %}content-area--operativo{% if filas %} content-area--bandeja{% endif %}{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/trabajo.css' %}"><link rel="stylesheet" href="{% static 'css/espacio.css' %}"><link rel="stylesheet" href="{% static 'css/bandeja.css' %}">{% endblock %}
+
+{% comment %}
+  Mis tickets — lo que la persona SOLICITÓ, en la bandeja compartida con Mi trabajo: una fila por ticket, segmentos
+  (lo que espera tu respuesta, borradores, en curso, finalizados), búsqueda local e inspector lateral de solo lectura.
+  Las acciones del solicitante (responder, aceptar u observar una entrega) siguen en el espacio del ticket.
+{% endcomment %}
 
 {% block content %}
-  <section class="card">
-    <h1>Mis tickets</h1>
-    <p class="text-muted">Lo que has solicitado: borradores en curso y tickets en seguimiento.</p>
-    <p><a class="btn btn--primary" href="{% url 'catalogo:lista' %}">{% include "components/icon.html" with name="plus" %}Nuevo ticket</a></p>
-  </section>
+  <header class="op-cabecera">
+    <h1 class="op-cabecera__titulo">Mis tickets</h1>
+    <a class="btn btn--primary btn--sm" href="{% url 'catalogo:lista' %}">{% include "components/icon.html" with name="plus" size="sm" %}Nuevo ticket</a>
+    <p class="op-cabecera__sub">Lo que has solicitado: borradores en curso y tickets en seguimiento.</p>
+  </header>
 
   {% if tickets %}
-    <section class="card">
-      <ul class="list-row-group">
-        {% for ticket in tickets %}
-          <li class="list-row" style="flex-wrap: wrap;">
-            <span class="list-row__title">
-              {% if ticket.estado == "BORRADOR" %}
-                <a href="{% url 'tickets:borrador' ticket.pk %}">{{ ticket.detalle_servicio.servicio.nombre }}</a>
-              {% else %}
-                <span class="text-muted">{{ ticket.codigo|default:"Ticket" }}</span>
-                <a href="{% url 'tickets:seguimiento' ticket.pk %}">{{ ticket.detalle_servicio.servicio.nombre }}</a>
-              {% endif %}
-            </span>
-            {% if ticket.estado == "BORRADOR" %}
-              <span class="badge badge--warning">Borrador</span>
-              <span class="text-muted">Sin enviar · creado el {{ ticket.creado_en|date:"d/m/Y H:i" }}</span>
-              <a class="btn btn--ghost btn--sm" href="{% url 'tickets:borrador' ticket.pk %}">Continuar</a>
-            {% else %}
-              <span class="badge {% if ticket.estado == 'RESUELTO' or ticket.estado == 'CERRADO' %}badge--success{% elif ticket.estado == 'CANCELADO' %}badge--danger{% else %}badge--info{% endif %}">{{ ticket.get_estado_display }}</span>
-              {% if ticket.fase_actual %}<span class="text-muted">Fase: {{ ticket.fase_actual }}</span>{% endif %}
-              <span class="text-muted">
-                {% if ticket.responsable.equipo %}{{ ticket.responsable.equipo }}{% if ticket.responsable.persona %} · {{ ticket.responsable.persona }}{% endif %}
-                {% elif ticket.responsable.persona %}{{ ticket.responsable.persona }}
-                {% else %}Sin asignar{% endif %}
-              </span>
-              {% if ticket.fecha_objetivo_vigente %}<span class="text-muted">Objetivo: {{ ticket.fecha_objetivo_vigente|date:"d/m/Y" }}</span>{% endif %}
-              <a class="btn btn--ghost btn--sm" href="{% url 'tickets:seguimiento' ticket.pk %}">Ver ticket</a>
-            {% endif %}
-          </li>
+    <div class="op-barra">
+      <form class="search op-barra__buscar" method="get" role="search">
+        <span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" size="sm" %}</span>
+        <label class="sr-only" for="mt-q">Buscar en Mis tickets</label>
+        <input class="search__input" id="mt-q" type="search" name="q" value="{{ q }}" placeholder="Buscar por código o nombre">
+        {% if ver != "todos" %}<input type="hidden" name="ver" value="{{ ver }}">{% endif %}
+      </form>
+      <nav class="segmented" aria-label="Filtrar Mis tickets">
+        {% for segmento in segmentos %}
+          <a class="segmented__item" href="?{% if segmento.clave != 'todos' %}ver={{ segmento.clave }}{% endif %}{% if q %}{% if segmento.clave != 'todos' %}&amp;{% endif %}q={{ q|urlencode }}{% endif %}"{% if ver == segmento.clave %} aria-current="page"{% endif %}>{{ segmento.etiqueta }} <span class="work-count">{{ segmento.total }}</span></a>
         {% endfor %}
-      </ul>
-    </section>
+      </nav>
+    </div>
+
+    {% if filas %}
+      <div class="bt bt--tickets" data-bandeja>
+        <div class="bt__lista">
+          {% include "tickets/bandeja/_encabezado.html" with situacion=False %}
+          <ul class="bt-filas" aria-label="Mis tickets">
+            {% for ticket in filas %}{% include "tickets/bandeja/_fila_ticket.html" %}{% endfor %}
+          </ul>
+        </div>
+        {% include "tickets/bandeja/_inspector.html" %}
+      </div>
+    {% else %}
+      <div class="empty-state">
+        <p>Ningún ticket coincide con la búsqueda.</p>
+        <p><a href="{% url 'tickets:mis_tickets' %}">Ver todos</a></p>
+      </div>
+    {% endif %}
   {% else %}
     <div class="empty-state">
       <p>Aún no tienes tickets.</p>
     </div>
   {% endif %}
 {% endblock %}
+
+{% block extra_scripts %}<script src="{% static 'js/bandeja.js' %}" defer></script>{% endblock %}

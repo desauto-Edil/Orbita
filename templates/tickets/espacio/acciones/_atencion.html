@@ -1,0 +1,41 @@
+{% comment %}
+  Atención directa de un servicio sin flujo («Atender y entregar») o cierre de un ticket cuyo flujo terminó
+  («Resolver o entregar»): entregables, entrega formal o resolución y solicitud de información, con las
+  operaciones de siempre (`entregable_*`, `entregar`, `resolver`, `solicitar_informacion`).
+{% endcomment %}
+{% if accion.entregables %}
+  <h4 class="esp-guia__titulo">Resultados</h4>
+  <ul class="list-row-group">
+    {% for entregable in accion.entregables %}
+      {% include "tickets/_entregable_item.html" with puede_escribir_entregables=True next_url=aqui %}
+    {% endfor %}
+  </ul>
+{% endif %}
+
+{% if accion.puede_entregar %}
+  <form method="post" action="{% url 'tickets:entregar' ticket.pk %}" class="form esp-cierre">
+    {% csrf_token %}<input type="hidden" name="next" value="{{ base }}"><input type="hidden" name="confirmar" value="1">
+    <p>¿Los resultados están listos para el solicitante? No podrás modificarlos mientras espera su respuesta.</p>
+    <button type="submit" class="btn btn--primary" onclick="return confirm('¿Confirmas entregar los resultados al solicitante?');">Entregar al solicitante</button>
+  </form>
+{% elif accion.puede_resolver %}
+  <form method="post" action="{% url 'tickets:resolver' ticket.pk %}" enctype="multipart/form-data" class="form esp-cierre">
+    {% csrf_token %}<input type="hidden" name="next" value="{{ base }}">
+    <div class="field"><label for="esp-resolucion">Descripción de la resolución</label><textarea id="esp-resolucion" name="descripcion" rows="3" required></textarea></div>
+    <div class="field"><label for="esp-resolucion-archivo">Adjuntar evidencia (opcional)</label><input id="esp-resolucion-archivo" type="file" name="archivo"></div>
+    <button type="submit" class="btn btn--primary">Resolver</button>
+  </form>
+{% endif %}
+
+{% if accion.puede_solicitar_informacion %}
+  <details class="esp-plegable">
+    <summary>Pedir información al solicitante</summary>
+    <form method="post" action="{% url 'tickets:solicitar_informacion' ticket.pk %}" enctype="multipart/form-data" class="form">
+      {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+      <div class="field"><label for="esp-pedir">¿Qué necesitas saber?</label><textarea id="esp-pedir" name="mensaje" rows="3" required></textarea></div>
+      <div class="field"><label for="esp-pedir-archivo">Adjuntar archivo (opcional)</label><input id="esp-pedir-archivo" type="file" name="archivo"></div>
+      <button type="submit" class="btn btn--secondary btn--sm">Enviar solicitud</button>
+    </form>
+  </details>
+{% endif %}
+<p class="ws-nota">Prórrogas, reasignación y la vista administrativa completa están en <a href="{% url 'tickets:detalle' ticket.pk %}">Vista completa</a>.</p>

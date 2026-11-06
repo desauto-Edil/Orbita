@@ -30,16 +30,35 @@ _AREA_TEXTO = forms.Textarea(attrs={"rows": 3})
 
 class ConfiguracionSistemaForm(forms.ModelForm):
     quitar_logo = forms.BooleanField(required=False, label="Quitar el logo actual")
+    quitar_logo_oscuro = forms.BooleanField(required=False, label="Quitar el logo oscuro")
 
     class Meta:
         model = ConfiguracionSistema
-        fields = ("nombre", "logo")
-        labels = {"nombre": "Nombre del sistema", "logo": "Logo"}
+        fields = ("nombre", "logo", "logo_oscuro", "tema")
+        labels = {
+            "nombre": "Nombre del sistema",
+            "logo": "Logo para modo claro",
+            "logo_oscuro": "Logo para modo oscuro",
+            "tema": "Estilo de color",
+        }
         help_texts = {
             "nombre": "Se muestra en el encabezado, en el inicio de sesión y en el título de cada página.",
             "logo": "PNG, JPG o WebP, hasta 1 MB. Se ve mejor cuadrado y con fondo transparente.",
+            "logo_oscuro": "Opcional. Una versión clara del logo para fondos oscuros; sin ella se usa el de modo claro.",
         }
-        widgets = {"logo": forms.FileInput(attrs={"accept": ".png,.jpg,.jpeg,.webp"})}
+        widgets = {
+            "logo": forms.FileInput(attrs={"accept": ".png,.jpg,.jpeg,.webp"}),
+            "logo_oscuro": forms.FileInput(attrs={"accept": ".png,.jpg,.jpeg,.webp"}),
+            "tema": forms.RadioSelect,
+        }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Sin elegir estilo se conserva el vigente: guardar solo el nombre o el logo no lo cambia.
+        self.fields["tema"].required = False
+
+    def clean_tema(self):
+        return self.cleaned_data.get("tema") or self.instance.tema
 
     def clean_nombre(self):
         nombre = self.cleaned_data["nombre"].strip()
@@ -50,6 +69,8 @@ class ConfiguracionSistemaForm(forms.ModelForm):
     def save(self, commit=True):
         if self.cleaned_data.get("quitar_logo") and "logo" not in self.changed_data:
             self.instance.logo = ""
+        if self.cleaned_data.get("quitar_logo_oscuro") and "logo_oscuro" not in self.changed_data:
+            self.instance.logo_oscuro = ""
         return super().save(commit)
 
 

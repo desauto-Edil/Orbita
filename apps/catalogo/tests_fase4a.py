@@ -122,8 +122,9 @@ class NavegacionGuiadaTests(_Base4A, TestCase):
         self._preparar()
         self.servicio = self._servicio()
 
-    def test_atras_continuar_y_posicion_en_las_cinco_secciones(self):
-        orden = ["general", "entrada", "salida", "ejecucion", "publicacion"]
+    def test_atras_continuar_y_posicion_en_las_seis_secciones(self):
+        # Notificaciones (Sprint 7, adelanto) va entre Flujo y Publicar: sus avisos por etapa usan las fases del flujo.
+        orden = ["general", "entrada", "salida", "ejecucion", "notificaciones", "publicacion"]
         for indice, tab in enumerate(orden):
             respuesta = self.client.get(self._url(self.servicio, tab))
             self.assertEqual(respuesta.status_code, 200, tab)
@@ -131,12 +132,12 @@ class NavegacionGuiadaTests(_Base4A, TestCase):
             self.assertEqual(nav["posicion"], indice + 1)
             self.assertEqual(nav["anterior"]["clave"] if nav["anterior"] else None, orden[indice - 1] if indice else None)
             self.assertEqual(
-                nav["siguiente"]["clave"] if nav["siguiente"] else None, orden[indice + 1] if indice < 4 else None
+                nav["siguiente"]["clave"] if nav["siguiente"] else None, orden[indice + 1] if indice < len(orden) - 1 else None
             )
         general = self.client.get(self._url(self.servicio, "general"))
         self.assertContains(general, "Continuar: Formulario")
         self.assertNotContains(general, "Atrás:")
-        self.assertContains(self.client.get(self._url(self.servicio, "publicacion")), "Atrás: Flujo")
+        self.assertContains(self.client.get(self._url(self.servicio, "publicacion")), "Atrás: Notificaciones")
 
     def test_omitir_solo_en_secciones_opcionales_y_no_borra_nada(self):
         salida = self.client.get(self._url(self.servicio, "salida"))  # Servicio sin entregables: opcional
@@ -173,7 +174,7 @@ class NavegacionGuiadaTests(_Base4A, TestCase):
     def test_progreso_cuenta_las_secciones_listas(self):
         Servicio.objects.filter(pk=self.servicio.pk).update(alcance_visibilidad="PUBLICO_INTERNO")  # Básico completo
         nav = self.client.get(self._url(self.servicio, "general")).context["navegacion"]
-        self.assertEqual(nav["total"], 5)
+        self.assertEqual(nav["total"], 6)
         self.assertGreaterEqual(nav["listas"], 4)  # básico, formulario, salida y flujo opcionales
         self.assertContains(self.client.get(self._url(self.servicio, "general")), "secciones listas")
 

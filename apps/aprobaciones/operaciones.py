@@ -114,6 +114,9 @@ def crear_esquema_aprobacion(
             **({"justificacion_al_aprobar": True} if esquema.justificacion_al_aprobar else {}),
         },
     )
+    from apps.notificaciones.eventos import publicar
+
+    publicar("APROBACION:ESQUEMA_CREADO", actor=actor, esquema=esquema)
     return esquema
 
 
@@ -227,6 +230,9 @@ def resolver_aprobacion(aprobacion, actor, *, decision, observacion=""):
         datos_anteriores={"estado": estado_anterior},
         datos_nuevos={"estado": aprobacion.estado, "observacion": aprobacion.observacion},
     )
+    from apps.notificaciones.eventos import publicar
+
+    publicar("APROBACION:DECIDIDA", actor=actor, esquema=esquema, aprobacion=aprobacion)
     return aprobacion, esquema
 
 
@@ -285,6 +291,9 @@ def reasignar_aprobacion(aprobacion, actor, *, nuevo_aprobador_usuario=None, nue
             "motivo": motivo,
         },
     )
+    from apps.notificaciones.eventos import publicar
+
+    publicar("APROBACION:REASIGNADA", actor=actor, esquema=aprobacion.esquema_id, aprobacion=aprobacion)
     return aprobacion
 
 

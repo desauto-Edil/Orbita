@@ -6407,7 +6407,7 @@ class StudioOrdenYRevisionTests(_EscenarioE2CatalogoMixin, TestCase):
         respuesta = self._pagina("general")
         self.assertEqual(
             [seccion["clave"] for seccion in respuesta.context["secciones"]],
-            ["general", "entrada", "salida", "ejecucion", "publicacion"],
+            ["general", "entrada", "salida", "ejecucion", "notificaciones", "publicacion"],
         )
         html = respuesta.content.decode()
         posiciones = [html.index(f"?tab={clave}") for clave in ("entrada", "salida", "ejecucion")]

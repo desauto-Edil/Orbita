@@ -1,0 +1,54 @@
+{% comment %}
+  UX-2 — panel derecho de contexto adicional. Solo se renderiza cuando se pide (`?panel=`) y la vista ya validó
+  quién puede verlo: solicitud original (quien consulta el ticket) o el detalle de un ítem (`puede_ver_ficha`). Es
+  de solo lectura: lo que se edita sigue en la ficha o en la acción. El historial y la conversación viven en el
+  panel global del ticket (`tickets/_panel_ticket.html`).
+{% endcomment %}
+<aside class="esp-derecho" aria-labelledby="esp-derecho-t">
+  <header class="esp-derecho__cabeza">
+    <h2 id="esp-derecho-t" class="esp-derecho__titulo">
+      {% if panel == "solicitud" %}Solicitud original{% else %}{{ panel_ficha.nombre_elemento }} #{{ panel_ficha.elemento.numero }}{% endif %}
+    </h2>
+    <a class="esp-cerrar" href="{{ url_sin_panel }}" aria-label="Cerrar el panel">{% include "components/icon.html" with name="x" size="sm" %}</a>
+  </header>
+
+  <div class="esp-derecho__cuerpo">
+    {% if panel == "solicitud" %}
+      {% include "tickets/_respuestas.html" with campos_formulario=panel_campos %}
+    {% elif panel_ficha %}
+      {% with f=panel_ficha %}
+        {% if f.salida %}<p><span class="badge badge--danger">{{ f.salida.get_tipo_display }}</span> <span class="text-muted">{{ f.salida.justificacion }}</span></p>{% endif %}
+        {% if f.recorrido %}<p class="text-muted">Recorrido: {{ f.recorrido.estado }}{% if f.recorrido.paso and f.recorrido.en_curso %} · {{ f.recorrido.paso }}{% endif %}</p>{% endif %}
+
+        <dl class="esp-item__datos">{% for fila in f.valores_lectura %}<dt>{{ fila.etiqueta }}</dt><dd>{{ fila.texto }}</dd>{% endfor %}</dl>
+
+        {% if f.archivos %}
+          <h3 class="esp-derecho__sub">Archivos</h3>
+          <ul class="esp-lista-simple">{% for archivo in f.archivos %}<li><a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a> <span class="text-muted">{{ archivo.creado_en|date:"j M, H:i" }}</span></li>{% endfor %}</ul>
+        {% endif %}
+
+        {% for g in f.gacetas %}
+          {% if g.observaciones %}
+            <h3 class="esp-derecho__sub">Observaciones · {{ g.participacion.gaceta.nombre }}</h3>
+            <ul class="esp-observaciones">
+              {% for obs in g.observaciones %}
+                <li><strong>{{ obs.autor.get_full_name|default:obs.autor.get_username }}</strong> <span class="text-muted">{{ obs.creada_en|date:"j M, H:i" }} · ronda {{ obs.ronda.numero }}</span><br>{{ obs.texto }}{% if obs.respuesta %}<br><span class="text-muted">Respuesta: {{ obs.respuesta }}</span>{% endif %}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        {% endfor %}
+
+        {% if f.versiones %}
+          <h3 class="esp-derecho__sub">Versiones <span class="work-count">{{ f.versiones|length }}</span></h3>
+          <ul class="esp-lista-simple">
+            {% for version in f.versiones %}
+              <li>Versión {{ version.numero }} · {% if version.creada_por %}{{ version.creada_por.get_full_name|default:version.creada_por.get_username }}{% else %}Sistema{% endif %} <span class="text-muted">{{ version.creada_en|date:"j M Y, H:i" }}</span>{% if version.motivo %} — {{ version.motivo }}{% endif %}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+
+        <p class="esp-derecho__pie"><a class="btn btn--secondary btn--sm" href="{{ base }}?elemento={{ f.elemento.pk }}">Abrir la ficha</a></p>
+      {% endwith %}
+    {% endif %}
+  </div>
+</aside>

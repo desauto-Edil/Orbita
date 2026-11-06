@@ -1,61 +1,140 @@
 {% extends "base.html" %}
+{% load static %}
 
 {% block title %}Mi perfil — {{ sistema.nombre }}{% endblock %}
+{% block content_modifier %}content-area--wide{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/perfil.css' %}">{% endblock %}
 
 {% block content %}
-  <section class="card">
-    <h1>{{ usuario.get_full_name|default:usuario.get_username }}</h1>
-    <dl class="definition-list">
-      <div>
-        <dt>Usuario</dt>
-        <dd>{{ usuario.get_username }}</dd>
-      </div>
-      <div>
-        <dt>Correo</dt>
-        <dd>{{ usuario.email|default:"—" }}</dd>
-      </div>
-      {% if perfil %}
-        <div>
-          <dt>Cargo</dt>
-          <dd>{{ perfil.cargo|default:"—" }}</dd>
-        </div>
-        <div>
-          <dt>Teléfono</dt>
-          <dd>{{ perfil.telefono|default:"—" }}</dd>
-        </div>
-      {% endif %}
-    </dl>
-  </section>
+{% comment %}
+  CU-003 — Consultar perfil (Fase visual). UNA superficie continua, sin tarjetas apiladas: portada con el
+  acento, columna de identidad (foto, contacto, apariencia) y, a la derecha, secciones separadas por aire y
+  líneas finas: organización, compañeros y últimos accesos (CU-001 los registra). Sin roles.
+{% endcomment %}
+<article class="perfil">
+  <div class="perfil__portada" aria-hidden="true"></div>
 
-  <section class="card">
-    <h3>Áreas</h3>
-    {% if areas %}
-      <ul class="plain-list">
-        {% for ua in areas %}
-          <li>
-            {{ ua.area.nombre }}
-            {% if ua.es_principal %}<span class="badge badge--accent">Principal</span>{% endif %}
-          </li>
-        {% endfor %}
-      </ul>
-    {% else %}
-      <div class="empty-state"><p>Aún no tienes áreas asignadas.</p></div>
-    {% endif %}
-  </section>
+  <div class="perfil__cuerpo">
+    <aside class="perfil-id" aria-labelledby="perfil-nombre">
+      <div class="perfil-id__foto" aria-hidden="true">
+        <span>{{ usuario.get_full_name|default:usuario.get_username|slice:":1"|upper }}</span>
+        {% if usuario.google_foto_url %}<img src="{{ usuario.foto_grande }}" alt="" referrerpolicy="no-referrer">{% endif %}
+      </div>
 
-  <section class="card">
-    <h3>Unidades de negocio</h3>
-    {% if unidades_negocio %}
-      <ul class="plain-list">
-        {% for uu in unidades_negocio %}
-          <li>
-            {{ uu.unidad_negocio.nombre }}
-            {% if uu.es_principal %}<span class="badge badge--accent">Principal</span>{% endif %}
-          </li>
-        {% endfor %}
+      <div class="perfil-id__titulo">
+        <h1 id="perfil-nombre" class="perfil-id__nombre">{{ usuario.get_full_name|default:usuario.get_username }}</h1>
+        {% if perfil.cargo %}<p class="perfil-id__cargo">{{ perfil.cargo }}</p>{% endif %}
+        {% if area_principal or unidad_principal %}
+          <p class="perfil-id__ubicacion">{% if area_principal %}{{ area_principal.area.nombre }}{% endif %}{% if area_principal and unidad_principal %} · {% endif %}{% if unidad_principal %}{{ unidad_principal.unidad_negocio.nombre }}{% endif %}</p>
+        {% endif %}
+      </div>
+
+      <ul class="perfil-id__datos">
+        <li>{% include "components/icon.html" with name="mail" size="sm" %}<span class="sr-only">Correo: </span>{% if usuario.email %}<a href="mailto:{{ usuario.email }}">{{ usuario.email }}</a>{% else %}<span class="perfil-tenue">Sin correo</span>{% endif %}</li>
+        <li>{% include "components/icon.html" with name="phone" size="sm" %}<span class="sr-only">Teléfono: </span>{% if perfil.telefono %}{{ perfil.telefono }}{% else %}<span class="perfil-tenue">Sin teléfono</span>{% endif %}</li>
+        <li>{% include "components/icon.html" with name="user" size="sm" %}<span class="sr-only">Usuario: </span>{{ usuario.get_username }}</li>
+        <li>{% if usuario.google_sub %}{% include "components/icon.html" with name="shield" size="sm" %}Cuenta vinculada con Google{% else %}{% include "components/icon.html" with name="key" size="sm" %}Usuario y contraseña{% endif %}</li>
+        <li>{% include "components/icon.html" with name="calendar" size="sm" %}En {{ sistema.nombre }} desde {{ usuario.date_joined|date:"F \d\e Y" }}</li>
       </ul>
-    {% else %}
-      <div class="empty-state"><p>Aún no tienes unidades de negocio asignadas.</p></div>
-    {% endif %}
-  </section>
+
+      <section class="perfil-id__apariencia" aria-labelledby="perfil-apariencia">
+        <h2 id="perfil-apariencia" class="perfil-etiqueta-seccion">Apariencia</h2>
+        <form method="post" action="{% url 'core:apariencia' %}" class="perfil-modo">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+          {% for valor, etiqueta in apariencias %}
+            <button type="submit" name="apariencia" value="{{ valor }}" class="perfil-modo__opcion" aria-pressed="{% if usuario.apariencia == valor %}true{% else %}false{% endif %}">
+              {% if valor == "CLARO" %}{% include "components/icon.html" with name="sun" size="sm" %}{% elif valor == "OSCURO" %}{% include "components/icon.html" with name="moon" size="sm" %}{% else %}{% include "components/icon.html" with name="monitor" size="sm" %}{% endif %}<span>{{ etiqueta }}</span>
+            </button>
+          {% endfor %}
+        </form>
+        <p class="perfil-tenue perfil-nota">Solo para ti. «Automático» sigue tu dispositivo.</p>
+      </section>
+    </aside>
+
+    <div class="perfil-contenido">
+
+      <section class="perfil-seccion" aria-labelledby="perfil-org">
+        <h2 id="perfil-org" class="perfil-seccion__titulo">Mi organización</h2>
+        <dl class="perfil-org">
+          <div class="perfil-org__fila">
+            <dt>Áreas</dt>
+            <dd>{% for ua in areas %}<span class="perfil-pastilla{% if ua.es_principal %} perfil-pastilla--principal{% endif %}">{{ ua.area.nombre }}{% if ua.es_principal %}<small>Principal</small>{% endif %}</span>{% empty %}<span class="perfil-tenue">Sin áreas asignadas</span>{% endfor %}</dd>
+          </div>
+          <div class="perfil-org__fila">
+            <dt>Unidades</dt>
+            <dd>{% for uu in unidades_negocio %}<span class="perfil-pastilla{% if uu.es_principal %} perfil-pastilla--principal{% endif %}">{{ uu.unidad_negocio.nombre }}{% if uu.es_principal %}<small>Principal</small>{% endif %}</span>{% empty %}<span class="perfil-tenue">Sin unidades de negocio</span>{% endfor %}</dd>
+          </div>
+          <div class="perfil-org__fila">
+            <dt>Equipos</dt>
+            <dd>{% for equipo in equipos %}<span class="perfil-pastilla">{{ equipo.nombre }}</span>{% empty %}<span class="perfil-tenue">Aún no perteneces a ningún equipo</span>{% endfor %}</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="perfil-seccion" aria-labelledby="perfil-companeros">
+        <h2 id="perfil-companeros" class="perfil-seccion__titulo">Mis compañeros</h2>
+        {% for grupo in companeros %}
+          <div class="perfil-equipo">
+            <h3 class="perfil-etiqueta-seccion">{% if grupo.tipo == "area" %}Tu área · {% endif %}{{ grupo.nombre }} <span class="perfil-equipo__cuenta">{{ grupo.total }}</span></h3>
+            <ul class="perfil-personas">
+              {% for persona in grupo.personas %}
+                <li class="perfil-persona">
+                  <span class="perfil-persona__foto" aria-hidden="true">
+                    <span>{{ persona.get_full_name|default:persona.get_username|slice:":1"|upper }}</span>
+                    {% if persona.google_foto_url %}<img src="{{ persona.foto_mediana }}" alt="" referrerpolicy="no-referrer" loading="lazy">{% endif %}
+                  </span>
+                  <span class="perfil-persona__nombre">{{ persona.get_full_name|default:persona.get_username }}</span>
+                  {% if persona.perfil_organizacional.cargo %}<span class="perfil-persona__cargo">{{ persona.perfil_organizacional.cargo }}</span>{% endif %}
+                </li>
+              {% endfor %}
+              {% if grupo.restantes %}<li class="perfil-persona perfil-persona--mas"><span class="perfil-persona__foto" aria-hidden="true"><span>+{{ grupo.restantes }}</span></span><span class="perfil-persona__nombre">y {{ grupo.restantes }} más</span></li>{% endif %}
+            </ul>
+          </div>
+        {% empty %}
+          <p class="perfil-tenue">Cuando formes parte de un equipo o un área, aquí verás a tus compañeros.</p>
+        {% endfor %}
+      </section>
+
+      <section class="perfil-seccion" aria-labelledby="perfil-accesos">
+        <h2 id="perfil-accesos" class="perfil-seccion__titulo">Últimos accesos</h2>
+        {% if accesos %}
+          <ol class="perfil-linea">
+            {% for acceso in accesos %}
+              <li class="perfil-linea__item{% if acceso.es_esta_sesion %} perfil-linea__item--actual{% endif %}">
+                <span class="perfil-linea__icono" aria-hidden="true">{% if acceso.es_movil %}{% include "components/icon.html" with name="smartphone" size="sm" %}{% else %}{% include "components/icon.html" with name="monitor" size="sm" %}{% endif %}</span>
+                <span class="perfil-linea__texto">
+                  <span class="perfil-linea__dispositivo">{% if acceso.navegador or acceso.sistema_operativo %}{{ acceso.navegador|default:"Navegador" }}{% if acceso.sistema_operativo %} en {{ acceso.sistema_operativo }}{% endif %}{% else %}Dispositivo no identificado{% endif %}{% if acceso.es_esta_sesion %}<span class="perfil-linea__actual">Esta sesión</span>{% endif %}</span>
+                  <span class="perfil-linea__detalle">{% if acceso.metodo == "GOOGLE" %}Con Google{% else %}Con usuario y contraseña{% endif %} · <time datetime="{{ acceso.fecha|date:'c' }}" title="{{ acceso.fecha|date:'j \d\e F \d\e Y, H:i' }}">{{ acceso.fecha|date:"j M Y, H:i" }}</time></span>
+                </span>
+              </li>
+            {% endfor %}
+          </ol>
+          <p class="perfil-tenue perfil-nota">¿No reconoces un acceso? Avisa al equipo de tecnología.</p>
+        {% else %}
+          <p class="perfil-tenue">Tus próximos inicios de sesión aparecerán aquí.</p>
+        {% endif %}
+      </section>
+
+      {% comment %}CU-037 — preferencias de correo por grupo. Siempre se avisa en la plataforma; lo que exige una acción siempre llega por correo.{% endcomment %}
+      <section class="perfil-seccion" id="notificaciones" aria-labelledby="perfil-notificaciones">
+        <h2 id="perfil-notificaciones" class="perfil-seccion__titulo">Avisos por correo</h2>
+        <p class="perfil-tenue perfil-nota">Siempre verás tus avisos en la campana de {{ sistema.nombre }}. Elige cuáles quieres recibir también por correo; lo que exige una acción tuya llega siempre.</p>
+        <form method="post" action="{% url 'notificaciones:preferencias' %}" class="perfil-avisos">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{% url 'core:perfil' %}#notificaciones">
+          {% for p in notif_preferencias %}
+            <label class="switch perfil-avisos__fila">
+              <input type="checkbox" name="correo_{{ p.grupo }}"{% if p.correo %} checked{% endif %}>
+              <span class="switch__track" aria-hidden="true"></span>
+              <span class="perfil-avisos__texto"><span class="perfil-avisos__nombre">{{ p.etiqueta }}</span><span class="perfil-tenue">{{ p.descripcion }}</span></span>
+            </label>
+          {% endfor %}
+          <div><button type="submit" class="btn btn--secondary btn--sm">Guardar preferencias</button></div>
+        </form>
+      </section>
+
+    </div>
+  </div>
+</article>
 {% endblock %}

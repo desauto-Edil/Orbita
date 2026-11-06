@@ -1,0 +1,64 @@
+{% comment %}
+  Edición de UN ítem dentro del espacio (Bloque 3 / 3.1): solo las columnas que la persona puede modificar
+  (`ficha_edicion.celdas_valor` / `celdas_archivo`); el resto se muestra como referencia. Espera `ficha_edicion`,
+  `elemento`, `ticket` y `aqui`. Las operaciones (`elemento_guardar`, `elemento_archivo_*`, `elemento_version`)
+  vuelven a autorizar bajo lock.
+{% endcomment %}
+<div class="esp-item{% if en_accion %} esp-item--en-accion{% endif %}">
+  <h4 class="esp-guia__titulo">{{ ficha_edicion.nombre_elemento }} #{{ elemento.numero }}</h4>
+  <dl class="esp-item__datos">
+    {% for celda in ficha_edicion.celdas %}
+      {% if not celda.editable %}<dt>{{ celda.campo.etiqueta }}</dt><dd>{{ celda.texto|default:"—" }}</dd>{% endif %}
+    {% endfor %}
+  </dl>
+  {% if ficha_edicion.celdas_valor %}
+    <form method="post" action="{% url 'tickets:elemento_guardar' ticket.pk elemento.pk %}" class="form" id="ficha-form-{{ elemento.pk }}">
+      {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}"><input type="hidden" name="elemento" value="{{ elemento.pk }}">
+      {% include "tickets/_parrilla_campos.html" with celdas=ficha_edicion.celdas_valor %}
+      {# Dentro de una actividad, los botones viven en la barra de acciones (`form=`): Guardar borrador · avanzar. #}
+      {% if not en_accion %}
+        <div class="form-actions">
+          <button type="submit" class="btn btn--secondary">{% if ficha_edicion.enviable %}Guardar borrador{% else %}Guardar cambios{% endif %}</button>
+          {% if ficha_edicion.enviable %}
+            {# Guarda, valida lo que se exige y envía en una sola operación (`recorridos.enviar_elemento`). #}
+            <button type="submit" class="btn btn--primary" formaction="{% url 'tickets:elemento_enviar' ticket.pk elemento.pk %}">Enviar a aprobación</button>
+          {% endif %}
+        </div>
+      {% endif %}
+    </form>
+  {% endif %}
+  {% for celda in ficha_edicion.celdas_archivo %}
+    <div class="esp-archivo">
+      <p class="esp-archivo__titulo">{{ celda.campo.etiqueta }}{% if celda.obligatorio %} <abbr title="Obligatorio">*</abbr>{% endif %}</p>
+      <ul class="plain-list">
+        {% for archivo in celda.archivos %}
+          <li>
+            <a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a>
+            <form method="post" action="{% url 'tickets:elemento_archivo_retirar' ticket.pk archivo.pk %}" class="esp-inline-mini">
+              {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+              <button type="submit" class="btn btn--ghost btn--sm">Retirar</button>
+            </form>
+          </li>
+        {% empty %}
+          <li class="text-muted">Sin archivo.</li>
+        {% endfor %}
+      </ul>
+      <form method="post" enctype="multipart/form-data" action="{% url 'tickets:elemento_archivo_adjuntar' ticket.pk elemento.pk celda.campo.pk %}" class="esp-inline">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+        <input type="file" name="archivo" required aria-label="{{ celda.campo.etiqueta }}">
+        <button type="submit" class="btn btn--secondary btn--sm">Adjuntar</button>
+      </form>
+    </div>
+  {% endfor %}
+  {% if ficha_edicion.celdas_valor or ficha_edicion.celdas_archivo %}
+    <details class="esp-plegable">
+      <summary>Registrar una versión del ítem</summary>
+      <form method="post" action="{% url 'tickets:elemento_version' ticket.pk elemento.pk %}" class="esp-inline">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+        <input type="text" name="motivo" maxlength="200" placeholder="Motivo (opcional)" aria-label="Motivo de la versión">
+        <button type="submit" class="btn btn--ghost btn--sm">Registrar versión</button>
+      </form>
+    </details>
+  {% endif %}
+  <p class="ws-nota"><a href="{{ base }}?elemento={{ elemento.pk }}">Abrir la ficha completa del ítem</a></p>
+</div>

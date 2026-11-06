@@ -225,6 +225,8 @@ def _espera_de(bloque, tareas_activas):
     if bloque.tipo == BloqueOperativo.Tipo.RECORRIDO_ITEMS:
         return "Cada ítem hace su propio recorrido; espera a que no quede ninguno en curso."
     if bloque.tipo == BloqueOperativo.Tipo.GACETA:
+        if bloque.rama == BloqueOperativo.Rama.ITEM:
+            return "Presenta el ítem en la gaceta y espera a que lo aprueben; los demás ítems siguen a su ritmo."
         if (bloque.configuracion or {}).get("esperar", "RESOLUCION") == "RESOLUCION":
             return "Abre la gaceta y espera a que se resuelva."
         return "Abre la gaceta y continúa sin esperar."

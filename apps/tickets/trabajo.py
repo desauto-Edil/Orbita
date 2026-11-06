@@ -47,6 +47,35 @@ def tickets_a_cargo(usuario):
     )
 
 
+def tickets_para_tomar(usuario):
+    """La COLA: tickets que `usuario` puede tomar (o iniciar, si ya se dirigieron a su persona) AHORA, en orden de
+    llegada. La elegibilidad no se reimplementa: es `puede_tomar` / `puede_iniciar_atencion` (solo un ticket
+    RADICADO puede tomarse o iniciarse), y crear un ticket no es tener trabajo. Cada ticket queda anotado con
+    `puede_tomar_ahora` / `puede_iniciar_ahora`. La lista se calcula una vez por petición (la vista de la Cola y
+    el contador de su pestaña la comparten) y se guarda en el propio objeto `usuario` de esa petición."""
+    from apps.tickets.autorizacion import puede_iniciar_atencion, puede_tomar
+
+    guardada = getattr(usuario, "_orbita_cola_para_tomar", None)
+    if guardada is not None:
+        return guardada
+    candidatos = (
+        Ticket.objects.filter(estado=Ticket.Estado.RADICADO)
+        .select_related("detalle_servicio__servicio", "solicitante", "usuario_responsable", "equipo_responsable")
+        .prefetch_related("contextos_atencion")
+        .order_by("radicado_en", "pk")
+    )
+    para_tomar = []
+    for ticket in candidatos:
+        if ticket.solicitante_id == usuario.pk and ticket.usuario_responsable_id != usuario.pk:
+            continue  # crear un ticket no es tener trabajo
+        ticket.puede_tomar_ahora = puede_tomar(usuario, ticket)
+        ticket.puede_iniciar_ahora = puede_iniciar_atencion(usuario, ticket)
+        if ticket.puede_tomar_ahora or ticket.puede_iniciar_ahora:
+            para_tomar.append(ticket)
+    usuario._orbita_cola_para_tomar = para_tomar
+    return para_tomar
+
+
 def contexto_trabajo_actual(usuario, ticket):
     """4.E2 — qué trabajo tiene el Ticket ahora y dónde actuar: el bloque vigente de su ejecución,
     su situación y los enlaces a la Tarea / Aprobación / Entregable que corresponda (solo a quien

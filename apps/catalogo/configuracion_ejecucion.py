@@ -162,11 +162,15 @@ def validar_configuracion_ejecucion(version, *, exigir_plantilla_vigente=True):
             from apps.catalogo.models import DefinicionGaceta
 
             clave = cfg.get("gaceta") or ""
-            if not DefinicionGaceta.objects.filter(servicio=version.servicio, clave=clave, activa=True).exists():
+            definicion = DefinicionGaceta.objects.filter(servicio=version.servicio, clave=clave, activa=True).first()
+            if definicion is None:
                 errores.append(f"El bloque {bloque.nombre} no indica una gaceta activa del proceso.")
-            if cfg.get("esperar", "RESOLUCION") not in ("RESOLUCION", "NINGUNA"):
+            elif bloque.rama == BloqueOperativo.Rama.ITEM:
+                errores.extend(_errores_de_gaceta_por_item(bloque, definicion))
+            if bloque.rama != BloqueOperativo.Rama.ITEM and cfg.get("esperar", "RESOLUCION") not in ("RESOLUCION", "NINGUNA"):
                 errores.append(f"El bloque {bloque.nombre} tiene una espera no válida.")
         errores.extend(_errores_de_cierre_de_alcance(bloque, cfg))
+    errores.extend(_errores_de_espera_circular(version))
     # 4.G1: un Proceso con programación activa no puede depender de un solicitante humano.
     from apps.catalogo.programacion import (
         bloques_dirigidos_al_solicitante,
@@ -251,6 +255,17 @@ def _errores_de_referencias(bloque, cfg):
                 errores.append(
                     f"permite editar columnas que la colección recorrida no tiene ({', '.join(faltan)})."
                 )
+    # UX-4: columnas que deben estar completas para completar la actividad.
+    requeridas = actividades.normalizar(cfg)[0]["columnas_requeridas"]
+    if requeridas:
+        coleccion = _coleccion_del_recorrido(bloque)
+        if not coleccion:
+            errores.append("solo una actividad «para cada ítem» de un recorrido puede exigir columnas del ítem.")
+        else:
+            columnas = _columnas_de_coleccion(bloque.version.servicio, coleccion)
+            faltan = [clave for clave in requeridas if clave not in columnas]
+            if faltan:
+                errores.append(f"exige columnas que la colección recorrida no tiene ({', '.join(faltan)}).")
     return errores
 
 
@@ -299,6 +314,129 @@ def _errores_de_contenedor(bloque):
         columna = variable.split(".", 1)[1] if variable.startswith("item.") else ""
         if not columna or columna not in _columnas_de_coleccion(bloque.version.servicio, clave):
             errores.append(f"La condición de ingreso de «{bloque.nombre}» no usa una columna de la colección.")
+    # UX-4: ingreso al enviar (paso de entrada y columnas exigidas para enviar).
+    from apps.workflows.recorridos import errores_de_configuracion
+
+    errores.extend(
+        f"El recorrido «{bloque.nombre}»: {e[0].lower()}{e[1:]}"
+        for e in errores_de_configuracion(
+            cfg,
+            claves_bloques_item=[c.clave for c in contenidos if c.rama == BloqueOperativo.Rama.ITEM],
+            claves_columnas=set(_columnas_de_coleccion(bloque.version.servicio, clave)) if definicion is not None else None,
+        )
+    )
+    errores.extend(_errores_de_rutas_sobre_gaceta(bloque, contenidos))
+    return errores
+
+
+def _errores_de_gaceta_por_item(bloque, definicion):
+    """Bloque 5.1 — revisión colaborativa DEL ÍTEM (GACETA en la rama ITEM): la gaceta debe recibir ítems de la
+    colección que el recorrido recorre y respetar `errores_de_uso_por_item` (ingreso manual, sin resolución automática;
+    el periodo compartido con aceptación automática sí se admite)."""
+    from apps.catalogo.gacetas import errores_de_uso_por_item, normalizar
+
+    cfg, _ = normalizar(definicion.configuracion)
+    errores = []
+    coleccion = str((bloque.contenedor.configuracion or {}).get("coleccion") or "") if bloque.contenedor_id else ""
+    if coleccion and coleccion not in cfg["colecciones"]:
+        errores.append(
+            f"El paso {bloque.nombre} revisa los ítems en la gaceta «{definicion.nombre}», que no incluye la "
+            "colección que recorre el recorrido."
+        )
+    errores.extend(
+        f"El paso {bloque.nombre}: la gaceta «{definicion.nombre}» {e}." for e in errores_de_uso_por_item(cfg)
+    )
+    return errores
+
+
+def _errores_de_rutas_sobre_gaceta(contenedor, contenidos):
+    """Bloque 5.1 — un ítem participa UNA sola vez en cada gaceta (`ParticipacionItemGaceta` única): una ruta
+    del recorrido que vuelve atrás por encima de un paso de gaceta ya superado llevaría al ítem a un punto
+    anterior a su aprobación sin que la gaceta pudiera revisarlo de nuevo. Tampoco se repite la misma gaceta."""
+    pasos = sorted((c for c in contenidos if c.rama == BloqueOperativo.Rama.ITEM), key=lambda b: (b.orden, b.pk))
+    gacetas = [b for b in pasos if b.tipo == BloqueOperativo.Tipo.GACETA]
+    if not gacetas:
+        return []
+    errores = []
+    claves = [(b.configuracion or {}).get("gaceta") or "" for b in gacetas]
+    if len(set(claves)) != len(claves):
+        errores.append(f"El recorrido «{contenedor.nombre}» revisa los ítems dos veces en la misma gaceta.")
+    posicion = {b.pk: i for i, b in enumerate(pasos)}
+    for transicion in TransicionBloqueOperativo.objects.filter(
+        bloque_origen_id__in=posicion, bloque_destino_id__in=posicion
+    ).select_related("bloque_origen", "bloque_destino"):
+        origen, destino = posicion[transicion.bloque_origen_id], posicion[transicion.bloque_destino_id]
+        for gaceta in gacetas:
+            if destino <= posicion[gaceta.pk] < origen:
+                errores.append(
+                    f"La ruta de «{transicion.bloque_origen.nombre}» a «{transicion.bloque_destino.nombre}» vuelve "
+                    f"antes de la revisión «{gaceta.nombre}», que el ítem ya superó: la gaceta no lo revisa dos veces."
+                )
+    return errores
+
+
+def _errores_de_espera_circular(version):
+    """Bloque 5.4 (complemento del 5.3) — un bloque GACETA del flujo principal que ESPERA la resolución de una
+    gaceta y un recorrido por ítem que revisa sus ítems en esa MISMA gaceta: la gaceta no se resuelve mientras
+    falten ítems por llegar (5.3) y los ítems solo llegan cuando la principal ejecuta el recorrido. Si la
+    principal puede alcanzar la espera SIN haber pasado por el recorrido, ambas esperas quedan bloqueadas para
+    siempre. Se recorre el orden REAL del motor desde el primer bloque (`motor._primer_bloque_desde_fase`): un
+    bloque con rutas sigue solo sus rutas; uno sin rutas, la secuencia (`motor._siguiente_bloque_lineal`). Las
+    combinaciones en las que el recorrido siempre termina antes de la espera son válidas."""
+    from apps.workflows.motor import _primer_bloque_desde_fase, _siguiente_bloque_lineal
+
+    bloques = list(
+        version.bloques.select_related("contenedor").prefetch_related("transiciones_salientes__bloque_destino")
+    )
+    recorridos_por_gaceta = {}
+    for bloque in bloques:
+        if bloque.tipo == BloqueOperativo.Tipo.GACETA and bloque.rama == BloqueOperativo.Rama.ITEM and bloque.contenedor_id:
+            clave = (bloque.configuracion or {}).get("gaceta") or ""
+            recorridos_por_gaceta.setdefault(clave, {}).setdefault(bloque.contenedor_id, (bloque.contenedor, bloque))
+    esperas = [
+        b for b in bloques
+        if b.tipo == BloqueOperativo.Tipo.GACETA and b.contenedor_id is None
+        and (b.configuracion or {}).get("esperar", "RESOLUCION") == "RESOLUCION"
+        and ((b.configuracion or {}).get("gaceta") or "") in recorridos_por_gaceta
+    ]
+    if not esperas:
+        return []
+    fase_inicial = version.workflow_version.fases.filter(transiciones_entrantes__isnull=True).order_by("orden", "pk").first()
+    inicio = _primer_bloque_desde_fase(version, fase_inicial) if fase_inicial is not None else None
+    if inicio is None:
+        return []
+
+    def sucesores(bloque):
+        rutas = list(bloque.transiciones_salientes.all())
+        if rutas:
+            return [t.bloque_destino for t in rutas if not t.finaliza and t.bloque_destino_id]
+        siguiente = _siguiente_bloque_lineal(bloque)
+        return [siguiente] if siguiente is not None else []
+
+    def alcanzable_sin(destino, evitado):
+        pendientes, vistos = [inicio], set()
+        while pendientes:
+            actual = pendientes.pop()
+            if actual.pk in vistos or actual.pk == evitado.pk:
+                continue
+            if actual.pk == destino.pk:
+                return True
+            vistos.add(actual.pk)
+            pendientes.extend(sucesores(actual))
+        return False
+
+    errores = []
+    for espera in esperas:
+        clave = (espera.configuracion or {}).get("gaceta") or ""
+        for contenedor, paso in recorridos_por_gaceta[clave].values():
+            if alcanzable_sin(espera, contenedor):
+                errores.append(
+                    f"«{espera.nombre}» espera a que se resuelva la gaceta que el paso «{paso.nombre}» del recorrido "
+                    f"«{contenedor.nombre}» usa para revisar cada ítem, y el flujo puede llegar a esa espera antes de "
+                    "terminar el recorrido: la gaceta no se resuelve mientras falten ítems y los ítems no llegan "
+                    f"mientras el flujo espera. Mueve «{espera.nombre}» después del recorrido o cámbiala a "
+                    "«Continuar sin esperar»."
+                )
     return errores
 
 

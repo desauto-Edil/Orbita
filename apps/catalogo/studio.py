@@ -34,6 +34,13 @@ from django.utils import timezone
 
 from apps.catalogo import evaluacion
 from apps.catalogo import experiencia_proceso as proceso_ui
+from apps.catalogo.edicion_formulario import (
+    TIPOS_NO_ADMITIDOS_EN_ELEMENTOS,
+    TIPOS_SOLO_EN_ELEMENTOS,
+    guardar_campo,
+    guardar_opcion,
+    guardar_regla,
+)
 from apps.catalogo.entregables import configurar_definicion_entregable, retirar_definicion_entregable
 from apps.catalogo.revision_elementos import configuracion_de as configuracion_de_conjunto
 from apps.catalogo.revision_elementos import errores_de_version_de_columnas
@@ -183,12 +190,15 @@ from apps.workflows.variables import referencias_disponibles
 
 # Orden de la dependencia natural (4.E2): el formulario, luego lo que el servicio ENTREGA (los
 # bloques ENTREGABLE del flujo eligen entre esas definiciones) y por último el flujo.
-TABS = ("general", "entrada", "salida", "ejecucion", "publicacion")
+# Sprint 7 (adelanto): Notificaciones va después del Flujo porque sus avisos por etapa eligen entre sus fases y
+# actividades. Es opcional: sin configurar nada funcionan los avisos base (`apps.notificaciones.catalogo`).
+TABS = ("general", "entrada", "salida", "ejecucion", "notificaciones", "publicacion")
 TAB_LABELS = {
     "general": "Básico",
     "entrada": "Formulario",
     "ejecucion": "Flujo",
     "salida": "Salida",
+    "notificaciones": "Notificaciones",
     "publicacion": "Publicar",
 }
 # Fase 4.A — estados visibles de cada sección (las claves CSS se conservan: complete/optional/attention).
@@ -206,6 +216,8 @@ ETIQUETAS_BLOQUE_DISPLAY = {
     "GRUPO_ACTIVIDADES": "Actividades en paralelo", "RECORRIDO_ITEMS": "Recorrido por ítem", "GACETA": "Gaceta",
 }
 ETIQUETAS_RAMA = {"ITEM": "Para cada ítem", "GENERAL": "General, en paralelo"}
+# Bloque 5.1: el bloque GACETA dentro del recorrido de un ítem.
+ETIQUETA_GACETA_ITEM = "Revisión colaborativa del ítem"
 
 
 def _puede_catalogo(usuario):
@@ -932,7 +944,7 @@ def _leer_cierre_de_alcance(request, prefix, opciones):
 
 
 def _parsear_configuracion_bloque(
-    request, tipo, *, bloque_id=None, servicio=None, incluir_pk=None, version=None, errores=None
+    request, tipo, *, bloque_id=None, servicio=None, incluir_pk=None, version=None, errores=None, rama=""
 ):
     errores = errores if errores is not None else []
     prefix = f"bloque-{bloque_id}-config" if bloque_id else "nuevo-config"
@@ -948,7 +960,9 @@ def _parsear_configuracion_bloque(
     if tipo == "GRUPO_ACTIVIDADES":
         return {}, True
     if tipo == "GACETA":
-        form = GacetaBloqueForm(request.POST, prefix=prefix, gacetas=opciones["gacetas"])
+        form = GacetaBloqueForm(
+            request.POST, prefix=prefix, gacetas=opciones["gacetas"], por_item=rama == BloqueOperativo.Rama.ITEM
+        )
         if not form.is_valid():
             errores.extend(m for lista in form.errors.values() for m in lista)
             return {}, False
@@ -1174,15 +1188,10 @@ def _contexto_general(servicio, ev=None):
     }
 
 
-# Tipos que una columna de colección de ítems no admite. Vacío desde la Fase 1 del modelo configurable
-# (ARCHIVO se guarda como `Adjunto` de la rama ELEMENTO); se conserva el punto único por si otro tipo
-# deja de ser compatible.
-TIPOS_NO_ADMITIDOS_EN_ELEMENTOS = frozenset()
-
-
-# Fase 2 — tipos que solo tienen sentido en una columna de ítems (el responsable por equipo de un
-# recorrido); el formulario de inicio no los ofrece ni los acepta.
-TIPOS_SOLO_EN_ELEMENTOS = frozenset({"EQUIPO"})
+# Tipos que una columna de colección de ítems no admite (vacío desde la Fase 1: ARCHIVO se guarda como `Adjunto`
+# de la rama ELEMENTO) y tipos que solo existen en una columna de ítems (Fase 2: EQUIPO). Bloque 5.6: la regla
+# vive en `apps.catalogo.edicion_formulario` (`TIPOS_NO_ADMITIDOS_EN_ELEMENTOS`, `TIPOS_SOLO_EN_ELEMENTOS`), que
+# también la hace cumplir al guardar.
 
 
 def _sin_tipos_no_soportados(form):
@@ -1388,6 +1397,24 @@ def _fases_para_resumen(version):
     return list(version.fases.order_by("orden", "pk"))
 
 
+# Opciones de un bloque que el Studio todavía NO edita (UX-4): al guardar el bloque desde el Studio se CONSERVAN tal
+# como estaban, así la configuración publicada (p. ej. la lluvia de ideas que se envía completa) no se pierde.
+CONSERVADAS_AL_EDITAR = {
+    "RECORRIDO_ITEMS": ("ingreso", "paso_al_enviar", "columnas_requeridas_ingreso", "envio", "etapa_borradores"),
+    "ACTIVIDAD": ("columnas_requeridas",),
+}
+
+
+def conservar_opciones_sin_editor(tipo, anterior, nueva):
+    """`nueva` más las opciones de `anterior` que el Studio no edita para ese tipo de bloque (sin pisar lo que
+    `nueva` ya trae)."""
+    anterior = anterior or {}
+    for clave in CONSERVADAS_AL_EDITAR.get(tipo, ()):
+        if clave in anterior and clave not in nueva:
+            nueva[clave] = anterior[clave]
+    return nueva
+
+
 def _serializar_configuracion_bloque_operativo(tipo, config_kwargs):
     if tipo == "ACTIVIDAD":
         usuario = config_kwargs.get("usuario")
@@ -1566,6 +1593,8 @@ def _resumen_bloque_base(bloque, cfg):
     if bloque.tipo == BloqueOperativo.Tipo.GRUPO_ACTIVIDADES:
         return f"{bloque.contenidos.count()} actividad(es) en paralelo"
     if bloque.tipo == BloqueOperativo.Tipo.GACETA:
+        if bloque.rama == BloqueOperativo.Rama.ITEM:
+            return f"Gaceta «{cfg.get('gaceta') or 'sin elegir'}» · el ítem espera su aprobación"
         espera = "espera su resolución" if cfg.get("esperar", "RESOLUCION") == "RESOLUCION" else "sin esperar"
         return f"Gaceta «{cfg.get('gaceta') or 'sin elegir'}» · {espera}"
     if bloque.tipo == BloqueOperativo.Tipo.RECORRIDO_ITEMS:
@@ -1595,6 +1624,12 @@ def _resumen_bloque_base(bloque, cfg):
     return "Sin configurar"
 
 
+def _etiqueta_de_bloque(bloque):
+    if bloque.tipo == BloqueOperativo.Tipo.GACETA and bloque.rama == BloqueOperativo.Rama.ITEM:
+        return ETIQUETA_GACETA_ITEM
+    return ETIQUETAS_BLOQUE_DISPLAY.get(bloque.tipo, bloque.tipo)
+
+
 def _ramas_de(contenedor):
     """Fase 2 — qué se puede agregar dentro de un contenedor: `[(rama, etiqueta, [(tipo, etiqueta)])]`."""
     ramas = ["ITEM", "GENERAL"] if contenedor.tipo == BloqueOperativo.Tipo.RECORRIDO_ITEMS else ["GENERAL"]
@@ -1607,7 +1642,7 @@ def _bloque_operativo_para_presentacion(bloque, editable, bloques_entregable=(),
     fila = {
         "bloque": bloque,
         "tipo_empresarial": bloque.tipo,
-        "tipo_empresarial_display": ETIQUETAS_BLOQUE_DISPLAY.get(bloque.tipo, bloque.tipo),
+        "tipo_empresarial_display": _etiqueta_de_bloque(bloque),
         "resumen": _resumen_bloque_operativo(bloque),
         "es_contenedor": bloque.tipo in BloqueOperativo.TIPOS_CONTENEDOR,
         "rama_display": ETIQUETAS_RAMA.get(bloque.rama, ""),
@@ -1660,6 +1695,7 @@ def _bloque_operativo_para_presentacion(bloque, editable, bloques_entregable=(),
                 "esperar": cfg.get("esperar", "RESOLUCION"),
             },
             prefix=f"bloque-{bloque.pk}-config", gacetas=opciones["gacetas"],
+            por_item=bloque.rama == BloqueOperativo.Rama.ITEM,
         )
     elif bloque.tipo == BloqueOperativo.Tipo.RECORRIDO_ITEMS:
         fila["form_configurar"] = RecorridoConfigForm(
@@ -2080,7 +2116,8 @@ ETIQUETA_VERIFICACION = {LISTO: "Listo", ATENCION: "Requiere atención", OPCIONA
 CLASE_VERIFICACION = {LISTO: "complete", ATENCION: "attention", OPCIONAL: "optional"}
 
 
-DONDE = {"general": "Básico", "entrada": "Formulario", "salida": "Salida", "ejecucion": "Flujo", "publicacion": "Publicar"}
+DONDE = {"general": "Básico", "entrada": "Formulario", "salida": "Salida", "ejecucion": "Flujo",
+         "notificaciones": "Notificaciones", "publicacion": "Publicar"}
 
 
 def _fila(nombre, estado, lineas, tab, uso="", errores=(), donde=""):
@@ -2402,9 +2439,12 @@ def _estado_secciones(servicio, ev=None):
     general = estado_basico.agregado(ev.apartados_basico)
     if ev.bloqueos_de(evaluacion.GENERAL) and general[0] == ESTADO_COMPLETA:
         general = (ESTADO_ATENCION, "Requiere atención")
+    from apps.notificaciones import configuracion as notificaciones
+
     estados = {
         "general": general, "entrada": _estado_formulario(ev), "salida": _estado_salida(ev),
-        "ejecucion": _estado_flujo(ev), "publicacion": _estado_publicar(ev),
+        "ejecucion": _estado_flujo(ev), "notificaciones": notificaciones.estado(servicio),
+        "publicacion": _estado_publicar(ev),
     }
     return [
         {
@@ -2474,6 +2514,10 @@ def studio_view(request, pk):
         contexto.update(_contexto_entrada(servicio, uso, request.GET.get("coleccion") or None, ev))
     elif tab == "publicacion":
         contexto.update(_contexto_publicacion(servicio, request.user, ev))
+    elif tab == "notificaciones":
+        from apps.notificaciones.views_studio import contexto_studio
+
+        contexto.update(contexto_studio(servicio, request.GET.get("vista") or ""))
     else:
         contexto.update(_contexto_general(servicio, ev) if tab == "general" else constructores[tab](servicio))
     if tab == "general":
@@ -2763,18 +2807,17 @@ def studio_campo_guardar_view(request, pk, campo_id=None, uso=USO_ENTRADA):
     if not form.is_valid():
         messages.error(request, "Revisa el campo: " + _errores_de_form(form))
         return redirect(_volver_entrada(pk, uso, _coleccion(request)))
-    if uso != USO_PARRILLA and form.cleaned_data["tipo"] in TIPOS_SOLO_EN_ELEMENTOS:
-        messages.error(request, "Un campo de tipo equipo solo existe en las columnas de los elementos del proceso.")
-        return redirect(_volver_entrada(pk, uso, _coleccion(request)))
-    campo = form.save(commit=False)
-    campo.version = version
-    campo.configuracion = form.configuracion_desde_tipo(form.cleaned_data["tipo"])
+    datos = form.cleaned_data
     try:
-        campo.full_clean()
+        guardar_campo(
+            version, request.user, campo=instancia, en_elementos=uso == USO_PARRILLA,
+            tipo=datos["tipo"], etiqueta=datos["etiqueta"], clave=datos.get("clave") or "", ayuda=datos.get("ayuda") or "",
+            obligatorio=datos.get("obligatorio"), orden=datos.get("orden") or 0,
+            es_fecha_requerida=datos.get("es_fecha_requerida"), configuracion=form.configuracion_desde_tipo(datos["tipo"]),
+        )
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
         return redirect(_volver_entrada(pk, uso, _coleccion(request)))
-    campo.save()
     messages.success(request, "Campo guardado.")
     return redirect(_volver_entrada(pk, uso, _coleccion(request)))
 
@@ -2818,14 +2861,15 @@ def studio_opcion_guardar_view(request, pk, campo_id, opcion_id=None, uso=USO_EN
     if not form.is_valid():
         messages.error(request, "Revisa la opción: " + _errores_de_form(form))
         return redirect(_volver_entrada(pk, uso, _coleccion(request)))
-    opcion = form.save(commit=False)
-    opcion.campo = campo
+    datos = form.cleaned_data
     try:
-        opcion.full_clean()
+        guardar_opcion(
+            campo, request.user, opcion=instancia, valor=datos["valor"], etiqueta=datos["etiqueta"],
+            orden=datos.get("orden") or 0,
+        )
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
         return redirect(_volver_entrada(pk, uso, _coleccion(request)))
-    opcion.save()
     messages.success(request, "Opción guardada.")
     return redirect(_volver_entrada(pk, uso, _coleccion(request)))
 
@@ -2866,13 +2910,15 @@ def studio_regla_guardar_view(request, pk, regla_id=None):
     if not form.is_valid():
         messages.error(request, "Revisa la regla: " + _errores_de_form(form))
         return redirect(_volver(pk, "entrada"))
-    regla = form.save(commit=False)
+    datos = form.cleaned_data
     try:
-        regla.full_clean()
+        guardar_regla(
+            version, request.user, regla=instancia, campo_origen=datos["campo_origen"], operador=datos["operador"],
+            valor=datos.get("valor") or "", campo_objetivo=datos["campo_objetivo"], efecto=datos["efecto"],
+        )
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
         return redirect(_volver(pk, "entrada"))
-    regla.save()
     messages.success(request, "Regla guardada.")
     return redirect(_volver(pk, "entrada"))
 
@@ -3347,7 +3393,7 @@ def _h_bloque_operativo_guardar(request, servicio, bloque_id=None):
         tipo = general_form.cleaned_data["tipo"]
         errores = []
         config_kwargs, config_valido = _parsear_configuracion_bloque(
-            request, tipo, servicio=servicio, version=version, errores=errores
+            request, tipo, servicio=servicio, version=version, errores=errores, rama=rama
         )
         if not config_valido:
             messages.error(request, "; ".join(errores) or "Revise la configuracion del bloque.")
@@ -3417,7 +3463,7 @@ def _h_bloque_operativo_guardar(request, servicio, bloque_id=None):
     errores = []
     config_kwargs, config_valido = _parsear_configuracion_bloque(
         request, bloque.tipo, bloque_id=bloque_id, servicio=servicio, incluir_pk=bloque.definicion_entregable_id,
-        version=version, errores=errores,
+        version=version, errores=errores, rama=bloque.rama,
     )
     if not config_valido:
         messages.error(request, "; ".join(errores) or "Revise la configuracion del bloque.")
@@ -3425,7 +3471,9 @@ def _h_bloque_operativo_guardar(request, servicio, bloque_id=None):
     extra = {}
     if bloque.tipo == BloqueOperativo.Tipo.APROBACION:
         extra["entregable_revisado"] = config_kwargs.get("entregable_revisado")  # None = aprobación general
-    configuracion = _serializar_configuracion_bloque_operativo(bloque.tipo, config_kwargs)
+    configuracion = conservar_opciones_sin_editor(
+        bloque.tipo, bloque.configuracion, _serializar_configuracion_bloque_operativo(bloque.tipo, config_kwargs)
+    )
     cierre = _leer_cierre_de_alcance(request, f"bloque-{bloque_id}-config", _opciones_bloques(servicio))
     if cierre:
         configuracion["cierra_alcance"] = cierre

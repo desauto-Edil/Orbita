@@ -1,12 +1,14 @@
-"""Pantallas de gacetas — Fase 3. Una sola página por gaceta reúne la revisión: ítems, evidencias, versiones,
-observaciones, correcciones y resultados. Las DECISIONES (aprobar, devolver, rechazar, excluir) se registran en la
-pantalla de la aprobación de siempre (`aprobaciones:detalle`), no aquí: no se duplica la operación. Cada acción es
-la operación de dominio, que revalida permisos y estado bajo lock."""
+"""Acciones de gacetas — Fase 3. La gaceta se VE dentro del espacio del ticket (galería de piezas, visor y menú
+«Coordinar»; `tickets:espacio`); la página propia de la gaceta se retiró y su URL redirige allí. Aquí quedan solo
+las acciones (observar, responder, reenviar, excluir, presentar, cerrar el periodo, resolver): cada una es la
+operación de dominio, que revalida permisos y estado bajo lock, y vuelve a la pantalla de origen (`next`) o a la
+gaceta dentro del ticket."""
 
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.shortcuts import get_object_or_404, render
+from django.shortcuts import get_object_or_404, redirect, render
+from django.urls import reverse
 from django.views.decorators.http import require_GET, require_POST
 
 from apps.core.redirecciones import volver_a
@@ -26,6 +28,11 @@ def _gaceta_visible(request, pk):
     return gaceta
 
 
+def _en_el_ticket(gaceta):
+    """La gaceta dentro del espacio de su ticket (su única vista)."""
+    return reverse("tickets:espacio", args=[gaceta.ticket_id]) + f"#gaceta-{gaceta.pk}"
+
+
 def _ejecutar(request, gaceta_pk, accion, exito):
     try:
         accion()
@@ -33,7 +40,10 @@ def _ejecutar(request, gaceta_pk, accion, exito):
         messages.error(request, _mensaje(exc))
     else:
         messages.success(request, exito)
-    return volver_a(request, "gacetas:detalle", gaceta_pk)
+    destino = request.POST.get("next") or ""
+    if destino.startswith("/"):
+        return volver_a(request, "tickets:mis_tickets")
+    return redirect(_en_el_ticket(GacetaTicket.objects.only("pk", "ticket_id").get(pk=gaceta_pk)))
 
 
 @login_required
@@ -46,10 +56,10 @@ def lista_view(request):
 @login_required
 @require_GET
 def detalle_view(request, pk):
+    """La página propia de la gaceta se retiró: enlaces viejos y avisos llevan a la gaceta dentro del ticket (la
+    misma autorización: quien consulta la gaceta entra al espacio por su relación con ella)."""
     gaceta = _gaceta_visible(request, pk)
-    contexto = consultas.detalle(request.user, gaceta)
-    contexto["titulo_pagina"] = f"{gaceta.nombre} — {gaceta.ticket.codigo or gaceta.ticket.pk}"
-    return render(request, "gacetas/detalle.html", contexto)
+    return redirect(_en_el_ticket(gaceta))
 
 
 @login_required

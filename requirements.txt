@@ -8,6 +8,14 @@ redis>=5.0,<6
 django-celery-beat>=2.7,<3
 django-environ>=0.11,<1
 whitenoise>=6.7,<7
+Authlib>=1.7,<2
+requests>=2.32,<3
+google-auth[requests]>=2.38,<3
+# Conversación del ticket en tiempo real (WebSocket): Django Channels con Redis como capa de canales y Daphne como
+# servidor ASGI (también lo usa `runserver` en desarrollo). En producción el servidor debe ser ASGI.
+channels>=4.2,<5
+channels-redis>=4.2,<5
+daphne>=4.1,<5
 
 # Cargadas condicionalmente en settings.py solo cuando DEBUG=True
 django-debug-toolbar>=4.4,<5

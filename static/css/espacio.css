@@ -1,0 +1,1114 @@
+/* Órbita UI — vistas operativas (UX-1 · UX-2 · UX-3): Mi trabajo, Cola, Mis tickets y espacio del Ticket.
+   Una sola escala: superficies blancas con borde fino sobre el fondo gris, filas compactas, tipografía de
+   tokens (página 24 · actividad 20 · sección 18 · cuerpo 14 · etiquetas 12–13; pesos 400/500/600), cifras
+   tabulares y lima SOLO en la acción principal (`.btn--primary`). Usa únicamente tokens semánticos y los
+   componentes existentes (btn, badge, estado-etiqueta, tabs, segmented, search, progress, field, table).
+
+   Breakpoints: escritorio amplio ≥1280 · portátil 1024–1279 · tableta 640–1023 · móvil <640. */
+
+/* ===================================================================== */
+/* 1. Piezas comunes                                                     */
+/* ===================================================================== */
+
+.op-cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-2) var(--space-5);
+}
+
+.op-cabecera__titulo {
+  margin: 0;
+  font-size: var(--font-size-page-title);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: -0.01em;
+}
+
+.op-cabecera .tabs { border-bottom: 0; }
+
+.op-cabecera__sub {
+  flex-basis: 100%;
+  margin: 0;
+  max-width: var(--measure-text);
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+}
+
+.op-barra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.op-barra__buscar { flex: 1 1 260px; max-width: 420px; }
+.op-barra .segmented { max-width: 100%; overflow-x: auto; overflow-y: hidden; }
+
+.op-seccion {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-1);
+  margin: 0 0 var(--space-2);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+}
+
+/* Superficie única (sustituye a `card` dentro de estas vistas). */
+.esp-superficie,
+.esp-trabajo .card,
+.esp-tarea,
+.esp-reposo,
+.esp-contexto,
+.esp-derecho {
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: none;
+}
+
+.esp-superficie,
+.esp-trabajo .card {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+}
+
+.esp-superficie > h2,
+.esp-superficie > h3,
+.esp-trabajo .card > h3 {
+  margin: 0;
+  font-size: var(--font-size-section-title);
+}
+
+/* Subtítulo de un bloque dentro de una superficie (lista de verificación, evidencias, archivos…). */
+.esp-guia__titulo,
+.esp-subtitulo {
+  margin: 0;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+}
+
+/* El estado del ticket usa el componente global `.estado-etiqueta` (components.css §4.1). */
+
+/* ===================================================================== */
+/* 2. Listas operativas: Mi trabajo y Mis tickets (fila = enlace)        */
+/* ===================================================================== */
+
+.bj { display: grid; }
+.bj + .bj { margin-top: var(--space-5); }
+
+.bj-lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.bj-lista > li + li { border-top: 1px solid var(--border-subtle); }
+
+/* Toda la fila es UN enlace: se abre con clic o con Tab + Enter. */
+.bj-fila {
+  display: grid;
+  grid-template-columns: minmax(0, 2.4fr) minmax(0, 2fr) minmax(112px, 0.7fr) minmax(64px, 0.45fr) 16px;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+  text-decoration: none;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+
+.bj-fila:hover { background: var(--surface-hover); }
+.bj-fila:focus-visible { outline: none; box-shadow: inset var(--ring-focus); background: var(--surface-hover); }
+
+/* «Requiere atención»: una marca discreta en el nombre, no una franja ni un botón verde. */
+.bj-fila--atencion .bj-fila__nombre::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin: 0 var(--space-2) 2px 0;
+  border-radius: 50%;
+  background: var(--text-primary);
+  vertical-align: middle;
+}
+
+.bj-fila__ticket { display: grid; gap: 2px; min-width: 0; }
+
+.bj-fila__nombre {
+  font-size: var(--font-size-body);
+  font-weight: var(--font-weight-semibold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bj-fila__secundario {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0 var(--space-2);
+  min-width: 0;
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.bj-fila__secundario > * + *::before { content: "·"; margin-right: var(--space-2); }
+
+.bj-fila__siguiente { display: flex; align-items: baseline; gap: var(--space-2); min-width: 0; }
+
+.bj-fila__accion-texto {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: var(--font-weight-medium);
+}
+
+.bj-fila__accion-texto.is-espera { font-weight: var(--font-weight-regular); color: var(--text-secondary); }
+
+.bj-fila__mas {
+  flex: none;
+  padding: 0 var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  font-size: var(--font-size-caption);
+  color: var(--text-secondary);
+}
+
+.bj-fila__vence { color: var(--text-secondary); white-space: nowrap; text-align: right; }
+.bj-fila__vence.is-vencido { color: var(--status-danger); font-weight: var(--font-weight-semibold); }
+.bj-fila__vence.is-por-vencer { color: var(--status-warning); font-weight: var(--font-weight-semibold); }
+
+.bj-fila__ir { display: inline-flex; color: var(--text-muted); }
+.bj-fila:hover .bj-fila__ir { color: var(--text-primary); }
+
+.bj-sueltos { margin-top: var(--space-5); font-size: var(--font-size-small); }
+
+.bj-sueltos > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-weight: var(--font-weight-medium);
+}
+
+.bj-sueltos[open] > summary { margin-bottom: var(--space-3); }
+
+/* --- Cola: misma lista, con posición y las acciones de tomar --- */
+
+.cola-fila {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 2.2fr) minmax(0, 1.6fr) minmax(0, 1.2fr) minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  font-size: var(--font-size-small);
+}
+
+.cola-fila + .cola-fila { border-top: 1px solid var(--border-subtle); }
+
+.cola-fila__pos {
+  width: 28px;
+  height: 28px;
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+  font-variant-numeric: var(--font-numeric);
+}
+
+.cola-fila .bj-fila__ticket { gap: 2px; }
+.cola-fila__nombre { font-size: var(--font-size-body); font-weight: var(--font-weight-semibold); overflow-wrap: anywhere; }
+.cola-fila .bj-fila__codigo { order: 2; font-size: var(--font-size-caption); color: var(--text-muted); font-variant-numeric: var(--font-numeric); }
+
+.cola-fila__meta,
+.cola-fila__estado,
+.cola-fila__objetivo { display: grid; gap: 2px; min-width: 0; font-variant-numeric: var(--font-numeric); }
+
+.cola-fila__alerta { font-size: var(--font-size-caption); color: var(--status-warning); }
+.cola-fila__objetivo { justify-items: start; }
+
+.cola-fila__acciones { display: flex; flex-wrap: wrap; gap: var(--space-2); justify-content: flex-end; }
+.cola-fila__acciones form { margin: 0; }
+
+/* Con el resumen abierto la lista se estrecha: se pliega lo secundario. */
+.work-split.has-preview .cola-fila { grid-template-columns: 32px minmax(0, 1.6fr) minmax(0, 1fr) auto; }
+.work-split.has-preview .cola-fila__meta,
+.work-split.has-preview .cola-fila__objetivo { display: none; }
+
+/* ===================================================================== */
+/* 3. Espacio del ticket: contexto · trabajo · panel opcional            */
+/* ===================================================================== */
+
+.esp {
+  display: grid;
+  grid-template-columns: 256px minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+.esp--con-panel { grid-template-columns: 256px minmax(0, 1fr) minmax(320px, 380px); }
+
+/* --- A. Contexto --- */
+
+.esp-contexto {
+  position: sticky;
+  top: calc(var(--header-h) + var(--space-3));
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
+}
+
+.esp-contexto__volver {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+
+.esp-contexto__volver:hover { color: var(--text-primary); }
+
+.esp-contexto__id { display: grid; gap: var(--space-1); }
+.esp-contexto__id > * { margin: 0; }
+
+.esp-contexto__codigo {
+  order: 2;
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+  font-variant-numeric: var(--font-numeric);
+}
+
+.esp-contexto__nombre {
+  order: 1;
+  font-size: var(--font-size-section-title);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  overflow-wrap: anywhere;
+}
+
+.esp-contexto__etiqueta { order: 3; font-size: var(--font-size-small); color: var(--text-secondary); }
+.esp-contexto__estado { order: 4; margin-top: var(--space-1) !important; }
+
+.esp-contexto__datos { margin: 0; display: grid; gap: var(--space-3); font-size: var(--font-size-small); }
+.esp-contexto__datos div { display: grid; gap: 2px; }
+.esp-contexto__datos dt { font-size: var(--font-size-caption); color: var(--text-muted); }
+.esp-contexto__datos dd { margin: 0; color: var(--text-primary); overflow-wrap: anywhere; font-variant-numeric: var(--font-numeric); }
+
+.esp-contexto__progreso p { margin: var(--space-1) 0 0; font-size: var(--font-size-caption); color: var(--text-secondary); font-variant-numeric: var(--font-numeric); }
+
+.esp-contexto__mas {
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border-subtle);
+  font-size: var(--font-size-small);
+}
+
+.esp-contexto__mas > summary { cursor: pointer; color: var(--text-secondary); font-weight: var(--font-weight-medium); }
+.esp-contexto__mas[open] > summary { margin-bottom: var(--space-3); }
+
+.esp-contexto__enlaces { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); margin: var(--space-3) 0 0; }
+
+/* --- B. Trabajo --- */
+
+.esp-trabajo { min-width: 0; display: grid; gap: var(--space-4); align-content: start; }
+
+.esp-barra {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.esp-tabs { border-bottom: 0; min-width: 0; }
+
+.esp-mas { position: relative; flex: none; padding-bottom: var(--space-1); }
+.esp-mas > summary { list-style: none; cursor: pointer; }
+.esp-mas > summary::-webkit-details-marker { display: none; }
+
+.esp-mas__panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + var(--space-2));
+  z-index: var(--z-popover);
+  width: min(360px, calc(100vw - 2 * var(--space-4)));
+  display: grid;
+  gap: var(--space-4);
+  padding: var(--space-4);
+  background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-float);
+}
+
+/* Selector compacto de acciones (varias pendientes) */
+.esp-selector { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+.esp-selector__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  min-height: var(--control-h-sm);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  transition: border-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+
+.esp-selector__item:hover { border-color: var(--border-strong); color: var(--text-primary); }
+.esp-selector__item:focus-visible { outline: none; box-shadow: var(--ring-focus); }
+.esp-selector__item.is-selected { border-color: var(--text-primary); color: var(--text-primary); font-weight: var(--font-weight-semibold); }
+.esp-selector__titulo { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.esp-selector__meta { flex: none; font-size: var(--font-size-caption); color: var(--text-muted); font-variant-numeric: var(--font-numeric); }
+
+/* --- La actividad: una sola superficie; el formulario es el protagonista --- */
+
+.esp-actividad { display: grid; gap: var(--space-3); }
+
+.esp-tarea {
+  display: grid;
+  gap: var(--space-5);
+  padding: clamp(var(--space-4), 2vw, var(--space-6));
+}
+
+.esp-tarea__cabeza { display: grid; gap: var(--space-1); max-width: var(--measure-text); }
+.esp-tarea__cabeza > * { margin: 0; }
+
+.esp-tarea__contexto { font-size: var(--font-size-caption); color: var(--text-muted); }
+
+.esp-tarea__titulo,
+.esp-panel__titulo {
+  margin: 0;
+  font-size: var(--font-size-activity-title);
+  font-weight: var(--font-weight-semibold);
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.01em;
+}
+
+.esp-panel__cabeza { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); flex-wrap: wrap; }
+.esp-panel__cabeza p { margin: var(--space-1) 0 0; }
+
+.esp-tarea__instruccion { color: var(--text-secondary); margin-top: var(--space-1) !important; }
+
+.esp-tarea__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-4);
+  margin-top: var(--space-2) !important;
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+  font-variant-numeric: var(--font-numeric);
+}
+
+.esp-vence { display: inline-flex; align-items: center; gap: var(--space-1); font-weight: var(--font-weight-medium); color: var(--text-primary); white-space: nowrap; }
+
+.esp-aviso {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  max-width: var(--measure-text);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--status-warning-soft);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+}
+
+.esp-aviso p { margin: 0; }
+.esp-aviso svg { flex: none; margin-top: 2px; color: var(--status-warning); }
+
+/* Lo que falta para completar: una línea compacta, junto a la acción. */
+.esp-requisitos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.esp-requisito {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  font-size: var(--font-size-small);
+  color: var(--text-primary);
+}
+
+.esp-requisito__marca { flex: none; width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--status-warning); }
+.esp-requisito--regla { color: var(--text-secondary); }
+.esp-requisito--regla .esp-requisito__marca { border-color: var(--text-muted); border-style: dashed; }
+
+/* Cuerpo: formularios a lo ancho disponible, en rejilla (campos cortos lado a lado; textos largos a todo el ancho). */
+.esp-tarea__cuerpo { display: grid; gap: var(--space-5); min-width: 0; max-width: 960px; }
+
+.esp-tarea__cuerpo .form {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-4) var(--space-5);
+  align-items: start;
+}
+
+.esp-tarea__cuerpo .form > :not(.field),
+.esp-tarea__cuerpo .form > .field:has(textarea),
+.esp-tarea__cuerpo .form > .field:has(select[multiple]) { grid-column: 1 / -1; }
+
+.esp-tarea__cuerpo .form > .field { margin: 0; }
+.esp-tarea__cuerpo .card { padding: 0; border: 0; background: transparent; }
+.esp-tarea__cuerpo .card > h3 { display: none; } /* la actividad ya lleva el título */
+.esp-item--en-accion > .esp-guia__titulo { display: none; }
+
+/* Barra de acciones: Guardar (secundario) · Completar (lima). Fija al pie mientras el formulario es largo. */
+.esp-panel__pie,
+.esp-tarea .form-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin: 0;
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+}
+
+.esp-panel__pie form { margin: 0; }
+.esp-panel__pie-secundario { margin-left: auto; }
+.esp-panel__nota { flex-basis: 100%; margin: 0; font-size: var(--font-size-caption); color: var(--text-muted); }
+
+.esp-despues {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: calc(-1 * var(--space-3)) 0 0;
+  font-size: var(--font-size-small);
+  color: var(--text-secondary);
+}
+
+.esp-despues svg { flex: none; margin-top: 2px; color: var(--text-muted); }
+.esp-despues__etiqueta { font-weight: var(--font-weight-medium); color: var(--text-primary); }
+
+.ws-ahora__dato { margin: 0; font-size: var(--font-size-small); color: var(--text-secondary); }
+
+/* Sin acciones: estado en reposo */
+.esp-reposo { display: grid; gap: var(--space-3); padding: var(--space-5); }
+.esp-reposo p { margin: 0; max-width: var(--measure-text); }
+
+.esp-pasos {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+}
+
+.esp-pasos__paso { display: inline-flex; align-items: center; gap: var(--space-2); }
+
+.esp-pasos__marca {
+  width: 18px;
+  height: 18px;
+  display: inline-grid;
+  place-items: center;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  font-size: 10px;
+}
+
+.esp-pasos__paso--completada { color: var(--text-secondary); }
+.esp-pasos__paso--completada .esp-pasos__marca { border-color: var(--status-success); background: var(--status-success); color: var(--text-on-inverse); }
+.esp-pasos__paso--actual { color: var(--text-primary); font-weight: var(--font-weight-semibold); }
+.esp-pasos__paso--actual .esp-pasos__marca { border-color: var(--text-primary); background: var(--accent); }
+
+/* --- Piezas de las acciones (sin cambios de comportamiento) --- */
+
+.esp-verificacion { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-2); }
+.esp-verificacion li { display: flex; gap: var(--space-2); align-items: center; }
+.esp-verificacion form { margin: 0; }
+
+.esp-check {
+  width: 22px;
+  height: 22px;
+  display: inline-grid;
+  place-items: center;
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-sm);
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font-size: var(--font-size-caption);
+  cursor: pointer;
+}
+
+.esp-check.is-on { background: var(--status-success-soft); border-color: var(--status-success); }
+.esp-check:focus-visible { outline: none; box-shadow: var(--ring-focus); }
+
+.esp-inline { display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center; margin: 0; }
+.esp-inline input[type="text"] { flex: 1 1 200px; }
+.esp-inline-mini { display: inline; margin: 0; }
+
+.esp-plegable > summary {
+  cursor: pointer;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  color: var(--text-secondary);
+}
+
+.esp-plegable[open] > summary { margin-bottom: var(--space-3); }
+
+.esp-decision__opciones {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
+}
+
+.esp-decision__opciones legend {
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: var(--space-2);
+}
+
+.esp-cierre { display: grid; gap: var(--space-3); }
+
+/* Piezas dentro de una actividad: separadas por espacio y, cuando son referencia (lo que se revisa), por un fondo
+   hundido — nunca una tarjeta dentro de otra. */
+.esp-item,
+.esp-pieza { display: grid; gap: var(--space-3); }
+
+.esp-revisado {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.esp-pieza + .esp-pieza { padding-top: var(--space-4); border-top: 1px solid var(--border-subtle); }
+
+.esp-revisado__texto { margin: 0; }
+
+.esp-item__datos {
+  margin: 0;
+  display: grid;
+  grid-template-columns: minmax(110px, max-content) 1fr;
+  gap: var(--space-1) var(--space-4);
+  font-size: var(--font-size-small);
+}
+
+.esp-item__datos dt { color: var(--text-muted); }
+.esp-item__datos dd { margin: 0; overflow-wrap: anywhere; }
+
+.esp-archivo { display: grid; gap: var(--space-2); }
+.esp-archivo__titulo { margin: 0; font-size: var(--font-size-small); font-weight: var(--font-weight-medium); }
+
+.esp-piezas { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); }
+
+.esp-observaciones,
+.esp-historia,
+.esp-lista-simple {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+  font-size: var(--font-size-small);
+}
+
+.esp-observaciones li { padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); background: var(--surface-sunken); }
+.esp-historia p { margin: var(--space-1) 0 0; }
+
+/* --- Elementos --- */
+
+.esp-coleccion__cabeza { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: var(--space-2); }
+.esp-coleccion__cabeza h2 { margin: 0; }
+.esp-coleccion__cabeza p { margin: 0; font-size: var(--font-size-small); }
+
+/* Las tablas extensas se desplazan dentro del componente, nunca la página. */
+.esp-tabla { overflow-x: auto; margin-inline: calc(-1 * var(--space-5)); padding-inline: var(--space-5); }
+.esp-tabla .table { min-width: 640px; }
+.esp-tabla__etiqueta { color: var(--text-secondary); }
+
+.esp-tabla__acciones { white-space: nowrap; text-align: right; }
+.esp-tabla__acciones a + a { margin-left: var(--space-3); }
+.esp-tabla__acciones a:not(.btn) { font-size: var(--font-size-small); color: var(--text-secondary); }
+
+.esp-volver { margin: 0; font-size: var(--font-size-small); }
+.esp-ficha { display: grid; gap: var(--space-4); }
+
+/* --- Proceso --- */
+
+.esp-recorrido { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+
+.esp-etapa {
+  position: relative;
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  grid-template-areas: "marca nombre" "marca estado";
+  column-gap: var(--space-3);
+  padding: var(--space-2) 0;
+  color: var(--text-muted);
+}
+
+.esp-etapa::before {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--border-subtle);
+}
+
+.esp-etapa:first-child::before { top: 50%; }
+.esp-etapa:last-child::before { bottom: 50%; }
+
+.esp-etapa__marca {
+  grid-area: marca;
+  position: relative;
+  z-index: 1;
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+  font-size: var(--font-size-caption);
+}
+
+.esp-etapa__nombre { grid-area: nombre; font-weight: var(--font-weight-medium); }
+.esp-etapa__estado { grid-area: estado; font-size: var(--font-size-caption); }
+
+.esp-etapa--completada { color: var(--text-primary); }
+.esp-etapa--completada .esp-etapa__marca { background: var(--status-success-soft); border-color: var(--status-success); }
+.esp-etapa--actual { color: var(--text-primary); }
+.esp-etapa--actual .esp-etapa__nombre { font-weight: var(--font-weight-semibold); }
+.esp-etapa--actual .esp-etapa__marca { background: var(--accent); border-color: var(--carbon); color: var(--accent-contrast); }
+
+/* --- Información: dos columnas en pantallas amplias --- */
+
+.esp-columnas { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); align-items: start; }
+.esp-columnas__col { display: grid; gap: var(--space-4); min-width: 0; }
+
+/* --- C. Panel derecho (solo cuando se pide) --- */
+
+.esp-derecho {
+  position: sticky;
+  top: calc(var(--header-h) + var(--space-3));
+  max-height: calc(100vh - var(--header-h) - var(--space-5));
+  overflow-y: auto;
+  display: grid;
+  align-content: start;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+.esp-derecho__cabeza { display: flex; justify-content: space-between; align-items: center; gap: var(--space-2); }
+.esp-derecho__titulo { margin: 0; font-size: var(--font-size-body-lg); }
+.esp-derecho__sub { margin: var(--space-2) 0 0; font-size: var(--font-size-small); color: var(--text-secondary); }
+.esp-derecho__cuerpo { display: grid; gap: var(--space-3); font-size: var(--font-size-small); }
+.esp-derecho__cuerpo > p { margin: 0; }
+.esp-derecho__cuerpo .card { padding: 0; border: 0; box-shadow: none; background: transparent; }
+.esp-derecho__cuerpo .card > h3 { display: none; } /* el panel ya lleva su título */
+.esp-derecho__pie { margin: var(--space-2) 0 0; }
+
+.esp-cerrar {
+  flex: none;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  display: inline-grid;
+  place-items: center;
+  border-radius: var(--radius-pill);
+  color: var(--text-secondary);
+}
+
+.esp-cerrar:hover { background: var(--surface-hover); color: var(--text-primary); }
+.esp-cerrar:focus-visible { outline: none; box-shadow: var(--ring-focus); }
+
+/* ===================================================================== */
+/* 3b. UX-4 — superficie continua: misión · recorrido · ítems · coordinación */
+/* ===================================================================== */
+
+/* Tu misión */
+.esp-mision { display: grid; gap: var(--space-3); }
+.esp-mision__cabeza { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); }
+
+.esp-mision__eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+}
+
+.esp-mision__cuenta { font-size: var(--font-size-caption); color: var(--text-muted); }
+.esp-mision .esp-tarea { border-color: var(--border-strong); box-shadow: var(--shadow-xs); }
+
+/* Recorrido individual de un ítem: un punto por paso */
+.esp-pasos-item {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
+}
+
+.esp-pasos-item__paso { display: inline-flex; align-items: center; gap: var(--space-1); }
+.esp-pasos-item:not(.esp-pasos-item--compacto) .esp-pasos-item__paso + .esp-pasos-item__paso::before {
+  content: "";
+  width: 12px;
+  height: 1px;
+  margin-right: var(--space-1);
+  background: var(--border-strong);
+}
+
+.esp-pasos-item__marca {
+  width: 14px;
+  height: 14px;
+  display: inline-grid;
+  place-items: center;
+  flex: none;
+  border: 1.5px solid var(--border-strong);
+  border-radius: 50%;
+  background: var(--surface-card);
+  font-size: 9px;
+  line-height: 1;
+}
+
+.esp-pasos-item__paso--completado { color: var(--text-secondary); }
+.esp-pasos-item__paso--completado .esp-pasos-item__marca { border-color: var(--status-success); background: var(--status-success); color: var(--text-on-inverse); }
+.esp-pasos-item__paso--actual { color: var(--text-primary); font-weight: var(--font-weight-semibold); }
+.esp-pasos-item__paso--actual .esp-pasos-item__marca { border-color: var(--text-primary); background: var(--accent); }
+.esp-pasos-item__paso--devuelto { color: var(--text-primary); font-weight: var(--font-weight-semibold); }
+.esp-pasos-item__paso--devuelto .esp-pasos-item__marca { border-color: var(--status-warning); background: var(--status-warning-soft); color: var(--status-warning); }
+.esp-pasos-item__paso--detenido .esp-pasos-item__marca { border-color: var(--status-danger); background: var(--status-danger-soft); color: var(--status-danger); }
+.esp-pasos-item__paso--fuera .esp-pasos-item__marca { border-style: dashed; }
+
+.esp-pasos-item--compacto { gap: 3px; }
+.esp-pasos-item--compacto .esp-pasos-item__marca { width: 10px; height: 10px; font-size: 0; }
+
+/* Recorrido del ticket */
+.esp-ruta { gap: var(--space-4); }
+.esp-ruta__cabeza { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-3); font-size: var(--font-size-small); }
+.esp-ruta__titulo { margin: 0; font-size: var(--font-size-section-title); }
+.esp-ruta__nota { margin: 0; font-size: var(--font-size-small); color: var(--text-secondary); }
+
+.esp-fases {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: var(--space-2);
+}
+
+.esp-fases__fase {
+  position: relative;
+  display: grid;
+  gap: 2px;
+  padding-top: var(--space-4);
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+}
+
+/* Barra de avance: completada (verde) · actual (lima) · pendiente (borde). */
+.esp-fases__fase::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--border-subtle);
+}
+
+.esp-fases__fase--completada::before { background: var(--status-success); }
+.esp-fases__fase--actual::before { background: var(--accent); box-shadow: inset 0 0 0 1px var(--border-selected); }
+.esp-fases__marca { display: none; }
+.esp-fases__nombre { font-weight: var(--font-weight-semibold); color: var(--text-primary); }
+.esp-fases__fase--pendiente .esp-fases__nombre { color: var(--text-secondary); font-weight: var(--font-weight-medium); }
+.esp-fases__estado { font-size: var(--font-size-caption); }
+
+.esp-etapas { display: grid; gap: var(--space-2); }
+.esp-etapas__titulo { margin: 0; font-size: var(--font-size-caption); font-weight: var(--font-weight-semibold); color: var(--text-secondary); }
+
+.esp-etapas__lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.esp-etapas__etapa {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  font-size: var(--font-size-small);
+  color: var(--text-muted);
+}
+
+.esp-etapas__etapa.tiene { color: var(--text-primary); border-color: var(--border-strong); }
+.esp-etapas__cantidad { font-weight: var(--font-weight-semibold); }
+.esp-etapas__devueltos { font-size: var(--font-size-caption); color: var(--status-warning); }
+
+/* Ítems: lista con la ficha del elegido abierta en su lugar */
+.esp-items { display: grid; gap: var(--space-4); }
+.esp-coleccion__titulo { margin: 0; font-size: var(--font-size-section-title); }
+
+.it-lista { list-style: none; margin: 0 calc(-1 * var(--space-5)); padding: 0; }
+.it-lista > li + li { border-top: 1px solid var(--border-subtle); }
+
+.it-fila { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+
+.it-fila__resumen {
+  display: grid;
+  grid-template-columns: minmax(0, 2.2fr) minmax(84px, 0.6fr) minmax(0, 1.4fr) minmax(0, 1fr) minmax(0, 1fr) 16px;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-5);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+  text-decoration: none;
+}
+
+.it-fila__resumen:hover { background: var(--surface-hover); }
+.it-fila__resumen:focus-visible { outline: none; box-shadow: inset var(--ring-focus); }
+.it-fila__nombre { font-size: var(--font-size-body); font-weight: var(--font-weight-semibold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.it-fila__fecha { color: var(--text-secondary); }
+.it-fila__quien { color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.it-fila__ir { display: inline-flex; color: var(--text-muted); }
+.it-fila__accion { margin: 0; padding-right: var(--space-5); }
+.it-fila.is-devuelta .it-fila__nombre::after { content: " ↺"; color: var(--status-warning); }
+.it-fila.is-abierta { background: var(--surface-sunken); }
+.it-fila__ficha { grid-column: 1 / -1; padding: var(--space-2) var(--space-5) var(--space-5); }
+
+.esp-ficha { display: grid; gap: var(--space-4); padding: var(--space-4); border-radius: var(--radius-md); background: var(--surface-card); border: 1px solid var(--border-subtle); }
+.esp-ficha__cabeza { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--space-3); flex-wrap: wrap; }
+.esp-ficha__cabeza p { margin: var(--space-1) 0 0; }
+.esp-ficha__titulo { margin: 0; font-size: var(--font-size-body-lg); }
+.esp-ficha__seccion { display: grid; gap: var(--space-2); margin-top: var(--space-3); }
+.esp-ficha .esp-item--en-accion,
+.esp-ficha .esp-item { gap: var(--space-3); }
+
+/* Borradores por enviar */
+.esp-borradores { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; border: 1px solid var(--border-subtle); border-radius: var(--radius-md); }
+.esp-borradores > li + li { border-top: 1px solid var(--border-subtle); }
+
+.esp-borrador {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--font-size-small);
+}
+
+.esp-borrador form { margin: 0 0 0 auto; }
+.esp-borrador__nombre { flex: 1 1 200px; font-weight: var(--font-weight-semibold); color: var(--text-primary); }
+.esp-borrador__falta { color: var(--status-warning); }
+.esp-borrador__listo { display: inline-flex; align-items: center; gap: var(--space-1); color: var(--status-success); }
+
+/* Coordinación */
+.esp-coordinacion__titulo { margin: 0; font-size: var(--font-size-section-title); }
+.esp-gaceta { display: grid; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
+.esp-gaceta__cabeza { display: flex; justify-content: space-between; align-items: center; gap: var(--space-3); }
+.esp-gaceta__nombre { margin: 0; font-weight: var(--font-weight-semibold); }
+.esp-gaceta__cifras { margin: 0; font-size: var(--font-size-small); color: var(--text-secondary); }
+.esp-cierre-condiciones { display: grid; gap: var(--space-2); padding-top: var(--space-3); border-top: 1px solid var(--border-subtle); }
+.esp-cierre-condiciones .esp-requisitos { display: grid; }
+
+.esp-revisado__archivos { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; }
+
+/* Conversación, resultados y datos: plegado */
+.esp-plegado { background: var(--surface-card); border: 1px solid var(--border-subtle); border-radius: var(--radius-lg); }
+
+.esp-plegado__resumen {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  cursor: pointer;
+  font-weight: var(--font-weight-semibold);
+  list-style: none;
+}
+
+.esp-plegado__resumen::-webkit-details-marker { display: none; }
+.esp-plegado__resumen .text-muted { font-weight: var(--font-weight-regular); font-size: var(--font-size-small); }
+.esp-plegado__cuerpo { padding: 0 var(--space-5) var(--space-5); }
+.esp-plegado__cuerpo .esp-superficie,
+.esp-plegado__cuerpo .card { border: 0; padding: 0; }
+
+/* ===================================================================== */
+/* 4. Responsive                                                         */
+/* ===================================================================== */
+
+/* Portátil: contexto más compacto; el panel derecho pasa a cajón superpuesto (no le quita ancho al trabajo). */
+@media (max-width: 1279px) {
+  .esp,
+  .esp--con-panel { grid-template-columns: 224px minmax(0, 1fr); }
+
+  .esp-derecho {
+    position: fixed;
+    z-index: var(--z-popover);
+    top: calc(var(--header-h) + var(--space-2));
+    right: var(--space-3);
+    bottom: var(--space-3);
+    width: min(400px, calc(100vw - 2 * var(--space-3)));
+    max-height: none;
+    box-shadow: var(--shadow-float);
+  }
+
+  .bj-fila { grid-template-columns: minmax(0, 2.2fr) minmax(0, 1.8fr) minmax(104px, 0.7fr) minmax(56px, 0.45fr) 16px; }
+}
+
+/* Tableta: el trabajo ocupa todo el ancho; el contexto es una franja con «Más datos» plegable. */
+@media (max-width: 1023px) {
+  .esp,
+  .esp--con-panel { grid-template-columns: minmax(0, 1fr); gap: var(--space-4); }
+
+  .esp-contexto {
+    position: static;
+    grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+    gap: var(--space-3) var(--space-5);
+  }
+
+  .esp-contexto__volver,
+  .esp-contexto__mas { grid-column: 1 / -1; }
+  .esp-contexto__progreso { grid-column: 2; }
+
+  .esp-columnas { grid-template-columns: minmax(0, 1fr); }
+
+  /* Dos líneas: nombre y siguiente acción; debajo, código, estado y vencimiento. */
+  .bj-fila {
+    grid-template-columns: minmax(0, 1fr) auto 16px;
+    grid-template-areas: "ticket estado ir" "siguiente vence ir";
+    row-gap: var(--space-1);
+  }
+
+  .bj-fila__ticket { grid-area: ticket; }
+  .bj-fila__siguiente { grid-area: siguiente; }
+  .bj-fila__estado { grid-area: estado; justify-self: end; }
+  .bj-fila__vence { grid-area: vence; }
+  .bj-fila__ir { grid-area: ir; }
+
+  .cola-fila { grid-template-columns: 32px minmax(0, 1.6fr) minmax(0, 1fr) auto; }
+  .cola-fila__meta { display: none; }
+
+  .it-fila__resumen { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1.2fr) minmax(0, 1fr) 16px; }
+  .it-fila__fecha,
+  .it-fila__quien { display: none; }
+  .esp-fases { grid-auto-flow: row; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+}
+
+/* Móvil: una columna; cada ticket es una tarjeta compacta y toda ella abre el ticket. */
+@media (max-width: 639px) {
+  .op-barra__buscar { max-width: none; }
+
+  .esp-contexto { grid-template-columns: minmax(0, 1fr); padding: var(--space-3) var(--space-4); }
+  .esp-contexto__progreso { grid-column: auto; }
+
+  .esp-barra { flex-wrap: wrap; }
+  .esp-mas__panel { right: auto; left: 0; }
+
+  .esp-tarea { padding: var(--space-4); gap: var(--space-4); }
+  .esp-tarea__titulo { font-size: var(--font-size-section-title); }
+  .esp-panel__pie-secundario { margin-left: 0; }
+
+  .esp-derecho {
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: auto;
+    max-height: 85vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+
+  .bj-lista { background: transparent; border: 0; border-radius: 0; overflow: visible; display: grid; gap: var(--space-2); }
+  .bj-lista > li + li { border-top: 0; }
+
+  .bj-fila {
+    grid-template-columns: minmax(0, 1fr) 16px;
+    grid-template-areas: "ticket ir" "siguiente ir" "estado ir" "vence ir";
+    padding: var(--space-3) var(--space-4);
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+  }
+
+  .bj-fila__nombre { white-space: normal; }
+  .bj-fila__estado { justify-self: start; }
+
+  .it-lista { margin-inline: calc(-1 * var(--space-4)); }
+  .it-fila { grid-template-columns: minmax(0, 1fr); }
+  .it-fila__resumen { grid-template-columns: minmax(0, 1fr) 16px; grid-template-areas: "nombre ir" "estado ir" "ruta ir"; row-gap: var(--space-1); padding-inline: var(--space-4); }
+  .it-fila__nombre { grid-area: nombre; white-space: normal; }
+  .it-fila__estado { grid-area: estado; }
+  .it-fila__ruta { grid-area: ruta; }
+  .it-fila__ir { grid-area: ir; }
+  .it-fila__accion { padding: 0 var(--space-4) var(--space-3); }
+  .it-fila__ficha { padding-inline: var(--space-3); }
+  .esp-borrador form { margin-left: 0; }
+  .bj-fila__vence { text-align: left; }
+
+  .cola-fila,
+  .cola-fila + .cola-fila,
+  .work-split.has-preview .cola-fila {
+    grid-template-columns: 32px minmax(0, 1fr);
+    background: var(--surface-card);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-md);
+  }
+
+  .cola-fila__estado,
+  .cola-fila__objetivo,
+  .cola-fila__acciones { grid-column: 2; }
+
+  .work-split.has-preview .cola-fila__objetivo,
+  .cola-fila__objetivo { display: grid; }
+  .cola-fila__acciones { justify-content: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bj-fila,
+  .esp-selector__item { transition: none; }
+}

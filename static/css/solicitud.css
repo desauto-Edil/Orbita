@@ -1049,8 +1049,9 @@
   padding: var(--space-1) var(--space-3);
   border-radius: var(--radius-pill);
   background: var(--surface-sunken);
-  font-family: var(--font-mono);
   font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  font-variant-numeric: var(--font-numeric);
   color: var(--text-secondary);
   overflow-wrap: anywhere;
 }

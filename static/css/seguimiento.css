@@ -3,7 +3,7 @@
 .seg-code {
   margin: 0 0 var(--space-1);
   font-size: var(--text-sm);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.04em;
   color: var(--text-muted);
 }
@@ -67,7 +67,7 @@
 .seg-paso--actual {
   background: var(--color-primary-soft);
   color: var(--text-primary);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
 .seg-paso--actual .seg-paso__marca {

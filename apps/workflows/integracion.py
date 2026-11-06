@@ -109,9 +109,26 @@ def completar_tarea_workflow(tarea, actor):
         )
 
     _exigir_datos_inicio_si_corresponde(vinculo.instancia_etapa)
+    _exigir_columnas_requeridas(vinculo.instancia_etapa)
     tarea_completada = completar_tarea(tarea, actor)
     continuar_espera_externa(vinculo.instancia_etapa, motivo_espera=InstanciaEtapa.MotivoEspera.TAREA)
     return tarea_completada
+
+
+def _exigir_columnas_requeridas(ejecucion):
+    """UX-4 — una ACTIVIDAD de un recorrido por ítem configurada con `columnas_requeridas` no se completa mientras
+    a SU ítem le falten esas columnas (p. ej. «Producción» exige el archivo antes de ir a aprobación). Misma
+    completitud que la colección (`parrilla.completitud_de`)."""
+    bloque = ejecucion.bloque_operativo
+    requeridas = (bloque.configuracion or {}).get("columnas_requeridas") if bloque is not None else None
+    elemento = ejecucion.instancia_workflow.elemento
+    if not requeridas or elemento is None:
+        return
+    from apps.tickets.parrilla import completitud_de
+
+    faltan = completitud_de(elemento, exigidas=requeridas).pendientes
+    if faltan:
+        raise ValidationError("Antes de continuar completa: " + ", ".join(faltan) + ".")
 
 
 def _exigir_datos_inicio_si_corresponde(ejecucion):

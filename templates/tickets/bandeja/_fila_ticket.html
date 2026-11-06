@@ -1,0 +1,36 @@
+{% load plazos %}{% comment %}
+  Bandeja compartida — fila de «Mis tickets»: un ticket solicitado por la persona. Espera `ticket` (con
+  `fase_actual`, `responsable`, `requiere_respuesta`, `ultima_novedad` y `es_borrador`, anotados en la vista). Sin JS
+  la fila es un enlace (borrador → continuar; enviado → espacio del ticket); con `static/js/bandeja.js` abre el
+  inspector. `bt-fila__compacto` repite el estado bajo el nombre para la composición compacta.
+{% endcomment %}
+{% with borrador=ticket.es_borrador plazo=ticket|estado_plazo %}
+<li class="bt-fila{% if ticket.requiere_respuesta %} is-atencion{% endif %}{% if plazo == 'vencido' %} is-vencido{% endif %}" data-fila="{{ ticket.pk }}">
+  <a class="bt-fila__enlace" href="{% if borrador %}{% url 'tickets:borrador' ticket.pk %}{% else %}{% url 'tickets:espacio' ticket.pk %}{% endif %}" data-inspector="{% url 'tickets:inspector' ticket.pk %}?desde=tickets">
+    <span class="bt-celda bt-celda--ticket">
+      <span class="bt-fila__nombre">{{ ticket.detalle_servicio.servicio.nombre }}</span>
+      <span class="bt-fila__meta">
+        {% if borrador %}<span>Sin enviar</span>
+        {% else %}<span class="tabular">{{ ticket.codigo|default:"Ticket" }}</span>{% if ticket.etiqueta %}<span>{{ ticket.etiqueta }}</span>{% endif %}<span><span class="sr-only">Lo tiene: </span>{% if ticket.responsable.equipo %}{{ ticket.responsable.equipo }}{% if ticket.responsable.persona %} · {{ ticket.responsable.persona }}{% endif %}{% elif ticket.responsable.persona %}{{ ticket.responsable.persona }}{% else %}Sin asignar{% endif %}</span>{% endif %}
+      </span>
+      <span class="bt-fila__compacto">
+        <span class="estado-etiqueta estado-etiqueta--{{ ticket.estado|lower }}"><span class="sr-only">Estado: </span>{{ ticket.get_estado_display }}</span>
+      </span>
+    </span>
+    <span class="bt-celda bt-celda--fase">
+      {% if borrador %}<span class="bt-fila__siguiente is-accion">Continuar el diligenciamiento</span>
+      {% elif ticket.requiere_respuesta %}<span class="estado-etiqueta estado-etiqueta--atencion">Requiere tu respuesta</span>
+      {% elif ticket.fase_actual %}<span class="sr-only">Fase: </span>{{ ticket.fase_actual }}
+      {% elif ticket.ultima_novedad %}<span class="bt-fila__novedad"><span class="sr-only">Última novedad: </span>{{ ticket.ultima_novedad }}{% if ticket.ultimo_evento_en %} · <span class="tabular">{{ ticket.ultimo_evento_en|date:"j M" }}</span>{% endif %}</span>{% endif %}
+    </span>
+    <span class="bt-celda bt-celda--estado"><span class="sr-only">Estado: </span><span class="estado-etiqueta estado-etiqueta--{{ ticket.estado|lower }}">{{ ticket.get_estado_display }}</span></span>
+    <span class="bt-celda bt-celda--fecha tabular">
+      {% if borrador %}<span class="bt-fecha__valor">{{ ticket.creado_en|date:"j M" }}</span><span class="bt-fecha__etiqueta">Creado</span>
+      {% elif ticket.fecha_objetivo_vigente %}<span class="bt-fecha__valor">{{ ticket.fecha_objetivo_vigente|date:"j M" }}</span>{% if plazo == 'vencido' %}<span class="estado-etiqueta estado-etiqueta--vencido">Venció</span>{% elif plazo == 'por_vencer' %}<span class="estado-etiqueta estado-etiqueta--por_vencer">Por vencer</span>{% else %}<span class="bt-fecha__etiqueta">Objetivo</span>{% endif %}
+      {% elif ticket.radicado_en %}<span class="bt-fecha__valor">{{ ticket.radicado_en|date:"j M" }}</span><span class="bt-fecha__etiqueta">Radicado</span>{% endif %}
+    </span>
+    <span class="sr-only">{% if borrador %}Continuar el borrador{% else %}Ver ticket{% endif %}</span>
+    <span class="bt-fila__ir" aria-hidden="true">{% include "components/icon.html" with name="chevron-right" size="sm" %}</span>
+  </a>
+</li>
+{% endwith %}

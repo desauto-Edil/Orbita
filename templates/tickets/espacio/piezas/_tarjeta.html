@@ -1,0 +1,28 @@
+{% comment %}
+  UX-5 — una PIEZA como tarjeta solo visual (gaceta y revisión del aprobador): su portada (imagen o video), o el
+  archivo, o —sin archivos— su nombre; la fecha y el estado como chips. Todo lo demás (datos, observaciones,
+  anotaciones y lo que la persona puede hacer) está en el visor (`_visor.html`), que abre `static/js/piezas.js` al
+  pulsar la tarjeta. Sin JS, la tarjeta lleva a la ficha del ítem. Espera `p` (pieza), `estado_texto` y `base`.
+{% endcomment %}
+{% load archivos %}
+<li class="pz pz--{{ p.situacion|default:'pendiente' }}" data-situacion="{{ p.situacion|default:'pendiente' }}" id="pieza-{{ p.elemento.pk }}">
+  <a class="pz__abrir" href="{{ base }}?elemento={{ p.elemento.pk }}#item-{{ p.elemento.pk }}" data-pieza="pz-{{ p.clave }}" aria-haspopup="dialog" aria-label="Abrir {{ p.titulo }}">
+    {% if p.portada %}
+      {% url 'tickets:descargar_adjunto' p.portada.pk as url_portada %}
+      {% if p.portada|clase_vista_previa == "video" %}
+        <video class="pz__medio" src="{{ url_portada }}?ver=1#t=0.1" muted preload="metadata" playsinline aria-hidden="true"></video>
+        <span class="pz__play" aria-hidden="true"></span>
+      {% else %}
+        <img class="pz__medio" src="{{ url_portada }}?ver=1" alt="" loading="lazy">
+      {% endif %}
+    {% elif p.archivos %}
+      <span class="pz__archivo">{% include "components/icon.html" with name="file" %}<span>{{ p.archivos.0.nombre_original|truncatechars:26 }}</span></span>
+    {% else %}
+      <span class="pz__texto">{{ p.titulo }}</span>
+    {% endif %}
+    {% if p.fecha %}<span class="pz__fecha" title="{{ p.fecha.etiqueta }}"><b class="tabular">{{ p.fecha.valor|date:"d" }}</b><small>{{ p.fecha.valor|date:"M" }}</small></span>{% endif %}
+    <span class="pz__estado pz__estado--{{ p.situacion|default:'pendiente' }}">{{ estado_texto }}</span>
+    <span class="sr-only">{{ p.titulo }}</span>
+  </a>
+  <template id="pz-{{ p.clave }}">{% include "tickets/espacio/piezas/_visor.html" %}</template>
+</li>

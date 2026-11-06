@@ -52,13 +52,13 @@ from apps.aprobaciones.autorizacion import (
     puede_reasignar_aprobacion,
 )
 from apps.aprobaciones.consultas import aprobaciones_pendientes_para, aprobaciones_visibles_para
+from apps.aprobaciones.decisiones import aplicar as aplicar_decision
 from apps.aprobaciones.forms import DecisionAprobacionForm, ReasignacionAprobacionForm
 from apps.aprobaciones.models import Aprobacion
-from apps.aprobaciones.operaciones import reasignar_aprobacion, resolver_aprobacion
+from apps.aprobaciones.operaciones import reasignar_aprobacion
+from apps.core.redirecciones import volver_a
 from apps.tickets.autorizacion import puede_consultar_ticket
 from apps.tickets.models import Ticket
-from apps.tickets.prorrogas import resolver_prorroga_por_aprobacion
-from apps.workflows.integracion import resolver_aprobacion_workflow
 from apps.workflows.models import EsquemaAprobacionWorkflow, InstanciaEtapa
 
 
@@ -330,46 +330,20 @@ def decidir_view(request, pk):
     form = _decision_form(aprobacion, es_prorroga=es_prorroga, datos=request.POST)
     if not form.is_valid():
         messages.error(request, "Revise los datos de la decisión.")
-        return redirect("aprobaciones:detalle", pk=pk)
+        return volver_a(request, "aprobaciones:detalle", pk)
     try:
-        if es_prorroga:
-            # 4.A2: la decisión también aplica (o no) la nueva fecha del Ticket,
-            # en una sola transacción — nunca `resolver_aprobacion` a secas.
-            resolver_prorroga_por_aprobacion(
-                aprobacion,
-                request.user,
-                decision=form.cleaned_data["decision"],
-                observacion=form.cleaned_data.get("observacion", ""),
-            )
-        elif hasattr(aprobacion.esquema, "ronda_gaceta"):
-            # Fase 3: la decisión de una ronda de gaceta aplica su resultado a ESE ítem en la gaceta.
-            from apps.gacetas.operaciones import resolver_aprobacion_gaceta
-
-            resolver_aprobacion_gaceta(
-                aprobacion,
-                request.user,
-                decision=form.cleaned_data["decision"],
-                observacion=form.cleaned_data.get("observacion", ""),
-            )
-        elif hasattr(aprobacion.esquema, "vinculo_workflow"):
-            resolver_aprobacion_workflow(
-                aprobacion,
-                request.user,
-                decision=form.cleaned_data["decision"],
-                observacion=form.cleaned_data.get("observacion", ""),
-            )
-        else:
-            resolver_aprobacion(
-                aprobacion,
-                request.user,
-                decision=form.cleaned_data["decision"],
-                observacion=form.cleaned_data.get("observacion", ""),
-            )
+        # La vía según el origen (prórroga, ronda de gaceta, Workflow o simple) vive en `decisiones.aplicar`.
+        aplicar_decision(
+            aprobacion,
+            request.user,
+            decision=form.cleaned_data["decision"],
+            observacion=form.cleaned_data.get("observacion", ""),
+        )
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Decisión registrada.")
-    return redirect("aprobaciones:detalle", pk=pk)
+    return volver_a(request, "aprobaciones:detalle", pk)
 
 
 @login_required

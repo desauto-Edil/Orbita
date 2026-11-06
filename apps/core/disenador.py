@@ -162,7 +162,24 @@ def _servicios():
 
 
 def lista_de_servicios():
-    return list(_servicios().order_by("nombre"))
+    """Servicios y procesos con lo que su tarjeta resume, leído de lo configurado (nunca texto fijo): campos del
+    formulario de inicio vigente, colecciones y entregables activos y si el proceso tiene programación activa."""
+    from django.db.models import Count, Exists, OuterRef, Q
+
+    from apps.catalogo.models import ProgramacionProceso
+
+    return list(
+        _servicios()
+        .annotate(
+            n_campos=Count("formulario__version_activa__campos", distinct=True),
+            n_colecciones=Count("definiciones_parrilla", filter=Q(definiciones_parrilla__activa=True), distinct=True),
+            n_entregables=Count(
+                "definiciones_entregables", filter=Q(definiciones_entregables__activo=True), distinct=True
+            ),
+            programado=Exists(ProgramacionProceso.objects.filter(servicio=OuterRef("pk"), activa=True)),
+        )
+        .order_by("nombre")
+    )
 
 
 def resumen_de_servicios():

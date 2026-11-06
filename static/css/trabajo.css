@@ -16,6 +16,7 @@
 .work-toolbar .segmented {
   max-width: 100%;
   overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .work-toolbar .segmented__item {
@@ -41,7 +42,7 @@
 .work-count {
   margin-left: var(--space-1);
   color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
+  font-variant-numeric: var(--font-numeric);
 }
 
 /* --- Lista ---------------------------------------------------------------- */
@@ -210,14 +211,52 @@
   max-height: calc(100vh - var(--header-h) - var(--dock-clearance));
   overflow-y: auto;
   padding: var(--space-5);
+  overscroll-behavior: contain;
   background: var(--surface-card);
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-sm);
   transition: opacity var(--duration-fast) var(--ease-standard);
 }
 
 .work-preview.is-loading {
   opacity: 0.6;
+}
+
+/* UX-2: el panel solo existe cuando hay algo seleccionado (trabajo.js); se cierra con su botón o Escape. */
+.work-preview__cerrar {
+  float: right;
+  width: var(--control-h-sm);
+  height: var(--control-h-sm);
+  margin: calc(-1 * var(--space-2)) calc(-1 * var(--space-2)) 0 var(--space-2);
+  display: inline-grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.work-preview__cerrar:hover { background: var(--surface-hover); color: var(--text-primary); }
+.work-preview__cerrar:focus-visible { outline: none; box-shadow: var(--ring-focus); }
+
+@media (max-width: 1023px) {
+  /* Solo la Cola usa el panel en pantallas angostas: hoja superpuesta, sin empujar la lista. */
+  .work-split.has-preview {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .work-split.has-preview .work-preview {
+    position: fixed;
+    z-index: var(--z-popover);
+    top: auto;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    max-height: 85vh;
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+    box-shadow: var(--shadow-float);
+  }
 }
 
 .work-preview__empty {
@@ -492,7 +531,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: var(--text-secondary);
 }
 
@@ -501,8 +540,9 @@
 .ws-head__code,
 .resumen__code {
   margin: 0;
+  font-variant-numeric: var(--font-numeric);
   font-size: var(--font-size-caption);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   letter-spacing: 0.04em;
   color: var(--text-muted);
 }
@@ -697,7 +737,7 @@
 
 .ws-fase--actual {
   color: var(--text-primary);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   border-color: var(--text-primary);
   background: var(--color-primary-soft);
 }
@@ -750,7 +790,7 @@
 
 .ws-bloque--actual {
   color: var(--text-primary);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   background: var(--color-primary-soft);
 }
 
@@ -828,7 +868,7 @@
 
 .ws-dato__valor {
   font-size: var(--text-xl);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
   color: var(--text-primary);
 }
 

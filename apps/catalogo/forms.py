@@ -290,6 +290,27 @@ class CampoForm(forms.ModelForm):
     )
     tamano_maximo_mb = forms.FloatField(required=False, min_value=0, label="Tamaño máximo (MB)")
     solo_activos = forms.BooleanField(required=False, initial=True, label="Solo registros activos")
+    # UX-4: una fecha que debe caer dentro del periodo de la ejecución programada (p. ej. el mes de la parrilla).
+    dentro_del_periodo = forms.BooleanField(
+        required=False, label="Debe estar dentro del periodo de la ejecución",
+        help_text="Solo en procesos programados: la fecha debe caer en el periodo del ticket (p. ej. «Noviembre 2026»).",
+    )
+
+    # Parámetros de configuración que este formulario edita (el resto de `configuracion` no existe para él).
+    CLAVES_CONFIGURACION = (
+        "longitud_maxima", "minimo", "maximo", "permite_decimales", "fecha_minima", "fecha_maxima",
+        "minimo_selecciones", "maximo_selecciones", "extensiones_permitidas", "tamano_maximo_mb", "solo_activos",
+        "dentro_del_periodo",
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Al editar, los parámetros parten de lo guardado: guardar sin tocarlos no los borra.
+        configuracion = (self.instance.configuracion or {}) if self.instance.pk else {}
+        for clave in self.CLAVES_CONFIGURACION:
+            if clave in configuracion:
+                valor = configuracion[clave]
+                self.initial[clave] = ", ".join(valor) if clave == "extensiones_permitidas" and isinstance(valor, list) else valor
 
     class Meta:
         model = Campo
@@ -319,8 +340,8 @@ class CampoForm(forms.ModelForm):
             "CORREO": ("longitud_maxima",),
             "URL": ("longitud_maxima",),
             "NUMERO": ("permite_decimales", "minimo", "maximo"),
-            "FECHA": ("fecha_minima", "fecha_maxima"),
-            "FECHA_HORA": ("fecha_minima", "fecha_maxima"),
+            "FECHA": ("fecha_minima", "fecha_maxima", "dentro_del_periodo"),
+            "FECHA_HORA": ("fecha_minima", "fecha_maxima", "dentro_del_periodo"),
             "MULTILISTA": ("minimo_selecciones", "maximo_selecciones"),
             "ARCHIVO": ("extensiones_permitidas", "tamano_maximo_mb"),
             "USUARIO": ("solo_activos",),
@@ -338,6 +359,8 @@ class CampoForm(forms.ModelForm):
                 valor = valor.isoformat()
             if clave == "fecha_maxima" and valor:
                 valor = valor.isoformat()
+            if clave == "dentro_del_periodo" and not valor:
+                continue  # solo se guarda cuando se exige
             if valor not in (None, "", []):
                 configuracion[clave] = valor
         return configuracion
@@ -396,7 +419,10 @@ TIPO_BLOQUE_GRUPO = ("GRUPO_ACTIVIDADES", "Actividades en paralelo")
 TIPO_BLOQUE_RECORRIDO = ("RECORRIDO_ITEMS", "Recorrido por ítem")
 # Lo que se puede agregar DENTRO de un contenedor, por rama (el modelo lo vuelve a validar).
 TIPOS_CONTENIDOS_CHOICES = {
-    "ITEM": [("ACTIVIDAD", "Actividad"), ("APROBACION", "Aprobación"), ("DECISION", "Decisión")],
+    "ITEM": [
+        ("ACTIVIDAD", "Actividad"), ("APROBACION", "Aprobación"), ("DECISION", "Decisión"),
+        ("GACETA", "Revisión colaborativa del ítem"),
+    ],
     "GENERAL": [("ACTIVIDAD", "Actividad"), ("APROBACION", "Aprobación")],
 }
 
@@ -987,14 +1013,25 @@ class DefinicionGacetaForm(forms.Form):
         required=False, widget=forms.CheckboxSelectMultiple,
         label="Columnas del ítem que puede modificar quien corrige",
     )
+    # UX-4b — qué datos del ítem se muestran a quienes revisan (presentación; vacío = todos).
+    columnas_visibles = forms.MultipleChoiceField(
+        required=False, widget=forms.CheckboxSelectMultiple,
+        label="Datos que se muestran de cada ítem en la revisión",
+    )
+
+    # UX-4: «La corrección la recibe» también puede ser quien hizo la última actividad del ítem.
+    ULTIMA_ACTIVIDAD = "__ULTIMA_ACTIVIDAD__"
 
     def __init__(self, *args, colecciones=(), columnas=(), columnas_actor=(), columnas_editables=(), **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["columnas_editables"].choices = list(columnas_editables)
+        self.fields["columnas_visibles"].choices = list(columnas_editables)
         self.fields["colecciones"].choices = list(colecciones)
         self.fields["condicion_variable"].choices = [("", "— Todos los ítems —"), *columnas]
         self.fields["responsable_correccion_columna"].choices = [
-            ("", "El responsable del ticket"), *[(clave, f"La persona o equipo de «{etiqueta}»") for clave, etiqueta in columnas_actor],
+            ("", "El responsable del ticket"),
+            (self.ULTIMA_ACTIVIDAD, "Quien hizo la última actividad del ítem (p. ej. quien produjo la pieza)"),
+            *[(clave, f"La persona o equipo de «{etiqueta}»") for clave, etiqueta in columnas_actor],
         ]
 
     def clean(self):
@@ -1012,6 +1049,7 @@ class DefinicionGacetaForm(forms.Form):
             coordinador = {"tipo": "USUARIO", "usuario_id": datos["coordinador_usuario"].pk}
         elif datos.get("coordinador_equipo"):
             coordinador = {"tipo": "EQUIPO", "equipo_id": datos["coordinador_equipo"].pk}
+        correccion = datos.get("responsable_correccion_columna") or ""
         condicion = None
         if datos.get("condicion_variable"):
             condicion = {
@@ -1036,10 +1074,12 @@ class DefinicionGacetaForm(forms.Form):
             "justificacion_al_aprobar": bool(datos.get("justificacion_al_aprobar")),
             "al_resolver_pendientes": datos["al_resolver_pendientes"],
             "resolucion_automatica": bool(datos.get("resolucion_automatica")),
-            "responsable_correccion_columna": datos.get("responsable_correccion_columna") or "",
+            "responsable_correccion_columna": correccion if correccion != self.ULTIMA_ACTIVIDAD else "",
+            "responsable_correccion_origen": "ULTIMA_ACTIVIDAD" if correccion == self.ULTIMA_ACTIVIDAD else "",
             "coordinador": coordinador,
             "obligatoria": bool(datos.get("obligatoria")),
             "columnas_editables": list(datos.get("columnas_editables") or []),
+            "columnas_visibles": list(datos.get("columnas_visibles") or []),
         }
 
     @staticmethod
@@ -1069,11 +1109,15 @@ class DefinicionGacetaForm(forms.Form):
             "justificacion_al_aprobar": cfg.get("justificacion_al_aprobar", False),
             "al_resolver_pendientes": cfg.get("al_resolver_pendientes", "IMPEDIR"),
             "resolucion_automatica": cfg.get("resolucion_automatica", False),
-            "responsable_correccion_columna": cfg.get("responsable_correccion_columna") or "",
+            "responsable_correccion_columna": (
+                DefinicionGacetaForm.ULTIMA_ACTIVIDAD if cfg.get("responsable_correccion_origen") == "ULTIMA_ACTIVIDAD"
+                else cfg.get("responsable_correccion_columna") or ""
+            ),
             "coordinador_usuario": (cfg.get("coordinador") or {}).get("usuario_id"),
             "coordinador_equipo": (cfg.get("coordinador") or {}).get("equipo_id"),
             "obligatoria": cfg.get("obligatoria", False),
             "columnas_editables": cfg.get("columnas_editables") or [],
+            "columnas_visibles": cfg.get("columnas_visibles") or [],
         }
 
 
@@ -1108,10 +1152,19 @@ class GacetaBloqueForm(forms.Form):
         label="El flujo",
     )
 
-    def __init__(self, *args, gacetas=(), **kwargs):
+    def __init__(self, *args, gacetas=(), por_item=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields["gaceta"].choices = list(gacetas)
+        self.por_item = por_item
+        if por_item:
+            # Bloque 5.1 — revisión colaborativa DEL ÍTEM (rama ITEM): presenta solo su ítem y su recorrido
+            # siempre espera la decisión sobre él; no hay nada más que elegir.
+            self.fields["gaceta"].label = "Gaceta que revisa el ítem"
+            del self.fields["presentar_items"]
+            del self.fields["esperar"]
 
     def configuracion(self):
         datos = self.cleaned_data
+        if self.por_item:
+            return {"gaceta": datos["gaceta"]}
         return {"gaceta": datos["gaceta"], "presentar_items": bool(datos.get("presentar_items")), "esperar": datos["esperar"]}

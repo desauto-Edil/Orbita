@@ -1,0 +1,12 @@
+{% comment %}
+  UX-4 — el recorrido INDIVIDUAL de un ítem (`espacio.recorrido_de_item`): un punto por paso (hecho · actual ·
+  devuelto · detenido · pendiente). `compacto` = solo los puntos (para la fila de la lista); si no, con nombres.
+{% endcomment %}
+<ol class="esp-pasos-item{% if compacto %} esp-pasos-item--compacto{% endif %}" aria-label="Recorrido del ítem: {{ item.estado }}">
+  {% for paso in item.pasos %}
+    <li class="esp-pasos-item__paso esp-pasos-item__paso--{{ paso.situacion }}"{% if paso.situacion == "actual" or paso.situacion == "devuelto" or paso.situacion == "detenido" %} aria-current="step"{% endif %} title="{{ paso.nombre }}">
+      <span class="esp-pasos-item__marca" aria-hidden="true">{% if paso.situacion == "completado" %}✓{% elif paso.situacion == "devuelto" %}↺{% elif paso.situacion == "detenido" %}!{% endif %}</span>
+      <span class="{% if compacto %}sr-only{% else %}esp-pasos-item__nombre{% endif %}">{{ paso.nombre }}{% if paso.situacion == "completado" %}<span class="sr-only"> (hecho)</span>{% elif paso.situacion == "devuelto" %}<span class="sr-only"> (devuelto)</span>{% elif paso.situacion == "actual" %}<span class="sr-only"> (actual)</span>{% elif paso.situacion == "detenido" %}<span class="sr-only"> (detenido)</span>{% endif %}</span>
+    </li>
+  {% endfor %}
+</ol>

@@ -65,14 +65,14 @@ class ShellDelStudioTests(_Base4B, TestCase):
         self.servicio = self._servicio()
 
     def test_las_cinco_secciones_viven_en_el_mismo_shell(self):
-        for tab in ("general", "entrada", "salida", "ejecucion", "publicacion"):
+        for tab in ("general", "entrada", "salida", "ejecucion", "notificaciones", "publicacion"):
             pagina = self.client.get(self._url(self.servicio, tab))
             self.assertEqual(pagina.status_code, 200, tab)
             for marca in ('data-studio', 'class="studio-app__cabecera"', 'class="studio-app__nav"', 'id="studio-panel"',
                           "studio-app__pie", "data-estado-guardado"):
                 self.assertContains(pagina, marca, msg_prefix=tab)
             self.assertEqual([s["clave"] for s in pagina.context["secciones"]],
-                             ["general", "entrada", "salida", "ejecucion", "publicacion"])
+                             ["general", "entrada", "salida", "ejecucion", "notificaciones", "publicacion"])
 
     def test_un_unico_estado_por_seccion_sin_texto_duplicado(self):
         pagina = self.client.get(self._url(self.servicio, "general"))
@@ -488,7 +488,7 @@ class CompatibilidadYSistemaVisualTests(_Base4B, TestCase):
     def test_fondos_neutros_y_documento_de_diseno(self):
         tokens = (RAIZ / "static" / "css" / "tokens.css").read_text(encoding="utf-8")
         self.assertIn("--surface-page: var(--palette-gray-50);", tokens)
-        self.assertIn("--color-primary: var(--palette-lime-500);", tokens)  # el lima corporativo no cambia
+        self.assertIn("--color-primary: var(--palette-lima-500);", tokens)  # el lima corporativo sigue siendo el estilo por defecto
         self.assertTrue((RAIZ / "docs" / "design" / "ORBITA_DESIGN.md").exists())
         estudio = (RAIZ / "static" / "css" / "studio.css").read_text(encoding="utf-8")
         self.assertIn("prefers-reduced-motion", estudio)
@@ -847,7 +847,7 @@ class NavegacionFlotanteTests(_Base4B, TestCase):
         self.assertIn('class="app-header__inicio"', cabecera)  # logo + búsqueda
         self.assertIn('<nav class="dock" aria-label="Navegación principal">', cabecera)  # destinos en el centro
         self.assertIn('class="app-header__actions"', cabecera)  # notificaciones + perfil
-        self.assertIn("Notificaciones (próximamente)", cabecera)
+        self.assertIn('aria-controls="panel-notificaciones"', cabecera)  # campana real (Sprint 7, adelanto)
         self.assertIn("(próximamente)", cabecera.split('class="app-header__inicio"')[1].split("</div>")[0])
         # El dock ya no se dibuja al pie de la página, fuera de la cabecera.
         self.assertNotIn('class="dock"', contenido.split("</header>", 1)[1])

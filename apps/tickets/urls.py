@@ -18,12 +18,21 @@ urlpatterns = [
     path("<int:pk>/enviar/", views.enviar_view, name="enviar"),
     path("<int:pk>/enviada/", views.solicitud_enviada_view, name="enviada"),
     path("<int:pk>/radicar/", views.radicar_view, name="radicar"),
+    # UX-1 — espacio unificado del ticket (atención y seguimiento); detalle/seguimiento/trabajo siguen vigentes.
+    path("<int:pk>/", views.espacio_view, name="espacio"),
     path("<int:pk>/detalle/", views.detalle_view, name="detalle"),
     # 4.F2 — «Ver mi ticket»: seguimiento orientado al solicitante (solo lectura)
     path("<int:pk>/seguimiento/", views.seguimiento_view, name="seguimiento"),
     # 4.F3 — experiencia operativa y resumen de solo lectura (Trabajo)
     path("<int:pk>/trabajo/", views.trabajo_view, name="trabajo"),
     path("<int:pk>/resumen/", views.resumen_view, name="resumen"),
+    # Inspector lateral de Mi trabajo / Mis tickets (fragmento de solo lectura).
+    path("<int:pk>/inspector/", views.inspector_view, name="inspector"),
+    path("<int:pk>/piezas/<int:aprobacion_id>/decidir/", views.decidir_pieza_view, name="decidir_pieza"),
+    path("anotaciones/<int:pk>/", views.anotacion_view, name="anotacion"),
+    path("<int:pk>/conversacion/", views.conversacion_mensajes_view, name="conversacion"),
+    path("<int:pk>/conversacion/enviar/", views.conversacion_enviar_view, name="conversacion_enviar"),
+    path("<int:pk>/conversacion/leido/", views.conversacion_leido_view, name="conversacion_leido"),
     path("<int:pk>/tomar/", views.tomar_view, name="tomar"),
     path("<int:pk>/iniciar-atencion/", views.iniciar_atencion_view, name="iniciar_atencion"),
     path("<int:pk>/asignar/", views.asignar_view, name="asignar"),
@@ -39,6 +48,9 @@ urlpatterns = [
     path("<int:pk>/colecciones/<slug:clave>/", views.coleccion_view, name="coleccion"),
     path("<int:pk>/elementos/agregar/", views.elemento_agregar_view, name="elemento_agregar"),
     path("<int:pk>/elementos/<int:elemento_id>/guardar/", views.elemento_guardar_view, name="elemento_guardar"),
+    path("<int:pk>/elementos/<int:elemento_id>/enviar/", views.elemento_enviar_view, name="elemento_enviar"),
+    path("<int:pk>/tareas/<int:tarea_id>/avanzar/", views.tarea_avanzar_view, name="tarea_avanzar"),
+    path("<int:pk>/colecciones/<slug:clave>/borradores/", views.tabla_borradores_view, name="tabla_borradores"),
     path("<int:pk>/elementos/<int:elemento_id>/editar/", views.elemento_tarea_view, name="elemento_tarea"),
     path("<int:pk>/elementos/<int:elemento_id>/retirar/", views.elemento_retirar_view, name="elemento_retirar"),
     path(

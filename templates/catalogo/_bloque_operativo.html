@@ -40,8 +40,12 @@
           {% include "catalogo/_actividad_ampliada.html" with form=fila.form_configurar %}
         {% elif fila.tipo_empresarial == "GACETA" %}
           <div class="field">{{ fila.form_configurar.gaceta.label_tag }}{{ fila.form_configurar.gaceta }}</div>
-          <label class="choice">{{ fila.form_configurar.presentar_items }} {{ fila.form_configurar.presentar_items.label }}</label>
-          <div class="field">{{ fila.form_configurar.esperar.label_tag }}{{ fila.form_configurar.esperar }}</div>
+          {% if fila.en_recorrido %}
+            <p class="svc-note">El recorrido de cada ítem espera aquí la decisión de la gaceta sobre ese ítem; los demás siguen a su ritmo.</p>
+          {% else %}
+            <label class="choice">{{ fila.form_configurar.presentar_items }} {{ fila.form_configurar.presentar_items.label }}</label>
+            <div class="field">{{ fila.form_configurar.esperar.label_tag }}{{ fila.form_configurar.esperar }}</div>
+          {% endif %}
         {% elif fila.tipo_empresarial == "RECORRIDO_ITEMS" %}
           {% include "catalogo/_recorrido_config.html" with form=fila.form_configurar %}
         {% elif fila.tipo_empresarial == "ENTREGABLE" %}

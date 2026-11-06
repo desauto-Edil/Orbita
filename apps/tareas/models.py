@@ -296,6 +296,8 @@ class HistorialTarea(models.Model):
         COMPLETADA = "COMPLETADA", "Completada"
         CANCELADA = "CANCELADA", "Cancelada"
         VERIFICACION = "VERIFICACION", "Lista de verificación"
+        # Bloque 5.4: cambiaron las fechas porque cambió el dato del que salen (p. ej. la fecha de un ítem).
+        REPROGRAMADA = "REPROGRAMADA", "Reprogramada"
 
     tarea = models.ForeignKey(Tarea, on_delete=models.CASCADE, related_name="historial")
     tipo_evento = models.CharField(max_length=15, choices=TipoEvento.choices)

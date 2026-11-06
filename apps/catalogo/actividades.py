@@ -26,6 +26,12 @@ Bloque 3.1 (opcional):
   en ESE ítem (solo en un recorrido por ítem; las claves se validan contra la colección recorrida al publicar).
   Vacía = la actividad no concede edición. La autorización vive en `apps.tickets.edicion_por_tarea`.
 
+UX-4 (opcional):
+
+- `columnas_requeridas`: `[clave, …]` de columnas del ítem que deben estar completas para COMPLETAR la Tarea
+  (solo en un recorrido por ítem; p. ej. el archivo de la pieza antes de enviarla a aprobación). Lo hace
+  cumplir la integración Tarea ↔ Workflow (`completar_tarea_workflow`), con la misma completitud de la colección.
+
 La descripción operativa es la del propio bloque (`BloqueOperativo.descripcion`), que ya se copia a la
 Tarea. Configuraciones anteriores sin estas claves siguen siendo válidas: todo es opcional.
 """
@@ -132,6 +138,7 @@ def normalizar(configuracion):
         "fecha_limite_campo": limite_campo,
         "exige_datos_inicio": bool(cfg.get("exige_datos_inicio")),
         "columnas_editables": columnas_editables(cfg.get("columnas_editables"), errores),
+        "columnas_requeridas": columnas_editables(cfg.get("columnas_requeridas"), errores),
     }
     return ampliacion, errores
 

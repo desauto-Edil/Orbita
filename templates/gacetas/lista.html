@@ -7,7 +7,7 @@
     <ul class="work-list">
       {% for gaceta in gacetas %}
         <li class="card">
-          <a href="{% url 'gacetas:detalle' gaceta.pk %}"><strong>{{ gaceta.nombre }}</strong></a>
+          <a href="{% url 'tickets:espacio' gaceta.ticket_id %}#gaceta-{{ gaceta.pk }}"><strong>{{ gaceta.nombre }}</strong></a>
           · {{ gaceta.ticket.detalle_servicio.servicio.nombre }} {{ gaceta.ticket.codigo|default:"" }}
           · <span class="badge">{{ gaceta.get_estado_display }}</span>
           {% if gaceta.vence_revision_en %}· Revisión hasta {{ gaceta.vence_revision_en|date:"d/m/Y H:i" }}{% endif %}

@@ -1,0 +1,104 @@
+{% comment %}Una tarea (del flujo, por elemento, corrección de gaceta, subtarea o independiente). Cada formulario es la operación de `apps.tareas` de siempre, con `next` = el espacio.{% endcomment %}
+{% with tarea=accion.tarea %}
+  <p class="ws-ahora__dato">Responsable: <strong>{{ accion.responsable|default:"sin asignar" }}</strong></p>
+
+  {% if accion.verificaciones %}
+    <h4 class="esp-guia__titulo">Lista de verificación</h4>
+    <ul class="esp-verificacion">
+      {% for item in accion.verificaciones %}
+        <li>
+          {% if accion.puede_marcar %}
+            <form method="post" action="{% url 'tareas:verificar' tarea.pk item.pk %}">
+              {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+              <input type="hidden" name="marcado" value="{% if item.marcado %}0{% else %}1{% endif %}">
+              <button type="submit" class="esp-check{% if item.marcado %} is-on{% endif %}" aria-pressed="{% if item.marcado %}true{% else %}false{% endif %}">
+                <span aria-hidden="true">{% if item.marcado %}✓{% endif %}</span><span class="sr-only">{% if item.marcado %}Desmarcar{% else %}Marcar{% endif %}</span>
+              </button>
+            </form>
+          {% else %}
+            <span class="esp-check{% if item.marcado %} is-on{% endif %}" aria-hidden="true">{% if item.marcado %}✓{% endif %}</span>
+          {% endif %}
+          <span>{{ item.texto }}{% if item.obligatorio %} <span class="badge badge--warning">Obligatorio</span>{% endif %}</span>
+        </li>
+      {% endfor %}
+    </ul>
+  {% endif %}
+
+  {% if accion.ficha %}
+    {% include "tickets/espacio/_ficha_edicion.html" with ficha_edicion=accion.ficha elemento=accion.elemento en_accion=True %}
+  {% endif %}
+
+  {% if tarea.requiere_evidencia or accion.evidencias or accion.puede_comentar %}
+    <h4 class="esp-guia__titulo">Evidencias</h4>
+    <ul class="plain-list">
+      {% for evidencia in accion.evidencias %}
+        <li><a href="{% url 'tareas:descargar_evidencia' evidencia.pk %}">{{ evidencia.nombre_original }}</a> <span class="text-muted">{{ evidencia.subido_por }} · {{ evidencia.creado_en|date:"d/m H:i" }}</span></li>
+      {% empty %}
+        <li class="text-muted">Sin evidencias.</li>
+      {% endfor %}
+    </ul>
+    {% if accion.puede_comentar %}
+      <form method="post" action="{% url 'tareas:adjuntar_evidencia' tarea.pk %}" enctype="multipart/form-data" class="esp-inline">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+        <input type="file" name="archivo" required aria-label="Evidencia">
+        <button type="submit" class="btn btn--secondary btn--sm">Adjuntar evidencia</button>
+      </form>
+    {% endif %}
+  {% endif %}
+
+  {% if accion.subtareas or accion.puede_crear_subtarea %}
+    <h4 class="esp-guia__titulo">Subtareas</h4>
+    <ul class="plain-list">
+      {% for subtarea in accion.subtareas %}
+        <li>{{ subtarea.titulo }} <span class="badge{% if subtarea.estado == 'COMPLETADA' %} badge--success{% endif %}">{{ subtarea.get_estado_display }}</span> <span class="text-muted">{% if subtarea.usuario_responsable %}{{ subtarea.usuario_responsable.get_full_name|default:subtarea.usuario_responsable.get_username }}{% elif subtarea.equipo_responsable %}{{ subtarea.equipo_responsable }}{% endif %}</span></li>
+      {% empty %}
+        <li class="text-muted">Sin subtareas.</li>
+      {% endfor %}
+    </ul>
+    {% if accion.puede_crear_subtarea %}
+      <details class="esp-plegable">
+        <summary>Crear una subtarea</summary>
+        <form method="post" action="{% url 'tareas:crear_subtarea' tarea.pk %}" class="form">
+          {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+          <div class="field"><label for="st-titulo">Título</label><input id="st-titulo" type="text" name="titulo" maxlength="200" required></div>
+          <div class="field"><label for="st-desc">Descripción</label><textarea id="st-desc" name="descripcion" rows="2"></textarea></div>
+          <p class="text-muted">Asigna la persona o el equipo y la fecha desde el <a href="{% url 'tareas:detalle' tarea.pk %}">detalle de la tarea</a> si los necesitas.</p>
+          <button type="submit" class="btn btn--secondary btn--sm">Crear subtarea</button>
+        </form>
+      </details>
+    {% endif %}
+  {% endif %}
+
+  {% if accion.puede_comentar %}
+    <details class="esp-plegable">
+      <summary>Comentar la tarea</summary>
+      <form method="post" action="{% url 'tareas:comentar' tarea.pk %}" class="form">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+        <div class="field"><label for="tc-{{ tarea.pk }}">Comentario</label><textarea id="tc-{{ tarea.pk }}" name="contenido" rows="2" required></textarea></div>
+        <button type="submit" class="btn btn--secondary btn--sm">Comentar</button>
+      </form>
+    </details>
+  {% endif %}
+
+  {# Barra de acciones: fija al pie mientras el formulario es largo. Guardar ≠ completar. #}
+  {# UX-4 — Guardar borrador ≠ avanzar. El botón principal guarda lo escrito y completa la actividad en UNA operación #}
+  {# (`tickets:tarea_avanzar` → `avance.guardar_y_avanzar`); su texto dice qué sigue según el flujo real. #}
+  <div class="ws-acciones esp-panel__pie">
+    {% if accion.puede_tomar %}
+      <form method="post" action="{% url 'tareas:tomar' tarea.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}"><button type="submit" class="btn btn--primary">Tomar la actividad</button></form>
+    {% endif %}
+    {% if accion.puede_completar %}
+      {% if accion.ficha and accion.ficha.celdas_valor %}
+        <button type="submit" class="btn btn--secondary" form="ficha-form-{{ accion.elemento.pk }}">Guardar borrador</button>
+        <button type="submit" class="btn btn--primary" form="ficha-form-{{ accion.elemento.pk }}" formaction="{% url 'tickets:tarea_avanzar' ticket.pk tarea.pk %}">{{ accion.etiqueta_avance }}</button>
+      {% else %}
+        <form method="post" action="{% url 'tickets:tarea_avanzar' ticket.pk tarea.pk %}">
+          {% csrf_token %}<input type="hidden" name="next" value="{{ base }}">{% if accion.elemento %}<input type="hidden" name="elemento" value="{{ accion.elemento.pk }}">{% endif %}
+          <button type="submit" class="btn btn--primary">{{ accion.etiqueta_avance }}</button>
+        </form>
+      {% endif %}
+    {% endif %}
+    <a class="btn btn--ghost esp-panel__pie-secundario" href="{% url 'tareas:detalle' tarea.pk %}">Detalle de la actividad</a>
+    {% if accion.puede_completar and accion.ficha and accion.ficha.celdas_valor %}<p class="esp-panel__nota">«Guardar borrador» conserva lo escrito sin avanzar; «{{ accion.etiqueta_avance }}» lo guarda y avanza.</p>{% endif %}
+  </div>
+{% endwith %}

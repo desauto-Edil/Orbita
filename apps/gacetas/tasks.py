@@ -6,6 +6,7 @@ vez, o una acción manual entre medias, no repiten efectos). Un error en una gac
 import logging
 
 from celery import shared_task
+from django.core.exceptions import ValidationError
 from django.utils import timezone
 
 from apps.gacetas import operaciones
@@ -24,6 +25,10 @@ def reconciliar(ahora=None):
         try:
             operaciones.cerrar_periodo(gaceta, None)
             acciones += 1
+        except ValidationError as exc:
+            # Bloque 5.3: una gaceta por ítem no cierra mientras falten ítems por llegar; se reintenta en la
+            # próxima pasada (la ventana se extiende hasta la última pieza). No es un fallo.
+            logger.info("La gaceta %s sigue abierta: %s", gaceta.pk, "; ".join(exc.messages))
         except Exception:  # noqa: BLE001 — aislar el error de una gaceta
             logger.exception("No se pudo cerrar el periodo de la gaceta %s", gaceta.pk)
     for participacion in ParticipacionItemGaceta.objects.filter(

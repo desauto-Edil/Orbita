@@ -1,0 +1,96 @@
+{% comment %}
+  Pestaña Información (solo quien consulta el ticket): solicitud original, resultados y entregas, solicitudes de
+  información y archivos. La conversación y el historial viven en el panel global del ticket
+  (`tickets/_panel_ticket.html`). Reutiliza los parciales del detalle.
+{% endcomment %}
+<div class="esp-columnas">
+<div class="esp-columnas__col">
+<div id="solicitud">{% include "tickets/_respuestas.html" %}</div>
+{% include "tickets/_datos_inicio.html" with next_url=aqui %}
+
+{% if entregables or entregas or resolucion_actual %}
+  <section class="esp-superficie" aria-labelledby="info-res-t">
+    <h3 id="info-res-t">Resultados</h3>
+    {% if entregables %}
+      <ul class="list-row-group">
+        {% for entregable in entregables %}{% include "tickets/_entregable_item.html" with next_url=aqui %}{% endfor %}
+      </ul>
+    {% endif %}
+    {% if resolucion_actual %}
+      <p><strong>Resuelto por {{ resolucion_actual.resuelto_por }}</strong> — {{ resolucion_actual.resuelto_en|date:"d/m/Y H:i" }}</p>
+      <p>{{ resolucion_actual.descripcion }}</p>
+      {% for adjunto in resolucion_actual.adjuntos.all %}<p><a href="{% url 'tickets:descargar_adjunto' adjunto.pk %}">{{ adjunto.nombre_original }}</a></p>{% endfor %}
+    {% endif %}
+    {% include "tickets/_entregas_lista.html" %}
+  </section>
+{% endif %}
+
+{% if muestra_prorrogas %}
+  <section class="esp-superficie" aria-labelledby="info-pro-t">
+    <h3 id="info-pro-t">Compromiso de tiempo</h3>
+    <p>Fecha objetivo vigente: <strong>{{ compromiso.vigente|date:"d/m/Y" }}</strong>{% if compromiso.ampliado %} <span class="text-muted">(original {{ compromiso.original|date:"d/m/Y" }})</span>{% endif %}</p>
+    {% for fila in prorrogas %}
+      <p class="text-muted">Prórroga {{ fila.prorroga.get_estado_display|lower }} · solicitada por {{ fila.prorroga.solicitada_por }} · nueva fecha {{ fila.prorroga.nueva_fecha_solicitada|date:"d/m/Y" }}</p>
+    {% endfor %}
+    {% if puede_solicitar_prorroga %}<p class="ws-nota">Para pedir una prórroga usa la <a href="{% url 'tickets:detalle' ticket.pk %}">vista completa</a>.</p>{% endif %}
+  </section>
+{% endif %}
+
+</div>
+<div class="esp-columnas__col">
+<section class="esp-superficie" id="solicitudes-informacion" aria-labelledby="info-sol-t">
+  <h3 id="info-sol-t">Solicitudes de información</h3>
+  <ul class="esp-historia">
+    {% for solicitud in solicitudes %}
+      <li>
+        <span class="badge {% if solicitud.estado == 'PENDIENTE' %}badge--warning{% else %}badge--success{% endif %}">{{ solicitud.get_estado_display }}</span>
+        <strong>{{ solicitud.solicitada_por.get_full_name|default:solicitud.solicitada_por.get_username }}</strong> <span class="text-muted">{{ solicitud.solicitada_en|date:"d/m/Y H:i" }}</span>
+        <p>{{ solicitud.mensaje|linebreaksbr }}</p>
+        {% for adjunto in solicitud.adjuntos.all %}<p><a href="{% url 'tickets:descargar_adjunto' adjunto.pk %}">{{ adjunto.nombre_original }}</a></p>{% endfor %}
+        {% if solicitud.estado == "RESPONDIDA" %}
+          <p><strong>Respuesta de {{ solicitud.respuesta.respondida_por }}</strong> <span class="text-muted">{{ solicitud.respuesta.respondida_en|date:"d/m/Y H:i" }}</span></p>
+          <p>{{ solicitud.respuesta.contenido|linebreaksbr }}</p>
+          {% for adjunto in solicitud.respuesta.adjuntos.all %}<p><a href="{% url 'tickets:descargar_adjunto' adjunto.pk %}">{{ adjunto.nombre_original }}</a></p>{% endfor %}
+        {% elif solicitud.destinatario_id == request.user.pk %}
+          <p><a class="btn btn--secondary btn--sm" href="{{ base }}?accion=solicitud-{{ solicitud.pk }}">Responder</a></p>
+        {% endif %}
+      </li>
+    {% empty %}
+      <li class="text-muted">Sin solicitudes de información.</li>
+    {% endfor %}
+  </ul>
+  {% if puede_solicitar_informacion %}
+    <details class="esp-plegable">
+      <summary>Pedir información al solicitante</summary>
+      <form method="post" action="{% url 'tickets:solicitar_informacion' ticket.pk %}" enctype="multipart/form-data" class="form">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}#solicitudes-informacion">
+        <div class="field"><label for="info-pedir">¿Qué necesitas saber?</label><textarea id="info-pedir" name="mensaje" rows="3" required></textarea></div>
+        <div class="field"><label for="info-pedir-archivo">Adjuntar archivo (opcional)</label><input id="info-pedir-archivo" type="file" name="archivo"></div>
+        <button type="submit" class="btn btn--secondary btn--sm">Enviar solicitud</button>
+      </form>
+    </details>
+  {% endif %}
+</section>
+
+{% if adjuntos_ticket or puede_comentar %}
+  <section class="esp-superficie" aria-labelledby="info-arch-t">
+    <h3 id="info-arch-t">Archivos del ticket</h3>
+    <ul class="plain-list">
+      {% for adjunto in adjuntos_ticket %}
+        <li><a href="{% url 'tickets:descargar_adjunto' adjunto.pk %}">{{ adjunto.nombre_original }}</a> <span class="text-muted">{{ adjunto.subido_por }} — {{ adjunto.creado_en|date:"d/m/Y H:i" }}</span></li>
+      {% empty %}
+        <li class="text-muted">Sin archivos.</li>
+      {% endfor %}
+    </ul>
+    {% if puede_comentar %}
+      <form method="post" action="{% url 'tickets:adjuntar' ticket.pk %}" enctype="multipart/form-data" class="esp-inline">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+        <input type="file" name="archivo" required aria-label="Archivo">
+        <button type="submit" class="btn btn--secondary btn--sm">Adjuntar al ticket</button>
+      </form>
+    {% endif %}
+  </section>
+{% endif %}
+
+</div>
+</div>

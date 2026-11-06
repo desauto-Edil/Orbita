@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% comment %}
+  UX-1/UX-2 — Espacio unificado del Ticket (todos los servicios y procesos). La composición sale de la relación de
+  la persona con el ticket (`apps/tickets/espacio.py`); cada formulario envía a la operación de dominio de siempre
+  con `next` = esta pantalla. Nada se decide en la plantilla.
+
+  Estructura (escritorio con altura suficiente, `content-area--espacio`): ENCABEZADO PERSISTENTE (`tb-fijo`:
+  regreso, nombre, estado, código, responsable, fecha objetivo, recorrido y el banner de «Tu misión») y debajo la
+  ÚNICA zona que se desplaza (`tb-cuerpo`). A la derecha, el panel global del ticket (Conversación | Historial,
+  `tickets/_panel_ticket.html`) para quien lo consulta, y el panel de contexto (`?panel=solicitud|elemento`).
+{% endcomment %}
+
+{% block title %}{{ titulo_pagina }} — {{ sistema.nombre }}{% endblock %}
+
+{% block content_modifier %}content-area--operativo content-area--espacio{% endblock %}
+
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/trabajo.css' %}"><link rel="stylesheet" href="{% static 'css/espacio.css' %}"><link rel="stylesheet" href="{% static 'css/tablero.css' %}"><link rel="stylesheet" href="{% static 'css/panel_ticket.css' %}"><link rel="stylesheet" href="{% static 'css/piezas.css' %}">{% endblock %}
+
+{% block extra_scripts %}<script src="{% static 'js/tablero.js' %}" defer></script><script src="{% static 'js/piezas.js' %}" defer></script>{% if conversacion.puede_leer %}<script src="{% static 'js/panel_ticket.js' %}" defer></script>{% endif %}{% endblock %}
+
+{% block content %}
+  <div class="tb-pagina{% if panel %} tb-pagina--con-panel{% endif %}{% if panel_global %} has-tp{% endif %}" data-espacio>
+    <div class="tb-principal">
+      <div class="tb-fijo">
+      {# --- Encabezado: qué ticket es, en qué estado, quién lo lleva --- #}
+      <header class="tb-cabeza">
+        <a class="tb-cabeza__volver" href="{% if desde_mis_tickets %}{% url 'tickets:mis_tickets' %}{% else %}{% url 'core:mi_trabajo' %}{% endif %}">
+          {% include "components/icon.html" with name="chevron-left" size="sm" %}{% if desde_mis_tickets %}Mis tickets{% else %}Mi trabajo{% endif %}
+        </a>
+        <div class="tb-cabeza__fila">
+          <div class="tb-cabeza__id">
+            <h1 class="tb-cabeza__titulo">{{ servicio.nombre }}{% if ticket.etiqueta %} <span class="tb-cabeza__periodo">· {{ ticket.etiqueta }}</span>{% endif %}</h1>
+            <p class="tb-cabeza__meta">
+              <span class="estado-etiqueta estado-etiqueta--{{ ticket.estado|lower }}">{{ ticket.get_estado_display }}</span>
+              <span class="tabular">{{ ticket.codigo|default:"Sin código" }}</span>
+              {% if lateral %}
+                <span>Responsable: <strong>{% if lateral.responsable.persona %}{{ lateral.responsable.persona }}{% elif lateral.responsable.equipo %}{{ lateral.responsable.equipo }}{% else %}Sin asignar{% endif %}</strong></span>
+                {% if ticket.fecha_objetivo_vigente %}<span class="tabular">Objetivo: <strong>{{ ticket.fecha_objetivo_vigente|date:"j M Y" }}</strong></span>{% endif %}
+                {% if lateral.solicitante %}<span>Solicita: {{ lateral.solicitante }}</span>{% endif %}
+              {% endif %}
+            </p>
+          </div>
+          <div class="tb-cabeza__acciones">
+            {% if rel.consulta %}
+              <a class="btn btn--ghost btn--sm" href="{{ url_panel }}solicitud">Solicitud</a>
+            {% endif %}
+            {% if conversacion.puede_leer %}
+              <a class="btn btn--ghost btn--sm tp-acceso" href="{{ url_panel }}conversacion" data-tp-abrir="conversacion" aria-controls="panel-ticket" aria-expanded="{% if panel_global == 'conversacion' %}true{% else %}false{% endif %}">
+                {% include "components/icon.html" with name="message" size="sm" %}Conversación
+                <span class="tp-acceso__cuenta tabular" data-chat-no-leidos{% if not conversacion.no_leidos %} hidden{% endif %}><span data-chat-no-leidos-n>{{ conversacion.no_leidos }}</span><span class="sr-only"> sin leer</span></span>
+              </a>
+              {% if historial_visible %}<a class="btn btn--ghost btn--sm" href="{{ url_panel }}historial" data-tp-abrir="historial" aria-controls="panel-ticket" aria-expanded="{% if panel_global == 'historial' %}true{% else %}false{% endif %}">{% include "components/icon.html" with name="history" size="sm" %}Historial</a>{% endif %}
+            {% endif %}
+            {% if generales.puede_cancelar or generales.puede_reabrir %}
+              <details class="esp-mas">
+                <summary class="btn btn--ghost btn--sm">Más {% include "components/icon.html" with name="chevron-down" size="sm" %}</summary>
+                <div class="esp-mas__panel">
+                  {% if generales.puede_reabrir %}
+                    <form method="post" action="{% url 'tickets:reabrir' ticket.pk %}" class="form">
+                      {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+                      <div class="field"><label for="esp-reabrir">Motivo de reapertura</label><textarea id="esp-reabrir" name="motivo" required rows="2"></textarea></div>
+                      <button type="submit" class="btn btn--secondary btn--sm">Reabrir</button>
+                    </form>
+                  {% endif %}
+                  {% if generales.puede_cancelar %}
+                    <form method="post" action="{% url 'tickets:cancelar' ticket.pk %}" class="form">
+                      {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+                      <div class="field"><label for="esp-cancelar">Motivo de cancelación</label><textarea id="esp-cancelar" name="motivo" required rows="2"></textarea></div>
+                      <button type="submit" class="btn btn--danger btn--sm">Cancelar ticket</button>
+                    </form>
+                  {% endif %}
+                </div>
+              </details>
+            {% endif %}
+          </div>
+        </div>
+      </header>
+
+      {# --- Recorrido: siempre visible --- #}
+      {% include "tickets/espacio/tablero/_ruta.html" %}
+
+      {# --- Tu misión (banner): cierra el encabezado persistente --- #}
+      {% include "tickets/espacio/tablero/_mision.html" %}
+      </div>
+
+      {# --- Lo que se desplaza: el lugar donde se hace la misión y el resto del espacio --- #}
+      <div class="tb-cuerpo" data-espacio-cuerpo>
+      {% if vista_etapa %}
+        {# --- UX-4c: una etapa elegida en el recorrido, en solo lectura (en lugar de la misión) --- #}
+        {% include "tickets/espacio/_etapa.html" %}
+      {% elif mision.tipo == "gaceta" %}
+        {# --- La misión es una gaceta: la vista queda AISLADA en esa gaceta (solo sus piezas publicadas). --- #}
+        {% if galeria %}{% include "tickets/espacio/tablero/_gaceta.html" %}{% endif %}
+      {% else %}
+        {% include "tickets/espacio/tablero/_mision_lugar.html" %}
+
+        {# --- Gacetas: el espacio de colaboración, siempre visible para quien participa en ellas --- #}
+        {% for galeria in galerias %}
+          {% include "tickets/espacio/tablero/_gaceta.html" %}
+        {% endfor %}
+
+        {# --- Seguimiento de todos los ítems (no durante la lluvia de ideas: ahí la tabla ya es la lista) --- #}
+        {% if colecciones and mision.tipo != "lluvia" or ficha and not colecciones %}
+          {% include "tickets/espacio/_items.html" %}
+        {% endif %}
+      {% endif %}
+
+      {% comment %}La coordinación de gacetas, las condiciones para finalizar, los resultados y los datos dependen de
+        la fase: no se muestran en el espacio de trabajo (siguen en la vista completa del ticket, `tickets:detalle`).{% endcomment %}
+      </div>
+    </div>
+
+    {% if panel %}
+      {% include "tickets/espacio/_panel.html" %}
+    {% endif %}
+    {% if conversacion.puede_leer %}
+      {% include "tickets/_panel_ticket.html" %}
+    {% endif %}
+  </div>
+{% endblock %}

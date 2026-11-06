@@ -24,6 +24,18 @@
   </div>
   <p class="svc-help">Los revisores registran observaciones; no deciden.</p>
 </fieldset>
+<fieldset class="svc-fieldset" data-paso="Qué se ve">
+  <legend>Qué ven quienes revisan</legend>
+  {% if form.columnas_visibles.field.choices %}
+    <fieldset class="svc-fieldset">
+      <legend>{{ form.columnas_visibles.label }}</legend>
+      {% for opcion in form.columnas_visibles %}<label class="choice">{{ opcion.tag }} {{ opcion.choice_label }}</label>{% endfor %}
+    </fieldset>
+    <p class="svc-help">La revisión muestra cada ítem como una tarjeta con solo estos datos. Marca la columna de archivo para ver la imagen o el video de la pieza. Sin ninguna marcada se muestran todos los datos.</p>
+  {% else %}
+    <p class="svc-help">Elige primero las colecciones de la gaceta y guarda: después podrás decidir qué datos se muestran.</p>
+  {% endif %}
+</fieldset>
 <fieldset class="svc-fieldset" data-paso="Revisión y aprobación">
   <legend>Revisión y aprobación</legend>
   <div class="svc-form-grid svc-form-grid--two">

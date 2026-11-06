@@ -1,0 +1,52 @@
+{% comment %}
+  UX-4 — coordinación dentro del espacio (solo quien consulta el ticket): las gacetas con su avance y, para quien
+  las coordina (`gacetas.autorizacion.puede_coordinar`), cerrar el periodo y resolver con las operaciones de
+  siempre (`gacetas:cerrar_periodo`, `gacetas:resolver`, que rechazan con su motivo si aún no se puede); y las
+  condiciones para finalizar el ticket (`finalizacion.evaluar`).
+{% endcomment %}
+{% if gacetas_ticket or condiciones_cierre %}
+  <section class="esp-superficie esp-coordinacion" aria-labelledby="esp-coord-t">
+    <h2 id="esp-coord-t" class="esp-coordinacion__titulo">Coordinación</h2>
+
+    {% for g in gacetas_ticket %}
+      <div class="esp-gaceta">
+        <div class="esp-gaceta__cabeza">
+          <p class="esp-gaceta__nombre">{% if g.puede_ver %}<a href="{% url 'tickets:espacio' g.gaceta.ticket_id %}#gaceta-{{ g.gaceta.pk }}">{{ g.gaceta.nombre }}</a>{% else %}{{ g.gaceta.nombre }}{% endif %}</p>
+          <span class="estado-etiqueta{% if g.gaceta.estado == 'RESUELTA' %} estado-etiqueta--resuelto{% elif g.gaceta.estado == 'ABIERTA' %} estado-etiqueta--en_atencion{% endif %}">{{ g.gaceta.get_estado_display }}</span>
+        </div>
+        <p class="esp-gaceta__cifras tabular">{{ g.resumen.aprobados }} aprobada{{ g.resumen.aprobados|pluralize }} · {{ g.resumen.en_revision }} en revisión · {{ g.resumen.en_correccion }} en corrección</p>
+        {% if g.coordina and g.gaceta.estado != "RESUELTA" and g.gaceta.estado != "CANCELADA" %}
+          <div class="ws-acciones">
+            {% if g.gaceta.estado == "ABIERTA" %}
+              <form method="post" action="{% url 'gacetas:cerrar_periodo' g.gaceta.pk %}">
+                {% csrf_token %}<input type="hidden" name="next" value="{{ base }}">
+                <button type="submit" class="btn btn--secondary btn--sm">Cerrar el periodo de observaciones</button>
+              </form>
+            {% endif %}
+            <details class="esp-plegable">
+              <summary>Resolver la gaceta</summary>
+              <form method="post" action="{% url 'gacetas:resolver' g.gaceta.pk %}" class="form">
+                {% csrf_token %}<input type="hidden" name="next" value="{{ base }}">
+                <div class="field"><label for="gac-res-{{ g.gaceta.pk }}">Justificación (opcional)</label><textarea id="gac-res-{{ g.gaceta.pk }}" name="justificacion" rows="2"></textarea></div>
+                <div class="form-actions"><button type="submit" class="btn btn--secondary btn--sm">Resolver</button></div>
+              </form>
+            </details>
+          </div>
+        {% endif %}
+      </div>
+    {% endfor %}
+
+    {% if condiciones_cierre %}
+      <div class="esp-cierre-condiciones">
+        <p class="esp-guia__titulo">Para finalizar el ticket</p>
+        <ul class="esp-requisitos">
+          {% for regla in condiciones_cierre %}
+            <li class="esp-requisito{% if regla.cumple %} esp-requisito--ok{% else %} esp-requisito--falta{% endif %}">
+              <span class="esp-requisito__marca" aria-hidden="true">{% if regla.cumple %}✓{% endif %}</span>{{ regla.descripcion }}{% if not regla.cumple and regla.detalle %} <span class="text-muted">· {{ regla.detalle }}</span>{% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    {% endif %}
+  </section>
+{% endif %}

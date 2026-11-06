@@ -21,7 +21,7 @@
       <h1 class="ws-head__title">{{ servicio.nombre }}</h1>
       {% if ticket.etiqueta %}<p class="ticket-etiqueta text-muted">{{ ticket.etiqueta }}</p>{% endif %}
       <p class="ws-head__meta">
-        <span class="badge badge--info badge--dot">{{ ticket.get_estado_display }}</span>
+        <span class="estado-etiqueta estado-etiqueta--{{ ticket.estado|lower }}">{{ ticket.get_estado_display }}</span>
         {% if ticket.solicitante %}Solicita {{ ticket.solicitante.get_full_name|default:ticket.solicitante.get_username }}{% else %}Generado por programación{% endif %}
         {% if ticket.fecha_objetivo_vigente %}· objetivo {{ ticket.fecha_objetivo_vigente|date:"d M Y" }}{% endif %}
         · lo tiene {% if responsable.persona %}{{ responsable.persona }}{% elif responsable.equipo %}{{ responsable.equipo }}{% else %}nadie aún{% endif %}
@@ -39,6 +39,7 @@
       {% elif puede_iniciar_atencion %}
         <form method="post" action="{% url 'tickets:iniciar_atencion' ticket.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{% url 'tickets:trabajo' ticket.pk %}"><button type="submit" class="btn btn--primary">Iniciar atención</button></form>
       {% endif %}
+      <a class="btn btn--secondary" href="{% url 'tickets:espacio' ticket.pk %}">Espacio del ticket</a>
       <a class="btn btn--ghost" href="{% url 'tickets:detalle' ticket.pk %}">Detalle completo</a>
     </div>
   </section>

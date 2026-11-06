@@ -23,12 +23,18 @@ Contrato de una gaceta (todo opcional salvo colecciones y aprobadores):
     al_resolver_pendientes IMPEDIR | EXCLUIR | RECHAZAR (qué pasa con lo pendiente al resolver)
     resolucion_automatica  bool: resolver sola cuando se cierra el periodo y se puede
     responsable_correccion_columna  clave de una columna USUARIO/EQUIPO del ítem (vacío: responsable del ticket)
+    responsable_correccion_origen   UX-4: "" (lo anterior) | "ULTIMA_ACTIVIDAD": la corrección la recibe quien
+                                    completó la última actividad del recorrido de ESE ítem (p. ej. quien produjo
+                                    la pieza); si no la hay, se aplica lo anterior
     coordinador            Fase 4.A: {"tipo": "USUARIO"|"EQUIPO", "usuario_id"|"equipo_id"} o null. Quién coordina
                            la gaceta (presenta, cierra el periodo, resuelve, excluye). Null: quien atiende el
                            ticket, como hasta ahora (`gacetas.autorizacion.puede_coordinar`).
     columnas_editables     Bloque 3.1: [clave de columna, …] que el responsable de una tarea de corrección ABIERTA
                            puede editar en SU ítem (`apps.tickets.edicion_por_tarea`). Vacía = la corrección no
                            concede edición del ítem. Cada clave debe existir en alguna colección de la gaceta.
+    columnas_visibles      UX-4b: [clave de columna, …] que se MUESTRAN de cada ítem en la revisión de la gaceta
+                           (datos y, si es una columna ARCHIVO, su vista previa). Vacía = todas, como antes. Solo
+                           presentación: no cambia quién ve el ítem ni lo que se versiona o se decide.
     obligatoria            Fase 4.A: bool. Con la regla «Las gacetas están resueltas», una gaceta OBLIGATORIA que
                            nunca se abrió impide resolver el ticket; una opcional no bloquea solo por existir.
                            Ausente en las configuraciones congeladas antes de 4.A = opcional (comportamiento previo).
@@ -53,6 +59,8 @@ OPERADORES = (
     "IGUAL_A", "DISTINTO_DE", "CONTIENE", "NO_CONTIENE", "MAYOR_QUE", "MENOR_QUE", "ESTA_VACIO", "NO_ESTA_VACIO",
 )
 
+ORIGENES_CORRECCION = ("", "ULTIMA_ACTIVIDAD")
+
 POR_DEFECTO = {
     "colecciones": [],
     "condicion_ingreso": None,
@@ -70,9 +78,11 @@ POR_DEFECTO = {
     "al_resolver_pendientes": "IMPEDIR",
     "resolucion_automatica": False,
     "responsable_correccion_columna": "",
+    "responsable_correccion_origen": "",
     "coordinador": None,
     "obligatoria": False,
     "columnas_editables": [],
+    "columnas_visibles": [],
 }
 
 
@@ -144,10 +154,16 @@ def normalizar(configuracion):
     if cfg["aceptacion_automatica"] and cfg["plazo_revision"] is None:
         errores.append("La aceptación automática necesita un plazo de revisión.")
     cfg["responsable_correccion_columna"] = str(cfg.get("responsable_correccion_columna") or "")
+    origen = str(cfg.get("responsable_correccion_origen") or "")
+    if origen not in ORIGENES_CORRECCION:
+        errores.append("El origen del responsable de la corrección no es válido.")
+        origen = ""
+    cfg["responsable_correccion_origen"] = origen
     cfg["obligatoria"] = bool(cfg.get("obligatoria"))
     from apps.catalogo.actividades import columnas_editables
 
     cfg["columnas_editables"] = columnas_editables(cfg.get("columnas_editables"), errores)
+    cfg["columnas_visibles"] = columnas_editables(cfg.get("columnas_visibles"), errores)
     coordinador = cfg.get("coordinador")
     if coordinador:
         unico = _actores([coordinador], "coordinadores", errores)
@@ -186,6 +202,9 @@ def errores_de_definicion(servicio, configuracion):
     faltan = [clave for clave in cfg["columnas_editables"] if clave not in columnas]
     if faltan:
         errores.append(f"La corrección permite editar columnas que las colecciones de la gaceta no tienen ({', '.join(faltan)}).")
+    faltan = [clave for clave in cfg["columnas_visibles"] if clave not in columnas]
+    if faltan:
+        errores.append(f"La gaceta muestra columnas que sus colecciones no tienen ({', '.join(faltan)}).")
     for etiqueta, lista in (
         ("revisor", cfg["revisores"]), ("aprobador", cfg["aprobadores"]),
         ("coordinador", [cfg["coordinador"]] if cfg["coordinador"] else []),
@@ -196,6 +215,37 @@ def errores_de_definicion(servicio, configuracion):
             if actor["tipo"] == "EQUIPO" and not Equipo.objects.filter(pk=actor["equipo_id"], activo=True).exists():
                 errores.append(f"Un equipo {etiqueta} de la gaceta ya no está activo.")
     return errores
+
+
+def errores_de_uso_por_item(configuracion):
+    """Bloque 5.1 — una gaceta que revisa cada ítem DENTRO de su recorrido (bloque GACETA en la rama ITEM) deja
+    a ese recorrido esperando su aprobación individual. No admite un ingreso automático: el paso del recorrido
+    presenta el ítem cuando llega a él; entrar antes (al cumplir la condición, con la pieza aún sin producir)
+    haría que la gaceta aprobara una versión que todavía va a cambiar. Tampoco la resolución automática.
+
+    Sí admite (demo Imperandina) un PERIODO de revisión compartido con ACEPTACIÓN AUTOMÁTICA («silencio
+    positivo»): el periodo corre desde la apertura (el primer ítem que llega, con apertura POR_FLUJO) sin
+    reiniciarse, y la protección del Bloque 5.3 (`integracion.bloqueos_de_cierre`) impide cerrarlo mientras
+    falten ítems por llegar: la ventana se extiende hasta la última pieza, ninguna queda fuera y ninguna se
+    acepta sin haber estado en revisión. Al cerrarse se aceptan las que están en revisión sin observaciones
+    pendientes; las que están en corrección esperan la decisión de un aprobador. Lista vacía = compatible."""
+    cfg, _ = normalizar(configuracion)
+    errores = []
+    if cfg["ingreso"] != "MANUAL":
+        errores.append("debe recibir los ítems a mano o por el flujo, no automáticamente")
+    if cfg["resolucion_automatica"]:
+        errores.append("no puede resolverse automáticamente")
+    return errores
+
+
+def bloques_por_item(servicio, clave):
+    """Bloques GACETA de la rama ITEM (configuraciones vigentes o en borrador) que usan la gaceta `clave`."""
+    from apps.catalogo.models import BloqueOperativo
+
+    return BloqueOperativo.objects.filter(
+        version__servicio=servicio, version__estado__in=("ACTIVA", "BORRADOR"), tipo="GACETA",
+        rama=BloqueOperativo.Rama.ITEM, configuracion__gaceta=clave,
+    )
 
 
 def definiciones_activas(servicio):
@@ -238,6 +288,12 @@ def configurar_gaceta(servicio, actor, *, nombre, descripcion="", configuracion,
         )
         return definicion
     definicion = DefinicionGaceta.objects.select_for_update().get(pk=definicion.pk, servicio=servicio)
+    if bloques_por_item(servicio, definicion.clave).exists():
+        incompatibles = errores_de_uso_por_item(cfg)
+        if incompatibles:
+            raise ValidationError([
+                f"Un recorrido por ítem revisa cada ítem en esta gaceta: {e}." for e in incompatibles
+            ])
     anterior = serializar(definicion)
     if (definicion.nombre, definicion.descripcion, definicion.configuracion) == (nombre, descripcion or "", cfg):
         return definicion

@@ -1,0 +1,35 @@
+{% extends "configuracion/base.html" %}
+
+{% block config_titulo %}Notificaciones{% endblock %}
+{% block config_subtitulo %}Los valores generales de alertas, recordatorios y escalamiento. Cada servicio o proceso los puede cambiar en su Studio.{% endblock %}
+
+{% block config_contenido %}
+  <div class="config-split">
+    <section class="card" aria-labelledby="cfg-recordatorios">
+      <h2 id="cfg-recordatorios">Alertas y recordatorios</h2>
+      <form method="post" class="form" novalidate>
+        {% csrf_token %}
+        {% include "configuracion/_errores.html" %}
+        {% for campo in form %}
+          {% include "configuracion/_campo.html" with campo=campo %}
+        {% endfor %}
+        <div class="form-actions">
+          <button type="submit" class="btn btn--primary">Guardar cambios</button>
+        </div>
+      </form>
+    </section>
+
+    <aside class="card config-vista" aria-labelledby="cfg-correo">
+      <h2 id="cfg-correo">Correo</h2>
+      {% if correo_activo %}
+        <p><span class="estado estado--complete">Activo</span></p>
+        <p class="text-muted">Los avisos salen por correo desde la cuenta de Gmail configurada, siempre con el logo del modo claro.</p>
+        {% if correo_redirigido %}<p class="field__hint">Entorno de pruebas: todo correo se envía a <strong>{{ correo_redirigido }}</strong>.</p>{% endif %}
+      {% else %}
+        <p><span class="estado estado--optional">Desactivado en este entorno</span></p>
+        <p class="text-muted">Los avisos llegan solo al centro de notificaciones. Para enviar correos, el equipo de tecnología debe activar <code>NOTIFICACIONES_CORREO_ACTIVO</code>.</p>
+      {% endif %}
+      <p class="field__hint">Lo que exige una acción (información pedida, entrega por aceptar, turno de aprobar) siempre se envía por correo; lo demás, según el servicio y las preferencias de cada persona.</p>
+    </aside>
+  </div>
+{% endblock %}

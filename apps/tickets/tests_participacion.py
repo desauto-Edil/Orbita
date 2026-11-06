@@ -181,7 +181,9 @@ class ConsultaTests(_BaseParticipacion, TestCase):
         self.assertNotIn(parrilla, list(parrilla_ops.colecciones_de_participante(self.atiende)))  # ya lo atiende
         self.client.force_login(self.participante)
         pagina = self.client.get(reverse("core:mi_trabajo"))
-        self.assertContains(pagina, reverse("tickets:coleccion", args=[ticket.pk, parrilla.clave]))
+        # UX-2: una fila por ticket que abre el espacio (la colección se trabaja en su pestaña Elementos).
+        self.assertContains(pagina, reverse("tickets:espacio", args=[ticket.pk]))
+        self.assertContains(pagina, "Participante de colección")
 
 
 class ConfiguracionEnStudioTests(_BaseParticipacion, TestCase):

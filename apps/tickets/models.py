@@ -185,6 +185,10 @@ class Ticket(RegistroBase):
     # Fase 3 — reglas de finalización del Proceso, congeladas al crear el ticket (`apps.tickets.finalizacion`).
     # NULL = las reglas por defecto (un ticket anterior a la Fase 3 o un Proceso sin reglas propias).
     reglas_finalizacion = models.JSONField(null=True, blank=True, editable=False)
+    # Sprint 7 (adelanto) — Studio › Notificaciones del Servicio/Proceso, congelado al crear el ticket
+    # (`apps.notificaciones.configuracion.foto`): avisos base con correo, avisos por etapa y recordatorios.
+    # NULL = el catálogo de avisos y los valores generales (tickets anteriores o servicios sin cambios).
+    notificaciones = models.JSONField(null=True, blank=True, editable=False)
 
     class Meta:
         constraints = [
@@ -733,6 +737,51 @@ class ComentarioTicket(models.Model):
 
     def __str__(self):
         return f"{self.ticket} — comentario de {self.autor}"
+
+
+class AnotacionRevision(models.Model):
+    """Anotación visual de una REVISIÓN de un ítem (UX-5): la imagen del ítem con los trazos que dibujó quien decidió
+    su aprobación (lápiz, resaltador…), guardada como PNG junto a SU decisión. No es un archivo del ítem ni una
+    versión: acompaña a la observación de la decisión (`Aprobacion.observacion`) para que quien corrige vea qué
+    señaló el aprobador. Solo existe en la aprobación de un ítem del flujo — nunca en una ronda de gaceta. Append-only;
+    se ve con la misma autorización de la ficha del ítem (`espacio.puede_ver_ficha`)."""
+
+    aprobacion = models.ForeignKey("aprobaciones.Aprobacion", on_delete=models.PROTECT, related_name="anotaciones")
+    elemento = models.ForeignKey("tickets.ElementoParrilla", on_delete=models.PROTECT, related_name="anotaciones")
+    archivo_base = models.ForeignKey(
+        "tickets.Adjunto", on_delete=models.SET_NULL, null=True, blank=True, related_name="anotaciones"
+    )
+    imagen = models.FileField(upload_to="tickets/anotaciones/%Y/%m/")
+    autor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    creada_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-creada_en", "-pk"]
+
+    def __str__(self):
+        return f"Anotación de {self.autor} sobre {self.elemento}"
+
+
+class LecturaConversacion(models.Model):
+    """Hasta dónde leyó una persona la Conversación de un Ticket (los mensajes son `ComentarioTicket`, CU-018).
+
+    Marca de lectura, no un mensaje ni otra fuente de verdad: guarda solo el último comentario visto
+    (`ultimo_leido_id`, los ids crecen con el tiempo) para contar los NO LEÍDOS = comentarios de OTRAS personas
+    posteriores a la marca. Regla explícita: se marca al ver la pestaña «Conversación» abierta
+    (`apps.tickets.conversacion.marcar_leido`); la marca solo avanza. Una por persona y ticket."""
+
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="lecturas_conversacion")
+    ultimo_leido_id = models.PositiveBigIntegerField(default=0)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["usuario", "ticket"], name="uq_lectura_conversacion_usuario_ticket"),
+        ]
+
+    def __str__(self):
+        return f"{self.ticket} — {self.usuario} leyó hasta {self.ultimo_leido_id}"
 
 
 class SolicitudInformacion(models.Model):

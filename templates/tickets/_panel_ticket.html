@@ -1,0 +1,75 @@
+{% comment %}
+  Panel contextual del ticket — UN panel derecho compartido por todos los servicios y procesos, con dos pestañas:
+  Conversación (chat de texto en tiempo real del ticket ENTERO, `apps/tickets/conversacion.py` +
+  `static/js/panel_ticket.js`; la recibe todo el que participa) e Historial (línea de tiempo de todo lo ocurrido,
+  `apps/tickets/linea_tiempo.py`; solo quien consulta el ticket, `historial_visible`). Encabezado (pestañas y cierre) fijo; cada pestaña desplaza solo su contenido; el compositor queda al
+  pie. Sin JS, las pestañas son enlaces (`?panel=conversacion|historial`) y el panel llega abierto desde el
+  servidor; con JS se abre y cierra sin recargar y recuerda su estado POR TICKET en `sessionStorage`.
+
+  Espera: `ticket`, `conversacion` (contexto de `conversacion.contexto`), `linea_tiempo`, `panel_global`
+  ("conversacion" | "historial" | "") y `url_panel` / `url_sin_panel`.
+{% endcomment %}
+<aside class="tp" id="panel-ticket" aria-label="Conversación e historial del ticket"
+       data-panel-ticket data-ticket="{{ ticket.pk }}" data-usuario="{{ request.user.pk }}"
+       data-url-mensajes="{% url 'tickets:conversacion' ticket.pk %}"
+       data-url-enviar="{% url 'tickets:conversacion_enviar' ticket.pk %}"
+       data-url-leido="{% url 'tickets:conversacion_leido' ticket.pk %}"
+       data-ws="/ws/tickets/{{ ticket.pk }}/conversacion/"
+       data-pestana-inicial="{{ panel_global|default:'conversacion' }}"
+       {% if not panel_global %}hidden{% endif %}>
+  {% csrf_token %}
+  <header class="tp__cabeza">
+    <div class="tabs tp__pestanas" role="tablist" aria-label="Contenido del panel">
+      <a class="tabs__tab{% if panel_global != 'historial' %} is-active{% endif %}" role="tab" id="tp-tab-conversacion" href="{{ url_panel }}conversacion" aria-controls="tp-conversacion"
+         aria-selected="{% if panel_global != 'historial' %}true{% else %}false{% endif %}" data-tp-pestana="conversacion">Conversación</a>
+      {% if historial_visible %}<a class="tabs__tab{% if panel_global == 'historial' %} is-active{% endif %}" role="tab" id="tp-tab-historial" href="{{ url_panel }}historial" aria-controls="tp-historial"
+         aria-selected="{% if panel_global == 'historial' %}true{% else %}false{% endif %}" data-tp-pestana="historial">Historial</a>{% endif %}
+    </div>
+    <a class="btn-icon tp__cerrar" href="{{ url_sin_panel }}" data-tp-cerrar aria-label="Cerrar el panel">{% include "components/icon.html" with name="x" size="sm" %}</a>
+  </header>
+
+  {# --- Conversación: mensajes (desplazables) + compositor fijo al pie --- #}
+  <section class="tp__vista tp-chat" id="tp-conversacion" role="tabpanel" aria-labelledby="tp-tab-conversacion" data-tp-vista="conversacion"{% if panel_global == "historial" %} hidden{% endif %}>
+    <div class="tp-chat__mensajes" data-chat-lista aria-live="polite" aria-relevant="additions" tabindex="0">
+      <p class="tp-chat__estado" data-chat-estado>{% if panel_global == "conversacion" %}Cargando la conversación…{% endif %}</p>
+    </div>
+    <p class="tp-chat__conexion" data-chat-conexion hidden></p>
+    {% if conversacion.puede_escribir %}
+      <form class="tp-chat__compositor" method="post" action="{% url 'tickets:conversacion_enviar' ticket.pk %}" data-chat-form>
+        {% csrf_token %}
+        <label class="sr-only" for="tp-chat-texto">Escribe un mensaje</label>
+        <textarea id="tp-chat-texto" name="texto" rows="1" maxlength="{{ conversacion.longitud_maxima }}" placeholder="Escribe un mensaje…" required data-chat-texto></textarea>
+        <button type="submit" class="btn btn--primary btn--sm tp-chat__enviar" aria-label="Enviar mensaje">{% include "components/icon.html" with name="arrow-right" size="sm" %}</button>
+        <p class="tp-chat__error" data-chat-error role="alert" hidden></p>
+      </form>
+    {% else %}
+      <p class="tp-chat__solo-lectura">El ticket ya no está abierto: la conversación queda como consulta.</p>
+    {% endif %}
+  </section>
+
+  {# --- Historial: línea de tiempo, del más reciente al más antiguo (solo quien consulta el ticket) --- #}
+  {% if historial_visible %}
+  <section class="tp__vista tp-historial" id="tp-historial" role="tabpanel" aria-labelledby="tp-tab-historial" data-tp-vista="historial"{% if panel_global != "historial" %} hidden{% endif %} tabindex="0">
+    {% if linea_tiempo %}
+      <ol class="tl">
+        {% for evento in linea_tiempo %}
+          <li class="tl__evento">
+            {% if evento.sistema %}
+              <span class="avatar avatar--neutral tl__avatar" aria-hidden="true">{% include "components/icon.html" with name="settings" size="sm" %}</span>
+            {% else %}
+              <span class="tl__avatar">{% include "components/avatar.html" with persona=evento.actor %}</span>
+            {% endif %}
+            <div class="tl__cuerpo">
+              <p class="tl__linea"><span class="tl__actor">{{ evento.actor_nombre }}</span> <span class="tl__accion">{{ evento.accion }}</span>{% if evento.objeto %} <span class="tl__objeto">«{{ evento.objeto }}»</span>{% endif %}</p>
+              {% for parte in evento.detalle %}<p class="tl__detalle">{{ parte }}</p>{% endfor %}
+              <time class="tl__fecha tabular" datetime="{{ evento.fecha|date:'c' }}">{{ evento.fecha|date:"j M Y, H:i" }}</time>
+            </div>
+          </li>
+        {% endfor %}
+      </ol>
+    {% else %}
+      <p class="tp__vacio">Aún no hay eventos registrados.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+</aside>

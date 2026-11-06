@@ -24,10 +24,12 @@ from django.utils import timezone
 from apps.aprobaciones.models import Aprobacion, EsquemaAprobacion
 from apps.aprobaciones.operaciones import crear_esquema_aprobacion
 from apps.catalogo import busqueda
+from apps.core import accesos, temas
 from apps.core.admin import RegistroAuditoriaAdmin
 from apps.core.auditoria import registrar_evento, serializar
 from apps.core.autorizacion import alcances_autorizados, permisos_globales, usuario_tiene_permiso
 from apps.core.models import (
+    AccesoUsuario,
     Area,
     AreaUnidadNegocio,
     AsignacionRol,
@@ -119,6 +121,161 @@ class PerfilTests(TestCase):
         self.assertEqual(respuesta.context["unidades_negocio"].count(), 2)
         self.assertEqual(respuesta.context["area_principal"].area, self.area1)
         self.assertEqual(respuesta.context["unidad_principal"].unidad_negocio, self.unidad1)
+
+
+CHROME_MAC = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/130.0 Safari/537.36"
+)
+SAFARI_IPHONE = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) "
+    "Version/17.0 Mobile/15E148 Safari/604.1"
+)
+
+
+class PerfilFaseVisualTests(TestCase):
+    """CU-003 (Mi perfil, Fase visual) y CU-001 (registro de accesos)."""
+
+    def setUp(self):
+        self.usuario = Usuario.objects.create_user(username="lperez", password=CLAVE_PRUEBA, first_name="Laura")
+
+    def _entrar(self, agente=CHROME_MAC):
+        return self.client.post(
+            reverse("core:login"), {"username": "lperez", "password": CLAVE_PRUEBA}, HTTP_USER_AGENT=agente
+        )
+
+    # --- Accesos (CU-001 registra, CU-003 muestra) ---
+
+    def test_iniciar_sesion_registra_el_acceso_sin_ip_ni_agente_completo(self):
+        self._entrar()
+        acceso = AccesoUsuario.objects.get(usuario=self.usuario)
+        self.assertEqual(
+            (acceso.metodo, acceso.navegador, acceso.sistema_operativo, acceso.es_movil),
+            (AccesoUsuario.Metodo.CONTRASENA, "Chrome", "macOS", False),
+        )
+        self.assertEqual(len(acceso.huella_sesion), 64)
+        self.assertNotIn(self.client.session.session_key, acceso.huella_sesion)
+        campos = {campo.name for campo in AccesoUsuario._meta.get_fields()}
+        self.assertFalse({"ip", "direccion_ip", "user_agent"} & campos)
+
+    def test_un_intento_fallido_no_se_registra(self):
+        self.client.post(reverse("core:login"), {"username": "lperez", "password": "incorrecta"})
+        self.assertFalse(AccesoUsuario.objects.exists())
+
+    def test_resumen_del_agente(self):
+        self.assertEqual(accesos.resumir_agente(SAFARI_IPHONE), ("Safari", "iOS", True))
+        self.assertEqual(accesos.resumir_agente(""), ("", "", False))
+        edge = CHROME_MAC.replace("Macintosh; Intel Mac OS X 10_15_7", "Windows NT 10.0") + " Edg/130.0"
+        self.assertEqual(accesos.resumir_agente(edge), ("Edge", "Windows", False))
+
+    def test_el_perfil_muestra_los_ultimos_accesos_y_marca_esta_sesion(self):
+        self._entrar(SAFARI_IPHONE)
+        self.client.logout()
+        self._entrar()
+        respuesta = self.client.get(reverse("core:perfil"))
+        lista = respuesta.context["accesos"]
+        self.assertEqual([a.navegador for a in lista], ["Chrome", "Safari"])
+        self.assertEqual([a.es_esta_sesion for a in lista], [True, False])
+        self.assertContains(respuesta, "Esta sesión", count=1)
+        self.assertContains(respuesta, "Safari en iOS")
+
+    def test_el_metodo_google_se_marca_antes_del_login(self):
+        solicitud = RequestFactory().get("/")
+        solicitud.session = self.client.session
+        accesos.marcar_metodo(solicitud, AccesoUsuario.Metodo.GOOGLE)
+        accesos.registrar_acceso(None, solicitud, self.usuario)
+        self.assertEqual(AccesoUsuario.objects.get().metodo, AccesoUsuario.Metodo.GOOGLE)
+
+    # --- Compañeros ---
+
+    def test_companeros_son_los_de_sus_equipos_activos_sin_incluirse(self):
+        equipo = Equipo.objects.create(nombre="Soporte")
+        otro_equipo = Equipo.objects.create(nombre="Ajeno")
+        ana = Usuario.objects.create_user(username="ana", first_name="Ana")
+        retirado = Usuario.objects.create_user(username="retirado")
+        inactivo = Usuario.objects.create_user(username="inactivo", is_active=False)
+        ajeno = Usuario.objects.create_user(username="ajeno")
+        MiembroEquipo.objects.create(equipo=equipo, usuario=self.usuario)
+        MiembroEquipo.objects.create(equipo=equipo, usuario=ana)
+        MiembroEquipo.objects.create(equipo=equipo, usuario=retirado, activo=False)
+        MiembroEquipo.objects.create(equipo=equipo, usuario=inactivo)
+        MiembroEquipo.objects.create(equipo=otro_equipo, usuario=ajeno)
+        self.client.force_login(self.usuario)
+        grupos = self.client.get(reverse("core:perfil")).context["companeros"]
+        self.assertEqual([(g["nombre"], g["tipo"], g["personas"]) for g in grupos], [("Soporte", "equipo", [ana])])
+
+    def test_sin_equipos_los_companeros_son_los_de_su_area_principal(self):
+        area = Area.objects.create(nombre="Finanzas", codigo="FIN-COMP")
+        UsuarioArea.objects.create(usuario=self.usuario, area=area, es_principal=True)
+        colega = Usuario.objects.create_user(username="colega")
+        UsuarioArea.objects.create(usuario=colega, area=area)
+        self.client.force_login(self.usuario)
+        respuesta = self.client.get(reverse("core:perfil"))
+        grupos = respuesta.context["companeros"]
+        self.assertEqual([(g["nombre"], g["tipo"], g["personas"]) for g in grupos], [("Finanzas", "area", [colega])])
+        self.assertContains(respuesta, "Tu área · Finanzas")
+
+    def test_la_foto_de_google_se_pide_en_el_tamano_en_que_se_muestra(self):
+        base = "https://lh3.googleusercontent.com/a/ACg8abc"
+        self.usuario.google_foto_url = f"{base}=s96-c"
+        self.assertEqual(self.usuario.foto_grande, f"{base}=s480-c")
+        self.assertEqual(self.usuario.foto_mediana, f"{base}=s192-c")
+        self.usuario.save()
+        self.client.force_login(self.usuario)
+        self.assertContains(self.client.get(reverse("core:perfil")), f"{base}=s480-c")
+        # Otro host u otro formato no se tocan.
+        self.usuario.google_foto_url = "https://otro.example/foto=s96-c"
+        self.assertEqual(self.usuario.foto_grande, "https://otro.example/foto=s96-c")
+        self.usuario.google_foto_url = f"{base}"
+        self.assertEqual(self.usuario.foto_grande, base)
+
+    def test_el_perfil_no_muestra_roles(self):
+        self.client.force_login(self.usuario)
+        self.assertNotContains(self.client.get(reverse("core:perfil")), "Mis roles")
+
+    # --- Apariencia ---
+
+    def test_la_apariencia_es_personal_y_se_aplica_en_toda_la_plataforma(self):
+        self.client.force_login(self.usuario)
+        inicio = self.client.get(reverse("core:inicio"))
+        self.assertContains(inicio, 'data-apariencia="SISTEMA" data-modo="claro"')
+
+        respuesta = self.client.post(
+            reverse("core:apariencia"), {"apariencia": "OSCURO", "next": reverse("core:inicio")}
+        )
+        self.assertRedirects(respuesta, reverse("core:inicio"))
+        self.usuario.refresh_from_db()
+        self.assertEqual(self.usuario.apariencia, Usuario.Apariencia.OSCURO)
+        self.assertContains(self.client.get(reverse("core:perfil")), 'data-apariencia="OSCURO" data-modo="oscuro"')
+
+        self.client.post(reverse("core:apariencia"), {"apariencia": "NEGRO"})
+        self.client.post(reverse("core:apariencia"), {"apariencia": "OSCURO", "next": "https://otro.sitio/"})
+        self.usuario.refresh_from_db()
+        self.assertEqual(self.usuario.apariencia, Usuario.Apariencia.OSCURO)
+
+    def test_la_apariencia_exige_sesion_y_post(self):
+        self.assertEqual(self.client.post(reverse("core:apariencia"), {"apariencia": "OSCURO"}).status_code, 302)
+        self.client.force_login(self.usuario)
+        self.assertEqual(self.client.get(reverse("core:apariencia")).status_code, 405)
+        self.client.logout()
+        self.assertContains(self.client.get(reverse("core:login")), 'data-apariencia="SISTEMA"')
+
+    def test_ningun_componente_escribe_colores_fijos(self):
+        """El modo oscuro y los estilos de acento solo funcionan si todo color pasa por tokens."""
+        import re
+        from pathlib import Path
+
+        from django.conf import settings
+
+        css = Path(settings.BASE_DIR) / "static" / "css"
+        literal = re.compile(r"#[0-9a-fA-F]{3,8}\b|rgba?\(\s*\d")
+        for archivo in sorted(css.glob("*.css")):
+            if archivo.name == "tokens.css":
+                continue
+            with self.subTest(archivo=archivo.name):
+                self.assertEqual(literal.findall(archivo.read_text(encoding="utf-8")), [])
+        tokens = (css / "tokens.css").read_text(encoding="utf-8")
+        self.assertIn('[data-modo="oscuro"] {', tokens)
 
 
 class OrganizacionTests(TestCase):
@@ -1133,13 +1290,18 @@ class MiTrabajoTests(TestCase):
         self.assertContains(respuesta, reverse("tareas:detalle", args=[tarea.pk]))
         self.assertContains(respuesta, reverse("aprobaciones:detalle", args=[aprobacion.pk]))
 
-    def test_enlaces_ver_todas_las_tareas_y_aprobaciones(self):
+    def test_sin_pestanas_ni_enlaces_tecnicos_visibles_pero_urls_vigentes(self):
+        # UX-2: la bandeja solo muestra tickets agrupados; «Tareas», «Aprobaciones» y «Ver todas…» salen de la
+        # navegación visible, pero sus URL siguen respondiendo (compatibilidad).
         self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
         respuesta = self.client.get(reverse("core:mi_trabajo"))
-        self.assertContains(respuesta, reverse("tareas:lista"))
-        self.assertContains(respuesta, reverse("aprobaciones:lista"))
-        self.assertContains(respuesta, "Ver todas las tareas")
-        self.assertContains(respuesta, "Ver todas las aprobaciones")
+        self.assertNotContains(respuesta, "Ver todas las tareas")
+        self.assertNotContains(respuesta, "Ver todas las aprobaciones")
+        self.assertNotContains(respuesta, "?tab=tareas")
+        self.assertNotContains(respuesta, "?tab=aprobaciones")
+        self.assertEqual(self.client.get(reverse("tareas:lista")).status_code, 200)
+        self.assertEqual(self.client.get(reverse("aprobaciones:lista")).status_code, 200)
+        self.assertEqual(self.client.get(reverse("core:mi_trabajo"), {"tab": "tareas"}).status_code, 200)
 
     def test_contadores_reflejan_las_listas_reales(self):
         crear_tarea(titulo="Contador 1", creada_por=self.usuario, usuario_responsable=self.usuario)
@@ -2228,7 +2390,8 @@ class ConfiguracionTests(TestCase):
 
     def test_cada_capacidad_abre_solo_su_seccion(self):
         casos = {
-            "sistema.configurar": ["general"],
+            # Sprint 7 (adelanto): Notificaciones (valores generales de recordatorios) va con `sistema.configurar`.
+            "sistema.configurar": ["general", "notificaciones"],
             "usuarios.administrar": ["usuarios"],
             "permisos.administrar": ["usuarios", "roles"],
             "organizacion.administrar": ["areas", "unidades"],
@@ -2248,7 +2411,7 @@ class ConfiguracionTests(TestCase):
         self.usuario.is_superuser = True
         self.usuario.save()
         claves = [s["clave"] for s in self.client.get(self._url("")).context["config_secciones"]]
-        self.assertEqual(claves, ["general", "usuarios", "roles", "areas", "unidades"])
+        self.assertEqual(claves, ["general", "notificaciones", "usuarios", "roles", "areas", "unidades"])
         self.assertEqual(self.client.get(self._url("_categorias")).status_code, 403)
 
     def test_permisos_globales_respeta_alcance_y_vigencia(self):
@@ -2310,6 +2473,78 @@ class ConfiguracionTests(TestCase):
             self.client.login(username="cfg_admin", password=CLAVE_PRUEBA)
             self.client.post(self._url("_general"), {"nombre": "Órbita", "quitar_logo": "on"})
             self.assertFalse(ConfiguracionSistema.actual().logo)
+
+    def test_logo_para_modo_oscuro_es_opcional_y_se_muestra_solo_en_oscuro(self):
+        self._con("sistema.configurar")
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as media, override_settings(MEDIA_ROOT=media):
+            self.assertEqual(self.client.get(reverse("core:logo_oscuro")).status_code, 404)
+            claro = SimpleUploadedFile("claro.png", PNG_MINIMO, content_type="image/png")
+            self.client.post(self._url("_general"), {"nombre": "Órbita", "logo": claro})
+            inicio = self.client.get(reverse("core:inicio"))
+            self.assertContains(inicio, reverse("core:logo"))
+            self.assertNotContains(inicio, "marca-modo--oscuro")
+
+            falso = SimpleUploadedFile("oscuro.png", b"<svg onload=alert(1)>", content_type="image/png")
+            respuesta = self.client.post(self._url("_general"), {"nombre": "Órbita", "logo_oscuro": falso})
+            self.assertTrue(respuesta.context["form"].errors["logo_oscuro"])
+
+            oscuro = SimpleUploadedFile("oscuro.png", PNG_MINIMO, content_type="image/png")
+            self.client.post(self._url("_general"), {"nombre": "Órbita", "logo_oscuro": oscuro})
+            config = ConfiguracionSistema.actual()
+            self.assertTrue(config.logo and config.logo_oscuro)
+            inicio = self.client.get(reverse("core:inicio"))
+            self.assertContains(inicio, "marca-modo--claro")
+            self.assertContains(inicio, reverse("core:logo_oscuro"))
+            self.client.logout()
+            respuesta = self.client.get(reverse("core:logo_oscuro"))
+            self.assertEqual(respuesta.status_code, 200)
+            self.assertEqual(b"".join(respuesta.streaming_content), PNG_MINIMO)
+
+            self.client.login(username="cfg_admin", password=CLAVE_PRUEBA)
+            self.client.post(self._url("_general"), {"nombre": "Órbita", "quitar_logo_oscuro": "on"})
+            config = ConfiguracionSistema.actual()
+            self.assertTrue(config.logo)
+            self.assertFalse(config.logo_oscuro)
+
+    def test_estilo_de_color_curado_se_aplica_a_toda_la_plataforma(self):
+        self._con("sistema.configurar")
+        pantalla = self.client.get(self._url("_general"))
+        for clave in temas.TEMAS:
+            self.assertContains(pantalla, f'data-tema="{clave}"')
+        self.assertContains(self.client.get(reverse("core:inicio")), '<html lang="es" data-tema="lima"')
+
+        respuesta = self.client.post(self._url("_general"), {"nombre": "Órbita", "tema": "coral"})
+        self.assertRedirects(respuesta, self._url("_general"))
+        config = ConfiguracionSistema.actual()
+        self.assertEqual(config.tema, "coral")
+        self.assertEqual(self._auditados(config).count(), 1)
+        self.assertContains(self.client.get(reverse("core:inicio")), '<html lang="es" data-tema="coral"')
+        self.client.logout()
+        self.assertContains(self.client.get(reverse("core:login")), '<html lang="es" data-tema="coral"')
+
+    def test_estilo_fuera_de_la_lista_se_rechaza_y_omitirlo_lo_conserva(self):
+        self._con("sistema.configurar")
+        self.client.post(self._url("_general"), {"nombre": "Órbita", "tema": "menta"})
+        respuesta = self.client.post(self._url("_general"), {"nombre": "Órbita", "tema": "#ff0000"})
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertTrue(respuesta.context["form"].errors["tema"])
+        self.assertEqual(respuesta.context["tema_elegido"], "menta")
+        self.client.post(self._url("_general"), {"nombre": "Otro nombre"})
+        config = ConfiguracionSistema.actual()
+        self.assertEqual((config.nombre, config.tema), ("Otro nombre", "menta"))
+
+    def test_cada_estilo_curado_tiene_su_escala_en_los_tokens(self):
+        from pathlib import Path
+
+        from django.conf import settings
+
+        tokens = (Path(settings.BASE_DIR) / "static/css/tokens.css").read_text()
+        for clave in temas.TEMAS:
+            self.assertIn(f'[data-tema="{clave}"]', tokens)
+            for paso in ("50", "100", "300", "500", "600", "700"):
+                self.assertIn(f"--palette-{clave}-{paso}:", tokens)
 
     # --- Usuarios ---
 
@@ -2572,11 +2807,15 @@ class TrabajoTests(TestCase):
 
         respuesta = self._cola()
         self.assertEqual([(t.pk, t.posicion) for t in respuesta.context["tickets"]], [(segundo.pk, 1)])
-        self.assertEqual(respuesta.context["conteos"], {"para_tomar": 1, "supervision": 0})
-        # Lo que se tomó ya no es de la Cola ni de «Supervisión»: es trabajo propio (Mi trabajo).
-        self.assertEqual(list(self._cola("?ver=supervision").context["tickets"]), [])
-        # Un filtro desconocido cae en «para tomar»; nunca amplía lo autorizado.
-        self.assertEqual(self._cola("?ver=otra-cosa").context["ver"], "para_tomar")
+        self.assertEqual(respuesta.context["conteos"], {"para_tomar": 1})
+        self.assertEqual(respuesta.context["total"], 1)
+        # La Cola es SOLO lo disponible para tomar: el antiguo filtro «Supervisión» (o cualquier otro) no la amplía.
+        for consulta in ("?ver=supervision", "?ver=otra-cosa"):
+            self.assertEqual([t.pk for t in self._cola(consulta).context["tickets"]], [segundo.pk])
+        self.assertNotContains(respuesta, "Supervisión")
+        # El contador de la pestaña «Cola» es la misma cantidad.
+        cola = next(t for t in respuesta.context["nav_trabajo_tabs"] if t["etiqueta"] == "Cola")
+        self.assertEqual(cola["total"], 1)
         self.client.logout()
         self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
         self.assertEqual(list(self._cola("?ver=para_tomar").context["tickets"]), [])

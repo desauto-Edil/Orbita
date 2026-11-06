@@ -1,0 +1,23 @@
+{% comment %}
+  UX-4b — un archivo con vista previa: imagen (miniatura; al pulsarla se amplía), video (reproductor) o PDF y otros
+  (ícono). `?ver=1` lo sirve en línea con la MISMA autorización de la descarga (`apps/tickets/vista_previa.py`).
+  Parámetros: `archivo` (Adjunto) y `grande` (vista amplia, en la ficha del ítem).
+{% endcomment %}
+{% load archivos %}
+{% url 'tickets:descargar_adjunto' archivo.pk as url_archivo %}
+{% with clase=archivo|clase_vista_previa %}
+  <figure class="tb-prev tb-prev--{{ clase|default:'archivo' }}{% if grande %} tb-prev--grande{% endif %}">
+    {% if clase == "imagen" %}
+      <a class="tb-prev__medio" href="{{ url_archivo }}?ver=1" target="_blank" rel="noopener" data-ampliar="{{ url_archivo }}?ver=1" aria-label="Ampliar {{ archivo.nombre_original }}">
+        <img src="{{ url_archivo }}?ver=1" alt="{{ archivo.nombre_original }}" loading="lazy">
+      </a>
+    {% elif clase == "video" %}
+      <div class="tb-prev__medio"><video src="{{ url_archivo }}?ver=1" controls preload="metadata" playsinline aria-label="{{ archivo.nombre_original }}"></video></div>
+    {% else %}
+      <a class="tb-prev__medio tb-prev__icono" href="{% if clase == 'pdf' %}{{ url_archivo }}?ver=1{% else %}{{ url_archivo }}{% endif %}"{% if clase == "pdf" %} target="_blank" rel="noopener"{% endif %}>
+        {% include "components/icon.html" with name="file" %}<span>{% if clase == "pdf" %}PDF{% else %}{{ archivo.nombre_original|slice:"-4:"|cut:"."|upper }}{% endif %}</span>
+      </a>
+    {% endif %}
+    <figcaption><a href="{{ url_archivo }}" title="Descargar {{ archivo.nombre_original }}">{{ archivo.nombre_original|truncatechars:30 }}</a></figcaption>
+  </figure>
+{% endwith %}

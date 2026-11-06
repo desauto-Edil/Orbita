@@ -1,0 +1,73 @@
+{% comment %}
+  UX-4 — ítems de cada colección que la persona consulta (`espacio.elementos`): nombre legible, fecha, estado y
+  recorrido INDIVIDUAL (cada ítem a su ritmo), quién lo tiene y la acción que corresponde. Elegir un ítem
+  (`?elemento=`) abre su ficha aquí mismo, debajo de su fila: editar o revisar sin salir del espacio.
+  Los permisos los decide el dominio: «Enviar» solo aparece si el flujo recibe ítems de esta colección y la persona
+  la opera; la operación (`recorridos.enviar_elemento`) vuelve a validarlo todo.
+{% endcomment %}
+<section class="esp-items" id="items" aria-label="Ítems">
+  {% for coleccion in colecciones %}
+    {% with tabla=coleccion.tabla %}
+      <div class="esp-superficie esp-coleccion">
+        <header class="esp-coleccion__cabeza">
+          <h2 class="esp-coleccion__titulo">{{ tabla.nombre_elemento|default:"Ítems" }} <span class="work-count tabular">{{ coleccion.filas|length }}</span></h2>
+          <p class="text-muted">
+            {% if tabla.alcance.cerrado %}Alcance cerrado{% else %}Se pueden agregar más{% endif %}{% if periodo %} · {{ periodo.etiqueta }}{% endif %}
+          </p>
+        </header>
+
+        {% if coleccion.filas %}
+          <ul class="it-lista">
+            {% for fila in coleccion.filas %}
+                <li class="it-fila{% if fila.elemento.pk == ficha_id %} is-abierta{% endif %}{% if fila.item.devuelto %} is-devuelta{% endif %}">
+                  <a class="it-fila__resumen" href="{% if fila.elemento.pk == ficha_id %}{{ base }}#items{% else %}{{ base }}?elemento={{ fila.elemento.pk }}#item-{{ fila.elemento.pk }}{% endif %}" id="item-{{ fila.elemento.pk }}"{% if fila.elemento.pk == ficha_id %} aria-expanded="true"{% endif %}>
+                    <span class="it-fila__nombre">{{ fila.nombre }}</span>
+                    <span class="it-fila__fecha tabular">{{ fila.fecha|default:"Sin fecha" }}</span>
+                    <span class="it-fila__estado">
+                      {% if fila.salida %}<span class="estado-etiqueta estado-etiqueta--cancelado">{{ fila.salida.get_tipo_display }}</span>
+                      {% elif fila.borrador %}<span class="estado-etiqueta">Borrador</span>
+                      {% elif fila.item %}<span class="estado-etiqueta{% if fila.item.detenido %} estado-etiqueta--cancelado{% elif fila.item.terminado %} estado-etiqueta--resuelto{% elif fila.item.devuelto %} estado-etiqueta--radicado{% else %} estado-etiqueta--en_atencion{% endif %}">{{ fila.item.estado }}</span>
+                      {% else %}<span class="text-muted">—</span>{% endif %}
+                    </span>
+                    <span class="it-fila__ruta">{% if fila.item %}{% include "tickets/espacio/_pasos_item.html" with item=fila.item compacto=True %}{% endif %}</span>
+                    <span class="it-fila__quien">{{ fila.responsable|default:"" }}</span>
+                    <span class="it-fila__ir" aria-hidden="true">{% if fila.elemento.pk == ficha_id %}{% include "components/icon.html" with name="chevron-up" size="sm" %}{% else %}{% include "components/icon.html" with name="chevron-down" size="sm" %}{% endif %}</span>
+                  </a>
+                  {% if fila.borrador and coleccion.enviar and fila.elemento.pk != ficha_id %}
+                    <form method="post" action="{% url 'tickets:elemento_enviar' ticket.pk fila.elemento.pk %}" class="it-fila__accion">
+                      {% csrf_token %}<input type="hidden" name="next" value="{{ base }}#items">
+                      <button type="submit" class="btn btn--secondary btn--sm">Enviar a aprobación</button>
+                    </form>
+                  {% endif %}
+                  {% if fila.elemento.pk == ficha_id %}
+                    <div class="it-fila__ficha">{% include "tickets/espacio/_ficha.html" %}</div>
+                  {% endif %}
+                </li>
+            {% endfor %}
+          </ul>
+        {% else %}
+          <p class="text-muted">Todavía no hay {{ tabla.nombre_elemento|lower|default:"ítems" }}.</p>
+        {% endif %}
+
+        {% if tabla.puede_operar and not tabla.alcance.cerrado and not coleccion.enviar %}
+          <details class="esp-plegable">
+            <summary>Agregar {{ tabla.nombre_elemento|lower|default:"ítem" }}</summary>
+            <form method="post" action="{% url 'tickets:elemento_agregar' ticket.pk %}" class="form">
+              {% csrf_token %}<input type="hidden" name="next" value="{{ base }}#items"><input type="hidden" name="coleccion" value="{{ tabla.parrilla.clave }}">
+              {% include "tickets/_parrilla_campos.html" with celdas=tabla.celdas_nuevas %}
+              <div class="form-actions"><button type="submit" class="btn btn--secondary btn--sm">Guardar</button></div>
+            </form>
+          </details>
+        {% endif %}
+        {% if rel.consulta %}
+          <p class="ws-nota">Retirar, excluir y altas extraordinarias: <a href="{% url 'tickets:detalle' ticket.pk %}#elementos">gestión avanzada</a>.</p>
+        {% endif %}
+      </div>
+    {% endwith %}
+  {% endfor %}
+
+  {# El ítem de la misión de quien no consulta la colección (aprobador, productor, revisor): su ficha, sola. #}
+  {% if ficha and not colecciones %}
+    <div class="esp-superficie esp-coleccion">{% include "tickets/espacio/_ficha.html" %}</div>
+  {% endif %}
+</section>

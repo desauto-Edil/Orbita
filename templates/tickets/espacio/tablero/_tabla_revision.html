@@ -1,0 +1,14 @@
+{% comment %}
+  UX-4b / UX-5 — revisar varias ideas o piezas (`espacio.filas_de_mision`): una tarjeta SOLO VISUAL por ítem
+  (`piezas/_tarjeta.html`). Al abrirla, el visor muestra sus datos y archivos y la revisión: Aprobar · Corregir ·
+  Eliminar, siempre con comentario (`tickets:decidir_pieza`), y —sobre una imagen— la anotación visual que acompaña
+  la decisión. Cada decisión es la operación de siempre, que vuelve a autorizar.
+{% endcomment %}
+<div class="pz-bloque">
+  <ul class="pz-rejilla">
+    {% for fila in filas_mision %}
+      {% include "tickets/espacio/piezas/_tarjeta.html" with p=fila estado_texto="Por revisar" %}
+    {% endfor %}
+  </ul>
+  <p class="tb-nota">Abre cada {{ mision.nombre_item|default:"pieza" }} para revisarla. Lo aprobado pasa solo al siguiente paso; lo que mandas a corregir vuelve a quien lo preparó con tu comentario y tu dibujo.</p>
+</div>

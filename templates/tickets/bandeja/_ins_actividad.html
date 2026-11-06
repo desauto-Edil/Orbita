@@ -1,0 +1,14 @@
+{% comment %}Inspector — actividad reciente: los últimos movimientos reales del historial (`HistorialTicket`), del más reciente al más antiguo, con evento, responsable y fecha/hora. Plegable, abierta por defecto; sin historial no se dibuja.{% endcomment %}
+{% if historial %}
+  <details class="bt-ins__seccion bt-ins__plegable" open>
+    <summary><h3 class="bt-ins__subtitulo">Actividad reciente</h3></summary>
+    <ol class="bt-ins__actividad">
+      {% for evento in historial %}
+        <li>
+          <span class="bt-ins__evento">{{ evento.get_tipo_evento_display }}</span>
+          <span class="bt-ins__evento-meta"><span>{% if evento.actor %}{{ evento.actor.get_full_name|default:evento.actor.get_username }}{% else %}Sistema{% endif %}</span><time class="tabular" datetime="{{ evento.creado_en|date:'c' }}">{{ evento.creado_en|date:"j M Y, H:i" }}</time></span>
+        </li>
+      {% endfor %}
+    </ol>
+  </details>
+{% endif %}

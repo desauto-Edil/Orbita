@@ -1,0 +1,66 @@
+{% comment %}
+  UX-4b — «Tu misión»: un banner con el objetivo (qué hago) y sus contadores (qué me falta). Con varias misiones,
+  se elige arriba. Sin ninguna, el estado del ticket y a quién espera. Forma parte del encabezado persistente del
+  espacio; el lugar exacto donde se hace la misión está en `_mision_lugar.html` (zona que se desplaza).
+{% endcomment %}
+<section class="ms" id="mision" aria-labelledby="ms-t">
+  {% if misiones|length > 1 %}
+    <nav class="ms-otras" aria-label="Tus misiones">
+      {% for g in misiones %}
+        <a class="ms-otras__item{% if g.clave == mision.clave %} is-actual{% endif %}" href="{{ base }}?mision={{ g.clave }}#mision"{% if g.clave == mision.clave %} aria-current="true"{% endif %}>
+          {{ g.titulo }}{% if g.cantidad > 1 %} <span class="tabular">· {{ g.cantidad }}</span>{% endif %}
+        </a>
+      {% endfor %}
+    </nav>
+  {% endif %}
+
+  {% if mision %}
+    <div class="ms-banner">
+      <span class="ms-banner__icono" aria-hidden="true">{% include "components/icon.html" with name="compass" %}</span>
+      <div class="ms-banner__texto">
+        <p class="ms-banner__eyebrow">Tu misión</p>
+        {% if mision.tipo == "lluvia" %}
+          <h2 id="ms-t" class="ms-banner__titulo">{{ lluvia.etapa }}{% if periodo %} de {{ periodo.etiqueta }}{% endif %}</h2>
+          <p class="ms-banner__objetivo">Registra cada {{ lluvia.parrilla.nombre_elemento|lower }} y, cuando la {{ lluvia.etapa|lower }} esté completa, envíala a aprobación. Nada avanza antes.</p>
+        {% elif mision.tipo == "revision" %}
+          <h2 id="ms-t" class="ms-banner__titulo">Revisa {{ mision.cantidad }} {{ mision.plural }}</h2>
+          <p class="ms-banner__objetivo">{{ mision.titulo }}: apruébalas o devuélvelas con una observación. Cada una sigue su camino por separado.</p>
+        {% elif mision.tipo == "gaceta" %}
+          <h2 id="ms-t" class="ms-banner__titulo">{{ mision.titulo }}</h2>
+          <p class="ms-banner__objetivo">En la gaceta, mira cada pieza y deja tu observación o tu decisión en su tarjeta. Lo que se observa vuelve a corrección con una versión nueva.</p>
+        {% elif mision.tipo == "items" %}
+          <h2 id="ms-t" class="ms-banner__titulo">{{ mision.titulo }} · {{ mision.cantidad }} {{ mision.plural }}</h2>
+          <p class="ms-banner__objetivo">{{ mision.descripcion|default:"Completa lo que falta en cada una y envíala." }}</p>
+        {% else %}
+          <h2 id="ms-t" class="ms-banner__titulo">{{ mision.titulo }}</h2>
+          {% if mision.accion.subtitulo %}<p class="ms-banner__objetivo">{{ mision.accion.subtitulo }}</p>{% endif %}
+        {% endif %}
+      </div>
+      <ul class="ms-banner__contadores" aria-label="Avance de tu misión">
+        {% if mision.tipo == "lluvia" %}
+          <li><span class="tabular">{{ lluvia.filas|length }}</span> registradas</li>
+          <li class="is-ok"><span class="tabular">{{ lluvia.listas }}</span> listas</li>
+          {% if lluvia.incompletas %}<li class="is-falta"><span class="tabular">{{ lluvia.incompletas }}</span> incompletas</li>{% endif %}
+        {% elif mision.tipo == "gaceta" %}
+          <li class="is-falta"><span class="tabular">{{ galeria.por_hacer }}</span> por revisar</li>
+          {% if galeria.conteo.correccion %}<li><span class="tabular">{{ galeria.conteo.correccion }}</span> en corrección</li>{% endif %}
+          {% if galeria.conteo.aprobada %}<li class="is-ok"><span class="tabular">{{ galeria.conteo.aprobada }}</span> aprobadas</li>{% endif %}
+        {% elif mision.tipo == "revision" or mision.tipo == "items" %}
+          <li class="is-falta"><span class="tabular">{{ mision.cantidad }}</span> pendientes</li>
+        {% elif mision.accion.vence %}
+          <li><span class="tabular">Vence {{ mision.accion.vence|date:"j M" }}</span></li>
+        {% endif %}
+      </ul>
+    </div>
+
+  {% else %}
+    <div class="ms-banner ms-banner--reposo">
+      <span class="ms-banner__icono" aria-hidden="true">{% include "components/icon.html" with name="check-circle" %}</span>
+      <div class="ms-banner__texto">
+        <p class="ms-banner__eyebrow">Tu misión</p>
+        <h2 id="ms-t" class="ms-banner__titulo">Nada pendiente para ti ahora</h2>
+        {% if espera %}<p class="ms-banner__objetivo">{{ espera }}</p>{% endif %}
+      </div>
+    </div>
+  {% endif %}
+</section>

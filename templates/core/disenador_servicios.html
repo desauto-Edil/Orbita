@@ -20,8 +20,73 @@
 
   {% include "layout/disenador_tabs.html" %}
 
-  <section class="card" aria-labelledby="dis-ticket-general">
+  <section class="designer-library" aria-labelledby="dis-servicios">
     <div class="designer-section-head">
+      <div>
+        <h2 id="dis-servicios">Servicios y procesos</h2>
+        <p>Todo lo que las personas pueden solicitar o que la organización puede ejecutar como proceso.</p>
+      </div>
+      {% if servicios %}<span class="designer-count">{{ servicios|length }} en total</span>{% endif %}
+    </div>
+
+    {% if servicios %}
+      <div class="designer-object-grid designer-object-grid--services" role="list">
+        {% for servicio in servicios %}
+          <article class="designer-object designer-object--service" role="listitem">
+            <div class="designer-object__top">
+              <span class="designer-tile" aria-hidden="true">{% if servicio.programado %}{% include "components/icon.html" with name="calendar-clock" %}{% elif servicio.tipo == "PROCESO" %}{% include "components/icon.html" with name="workflow" %}{% else %}{% include "components/icon.html" with name="hand-helping" %}{% endif %}</span>
+              <div>
+                <h3><a href="{% url 'core:disenador_servicio' servicio.pk %}">{{ servicio.nombre }}</a></h3>
+                <p>{{ servicio.get_tipo_display }}{% if servicio.tipo == "PROCESO" %} {% if servicio.programado %}programado{% else %}manual{% endif %}{% endif %} · {{ servicio.categoria.nombre }}</p>
+              </div>
+            </div>
+
+            <ul class="designer-facts" aria-label="Lo configurado">
+              <li>
+                {% include "components/icon.html" with name="list" size="sm" %}
+                {% if servicio.tipo == "PROCESO" %}
+                  <span{% if not servicio.n_campos and not servicio.n_colecciones %} class="designer-facts__vacio"{% endif %}>{% if servicio.n_campos %}Datos de inicio · {{ servicio.n_campos }} campo{{ servicio.n_campos|pluralize }}{% else %}Sin datos de inicio{% endif %}{% if servicio.n_colecciones %} · {{ servicio.n_colecciones }} colecci{{ servicio.n_colecciones|pluralize:"ón,ones" }} de ítems{% endif %}</span>
+                {% else %}
+                  <span{% if not servicio.n_campos %} class="designer-facts__vacio"{% endif %}>{% if servicio.n_campos %}Formulario · {{ servicio.n_campos }} campo{{ servicio.n_campos|pluralize }}{% else %}Formulario por configurar{% endif %}</span>
+                {% endif %}
+              </li>
+              <li>
+                {% include "components/icon.html" with name="git-branch" size="sm" %}
+                <span{% if not servicio.workflow %} class="designer-facts__vacio"{% endif %}>{% if servicio.workflow %}Flujo: {{ servicio.workflow.nombre }}{% else %}Sin flujo{% endif %}</span>
+              </li>
+              <li>
+                {% include "components/icon.html" with name="file" size="sm" %}
+                <span{% if not servicio.n_entregables %} class="designer-facts__vacio"{% endif %}>{% if servicio.n_entregables %}{{ servicio.n_entregables }} entregable{{ servicio.n_entregables|pluralize }}{% else %}Sin entregables{% endif %}</span>
+              </li>
+            </ul>
+
+            {% if servicio.tipo == "PROCESO" and not servicio.workflow %}
+              <p class="designer-object__hint">{% include "components/icon.html" with name="alert" size="sm" %}Un proceso necesita un flujo para poder publicarse.</p>
+            {% endif %}
+
+            <div class="designer-object__footer">
+              <div class="designer-object__states">
+                <span class="designer-status{% if servicio.activo %} designer-status--published{% else %} designer-status--draft{% endif %}">{% if servicio.activo %}Publicado{% else %}Borrador{% endif %}</span>
+                {% if servicio.es_ticket_general %}<span class="designer-status designer-status--neutral">Ticket general</span>{% endif %}
+              </div>
+              <a class="btn btn--secondary btn--sm" href="{% url 'core:disenador_servicio' servicio.pk %}">{% if servicio.activo %}Abrir{% else %}Continuar{% endif %}</a>
+            </div>
+          </article>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="designer-empty-state">
+        <span aria-hidden="true">{% include "components/icon.html" with name="tickets" %}</span>
+        <h3>Aún no hay servicios ni procesos</h3>
+        <p>Diseña lo que podrá solicitarse o ejecutarse en Órbita.</p>
+        <a class="btn btn--primary" href="{% url 'core:disenador_servicio_crear' %}">{% include "components/icon.html" with name="plus" %}Crear el primero</a>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="designer-panel" aria-labelledby="dis-ticket-general">
+    <div class="designer-panel__head">
+      <span class="designer-tile" aria-hidden="true">{% include "components/icon.html" with name="inbox" %}</span>
       <div>
         <h2 id="dis-ticket-general">Ticket general</h2>
         <p>Para pedir algo que no está en el catálogo. Usa un único servicio interno que no aparece como servicio ordinario.</p>
@@ -30,11 +95,6 @@
     </div>
 
     {% if ticket_general.servicio %}
-      <p>
-        Servicio interno: <strong>{{ ticket_general.servicio.nombre }}</strong>
-        · {% if ticket_general.servicio.activo %}Publicado{% else %}Borrador{% endif %}
-        — <a href="{% url 'core:disenador_servicio' ticket_general.servicio.pk %}">Configurar formulario, tiempo objetivo, prórroga y entrega</a>
-      </p>
       {% if ticket_general.problemas and not ticket_general.habilitado %}
         <div class="alert alert--warning" role="status">
           <div>
@@ -45,27 +105,36 @@
           </div>
         </div>
       {% endif %}
-      <form method="post" action="{% url 'catalogo:ticket_general_habilitar' %}" class="form">
-        {% csrf_token %}
-        {% if ticket_general.habilitado %}
-          <input type="hidden" name="habilitado" value="0">
-          <button type="submit" class="btn btn--secondary">Deshabilitar ticket general</button>
-        {% else %}
-          <input type="hidden" name="habilitado" value="1">
-          <button type="submit" class="btn btn--primary"{% if not ticket_general.puede_habilitar %} disabled{% endif %}>Habilitar ticket general</button>
-        {% endif %}
-      </form>
-      <h3 id="dis-tg-destinos">Destinos</h3>
+      <div class="designer-panel__summary">
+        <p>
+          Servicio interno: <strong>{{ ticket_general.servicio.nombre }}</strong>
+          · {% if ticket_general.servicio.activo %}Publicado{% else %}Borrador{% endif %}
+          · {{ ticket_general.destinos|length }} destino{{ ticket_general.destinos|length|pluralize }}
+          — <a href="{% url 'core:disenador_servicio' ticket_general.servicio.pk %}">Configurar formulario, tiempo objetivo, prórroga y entrega</a>
+        </p>
+        <form method="post" action="{% url 'catalogo:ticket_general_habilitar' %}">
+          {% csrf_token %}
+          {% if ticket_general.habilitado %}
+            <input type="hidden" name="habilitado" value="0">
+            <button type="submit" class="btn btn--secondary btn--sm">Deshabilitar ticket general</button>
+          {% else %}
+            <input type="hidden" name="habilitado" value="1">
+            <button type="submit" class="btn btn--primary btn--sm"{% if not ticket_general.puede_habilitar %} disabled{% endif %}>Habilitar ticket general</button>
+          {% endif %}
+        </form>
+      </div>
+      <details class="designer-fold"{% if not ticket_general.destinos %} open{% endif %}>
+        <summary id="dis-tg-destinos">Destinos y responsables</summary>
       <p class="text-muted">A quién puede dirigirse un ticket general. El destino es a quién va la solicitud; el responsable es quien la atiende. Los tickets ya radicados no cambian si editas o desactivas un destino.</p>
       {% if ticket_general.destinos %}
-        <ul class="plain-list" aria-labelledby="dis-tg-destinos">
+        <ul class="designer-destinos" aria-labelledby="dis-tg-destinos">
           {% for fila in ticket_general.destinos %}
             <li>
               <strong>{{ fila.destino.get_tipo_display }}: {{ fila.destino.etiqueta }}</strong>
               → responsable: {{ fila.destino.responsable_etiqueta }}
               · {% if fila.destino.activo %}Activo{% else %}Inactivo{% endif %}{% if fila.predeterminado %} · <strong>Destino de reserva</strong>{% endif %}
               {% if fila.destino.activo and fila.motivo %}<span class="text-muted"> — {{ fila.motivo }}</span>{% endif %}
-              <details class="work-fold">
+              <details class="designer-fold">
                 <summary>Editar</summary>
                 <form method="post" action="{% url 'catalogo:ticket_general_destino_responsable' fila.destino.pk %}" class="form">
                   {% csrf_token %}
@@ -97,7 +166,7 @@
       {% else %}
         <p class="text-muted">Aún no hay destinos.</p>
       {% endif %}
-      <details class="work-fold"{% if not ticket_general.destinos %} open{% endif %}>
+      <details class="designer-fold"{% if not ticket_general.destinos %} open{% endif %}>
         <summary>Agregar destino</summary>
         <form method="post" action="{% url 'catalogo:ticket_general_destino_crear' %}" class="form">
           {% csrf_token %}
@@ -129,8 +198,9 @@
           <button type="submit" class="btn btn--primary btn--sm">Agregar destino</button>
         </form>
       </details>
+      </details>
       {% if ticket_general.candidatos %}
-        <details class="work-fold">
+        <details class="designer-fold">
           <summary>Usar otro servicio como servicio interno</summary>
           <form method="post" action="{% url 'catalogo:ticket_general_designar' %}" class="form">
             {% csrf_token %}
@@ -160,7 +230,7 @@
         {% if not ticket_general.categorias %}<p class="text-muted">Primero crea una categoría activa.</p>{% endif %}
       </form>
       {% if ticket_general.candidatos %}
-        <details class="work-fold">
+        <details class="designer-fold">
           <summary>O elige un servicio existente</summary>
           <form method="post" action="{% url 'catalogo:ticket_general_designar' %}" class="form">
             {% csrf_token %}
@@ -176,70 +246,5 @@
     {% endif %}
   </section>
 
-  <section class="designer-library" aria-labelledby="dis-servicios">
-    <div class="designer-section-head">
-      <div>
-        <h2 id="dis-servicios">Servicios y procesos</h2>
-        <p>Todo lo que las personas pueden solicitar o que la organización puede ejecutar como proceso.</p>
-      </div>
-    </div>
-
-    {% if servicios %}
-      <div class="designer-object-grid designer-object-grid--services" role="list">
-        {% for servicio in servicios %}
-          <article class="designer-object designer-object--service" role="listitem">
-            <div class="designer-object__top">
-              <div>
-                <h3><a href="{% url 'core:disenador_servicio' servicio.pk %}">{{ servicio.nombre }}</a></h3>
-                <p>{{ servicio.get_tipo_display }} · {{ servicio.categoria.nombre }}</p>
-              </div>
-              <details class="designer-object-menu">
-                <summary aria-label="Más acciones">{% include "components/icon.html" with name="more" %}</summary>
-                <div class="designer-object-menu__content">
-                  <a href="{% url 'core:disenador_servicio' servicio.pk %}">{% if servicio.activo %}Abrir{% else %}Continuar{% endif %}</a>
-                  <span>{% if servicio.activo %}Publicado{% else %}Borrador{% endif %}</span>
-                </div>
-              </details>
-            </div>
-
-            <div class="designer-service-map" aria-label="Configuración del servicio">
-              <div>
-                <span>Formulario</span>
-                <strong>Entrada</strong>
-              </div>
-              <div>
-                <span>Flujo</span>
-                <strong>{% if servicio.workflow %}Flujo: {{ servicio.workflow.nombre }}{% else %}Sin flujo{% endif %}</strong>
-              </div>
-              <div>
-                <span>Salida</span>
-                <strong>Entregables</strong>
-              </div>
-            </div>
-
-            {% if servicio.tipo == "PROCESO" and not servicio.workflow %}
-              <p class="designer-object__hint">{% include "components/icon.html" with name="alert" size="sm" %}Un proceso necesita un flujo para poder publicarse.</p>
-            {% endif %}
-
-            <div class="designer-object__footer">
-              <div class="designer-object__states">
-                <span class="designer-status{% if servicio.tipo == 'PROCESO' %} designer-status--neutral{% endif %}">{{ servicio.get_tipo_display }}</span>
-                {% if servicio.es_ticket_general %}<span class="designer-status designer-status--neutral">Ticket general</span>{% endif %}
-                <span class="designer-status{% if servicio.activo %} designer-status--published{% else %} designer-status--draft{% endif %}">{% if servicio.activo %}Publicado{% else %}Borrador{% endif %}</span>
-              </div>
-              <a class="btn btn--secondary btn--sm" href="{% url 'core:disenador_servicio' servicio.pk %}">{% if servicio.activo %}Abrir{% else %}Continuar{% endif %}</a>
-            </div>
-          </article>
-        {% endfor %}
-      </div>
-    {% else %}
-      <div class="designer-empty-state">
-        <span aria-hidden="true">{% include "components/icon.html" with name="tickets" %}</span>
-        <h3>Aún no hay servicios ni procesos</h3>
-        <p>Diseña lo que podrá solicitarse o ejecutarse en Órbita.</p>
-        <a class="btn btn--primary" href="{% url 'core:disenador_servicio_crear' %}">{% include "components/icon.html" with name="plus" %}Crear el primero</a>
-      </div>
-    {% endif %}
-  </section>
 </div>
 {% endblock %}

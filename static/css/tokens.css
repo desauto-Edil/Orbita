@@ -14,7 +14,7 @@
       semántica; no se usan en código nuevo y se retirarán cuando las
       pantallas se rediseñen (fases V1+).
 
-   Identidad: carbón + superficies cálidas + blanco, con un único acento lima
+   Identidad: carbón + superficies neutras + blanco, con un único acento (lima por defecto)
    (#d7ff3e) de uso estratégico: selección, CTA primario, indicadores. El
    acento nunca cubre superficies grandes y siempre lleva texto oscuro encima
    (`--color-on-primary`): el lima NO sirve como color de texto ni de foco
@@ -50,30 +50,83 @@
   --palette-gray-200: #e2e4e8;
   --palette-gray-300: #cdd1d6;
 
-  --palette-lime-50: #f6ffd0;
-  --palette-lime-100: #ecfba0;
-  --palette-lime-300: #e4ff6b;
-  --palette-lime-500: #d7ff3e;
-  --palette-lime-600: #c3eb27;
-  --palette-lime-700: #a9cc12;
+  --palette-lima-50: #f6ffd0;
+  --palette-lima-100: #ecfba0;
+  --palette-lima-300: #e4ff6b;
+  --palette-lima-500: #d7ff3e;
+  --palette-lima-600: #c3eb27;
+  --palette-lima-700: #a9cc12;
   --palette-ink: #14140f;
+
+  /* Fase visual — estilos de acento curados (Configuración › General). Cada escala tiene la misma forma
+     que la lima: 50/100/300 son mezclas con blanco (suave, suave-hover, degradado) y 600/700 mezclas con
+     tinta (hover, activo). Todos los pasos cumplen contraste AA con `--palette-ink` encima, así que el
+     texto sobre el acento sigue siendo oscuro en cualquier estilo. */
+  --palette-menta-50: #dcfcee;
+  --palette-menta-100: #bcf9de;
+  --palette-menta-300: #92f6c9;
+  --palette-menta-500: #4ff0a8;
+  --palette-menta-600: #4ade9c;
+  --palette-menta-700: #45cb8e;
+
+  --palette-cielo-50: #e0f7ff;
+  --palette-cielo-100: #c3efff;
+  --palette-cielo-300: #9ee6ff;
+  --palette-cielo-500: #62d6ff;
+  --palette-cielo-600: #5cc6ec;
+  --palette-cielo-700: #55b5d6;
+
+  --palette-ambar-50: #fff3d8;
+  --palette-ambar-100: #ffe9b5;
+  --palette-ambar-300: #ffdb87;
+  --palette-ambar-500: #ffc53d;
+  --palette-ambar-600: #ecb739;
+  --palette-ambar-700: #d7a735;
+
+  --palette-coral-50: #ffe9e2;
+  --palette-coral-100: #ffd4c8;
+  --palette-coral-300: #ffbaa5;
+  --palette-coral-500: #ff8f6e;
+  --palette-coral-600: #ec8566;
+  --palette-coral-700: #d77a5e;
+
+  --palette-lavanda-50: #f1edff;
+  --palette-lavanda-100: #e4ddff;
+  --palette-lavanda-300: #d4c8ff;
+  --palette-lavanda-500: #b9a6ff;
+  --palette-lavanda-600: #ac9aec;
+  --palette-lavanda-700: #9d8dd6;
+
+  /* Fase visual — grises OSCUROS para el modo oscuro (solo los usa la capa §5). */
+  --palette-dark-950: #0d0e10;
+  --palette-dark-900: #111214;
+  --palette-dark-850: #141518;
+  --palette-dark-800: #18191c;
+  --palette-dark-750: #1f2024;
+  --palette-dark-700: #26272c;
+  --palette-dark-600: #2c2e33;
+  --palette-dark-500: #3b3d43;
+  --palette-dark-text-100: #eceef1;
+  --palette-dark-text-300: #b9bbc1;
+  --palette-dark-text-500: #8f9299;
+  --palette-dark-text-700: #5f6269;
 
   /* ------------------------------------------------------------------ */
   /* 2. Tokens semánticos                                                 */
   /* ------------------------------------------------------------------ */
 
   /* Color de marca / acción */
-  --color-primary: var(--palette-lime-500);
-  --color-primary-hover: var(--palette-lime-600);
-  --color-primary-active: var(--palette-lime-700);
-  --color-primary-soft: var(--palette-lime-50);
-  --color-primary-soft-hover: var(--palette-lime-100);
+  --color-primary: var(--palette-lima-500);
+  --color-primary-hover: var(--palette-lima-600);
+  --color-primary-active: var(--palette-lima-700);
+  --color-primary-soft: var(--palette-lima-50);
+  --color-primary-soft-hover: var(--palette-lima-100);
   /* Texto/icono SOBRE el acento (siempre oscuro). */
   --color-on-primary: var(--palette-ink);
   /* El foco es carbón: el lima no se ve sobre fondo claro. */
   --color-focus-ring: var(--palette-neutral-900);
   /* Uso MUY limitado: marca y avatar. */
-  --gradient-brand: linear-gradient(135deg, var(--palette-lime-300) 0%, var(--palette-lime-500) 55%, var(--palette-lime-600) 100%);
+  --gradient-brand: linear-gradient(135deg, var(--palette-lima-300) 0%, var(--palette-lima-500) 55%, var(--palette-lima-600) 100%);
 
   /* Superficies. El contenido principal vive en superficies sólidas; el
      glass queda para elementos flotantes (dock, header, popovers, modales). */
@@ -108,6 +161,28 @@
   --border-glass: rgba(23, 24, 27, 0.08);
   --border-glass-inverse: rgba(255, 255, 255, 0.1);
 
+  /* Canales para transparencias (`rgb(var(--rgb-tinta) / .08)`): ningún componente escribe un rgba fijo.
+     tinta = trazo/texto translúcido (se invierte en oscuro) · vidrio = superficie translúcida (se invierte)
+     · sombra = color de sombra (siempre oscuro) · brillo = reflejo interior de los paneles glass. */
+  --rgb-tinta: 23 24 27;
+  --rgb-vidrio: 255 255 255;
+  --rgb-sombra: 23 24 27;
+  --rgb-brillo: 255 255 255;
+
+  /* Muestras fijas de cada modo (Configuración › General › Logos): NO cambian con el modo, porque muestran
+     justamente cómo se verá el logo sobre el fondo de cada uno. */
+  --muestra-claro-fondo: var(--palette-gray-50);
+  --muestra-claro-borde: var(--palette-gray-200);
+  --muestra-claro-texto: var(--palette-neutral-900);
+  --muestra-oscuro-fondo: var(--palette-dark-900);
+  --muestra-oscuro-borde: var(--palette-dark-600);
+  --muestra-oscuro-texto: var(--palette-dark-text-100);
+
+  /* Controles neutros */
+  --text-on-status: var(--palette-neutral-0);
+  --control-track: var(--palette-neutral-300);
+  --progress-track: var(--palette-neutral-200);
+
   /* Estados funcionales: el color de texto/icono cumple contraste AA sobre
      su -soft. Nunca se comunica un estado solo con color (siempre hay
      texto o icono). */
@@ -119,6 +194,22 @@
   --status-danger-soft: #fadfdd;
   --status-info: #1a6e8c;
   --status-info-soft: #dbeff6;
+  /* Tonos adicionales para las etiquetas de estado (`.estado-etiqueta`): neutro (borrador, retirado) y gris
+     azulado (en seguimiento). Mismo contrato: texto AA sobre su -soft; independientes del acento. */
+  --status-neutral: #4f525a;
+  --status-neutral-soft: #eceef1;
+  --status-slate: #3e566b;
+  --status-slate-soft: #e3eaf1;
+
+  /* Escenario de medios (visor de piezas): fondo oscuro neutro en ambos modos, para que imágenes y videos se
+     vean como son; el texto sobre él, claro. */
+  --surface-escenario: var(--palette-neutral-900);
+  --text-escenario: var(--palette-gray-50);
+
+  /* Barras de desplazamiento: indicador atenuado del acento activo (se recalcula con cada `data-tema`). */
+  --scrollbar-size: 6px;
+  --scrollbar-thumb: color-mix(in srgb, var(--color-primary) 38%, var(--border-strong));
+  --scrollbar-thumb-hover: color-mix(in srgb, var(--color-primary) 62%, var(--text-muted));
 
   /* Categorías pastel (reservadas a categorización futura de dominios) */
   --tag-violet-bg: #ede7fb;
@@ -174,8 +265,10 @@
   --font-size-body: 14px;
   --font-size-body-lg: 16px;
   --font-size-card-title: 16px;
-  --font-size-section-title: 20px;
-  --font-size-page-title: 28px;
+  /* UX-3 — escala única: página 24 · actividad 20 · sección 18 · cuerpo 14 · etiquetas 12–13. */
+  --font-size-section-title: 18px;
+  --font-size-activity-title: 20px;
+  --font-size-page-title: 24px;
   --font-size-display: 36px;
   /* Saludo de la portada: crece con el viewport sin romper en móvil. */
   --font-size-hero: clamp(30px, 1.2rem + 2.2vw, 52px);
@@ -183,7 +276,11 @@
   --font-weight-regular: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
-  --font-weight-bold: 700;
+  /* UX-3: la interfaz usa 400 · 500 · 600. `bold` queda como alias de 600 para los usos heredados. */
+  --font-weight-bold: 600;
+
+  /* Cifras alineadas en fechas, códigos y cantidades (sin cambiar de familia). */
+  --font-numeric: tabular-nums;
 
   --line-height-tight: 1.25;
   --line-height-base: 1.5;
@@ -211,8 +308,8 @@
   --ring-focus: 0 0 0 3px rgba(23, 24, 27, 0.12);
   --ring-error: 0 0 0 3px rgba(168, 49, 47, 0.14);
   /* Selección: acento lima con contorno controlado (1px + halo suave), nunca bordes carbón gruesos. */
-  --border-selected: var(--palette-lime-700);
-  --ring-selected: 0 0 0 3px var(--palette-lime-100);
+  --border-selected: var(--palette-lima-700);
+  --ring-selected: 0 0 0 3px var(--palette-lima-100);
   --icon-select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234a483f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
   /* Movimiento Órbita: fluido (desacelera al llegar), continuo (lo que aparece nace de lo que se tocó),
@@ -248,6 +345,12 @@
   --content-narrow: 760px;
   --content-wide: 1200px;
   --content-portal: 1360px;
+  /* UX-2 — vistas operativas (Mi trabajo, Cola, Mis tickets, espacio del ticket): fluidas hasta un tope
+     amplio, con gutter adaptativo; lo que limita la lectura es la medida de formularios y párrafos. */
+  --content-operativo: 1760px;
+  --gutter-operativo: clamp(var(--space-4), 2.4vw, var(--space-7));
+  --measure-form: 68ch;
+  --measure-text: 72ch;
   /* Fase 4.B — margen inferior del Studio (con la navegación arriba, nada flota abajo). */
   --dock-reserve: var(--space-4);
   --studio-nav-w: 220px;
@@ -294,4 +397,190 @@
   --glass-blur: var(--blur-md);
   --glass-blur-sm: var(--blur-sm);
   --glass-shadow: var(--shadow-float);
+}
+
+/* ------------------------------------------------------------------ */
+/* 4. Estilos de acento (Configuración › General)                        */
+/* ------------------------------------------------------------------ */
+/* `<html data-tema="…">` elige el estilo de toda la plataforma (`ConfiguracionSistema.tema`); el mismo
+   atributo en un elemento lo aplica solo a esa zona (muestras y vista previa de Configuración). Solo cambia
+   el ACENTO: carbón, superficies, textos y estados son la identidad fija de Órbita. Los alias legados se
+   repiten aquí porque un `var()` declarado en :root se resuelve en :root y no seguiría a una zona. La lista
+   de estilos válidos vive en `apps/core/temas.py`. */
+
+[data-tema="lima"] {
+  --color-primary: var(--palette-lima-500);
+  --color-primary-hover: var(--palette-lima-600);
+  --color-primary-active: var(--palette-lima-700);
+  --color-primary-soft: var(--palette-lima-50);
+  --color-primary-soft-hover: var(--palette-lima-100);
+  --gradient-brand: linear-gradient(135deg, var(--palette-lima-300) 0%, var(--palette-lima-500) 55%, var(--palette-lima-600) 100%);
+  --border-selected: var(--palette-lima-700);
+  --ring-selected: 0 0 0 3px var(--palette-lima-100);
+  --accent: var(--color-primary);
+  --accent-hover: var(--color-primary-hover);
+}
+
+[data-tema="menta"] {
+  --color-primary: var(--palette-menta-500);
+  --color-primary-hover: var(--palette-menta-600);
+  --color-primary-active: var(--palette-menta-700);
+  --color-primary-soft: var(--palette-menta-50);
+  --color-primary-soft-hover: var(--palette-menta-100);
+  --gradient-brand: linear-gradient(135deg, var(--palette-menta-300) 0%, var(--palette-menta-500) 55%, var(--palette-menta-600) 100%);
+  --border-selected: var(--palette-menta-700);
+  --ring-selected: 0 0 0 3px var(--palette-menta-100);
+  --accent: var(--color-primary);
+  --accent-hover: var(--color-primary-hover);
+}
+
+[data-tema="cielo"] {
+  --color-primary: var(--palette-cielo-500);
+  --color-primary-hover: var(--palette-cielo-600);
+  --color-primary-active: var(--palette-cielo-700);
+  --color-primary-soft: var(--palette-cielo-50);
+  --color-primary-soft-hover: var(--palette-cielo-100);
+  --gradient-brand: linear-gradient(135deg, var(--palette-cielo-300) 0%, var(--palette-cielo-500) 55%, var(--palette-cielo-600) 100%);
+  --border-selected: var(--palette-cielo-700);
+  --ring-selected: 0 0 0 3px var(--palette-cielo-100);
+  --accent: var(--color-primary);
+  --accent-hover: var(--color-primary-hover);
+}
+
+[data-tema="ambar"] {
+  --color-primary: var(--palette-ambar-500);
+  --color-primary-hover: var(--palette-ambar-600);
+  --color-primary-active: var(--palette-ambar-700);
+  --color-primary-soft: var(--palette-ambar-50);
+  --color-primary-soft-hover: var(--palette-ambar-100);
+  --gradient-brand: linear-gradient(135deg, var(--palette-ambar-300) 0%, var(--palette-ambar-500) 55%, var(--palette-ambar-600) 100%);
+  --border-selected: var(--palette-ambar-700);
+  --ring-selected: 0 0 0 3px var(--palette-ambar-100);
+  --accent: var(--color-primary);
+  --accent-hover: var(--color-primary-hover);
+}
+
+[data-tema="coral"] {
+  --color-primary: var(--palette-coral-500);
+  --color-primary-hover: var(--palette-coral-600);
+  --color-primary-active: var(--palette-coral-700);
+  --color-primary-soft: var(--palette-coral-50);
+  --color-primary-soft-hover: var(--palette-coral-100);
+  --gradient-brand: linear-gradient(135deg, var(--palette-coral-300) 0%, var(--palette-coral-500) 55%, var(--palette-coral-600) 100%);
+  --border-selected: var(--palette-coral-700);
+  --ring-selected: 0 0 0 3px var(--palette-coral-100);
+  --accent: var(--color-primary);
+  --accent-hover: var(--color-primary-hover);
+}
+
+[data-tema="lavanda"] {
+  --color-primary: var(--palette-lavanda-500);
+  --color-primary-hover: var(--palette-lavanda-600);
+  --color-primary-active: var(--palette-lavanda-700);
+  --color-primary-soft: var(--palette-lavanda-50);
+  --color-primary-soft-hover: var(--palette-lavanda-100);
+  --gradient-brand: linear-gradient(135deg, var(--palette-lavanda-300) 0%, var(--palette-lavanda-500) 55%, var(--palette-lavanda-600) 100%);
+  --border-selected: var(--palette-lavanda-700);
+  --ring-selected: 0 0 0 3px var(--palette-lavanda-100);
+  --accent: var(--color-primary);
+  --accent-hover: var(--color-primary-hover);
+}
+
+/* ------------------------------------------------------------------ */
+/* 5. Modo oscuro (preferencia personal, Mi perfil)                     */
+/* ------------------------------------------------------------------ */
+/* `<html data-modo="oscuro">` (base.html lo resuelve desde `Usuario.apariencia`; AUTOMÁTICO sigue al
+   dispositivo). Redefine SOLO la capa semántica: ningún componente cambia. Va después de §4 para que, a igual
+   especificidad, gane sobre los estilos de acento. El acento conserva su color y su texto oscuro encima; lo
+   que se adapta son sus superficies suaves y la selección. Contrastes AA verificados sobre --surface-card. */
+
+[data-modo="oscuro"] {
+  color-scheme: dark;
+
+  --color-on-primary: var(--palette-ink);
+  --color-focus-ring: var(--palette-dark-text-100);
+
+  --surface-page: var(--palette-dark-900);
+  --surface-card: var(--palette-dark-800);
+  --surface-raised: var(--palette-dark-750);
+  --surface-sunken: var(--palette-dark-850);
+  --surface-hover: var(--palette-dark-700);
+  --surface-glass: rgba(24, 25, 28, 0.74);
+  --surface-glass-strong: rgba(24, 25, 28, 0.92);
+  --surface-glass-inverse: rgba(236, 238, 241, 0.9);
+  --surface-inverse: var(--palette-dark-text-100);
+  --surface-glass-fallback: var(--palette-dark-800);
+  --surface-glass-inverse-fallback: var(--palette-dark-text-100);
+  --overlay-backdrop: rgba(0, 0, 0, 0.6);
+
+  --text-primary: var(--palette-dark-text-100);
+  --text-secondary: var(--palette-dark-text-300);
+  --text-muted: var(--palette-dark-text-500);
+  --text-disabled: var(--palette-dark-text-700);
+  --text-on-inverse: var(--palette-neutral-900);
+  --text-on-inverse-muted: var(--palette-neutral-700);
+  --text-link: var(--text-primary);
+  --text-on-status: var(--palette-neutral-900);
+
+  --border-subtle: var(--palette-dark-600);
+  --border-strong: var(--palette-dark-500);
+  --border-focus: var(--palette-dark-text-100);
+  --border-glass: rgba(255, 255, 255, 0.08);
+  --border-glass-inverse: rgba(23, 24, 27, 0.12);
+
+  --rgb-tinta: 236 238 241;
+  --rgb-vidrio: 30 31 35;
+  --rgb-sombra: 0 0 0;
+  --rgb-brillo: 255 255 255;
+
+  --control-track: var(--palette-dark-500);
+  --progress-track: var(--palette-dark-600);
+
+  --status-success: #5fd39b;
+  --status-success-soft: #15301f;
+  --status-warning: #f0b94e;
+  --status-warning-soft: #33270f;
+  --status-danger: #ff8e86;
+  --status-danger-soft: #3b1716;
+  --status-info: #6fc6ea;
+  --status-info-soft: #10293a;
+  --surface-escenario: var(--palette-dark-900);
+  --text-escenario: var(--palette-dark-text-100);
+  --status-neutral: #c3c6cd;
+  --status-neutral-soft: #2a2c31;
+  --status-slate: #a9bfd3;
+  --status-slate-soft: #1c2631;
+
+  --tag-violet-bg: #2a2342;
+  --tag-violet-text: #c4b5ff;
+  --tag-peach-bg: #3a2618;
+  --tag-peach-text: #ffb88a;
+  --tag-sky-bg: #13283a;
+  --tag-sky-text: #8ec9f5;
+  --tag-rose-bg: #3a1a26;
+  --tag-rose-text: #ff9fc0;
+
+  --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3), 0 1px 3px rgba(0, 0, 0, 0.24);
+  --shadow-md: 0 6px 20px rgba(0, 0, 0, 0.36);
+  --shadow-lg: 0 20px 48px rgba(0, 0, 0, 0.5);
+  --shadow-float: 0 10px 32px rgba(0, 0, 0, 0.5);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.24);
+  --shadow-selected: 0 0 0 2px var(--palette-dark-text-100), 0 6px 16px rgba(0, 0, 0, 0.4);
+
+  --ring-focus: 0 0 0 3px rgba(236, 238, 241, 0.18);
+  --ring-error: 0 0 0 3px rgba(255, 142, 134, 0.22);
+  --icon-select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23b9bbc1' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
+  --carbon-soft: rgba(23, 24, 27, 0.08);
+}
+
+/* Acento en oscuro: el suave del estilo (`-50`) es casi blanco y apagaría el texto claro; se mezcla el
+   acento con la superficie. También dentro de una zona con su propio `data-tema` (vista previa). */
+[data-modo="oscuro"],
+[data-modo="oscuro"] [data-tema] {
+  --color-primary-soft: color-mix(in srgb, var(--color-primary) 16%, var(--palette-dark-800));
+  --color-primary-soft-hover: color-mix(in srgb, var(--color-primary) 24%, var(--palette-dark-800));
+  --border-selected: var(--color-primary);
+  --ring-selected: 0 0 0 3px color-mix(in srgb, var(--color-primary) 28%, transparent);
 }

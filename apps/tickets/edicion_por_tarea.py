@@ -154,3 +154,26 @@ def elemento_de_tarea(tarea, usuario):
     if elemento is None or not columnas_por_tarea(usuario, elemento):
         return None
     return elemento
+
+
+def puede_ver_elemento_por_intervencion(usuario, elemento):
+    """UX-4 — LECTURA de un ítem (sus valores y archivos) por quien interviene en SU recorrido: aprobador de una
+    aprobación del recorrido de ese ítem o responsable (directo o delegado) de una actividad de ese recorrido, en
+    cualquier estado de la aprobación o la Tarea (es su intervención). No concede nada sobre otros ítems ni sobre
+    el resto del ticket, y no permite editar (eso sigue siendo `columnas_por_tarea`)."""
+    if not getattr(usuario, "is_authenticated", False) or not isinstance(elemento, ElementoParrilla):
+        return False
+    from apps.aprobaciones.autorizacion import es_aprobador_directo
+    from apps.aprobaciones.models import Aprobacion
+    from apps.tareas.autorizacion import es_responsable_actual
+    from apps.workflows.models import TareaWorkflow
+
+    aprobaciones = Aprobacion.objects.filter(
+        esquema__vinculo_workflow__instancia_etapa__instancia_workflow__elemento=elemento
+    )
+    if any(es_aprobador_directo(usuario, a) for a in aprobaciones):
+        return True
+    vinculos = TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow__elemento=elemento).select_related("tarea")
+    return any(
+        es_responsable_actual(usuario, v.tarea) or v.tarea.completada_por_id == usuario.pk for v in vinculos
+    )

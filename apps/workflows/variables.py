@@ -278,7 +278,12 @@ def referencias_disponibles(*, campos=(), bloques=()):
                 ("excluidos", "ítems excluidos"), ("rechazados", "ítems rechazados"),
             ):
                 lista.append((f"recorridos.{bloque.clave}.{campo}", f"«{bloque.nombre}»: {texto}"))
-        if bloque.tipo == "GACETA" and bloque.clave:
+        if bloque.tipo == "GACETA" and bloque.clave and bloque.rama == "ITEM":
+            # Bloque 5.2: la revisión del ítem publica su resultado en la gaceta (APROBADA o NO_INGRESA).
+            lista.append(
+                (f"gacetas.{bloque.clave}.resultado", f"«{bloque.nombre}»: resultado del ítem en la gaceta")
+            )
+        elif bloque.tipo == "GACETA" and bloque.clave:
             for campo, texto in (
                 ("aprobados", "ítems aprobados"), ("rechazados", "ítems rechazados"), ("excluidos", "ítems excluidos"),
                 ("total", "ítems presentados"), ("resuelta", "verdadero si la gaceta ya se resolvió"),

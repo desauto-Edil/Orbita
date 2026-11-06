@@ -17,7 +17,9 @@
           {% for valor, etiqueta, marcada in celda.opciones %}<option value="{{ valor }}"{% if marcada %} selected{% endif %}>{{ etiqueta }}</option>{% endfor %}
         </select>
       {% else %}
-        <input type="{{ celda.input_type }}" name="campo_{{ celda.campo.pk }}" value="{{ celda.valor }}"{% if celda.tipo == "NUMERO" %} step="any"{% endif %}>
+        {# UX-4: una fecha que debe caer en el periodo del ticket lo indica y lo limita (el servidor lo vuelve a validar). #}
+        <input type="{{ celda.input_type }}" name="campo_{{ celda.campo.pk }}" value="{{ celda.valor }}"{% if celda.tipo == "NUMERO" %} step="any"{% endif %}{% if periodo and celda.campo.configuracion.dentro_del_periodo %}{% if celda.tipo == "FECHA" %} min="{{ periodo.inicio|date:'Y-m-d' }}" max="{{ periodo.fin|date:'Y-m-d' }}"{% else %} min="{{ periodo.inicio|date:'Y-m-d' }}T00:00" max="{{ periodo.fin|date:'Y-m-d' }}T23:59"{% endif %}{% endif %}>
+        {% if periodo and celda.campo.configuracion.dentro_del_periodo %}<p class="field__hint">Dentro de {{ periodo.etiqueta }} ({{ periodo.inicio|date:"j M" }}–{{ periodo.fin|date:"j M" }}).</p>{% endif %}
       {% endif %}
     </div>
   {% endif %}

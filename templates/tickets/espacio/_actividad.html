@@ -1,0 +1,93 @@
+{% comment %}
+  UX-4 — «Tu misión»: la acción que la persona puede realizar AHORA en este ticket (`espacio.acciones_de`, por su
+  relación con el ticket). Responde de un vistazo: ¿qué hago? (título e instrucción breve), ¿qué me falta? (lo
+  pendiente, en etiquetas) y ¿qué sucede después? (una línea). Con varias misiones, un selector compacto; sin
+  ninguna, el estado actual y, si la persona consulta el ticket, a qué o a quién espera.
+{% endcomment %}
+<section class="esp-mision" aria-labelledby="esp-mision-t">
+  <header class="esp-mision__cabeza">
+    <h2 id="esp-mision-t" class="esp-mision__eyebrow">{% include "components/icon.html" with name="compass" size="sm" %}Tu misión</h2>
+    {% if acciones|length > 1 %}<span class="esp-mision__cuenta tabular">{{ acciones|length }} pendientes</span>{% endif %}
+  </header>
+
+  {% if acciones|length > 1 %}
+    <nav class="esp-selector" aria-label="Tus misiones pendientes">
+      {% for accion in acciones %}
+        <a class="esp-selector__item{% if seleccionada.clave == accion.clave %} is-selected{% endif %}" href="{{ base }}?accion={{ accion.clave }}"{% if seleccionada.clave == accion.clave %} aria-current="true"{% endif %}>
+          <span class="esp-selector__titulo">{{ accion.titulo }}{% if accion.subtitulo %} · {{ accion.subtitulo }}{% endif %}</span>
+          {% if accion.vence %}<span class="esp-selector__meta tabular">{{ accion.vence|date:"j M" }}</span>{% endif %}
+        </a>
+      {% endfor %}
+    </nav>
+  {% endif %}
+
+  {% if seleccionada %}
+    {% with accion=seleccionada %}
+      <article class="esp-tarea" id="accion-{{ accion.clave }}" aria-labelledby="accion-t">
+        <header class="esp-tarea__cabeza">
+          {% if accion.subtitulo or accion.estado %}<p class="esp-tarea__contexto">{{ accion.subtitulo }}{% if accion.subtitulo and accion.estado %} · {% endif %}{{ accion.estado }}</p>{% endif %}
+          <h3 id="accion-t" class="esp-tarea__titulo">{{ accion.titulo }}</h3>
+          {% if accion.que %}<p class="esp-tarea__instruccion">{{ accion.que|linebreaksbr }}</p>{% endif %}
+          {% if accion.vence or accion.informacion %}
+            <p class="esp-tarea__meta">
+              {% if accion.vence %}<span class="esp-vence tabular">{% include "components/icon.html" with name="clock" size="sm" %}Vence {{ accion.vence|date:"j M, H:i" }}</span>{% endif %}
+              {% for dato in accion.informacion %}<span>{{ dato }}</span>{% endfor %}
+            </p>
+          {% endif %}
+        </header>
+
+        {% if accion.recorrido_item %}
+          {% include "tickets/espacio/_pasos_item.html" with item=accion.recorrido_item compacto=False %}
+        {% endif %}
+
+        {% if accion.impedimentos %}
+          <div class="esp-aviso" role="status">
+            {% include "components/icon.html" with name="alert" size="sm" %}
+            <p>{{ accion.impedimentos|join:" " }}</p>
+          </div>
+        {% endif %}
+
+        {% if accion.requisitos_pendientes %}
+          {% include "tickets/espacio/_guia.html" %}
+        {% endif %}
+
+        <div class="esp-tarea__cuerpo">
+          {% if accion.tipo == "tarea" %}{% include "tickets/espacio/acciones/_tarea.html" %}
+          {% elif accion.tipo == "borradores" %}{% include "tickets/espacio/acciones/_borradores.html" %}
+          {% elif accion.tipo == "aprobacion" %}{% include "tickets/espacio/acciones/_aprobacion.html" %}
+          {% elif accion.tipo == "gaceta" %}{% include "tickets/espacio/acciones/_gaceta.html" %}
+          {% elif accion.tipo == "revision" %}{% include "tickets/espacio/acciones/_revision.html" %}
+          {% elif accion.tipo == "entregable" %}{% include "tickets/espacio/acciones/_entregable.html" %}
+          {% elif accion.tipo == "correccion" %}{% include "tickets/espacio/acciones/_correccion.html" %}
+          {% elif accion.tipo == "recorrido" %}{% include "tickets/espacio/acciones/_recorrido.html" %}
+          {% elif accion.tipo == "atencion" %}{% include "tickets/espacio/acciones/_atencion.html" %}
+          {% elif accion.tipo == "tomar" %}{% include "tickets/espacio/acciones/_tomar.html" %}
+          {% elif accion.tipo == "datos_inicio" %}{% include "tickets/_datos_inicio.html" with datos_inicio=accion.datos_inicio next_url=aqui %}
+          {% elif accion.tipo == "solicitud" %}{% include "tickets/espacio/acciones/_solicitud.html" %}
+          {% elif accion.tipo == "entrega" %}{% include "tickets/espacio/acciones/_entrega.html" %}
+          {% elif accion.tipo == "cerrar" %}{% include "tickets/espacio/acciones/_cerrar.html" %}
+          {% endif %}
+        </div>
+
+        {% if accion.despues %}
+          <p class="esp-despues">{% include "components/icon.html" with name="arrow-right" size="sm" %}<span><span class="esp-despues__etiqueta">Después:</span> {{ accion.despues|join:" " }}</span></p>
+        {% endif %}
+      </article>
+    {% endwith %}
+  {% else %}
+    <div class="esp-reposo">
+      <h3 class="esp-tarea__titulo">Nada pendiente para ti ahora</h3>
+      {% if espera %}<p>{{ espera }}</p>{% endif %}
+      {% if progreso_solicitante %}
+        <ol class="esp-pasos" aria-label="Avance de tu solicitud">
+          {% for paso in progreso_solicitante.fases %}
+            <li class="esp-pasos__paso esp-pasos__paso--{{ paso.situacion }}"{% if paso.situacion == "actual" %} aria-current="step"{% endif %}>
+              <span class="esp-pasos__marca" aria-hidden="true">{% if paso.situacion == "completada" %}✓{% endif %}</span>
+              <span>{{ paso.nombre }}{% if paso.situacion == "completada" %}<span class="sr-only"> (completada)</span>{% elif paso.situacion == "actual" %}<span class="sr-only"> (actual)</span>{% endif %}</span>
+            </li>
+          {% endfor %}
+        </ol>
+      {% endif %}
+    </div>
+  {% endif %}
+</section>

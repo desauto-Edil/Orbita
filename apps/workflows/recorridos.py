@@ -24,6 +24,23 @@ Configuración del RECORRIDO_ITEMS (`BloqueOperativo.configuracion`):
     incorporar_nuevos      bool: un ítem que se agrega mientras el bloque espera entra a su recorrido
     espera_alcance_cerrado bool: el bloque no termina mientras el alcance de la colección siga abierto
 
+UX-4 (opcionales; sin ellas todo funciona como antes):
+
+    ingreso                "AUTOMATICO" (por defecto: entra al lanzarse o al agregarse) | "AL_ENVIAR": cada ítem
+                           es un BORRADOR (en el alcance, sin recorrido) hasta que alguien lo ENVÍA
+                           (`enviar_elemento`); nunca se lanza solo
+    paso_al_enviar         clave del bloque ITEM por el que entra un ítem enviado (por defecto, el primero). Así
+                           un paso anterior (p. ej. «Ajustar la idea») solo existe cuando una ruta «Devuelta»
+                           vuelve a él
+    columnas_requeridas_ingreso  claves de columna que deben estar completas para enviar
+    envio                  "INDIVIDUAL" (por defecto: cada ítem se envía por separado) | "CONJUNTO": los
+                           borradores se envían TODOS JUNTOS (`enviar_conjunto`) y ese envío cierra el alcance:
+                           ninguno avanza antes y después no se agregan más (solo se corrigen los devueltos)
+    etapa_borradores       nombre visible de la etapa de borradores (p. ej. «Lluvia de ideas»)
+
+Un borrador no es un estado guardado: es un ítem en el alcance sin subinstancia en ESTA ejecución. Con ingreso
+AL_ENVIAR el contenedor no termina mientras quede alguno (`Progreso.borradores`): se envía o sale del alcance.
+
 Cuándo termina el contenedor (`progreso(...).terminado`): no queda ninguna subinstancia en curso ni con error
 y, si se configuró, el alcance de la colección ya se cerró. Al terminar publica `recorridos.<clave>.*` o
 `grupos.<clave>.*` (totales por resultado) y las aprobaciones de las ramas generales quedan disponibles como
@@ -63,12 +80,33 @@ ESTADOS_EN_CURSO = (InstanciaWorkflow.Estado.EN_EJECUCION, InstanciaWorkflow.Est
 # --- Configuración -----------------------------------------------------------------------------------------
 
 
+INGRESO_AUTOMATICO = "AUTOMATICO"
+INGRESO_AL_ENVIAR = "AL_ENVIAR"
+INGRESOS = (INGRESO_AUTOMATICO, INGRESO_AL_ENVIAR)
+ENVIO_INDIVIDUAL = "INDIVIDUAL"
+ENVIO_CONJUNTO = "CONJUNTO"
+ENVIOS = (ENVIO_INDIVIDUAL, ENVIO_CONJUNTO)
+
+
 @dataclass(frozen=True)
 class ConfiguracionRecorrido:
     coleccion: str = ""
     condicion_ingreso: dict | None = None
     incorporar_nuevos: bool = False
     espera_alcance_cerrado: bool = False
+    ingreso: str = INGRESO_AUTOMATICO
+    paso_al_enviar: str = ""
+    columnas_requeridas_ingreso: tuple = ()
+    envio: str = ENVIO_INDIVIDUAL
+    etapa_borradores: str = ""
+
+    @property
+    def al_enviar(self):
+        return self.ingreso == INGRESO_AL_ENVIAR
+
+    @property
+    def en_conjunto(self):
+        return self.al_enviar and self.envio == ENVIO_CONJUNTO
 
 
 def configuracion_de(bloque):
@@ -81,7 +119,44 @@ def configuracion_de(bloque):
         condicion_ingreso=condicion,
         incorporar_nuevos=bool(cfg.get("incorporar_nuevos")),
         espera_alcance_cerrado=bool(cfg.get("espera_alcance_cerrado")),
+        ingreso=cfg.get("ingreso") if cfg.get("ingreso") in INGRESOS else INGRESO_AUTOMATICO,
+        paso_al_enviar=str(cfg.get("paso_al_enviar") or ""),
+        columnas_requeridas_ingreso=tuple(
+            c for c in (cfg.get("columnas_requeridas_ingreso") or ()) if isinstance(c, str) and c
+        ),
+        envio=cfg.get("envio") if cfg.get("envio") in ENVIOS else ENVIO_INDIVIDUAL,
+        etapa_borradores=str(cfg.get("etapa_borradores") or "")[:60],
     )
+
+
+def errores_de_configuracion(cfg, *, claves_bloques_item=(), claves_columnas=None):
+    """UX-4 — errores de las claves nuevas de un RECORRIDO_ITEMS (las de siempre las valida el Studio). Lista
+    vacía = válida. `claves_bloques_item` y `claves_columnas` permiten comprobar las referencias al publicar."""
+    cfg = cfg or {}
+    errores = []
+    ingreso = cfg.get("ingreso") or INGRESO_AUTOMATICO
+    if ingreso not in INGRESOS:
+        errores.append("El modo de ingreso del recorrido no es válido.")
+    paso = cfg.get("paso_al_enviar") or ""
+    if paso and ingreso != INGRESO_AL_ENVIAR:
+        errores.append("El paso de entrada solo aplica cuando los ítems entran al enviarse.")
+    if paso and claves_bloques_item and paso not in claves_bloques_item:
+        errores.append("El paso por el que entra un ítem enviado no es un paso de este recorrido.")
+    envio = cfg.get("envio") or ENVIO_INDIVIDUAL
+    if envio not in ENVIOS:
+        errores.append("El modo de envío del recorrido no es válido.")
+    elif envio == ENVIO_CONJUNTO and ingreso != INGRESO_AL_ENVIAR:
+        errores.append("Enviar los ítems en conjunto solo aplica cuando los ítems entran al enviarse.")
+    if len(str(cfg.get("etapa_borradores") or "")) > 60:
+        errores.append("El nombre de la etapa de borradores es demasiado largo (máximo 60 caracteres).")
+    requeridas = cfg.get("columnas_requeridas_ingreso") or []
+    if not isinstance(requeridas, (list, tuple)) or not all(isinstance(c, str) and c for c in requeridas):
+        errores.append("Las columnas exigidas para enviar deben indicarse por su clave.")
+    elif claves_columnas is not None:
+        faltan = [c for c in requeridas if c not in claves_columnas]
+        if faltan:
+            errores.append(f"Las columnas exigidas para enviar no son de la colección ({', '.join(faltan)}).")
+    return errores
 
 
 def bloques_de_rama(contenedor, rama):
@@ -94,7 +169,20 @@ def bloques_de_rama(contenedor, rama):
 def _ticket_de(instancia):
     from apps.tickets.models import Ticket
 
-    return Ticket.objects.filter(instancia_workflow_id=instancia.raiz_id).first()
+    ticket = Ticket.objects.filter(instancia_workflow_id=instancia.raiz_id).first()
+    if ticket is not None:
+        return ticket
+    # El motor ejecuta los primeros bloques ANTES de que la radicación guarde `Ticket.instancia_workflow` (igual
+    # que `actores._ticket_vigente`): si el recorrido es el primer bloque, solo en ese arranque se usa el
+    # `ticket_id` que la radicación dejó en los datos iniciales de la instancia principal.
+    raiz = instancia if instancia.pk == instancia.raiz_id else InstanciaWorkflow.objects.filter(pk=instancia.raiz_id).first()
+    ticket_id = ((raiz.contexto if raiz else {}) or {}).get("datos_iniciales", {}).get("ticket_id")
+    if not isinstance(ticket_id, int) or isinstance(ticket_id, bool):
+        return None
+    return Ticket.objects.filter(
+        pk=ticket_id, estado=Ticket.Estado.BORRADOR, instancia_workflow__isnull=True,
+        detalle_servicio__servicio__workflow_id=instancia.workflow_version.workflow_id,
+    ).first()
 
 
 def _coleccion(ticket, clave):
@@ -144,17 +232,18 @@ class Progreso:
     retirados: int = 0
     cancelados: int = 0
     pendiente_alcance: bool = False
+    borradores: int = 0  # UX-4: ítems en el alcance aún sin enviar (ingreso AL_ENVIAR)
 
     @property
     def terminado(self):
-        return self.en_curso == 0 and self.con_error == 0 and not self.pendiente_alcance
+        return self.en_curso == 0 and self.con_error == 0 and not self.pendiente_alcance and self.borradores == 0
 
     def datos(self):
         return {
             "total": self.total, "en_curso": self.en_curso, "con_error": self.con_error,
             "completados": self.completados, "completadas": self.completados, "excluidos": self.excluidos,
             "rechazados": self.rechazados, "retirados": self.retirados, "cancelados": self.cancelados,
-            "pendiente_alcance": self.pendiente_alcance,
+            "pendiente_alcance": self.pendiente_alcance, "borradores": self.borradores,
         }
 
 
@@ -170,20 +259,36 @@ def progreso(ejecucion):
         else:
             conteo[resultado_de(hija) if resultado_de(hija) in conteo else COMPLETADO] += 1
     pendiente_alcance = False
+    borradores = 0
     bloque = ejecucion.bloque_operativo
     if bloque is not None and bloque.tipo == TIPO_RECORRIDO:
         configuracion = configuracion_de(bloque)
-        if configuracion.espera_alcance_cerrado:
+        if configuracion.espera_alcance_cerrado or configuracion.al_enviar:
             ticket = _ticket_de(ejecucion.instancia_workflow)
             from apps.tickets.parrilla import parrilla_de
 
             parrilla = parrilla_de(ticket, configuracion.coleccion) if ticket is not None else None
+            # Con ingreso AL_ENVIAR siempre se espera el cierre del alcance: si no, nadie podría enviar después.
             pendiente_alcance = parrilla is not None and not parrilla.alcance_cerrado
+            if configuracion.al_enviar and parrilla is not None:
+                borradores = len(borradores_de(ejecucion, parrilla, hijas=hijas))
     return Progreso(
         total=len(hijas), en_curso=conteo["en_curso"], con_error=conteo["con_error"],
         completados=conteo[COMPLETADO], excluidos=conteo[EXCLUIDO], rechazados=conteo[RECHAZADO],
         retirados=conteo[RETIRADO], cancelados=conteo[CANCELADO], pendiente_alcance=pendiente_alcance,
+        borradores=borradores,
     )
+
+
+def borradores_de(ejecucion, parrilla, *, hijas=None):
+    """UX-4 — ítems de la colección EN EL ALCANCE que todavía no tienen recorrido en esta ejecución (con ingreso
+    AL_ENVIAR, son los borradores por enviar). Solo lee."""
+    from apps.tickets.parrilla import elementos_en_alcance
+
+    if hijas is None:
+        hijas = InstanciaWorkflow.objects.filter(ejecucion_padre_id=ejecucion.pk)
+    con_recorrido = {h.elemento_id for h in hijas if h.elemento_id}
+    return [e for e in elementos_en_alcance(parrilla) if e.pk not in con_recorrido]
 
 
 def subinstancias_de(ejecucion):
@@ -221,6 +326,8 @@ def lanzar(ejecucion, *, actor=None):
     if ticket is None:
         raise ValidationError("El recorrido por ítem necesita una ejecución vinculada a un Ticket.")
     parrilla = _coleccion(ticket, configuracion.coleccion)
+    if configuracion.al_enviar:
+        return  # UX-4: cada ítem entra cuando alguien lo envía (`enviar_elemento`), nunca solo
     from apps.tickets.parrilla import elementos_en_alcance
 
     con_recorrido = set(existentes.exclude(elemento__isnull=True).values_list("elemento_id", flat=True))
@@ -253,7 +360,7 @@ def incorporar_elemento(ticket, elemento, *, actor=None):
         return None
     bloque = ejecucion.bloque_operativo
     configuracion = configuracion_de(bloque)
-    if not configuracion.incorporar_nuevos or configuracion.coleccion != elemento.parrilla.clave:
+    if configuracion.al_enviar or not configuracion.incorporar_nuevos or configuracion.coleccion != elemento.parrilla.clave:
         return None
     secuencia = bloques_de_rama(bloque, "ITEM")
     if not secuencia or InstanciaWorkflow.objects.filter(ejecucion_padre=ejecucion, elemento=elemento).exists():
@@ -338,5 +445,138 @@ def sacar_elemento(elemento, actor, *, resultado, motivo=""):
     bloqueada (las operaciones de la colección ya la bloquean)."""
     from apps.workflows.integracion import cancelar_subinstancia
 
-    for hija in recorridos_activos_de(elemento):
+    activos = recorridos_activos_de(elemento)
+    for hija in activos:
         cancelar_subinstancia(hija, actor, resultado=resultado, motivo=motivo)
+    if not activos:
+        # UX-4: un BORRADOR (sin recorrido) que sale del alcance puede ser lo último que el contenedor esperaba.
+        reevaluar_ticket(elemento.parrilla.ticket)
+
+
+# --- Envío de un borrador (UX-4) ---------------------------------------------------------------------------
+
+
+def recorrido_al_enviar(ticket, parrilla):
+    """La ejecución del RECORRIDO_ITEMS con ingreso AL_ENVIAR que la instancia principal del Ticket está
+    esperando para `parrilla`, o `None` (todavía no llegó, ya terminó, o el recorrido no se envía a mano)."""
+    if ticket.instancia_workflow_id is None:
+        return None
+    ejecucion = _ejecucion_vigente_en_espera(ticket.instancia_workflow_id)
+    if ejecucion is None or ejecucion.bloque_operativo.tipo != TIPO_RECORRIDO:
+        return None
+    configuracion = configuracion_de(ejecucion.bloque_operativo)
+    if not configuracion.al_enviar or configuracion.coleccion != parrilla.clave:
+        return None
+    return ejecucion
+
+
+def faltantes_para_enviar(elemento, ejecucion):
+    """Etiquetas de las columnas que el recorrido exige y el ítem aún no tiene (lista vacía = puede enviarse)."""
+    from apps.tickets.parrilla import completitud_de
+
+    exigidas = configuracion_de(ejecucion.bloque_operativo).columnas_requeridas_ingreso
+    if not exigidas:
+        return []
+    return list(completitud_de(elemento, exigidas=exigidas).pendientes)
+
+
+@transaction.atomic
+def enviar_elemento(elemento, actor, valores=None):
+    """UX-4 — «Enviar»: guarda los valores indicados (como «Guardar borrador»), comprueba lo que el recorrido
+    exige y hace entrar AL ítem a su recorrido por `paso_al_enviar`, todo en UNA transacción (si algo falla no
+    queda nada guardado ni enviado). Solo con ingreso AL_ENVIAR, con la principal esperando ese recorrido y con
+    el ítem en el alcance y sin recorrido todavía. Autoriza quien puede operar la colección (la misma regla que
+    editar el ítem: responsable individual o participante; `parrilla._bloquear_elemento`).
+
+    Orden de locks: instancia principal → Ticket → colección → ítem (el del módulo)."""
+    from apps.tickets import parrilla as parrilla_ops
+    from apps.tickets.autorizacion import puede_operar_coleccion
+    from apps.tickets.models import ElementoParrilla, Ticket
+    from apps.workflows.motor import bloquear_con_padre, iniciar_subinstancia
+
+    ticket = Ticket.objects.get(pk=elemento.parrilla.ticket_id)
+    if ticket.instancia_workflow_id is None:
+        raise ValidationError("Este ticket no tiene un flujo al que enviar el ítem.")
+    padre = bloquear_con_padre(ticket.instancia_workflow_id)
+    if valores:
+        parrilla_ops.actualizar_valores(elemento, actor, valores)
+    elemento = ElementoParrilla.objects.select_related("parrilla").get(pk=elemento.pk)
+    parrilla = elemento.parrilla
+    ticket.refresh_from_db()
+    if not puede_operar_coleccion(actor, parrilla, ticket):
+        from django.core.exceptions import PermissionDenied
+
+        raise PermissionDenied("No puedes enviar ítems de esta colección.")
+    if elemento.retirado_en is not None or parrilla_ops.decision_de_salida(elemento) is not None:
+        raise ValidationError(f"El ítem #{elemento.numero} ya no está en el alcance.")
+    ejecucion = recorrido_al_enviar(ticket, parrilla)
+    if ejecucion is None:
+        raise ValidationError("Ahora no se pueden enviar ítems de esta colección: el flujo no los está recibiendo.")
+    ejecucion = InstanciaEtapa.objects.select_for_update(of=("self",)).select_related("bloque_operativo").get(pk=ejecucion.pk)
+    if InstanciaWorkflow.objects.filter(ejecucion_padre=ejecucion, elemento=elemento).exists():
+        raise ValidationError(f"El ítem #{elemento.numero} ya se envió.")
+    configuracion = configuracion_de(ejecucion.bloque_operativo)
+    if configuracion.en_conjunto and not parrilla.alcance_cerrado:
+        etapa = configuracion.etapa_borradores or "los borradores"
+        raise ValidationError(f"Se envían todos juntos: completa {etapa.lower()} y envíala a aprobación.")
+    faltan = faltantes_para_enviar(elemento, ejecucion)
+    if faltan:
+        raise ValidationError("Para enviarlo falta: " + ", ".join(faltan) + ".")
+    return iniciar_subinstancia(padre, ejecucion, _paso_de_entrada(ejecucion), elemento=elemento, actor=actor)
+
+
+def _paso_de_entrada(ejecucion):
+    configuracion = configuracion_de(ejecucion.bloque_operativo)
+    secuencia = bloques_de_rama(ejecucion.bloque_operativo, "ITEM")
+    if not secuencia:
+        raise ValidationError("El recorrido no tiene pasos configurados.")
+    if not configuracion.paso_al_enviar:
+        return secuencia[0]
+    inicial = next((b for b in secuencia if b.clave == configuracion.paso_al_enviar), None)
+    if inicial is None:
+        raise ValidationError("El paso por el que entran los ítems enviados ya no existe en el recorrido.")
+    return inicial
+
+
+@transaction.atomic
+def enviar_conjunto(ticket, parrilla, actor, *, cambios=None, nuevos=None):
+    """UX-4 — «Enviar <etapa de borradores> a aprobación»: en UNA transacción guarda lo escrito (`cambios`:
+    `{elemento: {campo_id: valor}}`, `nuevos`: `[{campo_id: valor}]`), comprueba que CADA borrador tenga lo que se
+    exige, hace entrar a todos a su recorrido y CIERRA el alcance (después no se agregan más; los devueltos se
+    corrigen en su recorrido). Si un solo borrador está incompleto no se envía ninguno. Lo hace quien cierra el
+    alcance (`puede_editar_parrilla`, el responsable individual en atención). Devuelve los ítems enviados.
+
+    Orden de locks: instancia principal → Ticket → colección → ítems (el del módulo)."""
+    from django.core.exceptions import PermissionDenied
+
+    from apps.tickets import parrilla as parrilla_ops
+    from apps.tickets.autorizacion import puede_editar_parrilla
+    from apps.workflows.motor import bloquear_con_padre, iniciar_subinstancia
+
+    if ticket.instancia_workflow_id is None:
+        raise ValidationError("Este ticket no tiene un flujo al que enviar los ítems.")
+    padre = bloquear_con_padre(ticket.instancia_workflow_id)
+    ticket.refresh_from_db()
+    if not puede_editar_parrilla(actor, ticket):
+        raise PermissionDenied("Solo quien atiende el ticket envía el conjunto y cierra el alcance.")
+    parrilla_ops.guardar_filas(ticket, actor, clave=parrilla.clave, cambios=cambios, nuevos=nuevos)
+    parrilla.refresh_from_db()
+    ejecucion = recorrido_al_enviar(ticket, parrilla)
+    if ejecucion is None:
+        raise ValidationError("Ahora no se pueden enviar ítems de esta colección: el flujo no los está recibiendo.")
+    ejecucion = InstanciaEtapa.objects.select_for_update(of=("self",)).select_related("bloque_operativo").get(pk=ejecucion.pk)
+    borradores = borradores_de(ejecucion, parrilla)
+    if not borradores:
+        raise ValidationError("Registra al menos un ítem antes de enviar.")
+    errores = [
+        f"«{parrilla_ops.nombre_de(e)}»: falta {', '.join(faltan)}"
+        for e in borradores if (faltan := faltantes_para_enviar(e, ejecucion))
+    ]
+    if errores:
+        raise ValidationError(errores)
+    inicial = _paso_de_entrada(ejecucion)
+    for elemento in borradores:
+        iniciar_subinstancia(padre, ejecucion, inicial, elemento=elemento, actor=actor)
+    if not parrilla.alcance_cerrado:
+        parrilla_ops.cerrar_alcance(ticket, actor, clave=parrilla.clave)
+    return borradores

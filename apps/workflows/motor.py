@@ -314,6 +314,27 @@ def _registrar_error(instancia, instancia_etapa, *, tipo, mensaje):
     instancia.save(update_fields=["estado", "actualizado_en"])
 
 
+def _publicar_flujo(tipo, instancia, instancia_etapa):
+    """Sprint 7 (adelanto): el motor PUBLICA lo que ocurrió en un flujo por fases (llegar a una fase, empezar o
+    completar una actividad) para los avisos por etapa del Servicio. No sabe quién recibe nada: lo decide
+    `apps.notificaciones` con la configuración congelada del Ticket. Se entrega al confirmar la transacción."""
+    bloque = instancia_etapa.bloque_operativo if instancia_etapa.bloque_operativo_id else None
+    if bloque is None:
+        return
+    from apps.notificaciones.eventos import publicar
+
+    comunes = {"instancia": instancia, "ejecucion": instancia_etapa, "elemento_id": instancia.elemento_id}
+    if tipo == "BLOQUE_INICIADO" and instancia.instancia_padre_id is None and instancia_etapa.fase_workflow_id:
+        anterior = (
+            InstanciaEtapa.objects.filter(instancia_workflow=instancia, fase_workflow__isnull=False)
+            .exclude(pk=instancia_etapa.pk).order_by("-orden", "-pk").values_list("fase_workflow_id", flat=True).first()
+        )
+        if anterior != instancia_etapa.fase_workflow_id:
+            fase = instancia_etapa.fase_workflow
+            publicar("FLUJO:FASE_ALCANZADA", clave=fase.clave, nombre=fase.nombre, **comunes)
+    publicar(f"FLUJO:{tipo}", clave=bloque.clave, nombre=bloque.nombre, **comunes)
+
+
 def _ejecutar_etapa(instancia, instancia_etapa):
     """Ejecuta la Strategy de `instancia_etapa.etapa`, persiste su
     resultado y aplica los cambios de contexto que haya devuelto (la
@@ -333,6 +354,7 @@ def _ejecutar_etapa(instancia, instancia_etapa):
     instancia_etapa.save(update_fields=["estado", "iniciada_en", "actualizado_en"])
 
     if primera_entrada and instancia_etapa.bloque_operativo_id:
+        _publicar_flujo("BLOQUE_INICIADO", instancia, instancia_etapa)
         # Fase 2 — efectos configurados al LLEGAR a un bloque (p. ej. cerrar el alcance de una colección).
         # El motor no sabe qué son: delega en `apps.workflows.efectos`, una sola vez por ejecución.
         from apps.workflows import efectos
@@ -410,6 +432,7 @@ def _ejecutar_etapa(instancia, instancia_etapa):
     instancia_etapa.save(
         update_fields=["estado", "resultado", "finalizada_en", campos_transicion, "actualizado_en"]
     )
+    _publicar_flujo("BLOQUE_COMPLETADO", instancia, instancia_etapa)
 
     if resultado.estado == ResultadoEjecucion.COMPLETAR:
         instancia.estado = InstanciaWorkflow.Estado.COMPLETADA
@@ -747,6 +770,7 @@ def _completar_ejecucion_en_espera(instancia, ejecucion, *, transicion_seleccion
         ejecucion.transicion_tomada = transicion_seleccionada or ejecucion.etapa.transiciones_salientes.first()
         campos = ["estado", "finalizada_en", "transicion_tomada", "actualizado_en"]
     ejecucion.save(update_fields=campos)
+    _publicar_flujo("BLOQUE_COMPLETADO", instancia, ejecucion)
 
     instancia.estado = InstanciaWorkflow.Estado.EN_EJECUCION
     instancia.save(update_fields=["estado", "actualizado_en"])

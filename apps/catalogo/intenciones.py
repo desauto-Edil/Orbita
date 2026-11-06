@@ -89,6 +89,11 @@ INTENCIONES = (
             "gaceta", "Coordinar una gaceta", "Abre la gaceta, presenta los ítems y, si quieres, espera su resolución.",
             "GACETA", ambitos=(PRINCIPAL,), solo_proceso=True,
         ),
+        Opcion(
+            "gaceta_item", "Revisión colaborativa del ítem",
+            "El ítem entra a una gaceta y su recorrido espera a que lo aprueben; los demás ítems siguen a su ritmo.",
+            "GACETA", ambitos=(RAMA_ITEM,), solo_proceso=True,
+        ),
     )),
     Intencion("condicion", "Evaluar una condición", "El camino sigue por una ruta u otra según un dato.", (
         Opcion("decision", "Una condición", "Si se cumple, va a un paso; si no, a otro.", "DECISION", ambitos=(PRINCIPAL, RAMA_ITEM)),
@@ -144,7 +149,7 @@ def _motivo(servicio, op, configuracion):
             return "Primero elige las columnas de la tarea en Formulario › Colecciones › Tareas por elemento.", ("entrada", "parrilla")
         if configuracion is not None and configuracion.bloques.filter(tipo="TAREAS_ELEMENTOS").exists():
             return "El flujo ya genera las tareas por elemento (solo puede haber un paso así).", ("ejecucion", "")
-    if op.codigo == "gaceta" and not DefinicionGaceta.objects.filter(servicio=servicio, activa=True).exists():
+    if op.codigo in ("gaceta", "gaceta_item") and not DefinicionGaceta.objects.filter(servicio=servicio, activa=True).exists():
         return "Primero crea la gaceta en Salida › Gacetas.", ("salida", "")
     return None, None
 
