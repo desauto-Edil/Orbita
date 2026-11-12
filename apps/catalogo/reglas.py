@@ -49,7 +49,8 @@ OPERADORES = {
     "NO_ESTA_VACIO": _no_esta_vacio,
 }
 
-_TIPOS = set(ESTRATEGIAS_POR_TIPO)
+# Una lista de evidencias no es un valor comparable: no puede ser origen de una regla condicional.
+_TIPOS = set(ESTRATEGIAS_POR_TIPO) - {"CHECKLIST"}
 
 # Cada operador se restringe a los tipos donde su semántica tiene sentido
 # real (RQF-043) — ninguno se implementó "porque existía en la lista".

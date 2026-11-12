@@ -19,7 +19,7 @@ Referencias admitidas (`variable` de una transición):
     <nombre plano>                     (contrato anterior: `variables` del contexto)
 
 - `ticket.*` se lee en vivo del Ticket vinculado (solo datos estables, sin volcar el
-  modelo: el solicitante/responsable se publican como nombre de usuario).
+  modelo: el solicitante/responsable se publican como su correo).
 - `formulario.<clave>` se resuelve contra el formulario CONGELADO del Ticket
   (`TicketServicio.formulario_version`) por la clave estable del `Campo`, no por
   etiqueta ni pk: sobrevive a renombrar la etiqueta y a nuevas versiones. El valor
@@ -60,7 +60,8 @@ from apps.workflows.contexto import AMBITOS_BLOQUE, INEXISTENTE, leer_resultado_
 
 
 def _nombre_usuario(usuario):
-    return usuario.get_username() if usuario is not None else None
+    # Versión 1: la persona se identifica por su CORREO (ya no hay username).
+    return usuario.email if usuario is not None else None
 
 
 # Datos del Ticket que un Workflow puede consultar (lista cerrada).
@@ -255,8 +256,8 @@ def referencias_disponibles(*, campos=(), bloques=()):
         ("ticket.estado", "Estado del ticket (BORRADOR, RADICADO, EN_ATENCION, …)"),
         ("ticket.tipo", "Tipo del ticket (SERVICIO o PROCESO)"),
         ("ticket.es_general", "Verdadero si es un ticket general"),
-        ("ticket.solicitante", "Nombre de usuario de quien solicita"),
-        ("ticket.responsable", "Nombre de usuario del responsable (vacío si aún no hay)"),
+        ("ticket.solicitante", "Correo de quien solicita"),
+        ("ticket.responsable", "Correo del responsable (vacío si aún no hay)"),
         ("ticket.fecha_objetivo", "Fecha objetivo vigente de atención"),
         ("ticket.datos_inicio_completos", "Verdadero cuando los datos de inicio ya se completaron"),
     ]
@@ -268,6 +269,9 @@ def referencias_disponibles(*, campos=(), bloques=()):
             lista.append(
                 (f"aprobaciones.{bloque.clave}.resultado", f"Resultado de «{bloque.nombre}» (APROBADA, RECHAZADA o DEVUELTA)")
             )
+            if (bloque.configuracion or {}).get("publicacion"):
+                lista.append((f"aprobaciones.{bloque.clave}.publicar", f"Verdadero si «{bloque.nombre}» lo publicó a los interesados"))
+                lista.append((f"aprobaciones.{bloque.clave}.dias", f"Días que «{bloque.nombre}» lo dejó publicado"))
         if bloque.tipo == "ENTREGABLE" and bloque.clave:
             lista.append(
                 (f"entregables.{bloque.clave}.satisfecho", f"Verdadero cuando se completó el entregable «{bloque.nombre}»")

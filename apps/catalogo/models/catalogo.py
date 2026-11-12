@@ -119,6 +119,16 @@ class Servicio(RegistroBase):
     prorroga_aprobador_equipo = models.ForeignKey(
         Equipo, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
     )
+    # Cancelación con aprobación (requerimiento nuevo, CU por asignar; extiende CU-019): si es True, cancelar un
+    # ticket de este Servicio/Proceso exige que UN aprobador (usuario o equipo) acepte; mientras decide, el ticket
+    # se congela (`apps.tickets.cancelaciones`). False = se cancela directo (lo de siempre). Cada Ticket lo congela.
+    cancelacion_con_aprobacion = models.BooleanField(default=False)
+    cancelacion_aprobador_usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    cancelacion_aprobador_equipo = models.ForeignKey(
+        Equipo, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
 
     # 4.C1 — marca al ÚNICO Servicio interno que respalda al Ticket General (la
     # entrada para pedir algo que no está catalogado). Es un Servicio normal para
@@ -168,6 +178,18 @@ class Servicio(RegistroBase):
                 ),
                 name="ck_servicio_prorroga_coherente",
                 violation_error_message="La prórroga con aprobación necesita exactamente un aprobador (usuario o equipo).",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(cancelacion_con_aprobacion=True, cancelacion_aprobador_usuario__isnull=False,
+                      cancelacion_aprobador_equipo__isnull=True)
+                    | Q(cancelacion_con_aprobacion=True, cancelacion_aprobador_usuario__isnull=True,
+                        cancelacion_aprobador_equipo__isnull=False)
+                    | Q(cancelacion_con_aprobacion=False, cancelacion_aprobador_usuario__isnull=True,
+                        cancelacion_aprobador_equipo__isnull=True)
+                ),
+                name="ck_servicio_cancelacion_coherente",
+                violation_error_message="La cancelación con aprobación necesita exactamente un aprobador (usuario o equipo).",
             ),
             models.CheckConstraint(
                 condition=(
@@ -243,7 +265,7 @@ class ServicioVisibilidad(RegistroBase):
         constraints = [
             # Coherencia de alcance, mismo patrón que AsignacionRol (0.3).
             models.CheckConstraint(
-                check=(
+                condition=(
                     Q(tipo_alcance="USUARIO", usuario__isnull=False, area__isnull=True, unidad_negocio__isnull=True)
                     | Q(tipo_alcance="AREA", area__isnull=False, usuario__isnull=True, unidad_negocio__isnull=True)
                     | Q(tipo_alcance="UNIDAD", unidad_negocio__isnull=False, usuario__isnull=True, area__isnull=True)
@@ -304,7 +326,7 @@ class ServicioResponsable(RegistroBase):
     class Meta:
         constraints = [
             models.CheckConstraint(
-                check=(
+                condition=(
                     Q(tipo_responsable="USUARIO", usuario__isnull=False, equipo__isnull=True)
                     | Q(tipo_responsable="EQUIPO", equipo__isnull=False, usuario__isnull=True)
                 ),
@@ -370,7 +392,7 @@ class ServicioContextoAtencion(RegistroBase):
     class Meta:
         constraints = [
             models.CheckConstraint(
-                check=(
+                condition=(
                     Q(tipo_alcance="AREA", area__isnull=False, unidad_negocio__isnull=True)
                     | Q(tipo_alcance="UNIDAD", unidad_negocio__isnull=False, area__isnull=True)
                 ),

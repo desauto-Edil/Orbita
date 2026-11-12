@@ -1,27 +1,29 @@
-{% extends "base.html" %}
+{% comment %}
+  Resumen del ticket DENTRO del espacio (`tickets:espacio?vista=resumen`; `?vista=gestion` sigue respondiendo; solo
+  quien consulta el ticket): lo que antes vivía en la página aislada del detalle (retirada; `tickets:detalle` redirige
+  aquí). Arriba una FICHA de datos clave en columnas; debajo una REJILLA compacta (tantas columnas como quepan) con
+  atención, trabajo actual, compromiso y prórrogas, entregables, entrega, resolución, archivos y solicitudes de
+  información; a todo lo ancho, lo tabular (datos de inicio, recorridos, gacetas y colecciones). Cada formulario va
+  a la operación de dominio de siempre con `next` = esta vista. Cancelar, reabrir y reasignar están en «Más»; la
+  conversación y la línea de tiempo completa, en el panel del ticket; la solicitud original, en «Solicitud».
+  Estilos `.esp-resumen`/`.rs-*` en `static/css/espacio.css`.
+{% endcomment %}
+<div class="esp-resumen" id="resumen">
+  <header class="esp-resumen__cabeza">
+    <h2>Resumen del ticket</h2>
+    <a class="btn btn--ghost btn--sm" href="{{ base }}">Volver a tu misión</a>
+  </header>
 
-{% block title %}Ticket {{ ticket.codigo|default:'' }} — {{ sistema.nombre }}{% endblock %}
-
-{% block content %}
-  <nav class="breadcrumb" aria-label="Ruta de navegación">
-    <a href="{% url 'tickets:mis_tickets' %}">Mis tickets</a>
-    <span class="breadcrumb__separator" aria-hidden="true">/</span>
-    <span class="breadcrumb__current">{{ servicio.nombre }}</span>
-  </nav>
-
-  <section class="card">
-    <h1>{{ servicio.nombre }}</h1>
-    {% if ticket.etiqueta %}<p class="ticket-etiqueta text-muted">{{ ticket.etiqueta }}</p>{% endif %}
-    <span class="badge
-      {% if ticket.estado == 'RESUELTO' %}badge--success
-      {% elif ticket.estado == 'CANCELADO' %}badge--danger
-      {% elif ticket.estado == 'BORRADOR' %}badge--warning
-      {% else %}badge--info{% endif %}">{{ ticket.get_estado_display }}</span>
-    <p class="text-muted">Ticket: <strong>{{ ticket.codigo|default:"Sin código" }}</strong></p>
-    <p class="text-muted">Radicado el {{ ticket.radicado_en|date:"d/m/Y H:i" }}</p>
-    {% if es_solicitante %}<p><a href="{% url 'tickets:seguimiento' ticket.pk %}">Ver el seguimiento de mi solicitud</a></p>{% endif %}
-    <p><a class="btn btn--primary btn--sm" href="{% url 'tickets:espacio' ticket.pk %}">Abrir el espacio del ticket</a></p>
-  </section>
+  <dl class="rs-ficha">
+    <div><dt>Estado</dt><dd><span class="estado-etiqueta estado-etiqueta--{{ ticket.estado|lower }}">{{ ticket.get_estado_display }}</span></dd></div>
+    <div><dt>Tipo</dt><dd>{{ ticket.get_tipo_display }}{% if ticket.etiqueta %} · {{ ticket.etiqueta }}{% endif %}</dd></div>
+    <div><dt>Solicitó</dt><dd>{{ ticket.solicitante.get_full_name|default:ticket.solicitante|default:"Sistema (programado)" }}</dd></div>
+    <div><dt>Responsable</dt><dd>{% if ticket.usuario_responsable %}{{ ticket.usuario_responsable.get_full_name|default:ticket.usuario_responsable }}{% else %}Sin asignar{% endif %}</dd></div>
+    <div><dt>Equipo</dt><dd>{{ ticket.equipo_responsable|default:"—" }}</dd></div>
+    {% if direccionamiento and direccionamiento.esta_fijado %}<div><dt>Dirigido a</dt><dd>{{ direccionamiento.etiqueta }}{% if direccionamiento.es_predeterminado %} <span class="text-muted">· reserva</span>{% endif %}</dd></div>{% endif %}
+    <div><dt>Radicado</dt><dd class="tabular">{{ ticket.radicado_en|date:"d M Y, H:i"|default:"—" }}</dd></div>
+    <div><dt>Fecha objetivo</dt><dd class="tabular">{{ ticket.fecha_objetivo_vigente|date:"d M Y"|default:"—" }}{% if ticket.fecha_objetivo_original and ticket.fecha_objetivo_original != ticket.fecha_objetivo_vigente %} <span class="text-muted">(antes {{ ticket.fecha_objetivo_original|date:"d M" }})</span>{% endif %}</dd></div>
+  </dl>
 
   {% if plazo_solicitado and plazo_solicitado.anticipada %}
     <div class="alert alert--warning" role="status" id="plazo-solicitado">
@@ -32,37 +34,27 @@
       </div>
     </div>
   {% endif %}
-
+  <div class="rs-rejilla">
+  {% if puede_tomar or puede_iniciar_atencion or puede_asignar %}
   <section class="card">
     <h3>Atención</h3>
-    <p class="text-muted">
-      Responsable: {% if ticket.usuario_responsable %}{{ ticket.usuario_responsable }}{% else %}Sin asignar{% endif %}
-    </p>
-    <p class="text-muted">
-      Equipo: {% if ticket.equipo_responsable %}{{ ticket.equipo_responsable }}{% else %}—{% endif %}
-    </p>
-
-    {% if direccionamiento and direccionamiento.esta_fijado %}
-      <p>Dirigido a: <strong>{{ direccionamiento.etiqueta }}</strong>{% if direccionamiento.es_predeterminado %} <span class="text-muted">· destino de reserva</span>{% endif %}</p>
-    {% endif %}
-
     {% if puede_tomar %}
       <form method="post" action="{% url 'tickets:tomar' ticket.pk %}">
-        {% csrf_token %}
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
         <button type="submit" class="btn btn--primary">Tomar</button>
       </form>
     {% endif %}
 
     {% if puede_iniciar_atencion %}
       <form method="post" action="{% url 'tickets:iniciar_atencion' ticket.pk %}">
-        {% csrf_token %}
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
         <button type="submit" class="btn btn--primary">Iniciar atención</button>
       </form>
     {% endif %}
 
-    {% if puede_asignar or puede_reasignar %}
-      <form method="post" action="{% if puede_asignar %}{% url 'tickets:asignar' ticket.pk %}{% else %}{% url 'tickets:reasignar' ticket.pk %}{% endif %}" class="form">
-        {% csrf_token %}
+    {% if puede_asignar %}
+      <form method="post" action="{% url 'tickets:asignar' ticket.pk %}" class="form">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
         <div class="field">
           <label for="id_usuario_responsable">Usuario</label>
           <select name="usuario_id" id="id_usuario_responsable">
@@ -81,11 +73,12 @@
             {% endfor %}
           </select>
         </div>
-        <button type="submit" class="btn btn--secondary">{% if puede_asignar %}Asignar{% else %}Reasignar{% endif %}</button>
+        <button type="submit" class="btn btn--secondary">Asignar</button>
       </form>
     {% endif %}
+    {% if generales.reasignar_a %}<p class="text-muted">Para reasignar el ticket a alguien del equipo usa «Más» › Reasignar el ticket.</p>{% endif %}
   </section>
-
+  {% endif %}
   {% if trabajo_actual %}
     <section class="card" id="trabajo-actual">
       <h3>Trabajo actual</h3>
@@ -102,25 +95,21 @@
       {% else %}
         <p class="text-muted">En curso.</p>
       {% endif %}
-      {% if trabajo_actual.tarea %}<p><a href="{% url 'tareas:detalle' trabajo_actual.tarea.pk %}">Abrir la actividad</a></p>{% endif %}
-      {% if trabajo_actual.aprobacion %}<p><a href="{% url 'aprobaciones:detalle' trabajo_actual.aprobacion.pk %}">Abrir la aprobación</a></p>{% endif %}
+      {% if trabajo_actual.tarea or trabajo_actual.aprobacion %}<p><a href="{{ base }}">Ir a tu misión</a></p>{% endif %}
     </section>
   {% endif %}
-
-  {% include "tickets/_prorroga.html" %}
-
+  {% include "tickets/_prorroga.html" with next_url=aqui %}
   {% if entregables %}
     <section class="card">
       <h3>Entregables</h3>
       <p class="text-muted">Resultados que debes producir para este ticket.{% if tiene_entrega_formal %} Se entregan formalmente al solicitante cuando estén listos.{% endif %}</p>
       <ul class="list-row-group">
         {% for entregable in entregables %}
-          {% include "tickets/_entregable_item.html" %}
+          {% include "tickets/_entregable_item.html" with next_url=aqui %}
         {% endfor %}
       </ul>
     </section>
   {% endif %}
-
   {% if tiene_entrega_formal or entregas %}
     <section class="card">
       <h3>Entrega al solicitante</h3>
@@ -142,7 +131,7 @@
           <button type="button" class="btn btn--primary" data-action="toggle-panel" data-target="panel-entregar">Entregar al solicitante</button>
           <div id="panel-entregar" hidden style="margin-top: var(--space-3);">
             <form method="post" action="{% url 'tickets:entregar' ticket.pk %}" class="form">
-              {% csrf_token %}
+              {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
               <input type="hidden" name="confirmar" value="1">
               <p>¿Confirmas que los resultados están listos para el solicitante? No podrás modificarlos mientras espera su respuesta.</p>
               <button type="submit" class="btn btn--primary">Sí, entregar ahora</button>
@@ -161,14 +150,14 @@
         {% if puede_responder_entrega %}
           <div class="form-actions">
             <form method="post" action="{% url 'tickets:aceptar_entrega' ticket.pk %}" style="display:inline;">
-              {% csrf_token %}
+              {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
               <button type="submit" class="btn btn--primary">Todo está correcto</button>
             </form>
             <button type="button" class="btn btn--secondary" data-action="toggle-panel" data-target="panel-observar">Tengo observaciones</button>
           </div>
           <div id="panel-observar" hidden style="margin-top: var(--space-3);">
             <form method="post" action="{% url 'tickets:observar_entrega' ticket.pk %}" class="form">
-              {% csrf_token %}
+              {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
               <div class="field">
                 <label for="id_observaciones">¿Qué debemos ajustar?</label>
                 <textarea name="observaciones" id="id_observaciones" required></textarea>
@@ -182,8 +171,7 @@
       {% include "tickets/_entregas_lista.html" %}
     </section>
   {% endif %}
-
-  {% if resolucion_actual or puede_resolver or puede_cerrar or puede_cancelar or puede_reabrir %}
+  {% if resolucion_actual or resoluciones_anteriores or puede_resolver or puede_cerrar %}
     <section class="card">
       <h3>Finalizar</h3>
 
@@ -217,7 +205,7 @@
         </div>
       {% elif puede_resolver %}
         <form method="post" action="{% url 'tickets:resolver' ticket.pk %}" enctype="multipart/form-data" class="form">
-          {% csrf_token %}
+          {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
           <div class="field">
             <label for="id_descripcion_resolucion">Descripción de la resolución</label>
             <textarea name="descripcion" id="id_descripcion_resolucion" required></textarea>
@@ -232,54 +220,17 @@
 
       {% if puede_cerrar %}
         <form method="post" action="{% url 'tickets:cerrar' ticket.pk %}" onsubmit="return confirm('¿Confirmas cerrar este ticket?');">
-          {% csrf_token %}
+          {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
           <button type="submit" class="btn btn--primary">Cerrar</button>
         </form>
       {% endif %}
 
-      {% if puede_reabrir %}
-        <form method="post" action="{% url 'tickets:reabrir' ticket.pk %}" class="form">
-          {% csrf_token %}
-          <div class="field">
-            <label for="id_motivo_reabrir">Motivo de reapertura</label>
-            <textarea name="motivo" id="id_motivo_reabrir" required></textarea>
-          </div>
-          <button type="submit" class="btn btn--secondary">Reabrir</button>
-        </form>
-      {% endif %}
-
-      {% if puede_cancelar %}
-        <form method="post" action="{% url 'tickets:cancelar' ticket.pk %}" class="form">
-          {% csrf_token %}
-          <div class="field">
-            <label for="id_motivo_cancelar">Motivo de cancelación</label>
-            <textarea name="motivo" id="id_motivo_cancelar" required></textarea>
-          </div>
-          <button type="submit" class="btn btn--secondary">Cancelar ticket</button>
-        </form>
-      {% endif %}
     </section>
   {% endif %}
-
+  {# La conversación del ticket vive SOLO en el chat en tiempo real del espacio (panel «Conversación»). #}
   <section class="card">
-    <h3>Comunicación</h3>
-    <ul>
-      {% for comentario in comentarios %}
-        <li>
-          <strong>{{ comentario.autor }}</strong>
-          <span class="text-muted">{{ comentario.creado_en|date:"d/m/Y H:i" }}</span>
-          <p>{{ comentario.contenido }}</p>
-          {% for adjunto in comentario.adjuntos.all %}
-            <p><a href="{% url 'tickets:descargar_adjunto' adjunto.pk %}">{{ adjunto.nombre_original }}</a></p>
-          {% endfor %}
-        </li>
-      {% empty %}
-        <li class="text-muted">Sin comentarios todavía.</li>
-      {% endfor %}
-    </ul>
-
+    <h3>Archivos del ticket</h3>
     {% if adjuntos_ticket %}
-      <h4>Archivos adjuntos al ticket</h4>
       <ul class="plain-list">
         {% for adjunto in adjuntos_ticket %}
           <li>
@@ -288,24 +239,13 @@
           </li>
         {% endfor %}
       </ul>
+    {% else %}
+      <p class="text-muted">Sin archivos.</p>
     {% endif %}
 
     {% if puede_comentar %}
-      <form method="post" action="{% url 'tickets:comentar' ticket.pk %}" enctype="multipart/form-data" class="form">
-        {% csrf_token %}
-        <div class="field">
-          <label for="id_contenido">Escribir comentario</label>
-          <textarea name="contenido" id="id_contenido" required></textarea>
-        </div>
-        <div class="field">
-          <label for="id_comentario_archivo">Adjuntar archivo (opcional)</label>
-          <input type="file" name="archivo" id="id_comentario_archivo">
-        </div>
-        <button type="submit" class="btn btn--primary">Comentar</button>
-      </form>
-
       <form method="post" action="{% url 'tickets:adjuntar' ticket.pk %}" enctype="multipart/form-data" class="form">
-        {% csrf_token %}
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
         <div class="field">
           <label for="id_adjunto_directo">Adjuntar archivo al ticket</label>
           <input type="file" name="archivo" id="id_adjunto_directo" required>
@@ -314,7 +254,6 @@
       </form>
     {% endif %}
   </section>
-
   <section class="card" id="solicitudes">
     <h3>Solicitudes de información</h3>
     <ul>
@@ -340,7 +279,7 @@
             {% endfor %}
           {% elif usuario_es_destinatario_solicitudes %}
             <form method="post" action="{% url 'tickets:responder_solicitud' ticket.pk solicitud.pk %}" enctype="multipart/form-data" class="form">
-              {% csrf_token %}
+              {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
               <div class="field">
                 <label for="id_respuesta_{{ solicitud.pk }}">Responder</label>
                 <textarea name="contenido" id="id_respuesta_{{ solicitud.pk }}" required></textarea>
@@ -360,7 +299,7 @@
 
     {% if puede_solicitar_informacion %}
       <form method="post" action="{% url 'tickets:solicitar_informacion' ticket.pk %}" enctype="multipart/form-data" class="form">
-        {% csrf_token %}
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
         <div class="field">
           <label for="id_mensaje_solicitud">Solicitar información</label>
           <textarea name="mensaje" id="id_mensaje_solicitud" required></textarea>
@@ -373,13 +312,14 @@
       </form>
     {% endif %}
   </section>
-
-  {% include "tickets/_datos_inicio.html" %}
-  {% include "tickets/_recorridos.html" %}
-  {% include "tickets/_gacetas.html" %}
-  {% for parrilla in colecciones %}{% include "tickets/_parrilla.html" %}{% endfor %}
-
   {% include "tickets/_historial.html" %}
+  </div>
 
-  {% include "tickets/_respuestas.html" %}
-{% endblock %}
+  {# A todo lo ancho: lo que es tabular o largo. #}
+  <div class="rs-ancho">
+  {% include "tickets/_datos_inicio.html" with next_url=aqui %}
+  {% include "tickets/_recorridos.html" with next_url=aqui %}
+  {% include "tickets/_gacetas.html" %}
+  {% for parrilla in tablas_coleccion %}{% include "tickets/_parrilla.html" with ws_next=aqui %}{% endfor %}
+  </div>
+</div>

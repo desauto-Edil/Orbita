@@ -25,7 +25,7 @@
   {% endif %}
 
   {% if accion.participaciones|length > 1 %}
-    <p class="text-muted">Participan: {% for p in accion.participaciones %}{% if p.aprobador_usuario %}{{ p.aprobador_usuario.get_full_name|default:p.aprobador_usuario.get_username }}{% elif p.aprobador_equipo %}{{ p.aprobador_equipo }}{% endif %} ({{ p.get_estado_display|lower }}){% if not forloop.last %}, {% endif %}{% endfor %} · {{ accion.esquema.get_modo_display }}</p>
+    <p class="text-muted">Participan: {% for p in accion.participaciones %}{% if p.aprobador_usuario %}{{ p.aprobador_usuario.nombre_visible }}{% elif p.aprobador_equipo %}{{ p.aprobador_equipo }}{% endif %} ({{ p.get_estado_display|lower }}){% if not forloop.last %}, {% endif %}{% endfor %} · {{ accion.esquema.get_modo_display }}</p>
   {% endif %}
 
   {% if accion.form %}
@@ -36,16 +36,28 @@
         <label for="obs-{{ aprobacion.pk }}">Observación <span class="text-muted">(necesaria para devolver, rechazar o excluir)</span></label>
         <textarea id="obs-{{ aprobacion.pk }}" name="observacion" rows="3"></textarea>
       </div>
+      {% if accion.publicacion %}{% include "tickets/espacio/acciones/_publicacion.html" with pub=accion.publicacion uid=aprobacion.pk %}{% endif %}
       <div class="ws-acciones esp-panel__pie">
         {% for valor, etiqueta in accion.form.fields.decision.choices %}
           {% if valor %}
             <button type="submit" name="decision" value="{{ valor }}" class="btn {% if valor == 'APROBADA' %}btn--primary{% elif valor == 'DEVUELTA' %}btn--secondary{% else %}btn--ghost{% endif %}">{% if valor == "APROBADA" %}Aprobar{% elif valor == "DEVUELTA" %}Devolver{% elif valor == "RECHAZADA" %}Rechazar{% elif valor == "EXCLUIDA" %}Excluir{% else %}{{ etiqueta }}{% endif %}</button>
           {% endif %}
         {% endfor %}
-        <a class="btn btn--ghost esp-panel__pie-secundario" href="{% url 'aprobaciones:detalle' aprobacion.pk %}">Detalle de la aprobación</a>
       </div>
     </form>
-  {% else %}
-    <div class="ws-acciones esp-panel__pie"><a class="btn btn--ghost" href="{% url 'aprobaciones:detalle' aprobacion.pk %}">Detalle de la aprobación</a></div>
+  {% endif %}
+
+  {% if accion.reasignacion_form %}
+    <details class="esp-plegable">
+      <summary>Reasignar la aprobación</summary>
+      <form method="post" action="{% url 'aprobaciones:reasignar' aprobacion.pk %}" class="form">
+        {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+        {% with f=accion.reasignacion_form %}
+          <div class="field"><label for="{{ f.usuario.id_for_label }}">Persona</label>{{ f.usuario }}</div>
+          <div class="field"><label for="{{ f.equipo.id_for_label }}">Equipo</label>{{ f.equipo }}</div>
+        {% endwith %}
+        <button type="submit" class="btn btn--secondary btn--sm">Reasignar</button>
+      </form>
+    </details>
   {% endif %}
 {% endwith %}

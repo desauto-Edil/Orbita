@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block title %}Confirma tu identidad — {{ sistema.nombre }}{% endblock %}
+
+{% block content %}
+  <div class="auth-card card">
+    <h1 class="auth-card__brand">{% include "layout/marca.html" %}Administración avanzada</h1>
+    <p class="auth-card__intro">
+      Para entrar confirma tu identidad con Google. La administración avanzada solo acepta un ingreso con Google de
+      los últimos {{ minutos }} minuto{{ minutos|pluralize }} en esta sesión.
+    </p>
+    <form method="post" action="{% url 'core:google_login' %}">
+      {% csrf_token %}
+      <input type="hidden" name="next" value="{{ next }}">
+      <input type="hidden" name="reautenticar" value="1">
+      <button type="submit" class="btn btn--secondary btn--block auth-card__google">Confirmar con Google</button>
+    </form>
+  </div>
+{% endblock %}

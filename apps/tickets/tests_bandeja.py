@@ -15,6 +15,7 @@ from apps.tickets.models import Ticket
 from apps.tickets.operaciones import crear_borrador, solicitar_informacion, tomar_ticket
 from apps.tickets.tests import CLAVE_PRUEBA, Usuario, _EscenarioAtencionMixin, _MediaAisladaMixin
 from apps.tickets.tests_edicion_por_tarea import _TareasConEdicionMixin
+from apps.core.pruebas import persona
 
 FETCH = {"HTTP_X_REQUESTED_WITH": "fetch"}
 
@@ -61,6 +62,19 @@ class BandejaMiTrabajoTests(_MediaAisladaMixin, _TareasConEdicionMixin, TestCase
         self.assertIn(self.ticket.pk, [g.ticket.pk for g in self._bandeja(q=servicio[:4].lower())["filas"]])
         self.assertEqual(self._bandeja(q="zzz-no-existe")["filas"], [])
 
+    def test_lo_destacado_es_el_numero_y_quien_lo_solicito(self):
+        pagina = self.client.get(reverse("core:mi_trabajo"))
+        solicitante = self.ticket.solicitante
+        # Un proceso programado no tiene solicitante: lo que lo distingue es su etiqueta (la ejecución).
+        if solicitante:
+            quien = solicitante.nombre_visible
+        else:
+            quien = self.ticket.etiqueta or "Proceso programado"
+        self.assertContains(pagina, f'<span class="bt-fila__codigo tabular">{self.ticket.codigo}</span>')
+        self.assertContains(pagina, f'<span class="sr-only">Solicitado por: </span>{quien}</span>')
+        if solicitante:
+            self.assertIn(self.ticket.pk, [g.ticket.pk for g in self._bandeja(q=quien[:4])["filas"]])
+
     def test_la_fila_es_un_enlace_al_espacio_y_ofrece_el_inspector(self):
         pagina = self.client.get(reverse("core:mi_trabajo"))
         grupo = next(g for g in pagina.context["bandeja"]["filas"] if g.ticket.pk == self.ticket.pk)
@@ -101,7 +115,7 @@ class BandejaMiTrabajoTests(_MediaAisladaMixin, _TareasConEdicionMixin, TestCase
         self.assertRedirects(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]), fetch_redirect_response=False)
 
     def test_el_inspector_respeta_la_relacion_con_el_ticket(self):
-        ajena = Usuario.objects.create_user(username="sin_relacion_bt", password=CLAVE_PRUEBA)
+        ajena = Usuario.objects.create_user("sin_relacion_bt@pruebas.orbita")
         self.client.force_login(ajena)
         self.assertEqual(self.client.get(_inspector(self.ticket, "trabajo"), **FETCH).status_code, 403)
         self.assertEqual(self.client.get(_inspector(self.ticket, "tickets"), **FETCH).status_code, 403)
@@ -111,7 +125,7 @@ class BandejaMisTicketsTests(_EscenarioAtencionMixin, TestCase):
     def setUp(self):
         self._preparar_escenario()
         self.borrador = crear_borrador(self.solicitante, self.servicio)
-        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solicitante23@pruebas.orbita"))
 
     def _pagina(self, **parametros):
         return self.client.get(reverse("tickets:mis_tickets"), parametros)
@@ -162,7 +176,7 @@ class BandejaMisTicketsTests(_EscenarioAtencionMixin, TestCase):
         self.assertIn("Descripción", html)
 
     def test_nadie_mas_ve_el_inspector_de_mis_tickets(self):
-        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ajeno23@pruebas.orbita"))
         self.assertEqual(self.client.get(_inspector(self.ticket, "tickets"), **FETCH).status_code, 403)
         self.assertEqual(self.client.get(_inspector(self.borrador, "tickets"), **FETCH).status_code, 403)
         self.assertEqual(self.client.get(_inspector(self.borrador, "trabajo"), **FETCH).status_code, 403)

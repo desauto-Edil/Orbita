@@ -68,7 +68,7 @@ from datetime import date, datetime, time, timedelta
 from django.core.exceptions import ValidationError
 from django.utils import timezone
 
-from apps.workflows.contexto import evaluar_operador
+from apps.workflows.contexto import evaluar_operador, leer_resultado_bloque
 from apps.workflows.variables import ResolutorVariables
 from apps.workflows.actores import resolver_actor
 
@@ -371,15 +371,24 @@ class EstrategiaTarea(EstrategiaSinConfiguracion):
             datos, _errores = actividades.normalizar(ampliacion)
             # Fase 2: una fecha puede salir de un campo del formulario o de una columna del ítem.
             resolutor = ResolutorVariables(instancia, contexto)
+            from apps.tickets.models import EjecucionProgramada
+
+            ticket_del_flujo = resolutor.ticket
+            periodo_inicio = EjecucionProgramada.objects.filter(ticket=ticket_del_flujo).values_list(
+                "periodo_inicio", flat=True).first() if ticket_del_flujo is not None else None
             fecha_prevista, fecha_limite = actividades.fechas_desde(
-                ampliacion, timezone.now(), resolver=resolutor.resolver
+                ampliacion, timezone.now(), resolver=resolutor.resolver, periodo_inicio=periodo_inicio,
             )
             extra = {
                 "fecha_prevista": fecha_prevista,
                 "fecha_limite": fecha_limite,
                 "requiere_evidencia": datos["requiere_evidencia"],
-                "verificaciones": [(item["texto"], item["obligatorio"]) for item in datos["verificacion"]],
+                "verificaciones": [
+                    (item["texto"], item["obligatorio"], item.get("pregunta", "")) for item in datos["verificacion"]
+                ],
             }
+            if equipo_responsable is not None and usuario_responsable is None and datos["responde_usuario_id"]:
+                extra["responde_por_id"] = datos["responde_usuario_id"]
         tarea = crear_tarea(
             titulo=_titulo_con_item(etapa.nombre, instancia),
             descripcion=etapa.descripcion,
@@ -638,7 +647,12 @@ class EstrategiaGaceta(EstrategiaSinConfiguracion):
                         estado=ResultadoEjecucion.ERROR,
                         mensaje_error="Este paso revisa un ítem, pero la ejecución no es el recorrido de un ítem.",
                     )
-                esperar, datos = integracion.entrar_item(ticket, bloque, elemento)
+                # La duración que eligió el aprobador al publicar el ítem a los interesados (`dias_desde_aprobacion`).
+                desde = (bloque.configuracion or {}).get("dias_desde_aprobacion") or ""
+                dias = leer_resultado_bloque(contexto, "aprobaciones", desde, "dias") if desde else None
+                esperar, datos = integracion.entrar_item(
+                    ticket, bloque, elemento, dias=dias if isinstance(dias, int) and dias > 0 else None,
+                )
             else:
                 esperar, datos = integracion.entrar_al_bloque(ticket, bloque)
         except ValidationError as exc:

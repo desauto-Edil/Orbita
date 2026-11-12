@@ -1,0 +1,103 @@
+{% extends "base.html" %}
+{% load static plazos %}
+{% comment %}
+  «Mi equipo» — el detalle de UN colaborador directo (`jefaturas.detalle_de_colaborador`): identidad (foto, cargo,
+  área, correo), cifras, y una TABLA compacta de sus tickets ordenada por urgencia, una fila por ticket:
+  qué ticket es, en qué etapa va, qué tiene que hacer la persona, su papel, cuándo vence y su situación. Filtros y
+  búsqueda locales (`static/js/mi_equipo.js`). Solo lectura: las filas no son enlaces (el jefe no gana el ticket).
+{% endcomment %}
+{% block title %}{{ titulo_pagina }} — {{ sistema.nombre }}{% endblock %}
+{% block content_modifier %}content-area--operativo{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/espacio.css' %}"><link rel="stylesheet" href="{% static 'css/mi_equipo.css' %}">{% endblock %}
+
+{% block content %}
+  {% with persona=detalle.persona %}
+  <p class="esp-volver"><a href="{% url 'core:mi_equipo' %}">← Mi equipo</a></p>
+
+  <header class="eq-ficha">
+    <span class="eq-foto eq-foto--md{% if detalle.en_linea %} is-en-linea{% endif %}">
+      <span class="eq-foto__inicial" aria-hidden="true">{{ persona.nombre_visible|first|upper }}</span>
+      {% if persona.foto_mediana %}<img src="{{ persona.foto_mediana }}" alt="" referrerpolicy="no-referrer">{% endif %}
+      {% if detalle.en_linea %}<span class="eq-foto__punto"><span class="sr-only">En línea</span></span>{% endif %}
+    </span>
+    <div class="eq-ficha__id">
+      <h1 class="op-cabecera__titulo">{{ persona.nombre_visible }}</h1>
+      <p class="eq-ficha__datos">
+        <span>{{ detalle.cargo|default:"Sin cargo" }}</span>{% if detalle.area %}<span>{{ detalle.area }}</span>{% endif %}{% if persona.email %}<a href="mailto:{{ persona.email }}">{{ persona.email }}</a>{% endif %}{% if detalle.en_linea %}<span class="eq-ficha__linea">En línea</span>{% endif %}
+      </p>
+    </div>
+    <dl class="eq-kpis">
+      <div><dt>A cargo</dt><dd class="tabular">{{ detalle.tickets_activos }}</dd></div>
+      <div><dt>Pendientes</dt><dd class="tabular">{{ detalle.pendientes }}</dd></div>
+      <div{% if detalle.vencidos %} class="is-vencido"{% endif %}><dt>Vencidos</dt><dd class="tabular">{{ detalle.vencidos }}</dd></div>
+    </dl>
+  </header>
+
+  {% if detalle.tickets %}
+    <div class="eq-tabla-barra" data-eq-tabla-barra hidden>
+      <div class="segmented" role="group" aria-label="Filtrar tickets">
+        <button type="button" class="segmented__item is-active" data-eq-seg="" aria-pressed="true">Todos <span class="tabular">{{ detalle.tickets|length }}</span></button>
+        <button type="button" class="segmented__item" data-eq-seg="atencion" aria-pressed="false">Pendientes <span class="tabular">{{ detalle.con_pendientes }}</span></button>
+        <button type="button" class="segmented__item" data-eq-seg="vencido" aria-pressed="false">Vencidos <span class="tabular">{{ detalle.vencidos }}</span></button>
+        <button type="button" class="segmented__item" data-eq-seg="seguimiento" aria-pressed="false">En seguimiento <span class="tabular">{{ detalle.en_seguimiento }}</span></button>
+      </div>
+      <label class="eq-buscar eq-buscar--sm">
+        {% include "components/icon.html" with name="search" size="sm" %}<span class="sr-only">Buscar ticket</span>
+        <input type="search" placeholder="Buscar ticket o actividad" data-eq-tabla-buscar autocomplete="off">
+      </label>
+    </div>
+
+    <div class="eq-tabla-marco">
+      <table class="eq-tabla" data-eq-tabla>
+        <thead>
+          <tr>
+            <th scope="col">Ticket</th>
+            <th scope="col">Etapa actual</th>
+            <th scope="col">Qué tiene que hacer</th>
+            <th scope="col">Su papel</th>
+            <th scope="col" class="eq-tabla__fecha">Vence</th>
+            <th scope="col">Situación</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for grupo in detalle.tickets %}
+            {% with ticket=grupo.ticket siguiente=grupo.siguiente plazo=grupo.ticket|estado_plazo %}
+            <tr class="{% if grupo.vencido %}is-vencido{% endif %}" data-eq-fila
+                data-situacion="{% if grupo.vencido %}vencido atencion{% elif grupo.requiere_atencion %}atencion{% else %}seguimiento{% endif %}"
+                data-texto="{{ ticket.codigo|default:''|lower }} {{ ticket.detalle_servicio.servicio.nombre|lower }} {{ ticket.etiqueta|lower }}{% for p in grupo.pendientes %} {{ p.titulo|lower }}{% endfor %}">
+              <td>
+                <span class="eq-tabla__ticket">{{ ticket.detalle_servicio.servicio.nombre }}{% if ticket.etiqueta %} · {{ ticket.etiqueta }}{% endif %}</span>
+                <span class="eq-tabla__sub tabular">{{ ticket.codigo|default:"Sin código" }}{% if ticket.usuario_responsable_id == persona.pk %} · a su cargo{% endif %}</span>
+              </td>
+              <td>{{ grupo.fase|default:ticket.get_estado_display }}</td>
+              <td>
+                {% if siguiente %}
+                  <span class="eq-tabla__que">{{ siguiente.titulo }}</span>
+                  {% if grupo.acciones|length > 1 %}<span class="eq-tabla__sub">y {{ grupo.acciones|length|add:"-1" }} más</span>{% elif siguiente.detalle %}<span class="eq-tabla__sub">{{ siguiente.detalle }}</span>{% endif %}
+                {% else %}<span class="text-muted">—</span>{% endif %}
+              </td>
+              <td class="eq-tabla__papel">{{ grupo.participacion|join:", "|default:"—" }}</td>
+              <td class="eq-tabla__fecha tabular">
+                {% if grupo.proximo_vencimiento %}{{ grupo.proximo_vencimiento|date:"j M" }}
+                {% elif ticket.fecha_objetivo_vigente %}{{ ticket.fecha_objetivo_vigente|date:"j M" }}
+                {% else %}<span class="text-muted">Sin fecha</span>{% endif %}
+              </td>
+              <td>
+                {% if grupo.vencido or plazo == "vencido" and grupo.requiere_atencion %}<span class="estado-etiqueta estado-etiqueta--vencido">Vencido</span>
+                {% elif plazo == "por_vencer" and grupo.requiere_atencion %}<span class="estado-etiqueta estado-etiqueta--por_vencer">Por vencer</span>
+                {% elif grupo.requiere_atencion %}<span class="estado-etiqueta estado-etiqueta--atencion">Pendiente</span>
+                {% else %}<span class="estado-etiqueta estado-etiqueta--seguimiento">En seguimiento</span>{% endif %}
+              </td>
+            </tr>
+            {% endwith %}
+          {% endfor %}
+        </tbody>
+      </table>
+      <p class="eq-sin-resultados" data-eq-tabla-vacio hidden>Ningún ticket coincide.</p>
+    </div>
+  {% else %}
+    <div class="empty-state"><p>Sin trabajo pendiente ni tickets a su cargo.</p></div>
+  {% endif %}
+  {% endwith %}
+  <script src="{% static 'js/mi_equipo.js' %}" defer></script>
+{% endblock %}

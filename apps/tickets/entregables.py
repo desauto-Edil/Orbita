@@ -183,6 +183,9 @@ def _bloquear_y_autorizar(entregable, actor):
     ticket = Ticket.objects.select_for_update().get(pk=ticket_id)
     if not puede_escribir_entregables_finales(actor, ticket):
         raise PermissionDenied("Solo el responsable individual actual puede modificar entregables de un ticket en atención.")
+    from apps.tickets.cancelaciones import exigir_sin_cancelacion_pendiente
+
+    exigir_sin_cancelacion_pendiente(ticket)  # una cancelación por aprobar congela el ticket
     return EntregableTicket.objects.get(pk=entregable.pk)
 
 

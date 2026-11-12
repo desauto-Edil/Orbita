@@ -136,6 +136,10 @@ def _crear_borrador_de_servicio(usuario, servicio, *, origen=Ticket.Origen.MANUA
         prorroga_politica=servicio.politica_prorroga,
         prorroga_aprobador_usuario=servicio.prorroga_aprobador_usuario,
         prorroga_aprobador_equipo=servicio.prorroga_aprobador_equipo,
+        # Cancelación con aprobación: política y aprobador, congelados como la prórroga.
+        cancelacion_con_aprobacion=servicio.cancelacion_con_aprobacion,
+        cancelacion_aprobador_usuario=servicio.cancelacion_aprobador_usuario,
+        cancelacion_aprobador_equipo=servicio.cancelacion_aprobador_equipo,
         # Fase 2: en un PROCESO, los datos de inicio pueden pertenecer a la ejecución (siempre en uno
         # programado). Se congela aquí, como el resto de políticas.
         datos_inicio_en_ejecucion=(
@@ -280,6 +284,13 @@ def _guardar_respuestas(ticket, actor, respuestas_crudas):
         for rc in respuesta_formulario.respuestas_campo.select_related("campo").all()
     }
 
+    # Listas de evidencias: no son un valor (ni origen de reglas); se aplican aparte, punto por punto.
+    respuestas_crudas = dict(respuestas_crudas)
+    checklists = {
+        campo_id: respuestas_crudas.pop(campo_id)
+        for campo_id in list(respuestas_crudas)
+        if campo_id in campos and campos[campo_id].tipo == Campo.TipoCampo.CHECKLIST
+    }
     valores_para_evaluar = {campo_id: rc.valor for campo_id, rc in existentes.items()}
     valores_para_evaluar.update(respuestas_crudas)
 
@@ -292,6 +303,13 @@ def _guardar_respuestas(ticket, actor, respuestas_crudas):
         if not visible:
             if existente is not None:
                 existente.delete()
+            continue
+
+        if campo.tipo == Campo.TipoCampo.CHECKLIST:
+            if campo_id in checklists:
+                from apps.tickets.evidencias import aplicar_en_respuesta
+
+                aplicar_en_respuesta(ticket, campo, checklists[campo_id], actor)
             continue
 
         if campo_id not in respuestas_crudas:
@@ -476,6 +494,13 @@ def radicar_ticket(ticket, actor):
     return ticket_original
 
 
+def _exigir_sin_cancelacion_pendiente(ticket):
+    """Un ticket con una cancelación por aprobar está congelado (`apps.tickets.cancelaciones`)."""
+    from apps.tickets.cancelaciones import exigir_sin_cancelacion_pendiente
+
+    exigir_sin_cancelacion_pendiente(ticket)
+
+
 def _bloquear_instancia_del_ticket(ticket_pk):
     """4.G3A — primer lock de las operaciones del Ticket que, ya con su fila tomada, tocan Tareas o
     aprobaciones de su flujo (`tomar_ticket`, `asignar_ticket`, `cancelar_ticket`): la INSTANCIA de su
@@ -504,6 +529,7 @@ def tomar_ticket(ticket, actor):
     entregar las Tareas «para el responsable del ticket» toma sus filas después del Ticket."""
     _bloquear_instancia_del_ticket(ticket.pk)
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    _exigir_sin_cancelacion_pendiente(ticket)
     if ticket.usuario_responsable_id is not None:
         raise ValidationError("Este ticket ya tiene un responsable asignado.")
     if not puede_tomar(actor, ticket):
@@ -536,6 +562,7 @@ def iniciar_atencion_ticket(ticket, actor):
     su contrato: solo mueve el estado y lo registra. Mismo lock que las demás
     operaciones de atención; la autorización se revalida bajo lock."""
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    _exigir_sin_cancelacion_pendiente(ticket)
     if ticket.estado != Ticket.Estado.RADICADO or ticket.usuario_responsable_id is None:
         raise ValidationError("Solo un ticket RADICADO dirigido a una persona puede iniciarse por esta vía.")
     if not puede_iniciar_atencion(actor, ticket):
@@ -561,6 +588,7 @@ def asignar_ticket(ticket, actor, *, usuario=None, equipo=None):
     función. 4.G3A: bloquea la instancia antes que el Ticket, igual que `tomar_ticket`."""
     _bloquear_instancia_del_ticket(ticket.pk)
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    _exigir_sin_cancelacion_pendiente(ticket)
     if ticket.estado != Ticket.Estado.RADICADO:
         raise ValidationError("Solo un ticket RADICADO sin responsable puede asignarse por esta vía.")
     if usuario is None and equipo is None:
@@ -598,6 +626,43 @@ def asignar_ticket(ticket, actor, *, usuario=None, equipo=None):
     return ticket
 
 
+def candidatos_reasignacion(ticket, *, equipo=None):
+    """Personas a las que se puede reasignar `ticket`: SOLO el EQUIPO DE TRABAJO del ticket —miembros activos de su
+    equipo responsable (y del equipo que se indica en la misma reasignación), los responsables configurados del
+    servicio o proceso (personas y miembros activos de sus equipos) y los compañeros de equipo de quien lo tiene
+    ahora—. Es la regla de `reasignar_ticket` y la lista del menú «Más» del espacio."""
+    from django.db.models import Q
+
+    from apps.catalogo.models import ServicioResponsable
+    from apps.core.models import MiembroEquipo, Usuario
+
+    equipos = set()
+    if equipo is not None:
+        equipos.add(equipo.pk)
+    if ticket.equipo_responsable_id:
+        equipos.add(ticket.equipo_responsable_id)
+    if ticket.usuario_responsable_id:
+        equipos |= set(
+            MiembroEquipo.objects.filter(usuario_id=ticket.usuario_responsable_id, activo=True, equipo__activo=True)
+            .values_list("equipo_id", flat=True)
+        )
+    personas = set()
+    servicio_id = TicketServicio.objects.filter(ticket_id=ticket.pk).values_list("servicio_id", flat=True).first()
+    if servicio_id is not None:
+        for usuario_id, equipo_id in ServicioResponsable.objects.filter(servicio_id=servicio_id, activo=True).values_list(
+            "usuario_id", "equipo_id"
+        ):
+            if usuario_id:
+                personas.add(usuario_id)
+            if equipo_id:
+                equipos.add(equipo_id)
+    return (
+        Usuario.objects.filter(is_active=True)
+        .filter(Q(pk__in=personas) | Q(pk__in=MiembroEquipo.objects.filter(equipo_id__in=equipos, activo=True).values("usuario_id")))
+        .distinct().order_by("first_name", "last_name", "email")
+    )
+
+
 @transaction.atomic
 def reasignar_ticket(ticket, actor, *, usuario=None, equipo=None):
     """CU-017/RQF-056 — REASIGNAR cambia responsable/equipo de un ticket ya
@@ -605,12 +670,15 @@ def reasignar_ticket(ticket, actor, *, usuario=None, equipo=None):
     EN_ATENCION→EN_ATENCION (decisión explícita del usuario) — solo cambia
     los campos de responsable."""
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    _exigir_sin_cancelacion_pendiente(ticket)
     if ticket.estado != Ticket.Estado.EN_ATENCION:
         raise ValidationError("Solo un ticket EN_ATENCION puede reasignarse.")
     if usuario is None and equipo is None:
         raise ValidationError("Debe indicar un usuario y/o un equipo para reasignar.")
     if not puede_reasignar(actor, ticket):
         raise PermissionDenied("No tiene autorización para reasignar este ticket.")
+    if usuario is not None and not candidatos_reasignacion(ticket, equipo=equipo).filter(pk=usuario.pk).exists():
+        raise ValidationError("Solo puedes reasignar el ticket a alguien del equipo de trabajo.")
 
     usuario_anterior_id = ticket.usuario_responsable_id
     equipo_anterior_id = ticket.equipo_responsable_id
@@ -668,21 +736,30 @@ def comentar_ticket(ticket, actor, contenido, archivos=None):
     return registrar_comentario(ticket, actor, contenido, archivos)
 
 
-def registrar_comentario(ticket, actor, contenido, archivos=None):
-    """Núcleo de un comentario del Ticket SIN autorizar: guarda el `ComentarioTicket` (y sus adjuntos) y publica el
-    aviso COMENTARIO. Lo llaman, ya autorizados, `comentar_ticket` (regla CU-018) y la Conversación del ticket
-    (`conversacion.enviar`, regla de participación)."""
-    if not contenido or not contenido.strip():
+def registrar_comentario(ticket, actor, contenido, archivos=None, *, canal=None, origen=None):
+    """Núcleo de un comentario del Ticket SIN autorizar: guarda el `ComentarioTicket` en su canal (equipo /
+    interesados; por defecto interesados), con sus archivos si los trae (entonces el texto puede ir vacío), y publica
+    el aviso COMENTARIO con ese canal. Lo llaman, ya autorizados, la
+    Conversación del ticket (`conversacion.enviar`, la única vía de la interfaz), `comentar_ticket` y la entrada
+    desde Google Chat (`espacios_chat.importar_mensaje`, `origen=GOOGLE_CHAT`). Lo escrito en Órbita se deja en la
+    bandeja de salida hacia el espacio de Chat del canal, si el entorno lo tiene activo."""
+    if not (contenido and contenido.strip()) and not archivos:
         raise ValidationError("El comentario no puede estar vacío.")
 
     comentario = ComentarioTicket.objects.create(
-        ticket=ticket, autor=actor, contenido=contenido.strip()
+        ticket=ticket, autor=actor, contenido=(contenido or "").strip(), canal=canal or ComentarioTicket.Canal.INTERESADOS,
+        origen=origen or ComentarioTicket.Origen.ORBITA,
     )
     for archivo_subido in archivos or []:
         _crear_adjunto(Adjunto.TipoRelacion.COMENTARIO, {"comentario": comentario}, archivo_subido, actor)
     from apps.notificaciones.eventos import publicar
 
-    publicar("TICKET:COMENTARIO", actor=actor, ticket=ticket, contenido=comentario.contenido)
+    cantidad = len(archivos or [])
+    resumen = comentario.contenido or f"📎 {cantidad} archivo{'s' if cantidad != 1 else ''}"
+    publicar("TICKET:COMENTARIO", actor=actor, ticket=ticket, contenido=resumen, canal=comentario.canal)
+    from apps.tickets.espacios_chat import al_registrar
+
+    al_registrar(comentario)
     return comentario
 
 
@@ -702,6 +779,7 @@ def solicitar_informacion(ticket, actor, mensaje, archivos=None):
     (R.1 aprobado): nunca aceptado como parámetro externo/POST."""
     if not puede_solicitar_informacion(actor, ticket):
         raise PermissionDenied("No tiene autorización para solicitar información en este ticket.")
+    _exigir_sin_cancelacion_pendiente(ticket)
     if ticket.solicitante_id is None:  # 4.G1: defensa; `puede_solicitar_informacion` ya lo excluye.
         raise ValidationError("Este ticket no tiene solicitante a quien pedirle información.")
     if not mensaje or not mensaje.strip():
@@ -854,6 +932,7 @@ def resolver_ticket(ticket, actor, descripcion, archivos=None):
     pasar por `REABRIR` falla aquí, antes de crear ninguna fila — no hace
     falta (ni se usa) ningún chequeo de "¿ya existe una resolución?"."""
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    _exigir_sin_cancelacion_pendiente(ticket)
     if ticket.estado != Ticket.Estado.EN_ATENCION:
         raise ValidationError("Solo un ticket EN_ATENCION puede resolverse.")
     if ticket.entrega_politica:
@@ -927,7 +1006,7 @@ def cerrar_ticket(ticket, actor):
 
 
 @transaction.atomic
-def cancelar_ticket(ticket, actor, motivo):
+def cancelar_ticket(ticket, actor, motivo, *, por_solicitud=None):
     """CU-019/RQF-059 — RADICADO/EN_ATENCION → CANCELADO. Motivo
     obligatorio (V1 aprobado). No elimina físicamente el ticket — distinto
     de `eliminar_borrador`, que solo aplica a BORRADOR.
@@ -954,8 +1033,16 @@ def cancelar_ticket(ticket, actor, motivo):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if ticket.estado not in (Ticket.Estado.RADICADO, Ticket.Estado.EN_ATENCION):
         raise ValidationError("Solo un ticket RADICADO o EN_ATENCION puede cancelarse.")
-    if not puede_cancelar_ticket(actor, ticket):
-        raise PermissionDenied("No tiene autorización para cancelar este ticket.")
+    if por_solicitud is None:
+        # Cancelación directa: quien puede cancelar, y solo si el ticket no exige que un aprobador la acepte
+        # (`apps.tickets.cancelaciones`; la aprobación llega con `por_solicitud`, ya validada por esa vía).
+        if not puede_cancelar_ticket(actor, ticket):
+            raise PermissionDenied("No tiene autorización para cancelar este ticket.")
+        if ticket.cancelacion_con_aprobacion:
+            raise ValidationError("Cancelar este ticket necesita la aprobación de su aprobador: solicítala.")
+        from apps.tickets.cancelaciones import exigir_sin_cancelacion_pendiente
+
+        exigir_sin_cancelacion_pendiente(ticket)
     if not motivo or not motivo.strip():
         raise ValidationError("El motivo de cancelación no puede estar vacío.")
     # Ya validado: recién ahora se bloquea el trabajo que se va a cancelar (Tareas del flujo, aprobaciones y
@@ -985,6 +1072,7 @@ def cancelar_ticket(ticket, actor, motivo):
         estado_anterior=estado_anterior,
         estado_nuevo=ticket.estado,
         motivo=motivo.strip(),
+        **({"solicitud_cancelacion_id": por_solicitud.pk} if por_solicitud is not None else {}),
     )
     _auditar_cambio_estado(ticket, actor, estado_anterior)
     return ticket

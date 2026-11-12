@@ -70,6 +70,18 @@ from apps.tickets.operaciones import _es_valor_vacio
 from apps.workflows.models import InstanciaWorkflow
 
 ESTADOS_SIN_CAMBIOS = (Ticket.Estado.RESUELTO, Ticket.Estado.CERRADO, Ticket.Estado.CANCELADO)
+# Columnas que NO son un valor de celda: sus archivos (ARCHIVO) o sus pruebas por punto (CHECKLIST) se suben con su
+# propia acción y nunca pasan por `ValorElemento`.
+_SIN_VALOR = (Campo.TipoCampo.ARCHIVO, Campo.TipoCampo.CHECKLIST)
+
+
+def _marcas_si_hay(columnas, elemento):
+    """Marcas vigentes de las listas de evidencias del ítem, solo si alguna columna es CHECKLIST."""
+    if not any(c.tipo == Campo.TipoCampo.CHECKLIST for c in columnas):
+        return []
+    from apps.tickets.evidencias import marcas_vigentes
+
+    return marcas_vigentes(elemento=elemento)
 
 
 # --- Snapshot al nacer el Ticket ------------------------------------------------
@@ -279,6 +291,7 @@ def completitud_de(elemento, columnas=None, exigidas=None):
         columnas = columnas_de(elemento.parrilla)
     valores = {v.campo_id: v for v in elemento.valores.all()}
     con_archivo = set(elemento.archivos.filter(retirado_en__isnull=True).values_list("campo_elemento_id", flat=True))
+    marcas = None  # las marcas de las listas de evidencias solo se leen si alguna columna las necesita
     faltantes, invalidos = [], []
     exigidas = set(exigidas) if exigidas is not None else None
     for campo in columnas:
@@ -287,6 +300,15 @@ def completitud_de(elemento, columnas=None, exigidas=None):
         if campo.tipo == Campo.TipoCampo.ARCHIVO:
             # Completa con al menos un archivo vigente en esa columna.
             if campo.pk not in con_archivo:
+                faltantes.append(campo)
+            continue
+        if campo.tipo == Campo.TipoCampo.CHECKLIST:
+            # Completa cuando TODOS sus puntos tienen su prueba (`tickets.evidencias`).
+            from apps.tickets.evidencias import esta_completo, marcas_vigentes
+
+            if marcas is None:
+                marcas = marcas_vigentes(elemento=elemento)
+            if not esta_completo(campo, marcas):
                 faltantes.append(campo)
             continue
         guardado = valores.get(campo.pk)
@@ -328,16 +350,16 @@ def representacion_de_valores(elemento, campos=None):
     (fase posterior); no calcula ninguna huella ni guarda nada."""
     columnas = {c.pk: c for c in columnas_de(elemento.parrilla)}
     if campos is None:
-        elegidas = [c for c in columnas.values() if c.tipo != Campo.TipoCampo.ARCHIVO]
+        elegidas = [c for c in columnas.values() if c.tipo not in _SIN_VALOR]
     else:
         elegidas = []
         for llave in campos:
             campo = columnas.get(llave.pk if isinstance(llave, Campo) else llave)
             if campo is None:
                 raise ValidationError("El campo no pertenece a la estructura de este ticket.")
-            if campo.tipo == Campo.TipoCampo.ARCHIVO:
+            if campo.tipo in _SIN_VALOR:
                 raise ValidationError(
-                    f"«{campo.etiqueta}»: los campos de tipo archivo todavía no se admiten en los elementos."
+                    f"«{campo.etiqueta}»: los archivos y las listas de evidencias no se comparan como valor."
                 )
             elegidas.append(campo)
     guardados = {v.campo_id: v.valor for v in elemento.valores.all()}
@@ -384,9 +406,10 @@ def _resolver_campos(parrilla, valores):
         campo = campos.get(pk)
         if campo is None:
             raise ValidationError("El campo no pertenece a la estructura de este ticket.")
-        if campo.tipo == Campo.TipoCampo.ARCHIVO:
+        if campo.tipo in _SIN_VALOR:
             raise ValidationError(
-                f"«{campo.etiqueta}»: los archivos de un elemento se adjuntan con su propia acción, no como valor."
+                f"«{campo.etiqueta}»: los archivos y las evidencias de un elemento se suben con su propia acción, "
+                "no como valor."
             )
         resueltos[pk] = (campo, crudo)
     return resueltos
@@ -481,6 +504,9 @@ def _bloquear(ticket_id, actor, *, parrilla_id=None, clave=None, operar=False, p
     ticket = Ticket.objects.select_for_update().get(pk=ticket_id)
     if ticket.estado in ESTADOS_SIN_CAMBIOS:
         raise ValidationError("Este ticket ya no admite cambios en sus elementos.")
+    from apps.tickets.cancelaciones import exigir_sin_cancelacion_pendiente
+
+    exigir_sin_cancelacion_pendiente(ticket)  # una cancelación por aprobar congela el ticket
     if not operar and not puede_editar_parrilla(actor, ticket):
         raise PermissionDenied(
             "Solo el responsable individual de un ticket en atención puede modificar sus elementos."
@@ -519,10 +545,18 @@ def _bloquear_elemento(elemento, actor):
     ticket_id = ParrillaTicket.objects.values_list("ticket_id", flat=True).get(pk=elemento.parrilla_id)
     ticket, parrilla = _bloquear(ticket_id, actor, parrilla_id=elemento.parrilla_id, operar=True, por_tarea=True)
     elemento = ElementoParrilla.objects.select_for_update().select_related("parrilla").get(pk=elemento.pk)
-    if puede_operar_coleccion(actor, parrilla, ticket):
+    # Enviado a revisión = solo lectura para TODOS hasta que lo devuelvan (`apps.tickets.en_revision`).
+    from apps.tickets import en_revision
+
+    en_revision.exigir_editable(elemento)
+    # Aprobado = ya no se edita por la colección; solo por una tarea abierta de un paso posterior.
+    aprobado = en_revision.aprobado(elemento)
+    if not aprobado and puede_operar_coleccion(actor, parrilla, ticket):
         return ticket, parrilla, elemento, None
     permitidas = columnas_por_tarea(actor, elemento, ticket)
     if not permitidas:
+        if aprobado:
+            raise ValidationError(en_revision.MENSAJE_APROBADO)
         raise PermissionDenied(_MENSAJE_SIN_EDICION)
     return ticket, parrilla, elemento, permitidas
 
@@ -1131,7 +1165,18 @@ def _texto_legible(campo, valor, opciones):
     return _como_texto_de_input(campo, valor)
 
 
-def _celda(campo, valor_elemento, bases, faltante=False, archivos=()):
+def _celda(campo, valor_elemento, bases, faltante=False, archivos=(), marcas=()):
+    if campo.tipo == Campo.TipoCampo.CHECKLIST:
+        # Lista de evidencias: no es un valor (se marca punto por punto con su prueba). `es_archivo` la deja fuera
+        # de los formularios de valores; `es_checklist` la dibuja con su propio componente (`_checklist.html`).
+        from apps.tickets.evidencias import checklist
+
+        lista = checklist(campo, marcas)
+        return {
+            "campo": campo, "soportado": True, "es_archivo": True, "es_checklist": True, "tipo": campo.tipo,
+            "obligatorio": campo.obligatorio, "faltante": faltante, "archivos": [], "checklist": lista,
+            "texto": f"{lista['hechos']}/{lista['total']} evidencias",
+        }
     if campo.tipo == Campo.TipoCampo.ARCHIVO:
         return {
             "campo": campo, "soportado": True, "es_archivo": True, "tipo": campo.tipo,
@@ -1168,9 +1213,13 @@ def tabla_de_elemento(elemento):
     bases = {c.pk: _opciones_base(c) for c in columnas}
     por_campo = {v.campo_id: v for v in elemento.valores.select_related("campo")}
     archivos = archivos_de(elemento)
+    marcas = _marcas_si_hay(columnas, elemento)
     filas = []
     for campo in columnas:
-        celda = _celda(campo, por_campo.get(campo.pk), bases, archivos=[a for a in archivos if a.campo_elemento_id == campo.pk])
+        celda = _celda(
+            campo, por_campo.get(campo.pk), bases, archivos=[a for a in archivos if a.campo_elemento_id == campo.pk],
+            marcas=marcas,
+        )
         filas.append({"etiqueta": campo.etiqueta, "texto": celda["texto"] or "—", "clave": campo.clave, "tipo": campo.tipo})
     return filas
 
@@ -1179,18 +1228,23 @@ def ficha_por_tarea(elemento, usuario):
     """Bloque 3.1 — UN ítem tal como lo ve el responsable de una tarea abierta que lo trabaja: todas sus celdas
     (solo lectura) con `editable` en las columnas que su tarea autoriza. `None` si no le autoriza ninguna. La
     autorización real la repite cada operación bajo lock."""
+    from apps.tickets import en_revision
     from apps.tickets.edicion_por_tarea import columnas_por_tarea
 
     permitidas = columnas_por_tarea(usuario, elemento)
-    if not permitidas:
+    if not permitidas or en_revision.motivo(elemento):
         return None
     columnas = columnas_de(elemento.parrilla)
     bases = {c.pk: _opciones_base(c) for c in columnas}
     por_campo = {v.campo_id: v for v in elemento.valores.select_related("campo")}
     archivos = archivos_de(elemento)
+    marcas = _marcas_si_hay(columnas, elemento)
     celdas = []
     for campo in columnas:
-        celda = _celda(campo, por_campo.get(campo.pk), bases, archivos=[a for a in archivos if a.campo_elemento_id == campo.pk])
+        celda = _celda(
+            campo, por_campo.get(campo.pk), bases, archivos=[a for a in archivos if a.campo_elemento_id == campo.pk],
+            marcas=marcas,
+        )
         celda["editable"] = campo.pk in permitidas
         celdas.append(celda)
     return {
@@ -1203,8 +1257,12 @@ def ficha_por_tarea(elemento, usuario):
 def columnas_editables_para(usuario, elemento):
     """Las columnas que `usuario` puede enviar al guardar `elemento`: todas si opera la colección; si no, las de
     sus tareas abiertas (Bloque 3.1). Solo filtra lo que se lee del formulario; la regla vive en la operación."""
+    from apps.tickets import en_revision
+
+    if en_revision.motivo(elemento):
+        return []
     columnas = columnas_de(elemento.parrilla)
-    if puede_operar_coleccion(usuario, elemento.parrilla):
+    if puede_operar_coleccion(usuario, elemento.parrilla) and not en_revision.aprobado(elemento):
         return columnas
     from apps.tickets.edicion_por_tarea import columnas_por_tarea
 
@@ -1252,22 +1310,32 @@ def tabla(ticket, usuario, *, parrilla=None):
         por_campo = {v.campo_id: v for v in elemento.valores.all()}
         faltan = {c.pk for c in completitud.faltantes} | {c.pk for c, _ in completitud.invalidos}
         archivos = archivos_de(elemento) if hay_archivos else []
+        marcas = _marcas_si_hay(columnas, elemento)
         return [
             _celda(
                 c, por_campo.get(c.pk), bases, faltante=c.pk in faltan,
-                archivos=[a for a in archivos if a.campo_elemento_id == c.pk],
+                archivos=[a for a in archivos if a.campo_elemento_id == c.pk], marcas=marcas,
             )
             for c in columnas
         ]
 
     alcance = alcance_de(parrilla)
+    from apps.tickets.en_revision import ids_aprobados, ids_en_revision
+
+    vigentes = list(elementos_vigentes(parrilla).prefetch_related("versiones"))
+    en_revision = ids_en_revision([e.pk for e in vigentes])
+    aprobados = ids_aprobados([e.pk for e in vigentes])
     filas = []
-    for elemento in elementos_vigentes(parrilla).prefetch_related("versiones"):
+    for elemento in vigentes:
         completitud = completitud_de(elemento, columnas)
         filas.append({
             "elemento": elemento, "completitud": completitud, "celdas": celdas_de(elemento, completitud),
             "salida": alcance["salida"].get(elemento.pk),
             "n_versiones": len(elemento.versiones.all()),
+            # Enviado a revisión: la fila se muestra en solo lectura (la operación también lo rechaza).
+            "en_revision": elemento.pk in en_revision,
+            # Aprobado: tampoco se edita desde la colección (solo una tarea abierta de un paso posterior).
+            "aprobado": elemento.pk in aprobados,
         })
     retiradas = [
         {"elemento": elemento, "celdas": celdas_de(elemento, Completitud())}
@@ -1285,7 +1353,7 @@ def tabla(ticket, usuario, *, parrilla=None):
         "retiradas": retiradas,
         "n_retirados": len(retiradas),
         # Al dar de alta solo se piden los valores: los archivos se adjuntan después en la fila.
-        "celdas_nuevas": [_celda(c, None, bases) for c in columnas if c.tipo != Campo.TipoCampo.ARCHIVO],
+        "celdas_nuevas": [_celda(c, None, bases) for c in columnas if c.tipo not in _SIN_VALOR],
         "alcance": alcance,
         # Retirar, excluir, cerrar el alcance y altas extraordinarias: solo el responsable individual.
         "puede_editar": puede_editar_parrilla(usuario, ticket) and ticket.estado not in ESTADOS_SIN_CAMBIOS,
@@ -1299,7 +1367,7 @@ def valores_desde_post(post, columnas):
     checkbox ausente es «No marcado»; un campo ausente (que no es checkbox) no se toca."""
     valores = {}
     for campo in columnas:
-        if campo.tipo == Campo.TipoCampo.ARCHIVO:
+        if campo.tipo in _SIN_VALOR:
             continue
         nombre = f"campo_{campo.pk}"
         if campo.tipo == Campo.TipoCampo.MULTILISTA:

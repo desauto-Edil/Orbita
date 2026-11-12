@@ -36,6 +36,41 @@
           </tr>
           <tr>
             <td style="background:#FDFDFD;border:1px solid #E2E4E8;border-radius:16px;padding:28px 28px 24px 28px;">
+              {% if conversacion %}
+              {# Conversación (2026-11-12): como un chat — quién escribió y qué, uno debajo del otro — y un botón al ticket. #}
+              <p style="margin:0 0 20px 0;padding:0 0 18px 0;border-bottom:1px solid #E2E4E8;font-size:17px;line-height:1.45;color:#17181B;">
+                {% if conversacion.autores|length == 1 %}<strong style="font-weight:600;">{{ conversacion.autores.0 }}</strong> te {% if conversacion.total > 1 %}envió {{ conversacion.total }} mensajes{% else %}envió un mensaje{% endif %}{% else %}Tienes <strong style="font-weight:600;">{{ conversacion.total }} mensajes nuevos</strong>{% endif %}
+                en la conversación de <strong style="font-weight:600;">{% if notificacion.ticket.consecutivo %}{{ notificacion.ticket.codigo }}{% else %}{{ conversacion.ticket }}{% endif %}</strong> cuando no estabas
+              </p>
+              {% if conversacion.anteriores %}<p style="margin:0 0 14px 0;font-size:13px;color:#706E64;">y {{ conversacion.anteriores }} mensaje{{ conversacion.anteriores|pluralize }} anterior{{ conversacion.anteriores|pluralize:"es" }} sin leer…</p>{% endif %}
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 24px 0;">
+                {% for m in conversacion.mensajes %}
+                  <tr>
+                    <td width="52" style="width:52px;padding:0 12px 18px 0;vertical-align:top;">
+                      {% if m.foto %}
+                        <img src="{{ m.foto }}" alt="" width="40" height="40" style="display:block;width:40px;height:40px;border-radius:50%;border:0;">
+                      {% else %}
+                        <span style="display:block;width:40px;height:40px;line-height:40px;border-radius:50%;background:{{ m.color }};color:#FFFFFF;text-align:center;font-size:18px;font-weight:500;">{{ m.inicial }}</span>
+                      {% endif %}
+                    </td>
+                    <td style="padding:0 0 18px 0;vertical-align:top;">
+                      <p style="margin:2px 0 3px 0;font-size:14px;line-height:1.3;color:#17181B;font-weight:500;">{{ m.autor }} <span style="font-size:12px;font-weight:400;color:#706E64;">{{ m.hora|date:"j M, H:i" }}</span></p>
+                      {% if m.texto %}<p style="margin:0;font-size:14px;line-height:1.5;color:#3C4043;">{{ m.texto|linebreaksbr }}</p>{% endif %}
+                      {% for archivo in m.archivos %}<p style="margin:2px 0 0 0;font-size:14px;line-height:1.5;color:#706E64;font-style:italic;">{{ archivo }}</p>{% endfor %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </table>
+              {% if enlace %}
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="border-radius:999px;background:#17181B;">
+                      <a href="{{ enlace }}" style="display:inline-block;padding:12px 24px;font-size:14px;font-weight:600;color:#FDFDFD;text-decoration:none;border-radius:999px;">Ir al ticket{% if notificacion.ticket.consecutivo %} {{ notificacion.ticket.codigo }}{% endif %}</a>
+                    </td>
+                  </tr>
+                </table>
+              {% endif %}
+              {% else %}
               <p style="margin:0 0 6px 0;font-size:13px;color:#706E64;">Hola {{ nombre }},</p>
               <h1 style="margin:0 0 12px 0;font-size:20px;line-height:1.3;font-weight:600;color:#17181B;">{{ notificacion.titulo }}</h1>
               <p style="margin:0 0 20px 0;font-size:15px;line-height:1.55;color:#17181B;">{{ notificacion.resumen }}</p>
@@ -73,6 +108,7 @@
                     </td>
                   </tr>
                 </table>
+              {% endif %}
               {% endif %}
             </td>
           </tr>

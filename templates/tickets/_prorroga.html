@@ -1,7 +1,7 @@
 {% comment %}
   4.A2 — Compromiso de atención y prórrogas del ticket. Espera `compromiso`, `prorrogas`
   (filas con `prorroga`, `puede_cancelar`, `aprobacion_a_resolver`), `puede_solicitar_prorroga`,
-  `prorroga_form`, `prorroga_sin_aprobacion` y `prorroga_no_disponible`. Solo presentación:
+  `prorroga_form`, `prorroga_sin_aprobacion`, `prorroga_no_disponible` y, opcional, `next_url`. Solo presentación:
   cada acción se vuelve a validar en el dominio.
 {% endcomment %}
 {% if muestra_prorrogas %}
@@ -26,7 +26,7 @@
       <details class="work-fold">
         <summary>Solicitar prórroga</summary>
         <form method="post" action="{% url 'tickets:solicitar_prorroga' ticket.pk %}" class="form">
-          {% csrf_token %}
+          {% csrf_token %}{% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
           <p class="text-muted">
             {% if prorroga_sin_aprobacion %}La nueva fecha se aplicará directamente, sin aprobación.
             {% else %}La solicitud se enviará para aprobación; la fecha vigente no cambia hasta que se apruebe.{% endif %}
@@ -74,11 +74,11 @@
                   </p>
                 {% endif %}
                 {% if fila.aprobacion_a_resolver %}
-                  <p><a class="btn btn--secondary btn--sm" href="{% url 'aprobaciones:detalle' fila.aprobacion_a_resolver.pk %}">Resolver prórroga</a></p>
+                  <p><a class="btn btn--secondary btn--sm" href="{% url 'tickets:espacio' ticket.pk %}">Resolver prórroga</a></p>
                 {% endif %}
                 {% if fila.puede_cancelar %}
                   <form method="post" action="{% url 'tickets:cancelar_prorroga' ticket.pk prorroga.pk %}" class="form">
-                    {% csrf_token %}
+                    {% csrf_token %}{% if next_url %}<input type="hidden" name="next" value="{{ next_url }}">{% endif %}
                     <button type="submit" class="btn btn--ghost btn--sm">Cancelar solicitud</button>
                   </form>
                 {% endif %}

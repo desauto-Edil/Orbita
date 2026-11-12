@@ -45,6 +45,7 @@ from apps.tickets.tests import (
     _MediaAisladaMixin,
     _otorgar_permiso,
 )
+from apps.core.pruebas import persona
 
 # PNG 1×1 válido (el logo se valida por contenido).
 PNG = base64.b64decode(
@@ -62,7 +63,7 @@ class _Base(_EscenarioAtencionMixin):
             self._preparar_escenario()
         Notificacion.objects.all().delete()
         for usuario in (self.solicitante, self.responsable_directo, self.miembro_equipo, self.gestor_area):
-            usuario.email = f"{usuario.username}@edilandina.test"
+            usuario.email = usuario.email.replace("@pruebas.orbita", "@edilandina.test")
             usuario.save(update_fields=["email"])
         self._encolar = mock.patch.object(correo, "encolar", lambda notificaciones: None)
         self._encolar.start()
@@ -230,7 +231,9 @@ class DespachoTests(_Base, TestCase):
 
     def test_catalogo_lo_que_exige_accion_siempre_va_por_correo(self):
         self.assertTrue(catalogo.correo_por_defecto("APROBACION_TURNO", {"APROBACION_TURNO": False}))
-        self.assertFalse(catalogo.correo_por_defecto("COMENTARIO"))
+        # Un mensaje de la conversación sí va por correo, pero diferido y solo si sigue sin leerse (`correo_conversacion`).
+        self.assertTrue(catalogo.correo_por_defecto("COMENTARIO"))
+        self.assertFalse(catalogo.correo_por_defecto("COMENTARIO", {"COMENTARIO": False}))
 
 
 # --- Correo -------------------------------------------------------------------------------------------------
@@ -318,7 +321,7 @@ class CentroTests(_Base, TestCase):
         despacho.entregar([despacho.Aviso(usuario=self.responsable_directo, clave="COMENTARIO", ticket=self.ticket)])
         self.mia = Notificacion.objects.get(destinatario=self.solicitante)
         self.ajena = Notificacion.objects.get(destinatario=self.responsable_directo)
-        self.client.login(username=self.solicitante.username, password=CLAVE_PRUEBA)
+        self.client.force_login(self.solicitante)
 
     def test_cada_persona_ve_solo_las_suyas(self):
         respuesta = self.client.get(reverse("notificaciones:centro"))
@@ -361,10 +364,10 @@ class CentroTests(_Base, TestCase):
 class StudioNotificacionesTests(_Base, TestCase):
     def test_avisos_base_solo_guardan_cambios_y_no_apagan_lo_que_exige_accion(self):
         cfg.guardar_avisos_base(self.servicio, self.gestor_area, {
-            "TICKET_RESUELTO": False, "COMENTARIO": True, "TICKET_RADICADO": True, "INFORMACION_SOLICITADA": False,
+            "TICKET_RESUELTO": False, "COMENTARIO": False, "TICKET_RADICADO": True, "INFORMACION_SOLICITADA": False,
         })
         configuracion = ConfiguracionNotificacionesServicio.objects.get(servicio=self.servicio)
-        self.assertEqual(configuracion.correo_eventos, {"TICKET_RESUELTO": False, "COMENTARIO": True})
+        self.assertEqual(configuracion.correo_eventos, {"TICKET_RESUELTO": False, "COMENTARIO": False})
 
     def test_la_foto_se_congela_al_crear_el_ticket(self):
         cfg.guardar_avisos_base(self.servicio, self.gestor_area, {"TICKET_RESUELTO": False})
@@ -396,7 +399,7 @@ class StudioNotificacionesTests(_Base, TestCase):
 
     def test_la_seccion_aparece_en_el_studio(self):
         _otorgar_permiso(self.gestor_area, "catalogo.administrar")
-        self.client.login(username=self.gestor_area.username, password=CLAVE_PRUEBA)
+        self.client.force_login(self.gestor_area)
         respuesta = self.client.get(f"{reverse('core:disenador_servicio', args=[self.servicio.pk])}?tab=notificaciones")
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "Avisos base")

@@ -42,14 +42,12 @@ from apps.core.models import AsignacionRol, Equipo, MiembroEquipo, Permiso, Regi
 from apps.tareas.autorizacion import (
     PERMISO_CONSULTAR,
     PERMISO_GESTIONAR,
-    delegado_actual,
     es_responsable_actual,
     puede_asignar_tarea,
     puede_comentar_tarea,
     puede_completar_tarea,
     puede_consultar_tarea,
     puede_crear_subtarea,
-    puede_delegar_tarea,
     puede_iniciar_tarea,
     puede_reasignar_tarea,
     puede_tomar_tarea,
@@ -61,7 +59,7 @@ from apps.tareas.consultas import (
     tareas_vencidas,
     tareas_visibles_para,
 )
-from apps.tareas.models import AdjuntoTarea, ComentarioTarea, DelegacionTarea, HistorialTarea, Tarea
+from apps.tareas.models import AdjuntoTarea, ComentarioTarea, HistorialTarea, Tarea
 from apps.tareas.operaciones import (
     adjuntar_evidencia_tarea,
     asignar_tarea,
@@ -69,11 +67,11 @@ from apps.tareas.operaciones import (
     completar_tarea,
     crear_subtarea,
     crear_tarea,
-    delegar_tarea,
     iniciar_tarea,
     reasignar_tarea,
     tomar_tarea,
 )
+from apps.core.pruebas import persona
 
 Usuario = get_user_model()
 CLAVE_PRUEBA = "Clave-Segura-123"
@@ -81,7 +79,7 @@ CLAVE_PRUEBA = "Clave-Segura-123"
 
 def _otorgar_permiso(usuario, codigo):
     permiso, _ = Permiso.objects.get_or_create(codigo=codigo, defaults={"nombre": codigo})
-    rol = RolFuncional.objects.create(nombre=f"Rol {codigo} {usuario.username}")
+    rol = RolFuncional.objects.create(nombre=f"Rol {codigo} {usuario.email}")
     RolPermiso.objects.create(rol=rol, permiso=permiso)
     return AsignacionRol.objects.create(usuario=usuario, rol=rol, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL)
 
@@ -96,7 +94,7 @@ class ModeloTareaTests(TestCase):
     def test_origen_sistema_sin_creador_es_invalido(self):
         with self.assertRaises(IntegrityError):
             with transaction.atomic():
-                Tarea.objects.create(titulo="x", origen=Tarea.Origen.SISTEMA, creada_por=Usuario.objects.create_user("u1", password=CLAVE_PRUEBA))
+                Tarea.objects.create(titulo="x", origen=Tarea.Origen.SISTEMA, creada_por=Usuario.objects.create_user("u1@pruebas.orbita"))
 
     def test_subtarea_no_puede_tener_otra_subtarea(self):
         padre = _crear_tarea_simple(titulo="Padre", permite_subtareas=True)
@@ -112,7 +110,7 @@ class ModeloTareaTests(TestCase):
 
 class CrearTareaTests(TestCase):
     def test_crear_tarea_independiente_manual(self):
-        actor = Usuario.objects.create_user("creador1", password=CLAVE_PRUEBA)
+        actor = Usuario.objects.create_user("creador1@pruebas.orbita")
         tarea = crear_tarea(titulo="Tarea manual", creada_por=actor, origen=Tarea.Origen.MANUAL)
         self.assertEqual(tarea.estado, Tarea.Estado.PENDIENTE)
         self.assertEqual(tarea.creada_por_id, actor.id)
@@ -122,12 +120,12 @@ class CrearTareaTests(TestCase):
         self.assertIsNone(tarea.creada_por_id)
 
     def test_crear_tarea_sistema_con_creador_falla(self):
-        actor = Usuario.objects.create_user("creador2", password=CLAVE_PRUEBA)
+        actor = Usuario.objects.create_user("creador2@pruebas.orbita")
         with self.assertRaises(ValueError):
             crear_tarea(titulo="x", origen=Tarea.Origen.SISTEMA, creada_por=actor)
 
     def test_crear_tarea_audita_creacion(self):
-        actor = Usuario.objects.create_user("creador3", password=CLAVE_PRUEBA)
+        actor = Usuario.objects.create_user("creador3@pruebas.orbita")
         tarea = crear_tarea(titulo="Tarea auditada", creada_por=actor)
         from django.contrib.contenttypes.models import ContentType
 
@@ -140,9 +138,9 @@ class CrearTareaTests(TestCase):
 
 class AsignacionTests(TestCase):
     def setUp(self):
-        self.gestor = Usuario.objects.create_user("gestor1", password=CLAVE_PRUEBA)
+        self.gestor = Usuario.objects.create_user("gestor1@pruebas.orbita")
         _otorgar_permiso(self.gestor, PERMISO_GESTIONAR)
-        self.ejecutor = Usuario.objects.create_user("ejecutor1", password=CLAVE_PRUEBA)
+        self.ejecutor = Usuario.objects.create_user("ejecutor1@pruebas.orbita")
         self.equipo = Equipo.objects.create(nombre="Equipo A")
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.ejecutor)
 
@@ -158,7 +156,7 @@ class AsignacionTests(TestCase):
 
     def test_tomar_tarea_sin_relacion_ni_permiso_falla(self):
         tarea = _crear_tarea_simple()
-        extrano = Usuario.objects.create_user("extrano1", password=CLAVE_PRUEBA)
+        extrano = Usuario.objects.create_user("extrano1@pruebas.orbita")
         with self.assertRaises(PermissionDenied):
             tomar_tarea(tarea, extrano)
 
@@ -178,13 +176,13 @@ class AsignacionTests(TestCase):
             asignar_tarea(tarea, self.ejecutor, usuario=self.ejecutor)
 
     def test_reasignar_tarea_por_gestor(self):
-        otro = Usuario.objects.create_user("otro1", password=CLAVE_PRUEBA)
+        otro = Usuario.objects.create_user("otro1@pruebas.orbita")
         tarea = _crear_tarea_simple(usuario_responsable=self.ejecutor)
         tarea = reasignar_tarea(tarea, self.gestor, usuario=otro)
         self.assertEqual(tarea.usuario_responsable_id, otro.id)
 
     def test_reasignar_tarea_por_responsable_actual(self):
-        otro = Usuario.objects.create_user("otro2", password=CLAVE_PRUEBA)
+        otro = Usuario.objects.create_user("otro2@pruebas.orbita")
         tarea = _crear_tarea_simple(usuario_responsable=self.ejecutor)
         tarea = reasignar_tarea(tarea, self.ejecutor, usuario=otro)
         self.assertEqual(tarea.usuario_responsable_id, otro.id)
@@ -204,7 +202,7 @@ class AsignacionTests(TestCase):
         asignar_tarea(tarea2, self.gestor, usuario=self.ejecutor)
         self.assertTrue(tarea2.historial.filter(tipo_evento=HistorialTarea.TipoEvento.ASIGNADA).exists())
 
-        otro = Usuario.objects.create_user("otro3", password=CLAVE_PRUEBA)
+        otro = Usuario.objects.create_user("otro3@pruebas.orbita")
         reasignar_tarea(tarea2, self.gestor, usuario=otro)
         self.assertTrue(tarea2.historial.filter(tipo_evento=HistorialTarea.TipoEvento.REASIGNADA).exists())
 
@@ -220,87 +218,9 @@ class AsignacionTests(TestCase):
         self.assertTrue(existe)
 
 
-class DelegacionTests(TestCase):
-    def setUp(self):
-        self.responsable = Usuario.objects.create_user("resp1", password=CLAVE_PRUEBA)
-        self.delegado = Usuario.objects.create_user("deleg1", password=CLAVE_PRUEBA)
-        self.tarea = _crear_tarea_simple(usuario_responsable=self.responsable)
-        self.ahora = timezone.now()
-
-    def test_delegar_no_modifica_responsable_formal(self):
-        delegar_tarea(
-            self.tarea, self.responsable, delegado_a=self.delegado,
-            desde=self.ahora, hasta=self.ahora + timedelta(hours=1),
-        )
-        self.tarea.refresh_from_db()
-        self.assertEqual(self.tarea.usuario_responsable_id, self.responsable.id)
-
-    def test_desde_debe_ser_menor_que_hasta(self):
-        with self.assertRaises(ValidationError):
-            delegar_tarea(
-                self.tarea, self.responsable, delegado_a=self.delegado,
-                desde=self.ahora, hasta=self.ahora - timedelta(hours=1),
-            )
-
-    def test_no_se_puede_delegar_al_propio_responsable(self):
-        with self.assertRaises(ValidationError):
-            delegar_tarea(
-                self.tarea, self.responsable, delegado_a=self.responsable,
-                desde=self.ahora, hasta=self.ahora + timedelta(hours=1),
-            )
-
-    def test_solapamiento_de_delegaciones_activas_es_invalido(self):
-        delegar_tarea(
-            self.tarea, self.responsable, delegado_a=self.delegado,
-            desde=self.ahora, hasta=self.ahora + timedelta(hours=2),
-        )
-        otro_delegado = Usuario.objects.create_user("deleg2", password=CLAVE_PRUEBA)
-        with self.assertRaises(ValidationError):
-            delegar_tarea(
-                self.tarea, self.responsable, delegado_a=otro_delegado,
-                desde=self.ahora + timedelta(hours=1), hasta=self.ahora + timedelta(hours=3),
-            )
-
-    def test_delegacion_no_solapada_es_valida(self):
-        delegar_tarea(
-            self.tarea, self.responsable, delegado_a=self.delegado,
-            desde=self.ahora, hasta=self.ahora + timedelta(hours=1),
-        )
-        otro_delegado = Usuario.objects.create_user("deleg3", password=CLAVE_PRUEBA)
-        delegacion2 = delegar_tarea(
-            self.tarea, self.responsable, delegado_a=otro_delegado,
-            desde=self.ahora + timedelta(hours=1), hasta=self.ahora + timedelta(hours=2),
-        )
-        self.assertEqual(delegacion2.delegado_a_id, otro_delegado.id)
-
-    def test_delegado_puede_actuar_durante_vigencia(self):
-        delegar_tarea(
-            self.tarea, self.responsable, delegado_a=self.delegado,
-            desde=self.ahora, hasta=self.ahora + timedelta(hours=1),
-        )
-        self.assertTrue(es_responsable_actual(self.delegado, self.tarea))
-        self.assertTrue(puede_completar_tarea(self.delegado, self.tarea))
-        self.assertEqual(delegado_actual(self.tarea).id, self.delegado.id)
-
-    def test_delegado_no_puede_actuar_fuera_de_vigencia(self):
-        delegar_tarea(
-            self.tarea, self.responsable, delegado_a=self.delegado,
-            desde=self.ahora - timedelta(hours=2), hasta=self.ahora - timedelta(hours=1),
-        )
-        self.assertFalse(es_responsable_actual(self.delegado, self.tarea))
-        self.assertIsNone(delegado_actual(self.tarea))
-
-    def test_historial_registra_delegada(self):
-        delegar_tarea(
-            self.tarea, self.responsable, delegado_a=self.delegado,
-            desde=self.ahora, hasta=self.ahora + timedelta(hours=1),
-        )
-        self.assertTrue(self.tarea.historial.filter(tipo_evento=HistorialTarea.TipoEvento.DELEGADA).exists())
-
-
 class IniciarCompletarTests(TestCase):
     def setUp(self):
-        self.responsable = Usuario.objects.create_user("resp2", password=CLAVE_PRUEBA)
+        self.responsable = Usuario.objects.create_user("resp2@pruebas.orbita")
 
     def test_flujo_pendiente_en_progreso_completada(self):
         tarea = _crear_tarea_simple(usuario_responsable=self.responsable)
@@ -323,14 +243,14 @@ class IniciarCompletarTests(TestCase):
 
     def test_iniciar_por_quien_no_es_responsable_falla(self):
         tarea = _crear_tarea_simple(usuario_responsable=self.responsable)
-        extrano = Usuario.objects.create_user("extrano2", password=CLAVE_PRUEBA)
+        extrano = Usuario.objects.create_user("extrano2@pruebas.orbita")
         with self.assertRaises(PermissionDenied):
             iniciar_tarea(tarea, extrano)
 
     def test_completar_por_quien_solo_tiene_gestionar_falla(self):
         """`tareas.gestionar` no permite completar trabajo ajeno
         (instrucción explícita)."""
-        gestor = Usuario.objects.create_user("gestor2", password=CLAVE_PRUEBA)
+        gestor = Usuario.objects.create_user("gestor2@pruebas.orbita")
         _otorgar_permiso(gestor, PERMISO_GESTIONAR)
         tarea = _crear_tarea_simple(usuario_responsable=self.responsable)
         with self.assertRaises(PermissionDenied):
@@ -354,7 +274,7 @@ class IniciarCompletarTests(TestCase):
 
 class SubtareaTests(TestCase):
     def setUp(self):
-        self.responsable = Usuario.objects.create_user("resp3", password=CLAVE_PRUEBA)
+        self.responsable = Usuario.objects.create_user("resp3@pruebas.orbita")
 
     def test_crear_subtarea_permitida(self):
         padre = _crear_tarea_simple(usuario_responsable=self.responsable, permite_subtareas=True)
@@ -391,7 +311,7 @@ class SubtareaTests(TestCase):
 
     def test_subtarea_tiene_responsable_y_estado_propios(self):
         padre = _crear_tarea_simple(usuario_responsable=self.responsable, permite_subtareas=True)
-        otro = Usuario.objects.create_user("otro4", password=CLAVE_PRUEBA)
+        otro = Usuario.objects.create_user("otro4@pruebas.orbita")
         hija = crear_subtarea(padre, self.responsable, titulo="Hija", usuario_responsable=otro)
         self.assertNotEqual(hija.usuario_responsable_id, padre.usuario_responsable_id)
         hija = iniciar_tarea(hija, otro)
@@ -415,7 +335,7 @@ class ComentarioEvidenciaTests(TestCase):
         super().tearDownClass()
 
     def setUp(self):
-        self.responsable = Usuario.objects.create_user("resp4", password=CLAVE_PRUEBA)
+        self.responsable = Usuario.objects.create_user("resp4@pruebas.orbita")
         self.tarea = _crear_tarea_simple(usuario_responsable=self.responsable)
 
     def test_comentar_tarea_por_responsable(self):
@@ -423,7 +343,7 @@ class ComentarioEvidenciaTests(TestCase):
         self.assertEqual(comentario.autor_id, self.responsable.id)
 
     def test_comentar_tarea_sin_relacion_falla(self):
-        extrano = Usuario.objects.create_user("extrano3", password=CLAVE_PRUEBA)
+        extrano = Usuario.objects.create_user("extrano3@pruebas.orbita")
         with self.assertRaises(PermissionDenied):
             comentar_tarea(self.tarea, extrano, "Intento no autorizado")
 
@@ -461,7 +381,7 @@ class ComentarioEvidenciaTests(TestCase):
 
 class ConsultasTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user("consulta1", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("consulta1@pruebas.orbita")
         self.equipo = Equipo.objects.create(nombre="Equipo Consultas")
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.usuario)
 
@@ -515,7 +435,7 @@ class ConcurrenciaCompletarTareaTests(TransactionTestCase):
     Postgres) que `apps.workflows.tests.ConcurrenciaReanudarInstanciaTests`."""
 
     def setUp(self):
-        self.responsable = Usuario.objects.create_user("concurrencia_tareas", password=CLAVE_PRUEBA)
+        self.responsable = Usuario.objects.create_user("concurrencia_tareas@pruebas.orbita")
         self.tarea = _crear_tarea_simple(usuario_responsable=self.responsable)
 
     def test_doble_completar_concurrente_solo_uno_avanza(self):
@@ -558,7 +478,7 @@ class ConcurrenciaCompletarTareaTests(TransactionTestCase):
 
 def _crear_tarea_con_responsable(**kwargs):
     responsable = kwargs.pop("usuario_responsable", None) or Usuario.objects.create_user(
-        f"resp_{Usuario.objects.count()}", password=CLAVE_PRUEBA
+        f"resp_{Usuario.objects.count()}@pruebas.orbita",
     )
     tarea = _crear_tarea_simple(usuario_responsable=responsable, **kwargs)
     return tarea, responsable
@@ -578,93 +498,55 @@ class AutenticacionRequeridaTests(TestCase):
 
 
 class BandejaViewTests(TestCase):
+    """Hay una sola vista de trabajo: la bandeja de tareas se retiró y su URL lleva a Mi trabajo."""
+
     def setUp(self):
-        self.usuario = Usuario.objects.create_user("bandeja1", password=CLAVE_PRUEBA)
-        self.equipo = Equipo.objects.create(nombre="Equipo bandeja")
-        MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.usuario)
-        self.client.login(username="bandeja1", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("bandeja1@pruebas.orbita")
+        self.client.force_login(persona("bandeja1@pruebas.orbita"))
 
-    def test_bandeja_renderiza_y_filtra_solo_asignadas(self):
-        mia = _crear_tarea_simple(titulo="Mía", usuario_responsable=self.usuario)
-        ajena = _crear_tarea_simple(titulo="Ajena")
+    def test_la_bandeja_de_tareas_redirige_a_mi_trabajo(self):
         respuesta = self.client.get(reverse("tareas:lista"))
-        self.assertEqual(respuesta.status_code, 200)
-        ids = {fila["tarea"].id for fila in respuesta.context["filas"]}
-        self.assertIn(mia.id, ids)
-        self.assertNotIn(ajena.id, ids)
-
-    def test_bandeja_tab_disponibles_usa_consulta_existente(self):
-        disponible = _crear_tarea_simple(titulo="Disponible", equipo_responsable=self.equipo)
-        respuesta = self.client.get(reverse("tareas:lista") + "?tab=disponibles")
-        self.assertEqual(respuesta.context["tab"], "disponibles")
-        ids = {fila["tarea"].id for fila in respuesta.context["filas"]}
-        self.assertIn(disponible.id, ids)
-
-    def test_bandeja_empty_state(self):
-        respuesta = self.client.get(reverse("tareas:lista"))
-        self.assertContains(respuesta, "No tienes tareas asignadas.")
-
-    def test_vencimiento_se_presenta_correctamente(self):
-        vencida = _crear_tarea_simple(
-            titulo="Vencida", usuario_responsable=self.usuario, fecha_limite=timezone.now() - timedelta(days=1)
-        )
-        vigente = _crear_tarea_simple(
-            titulo="Vigente", usuario_responsable=self.usuario, fecha_limite=timezone.now() + timedelta(days=1)
-        )
-        respuesta = self.client.get(reverse("tareas:lista"))
-        por_id = {fila["tarea"].id: fila["vencida"] for fila in respuesta.context["filas"]}
-        self.assertTrue(por_id[vencida.id])
-        self.assertFalse(por_id[vigente.id])
+        self.assertRedirects(respuesta, reverse("core:mi_trabajo"), fetch_redirect_response=False)
 
 
 class DetalleViewTests(TestCase):
+    """El detalle de una tarea ya no es una página: lleva al espacio de su ticket (o a Mi trabajo si no tiene ticket),
+    con la misma autorización de objeto de siempre."""
+
     def setUp(self):
-        self.responsable = Usuario.objects.create_user("detalle_resp", password=CLAVE_PRUEBA)
-        self.ajeno = Usuario.objects.create_user("detalle_ajeno", password=CLAVE_PRUEBA)
+        self.responsable = Usuario.objects.create_user("detalle_resp@pruebas.orbita")
+        self.ajeno = Usuario.objects.create_user("detalle_ajeno@pruebas.orbita")
         self.tarea = _crear_tarea_simple(usuario_responsable=self.responsable)
 
-    def test_detalle_autorizado_para_responsable(self):
-        self.client.login(username="detalle_resp", password=CLAVE_PRUEBA)
+    def test_detalle_redirige_para_el_responsable(self):
+        self.client.force_login(persona("detalle_resp@pruebas.orbita"))
         respuesta = self.client.get(reverse("tareas:detalle", args=[self.tarea.pk]))
-        self.assertEqual(respuesta.status_code, 200)
+        self.assertRedirects(respuesta, reverse("core:mi_trabajo"), fetch_redirect_response=False)
 
     def test_detalle_no_autorizado_devuelve_403(self):
-        self.client.login(username="detalle_ajeno", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("detalle_ajeno@pruebas.orbita"))
         respuesta = self.client.get(reverse("tareas:detalle", args=[self.tarea.pk]))
         self.assertEqual(respuesta.status_code, 403)
 
-    def test_acciones_ocultas_cuando_no_corresponden(self):
-        """Un usuario con visibilidad amplia (`tareas.consultar`) pero sin
-        relación operacional real: ve el detalle, pero ningún `puede_*`
-        de acción es verdadero — ni un botón se renderiza sin el respaldo
-        real de autorización."""
-        observador = Usuario.objects.create_user("detalle_observador", password=CLAVE_PRUEBA)
-        _otorgar_permiso(observador, PERMISO_CONSULTAR)
-        self.client.login(username="detalle_observador", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tareas:detalle", args=[self.tarea.pk]))
-        self.assertEqual(respuesta.status_code, 200)
-        self.assertFalse(respuesta.context["puede_tomar"])
-        self.assertFalse(respuesta.context["puede_iniciar"])
-        self.assertFalse(respuesta.context["puede_completar"])
-        self.assertFalse(respuesta.context["puede_asignar"])
-        self.assertFalse(respuesta.context["puede_reasignar"])
-        self.assertFalse(respuesta.context["puede_delegar"])
-        self.assertFalse(respuesta.context["puede_comentar"])
-        self.assertNotContains(respuesta, 'action="' + reverse("tareas:completar", args=[self.tarea.pk]))
+    def test_la_vista_previa_ya_no_existe(self):
+        from django.urls import NoReverseMatch
+
+        with self.assertRaises(NoReverseMatch):
+            reverse("tareas:vista_previa", args=[self.tarea.pk])
 
 
 class AccionesViewTests(TestCase):
     def setUp(self):
-        self.gestor = Usuario.objects.create_user("accion_gestor", password=CLAVE_PRUEBA)
+        self.gestor = Usuario.objects.create_user("accion_gestor@pruebas.orbita")
         _otorgar_permiso(self.gestor, PERMISO_GESTIONAR)
         self.equipo = Equipo.objects.create(nombre="Equipo acciones")
-        self.miembro = Usuario.objects.create_user("accion_miembro", password=CLAVE_PRUEBA)
+        self.miembro = Usuario.objects.create_user("accion_miembro@pruebas.orbita")
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.miembro)
-        self.ajeno = Usuario.objects.create_user("accion_ajeno", password=CLAVE_PRUEBA)
+        self.ajeno = Usuario.objects.create_user("accion_ajeno@pruebas.orbita")
 
     def test_tomar_exitoso_por_miembro_de_equipo(self):
         tarea = _crear_tarea_simple(equipo_responsable=self.equipo)
-        self.client.login(username="accion_miembro", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("accion_miembro@pruebas.orbita"))
         respuesta = self.client.post(reverse("tareas:tomar", args=[tarea.pk]))
         self.assertEqual(respuesta.status_code, 302)
         self.assertEqual(respuesta.url, reverse("tareas:detalle", args=[tarea.pk]))
@@ -673,7 +555,7 @@ class AccionesViewTests(TestCase):
 
     def test_tomar_no_autorizado_devuelve_403(self):
         tarea = _crear_tarea_simple(equipo_responsable=self.equipo)
-        self.client.login(username="accion_ajeno", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("accion_ajeno@pruebas.orbita"))
         respuesta = self.client.post(reverse("tareas:tomar", args=[tarea.pk]))
         self.assertEqual(respuesta.status_code, 403)
         tarea.refresh_from_db()
@@ -685,13 +567,13 @@ class AccionesViewTests(TestCase):
         que "esconder"), es rechazado igual — la autorización no depende
         de la vista GET."""
         tarea = _crear_tarea_simple(usuario_responsable=self.miembro)
-        self.client.login(username="accion_ajeno", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("accion_ajeno@pruebas.orbita"))
         respuesta = self.client.post(reverse("tareas:completar", args=[tarea.pk]))
         self.assertEqual(respuesta.status_code, 403)
 
     def test_iniciar_exitoso(self):
         tarea = _crear_tarea_simple(usuario_responsable=self.miembro)
-        self.client.login(username="accion_miembro", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("accion_miembro@pruebas.orbita"))
         respuesta = self.client.post(reverse("tareas:iniciar", args=[tarea.pk]))
         self.assertEqual(respuesta.status_code, 302)
         tarea.refresh_from_db()
@@ -699,7 +581,7 @@ class AccionesViewTests(TestCase):
 
     def test_completar_exitoso_sin_vinculo_workflow(self):
         tarea = _crear_tarea_simple(usuario_responsable=self.miembro)
-        self.client.login(username="accion_miembro", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("accion_miembro@pruebas.orbita"))
         respuesta = self.client.post(reverse("tareas:completar", args=[tarea.pk]))
         self.assertEqual(respuesta.status_code, 302)
         tarea.refresh_from_db()
@@ -708,7 +590,7 @@ class AccionesViewTests(TestCase):
 
     def test_asignar_exitoso(self):
         tarea = _crear_tarea_simple()
-        self.client.login(username="accion_gestor", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("accion_gestor@pruebas.orbita"))
         respuesta = self.client.post(reverse("tareas:asignar", args=[tarea.pk]), {"usuario": self.miembro.pk})
         self.assertEqual(respuesta.status_code, 302)
         tarea.refresh_from_db()
@@ -716,40 +598,23 @@ class AccionesViewTests(TestCase):
 
     def test_reasignar_exitoso(self):
         tarea = _crear_tarea_simple(usuario_responsable=self.miembro)
-        otro = Usuario.objects.create_user("accion_otro", password=CLAVE_PRUEBA)
-        self.client.login(username="accion_gestor", password=CLAVE_PRUEBA)
+        otro = Usuario.objects.create_user("accion_otro@pruebas.orbita")
+        self.client.force_login(persona("accion_gestor@pruebas.orbita"))
         respuesta = self.client.post(reverse("tareas:reasignar", args=[tarea.pk]), {"usuario": otro.pk})
         self.assertEqual(respuesta.status_code, 302)
         tarea.refresh_from_db()
         self.assertEqual(tarea.usuario_responsable_id, otro.id)
 
-    def test_delegar_exitoso(self):
-        tarea = _crear_tarea_simple(usuario_responsable=self.miembro)
-        delegado = Usuario.objects.create_user("accion_delegado", password=CLAVE_PRUEBA)
-        self.client.login(username="accion_miembro", password=CLAVE_PRUEBA)
-        desde = timezone.now() + timedelta(hours=1)
-        hasta = desde + timedelta(days=1)
-        respuesta = self.client.post(
-            reverse("tareas:delegar", args=[tarea.pk]),
-            {
-                "delegado_a": delegado.pk,
-                "desde": desde.strftime("%Y-%m-%dT%H:%M"),
-                "hasta": hasta.strftime("%Y-%m-%dT%H:%M"),
-            },
-        )
-        self.assertEqual(respuesta.status_code, 302)
-        self.assertTrue(DelegacionTarea.objects.filter(tarea=tarea, delegado_a=delegado).exists())
-
     def test_comentario_exitoso(self):
         tarea = _crear_tarea_simple(usuario_responsable=self.miembro)
-        self.client.login(username="accion_miembro", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("accion_miembro@pruebas.orbita"))
         respuesta = self.client.post(reverse("tareas:comentar", args=[tarea.pk]), {"contenido": "Avance registrado."})
         self.assertEqual(respuesta.status_code, 302)
         self.assertTrue(ComentarioTarea.objects.filter(tarea=tarea, contenido="Avance registrado.").exists())
 
     def test_evidencia_exitosa(self):
         tarea = _crear_tarea_simple(usuario_responsable=self.miembro)
-        self.client.login(username="accion_miembro", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("accion_miembro@pruebas.orbita"))
         archivo = SimpleUploadedFile("evidencia.txt", b"contenido", content_type="text/plain")
         respuesta = self.client.post(reverse("tareas:adjuntar_evidencia", args=[tarea.pk]), {"archivo": archivo})
         self.assertEqual(respuesta.status_code, 302)
@@ -760,7 +625,7 @@ class AccionesViewTests(TestCase):
         la entrada antes de tocar el dominio — la tarea permanece exactamente
         igual, sin excepción no controlada."""
         tarea = _crear_tarea_simple()
-        self.client.login(username="accion_gestor", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("accion_gestor@pruebas.orbita"))
         respuesta = self.client.post(reverse("tareas:asignar", args=[tarea.pk]), {})
         self.assertEqual(respuesta.status_code, 302)
         tarea.refresh_from_db()
@@ -768,18 +633,19 @@ class AccionesViewTests(TestCase):
 
     def test_prg_tras_operacion_exitosa(self):
         tarea = _crear_tarea_simple(equipo_responsable=self.equipo)
-        self.client.login(username="accion_miembro", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("accion_miembro@pruebas.orbita"))
         respuesta = self.client.post(reverse("tareas:tomar", args=[tarea.pk]), follow=True)
-        self.assertRedirects(respuesta, reverse("tareas:detalle", args=[tarea.pk]))
+        # Vuelve al detalle de la tarea, que ya no es una página: sin ticket lleva a Mi trabajo.
+        self.assertRedirects(respuesta, reverse("core:mi_trabajo"))
         mensajes = [str(m) for m in respuesta.context["messages"]]
         self.assertIn("Tarea tomada.", mensajes)
 
 
 class SubtareaViewTests(TestCase):
     def setUp(self):
-        self.responsable = Usuario.objects.create_user("subtarea_resp", password=CLAVE_PRUEBA)
+        self.responsable = Usuario.objects.create_user("subtarea_resp@pruebas.orbita")
         self.padre = _crear_tarea_simple(usuario_responsable=self.responsable, permite_subtareas=True)
-        self.client.login(username="subtarea_resp", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("subtarea_resp@pruebas.orbita"))
 
     def test_crear_subtarea_exitosa(self):
         respuesta = self.client.post(
@@ -800,19 +666,19 @@ class SubtareaViewTests(TestCase):
 
 class EvidenciaDescargaProtegidaTests(TestCase):
     def setUp(self):
-        self.responsable = Usuario.objects.create_user("descarga_resp", password=CLAVE_PRUEBA)
-        self.ajeno = Usuario.objects.create_user("descarga_ajeno", password=CLAVE_PRUEBA)
+        self.responsable = Usuario.objects.create_user("descarga_resp@pruebas.orbita")
+        self.ajeno = Usuario.objects.create_user("descarga_ajeno@pruebas.orbita")
         self.tarea = _crear_tarea_simple(usuario_responsable=self.responsable)
         archivo = SimpleUploadedFile("evidencia.txt", b"contenido-protegido", content_type="text/plain")
         self.adjunto = adjuntar_evidencia_tarea(self.responsable, archivo, tarea=self.tarea)
 
     def test_descarga_autorizada(self):
-        self.client.login(username="descarga_resp", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("descarga_resp@pruebas.orbita"))
         respuesta = self.client.get(reverse("tareas:descargar_evidencia", args=[self.adjunto.pk]))
         self.assertEqual(respuesta.status_code, 200)
 
     def test_descarga_no_autorizada_devuelve_403(self):
-        self.client.login(username="descarga_ajeno", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("descarga_ajeno@pruebas.orbita"))
         respuesta = self.client.get(reverse("tareas:descargar_evidencia", args=[self.adjunto.pk]))
         self.assertEqual(respuesta.status_code, 403)
 
@@ -866,15 +732,15 @@ def _crear_workflow_con_tarea_vinculada(actor, usuario_responsable, *, permite_s
 
 class CompletarTareaWorkflowIntegracionTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user("integracion_actor", password=CLAVE_PRUEBA)
-        self.responsable = Usuario.objects.create_user("integracion_resp", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("integracion_actor@pruebas.orbita")
+        self.responsable = Usuario.objects.create_user("integracion_resp@pruebas.orbita")
 
     def test_completar_tarea_principal_de_workflow_continua_la_instancia(self):
         instancia, tarea = _crear_workflow_con_tarea_vinculada(self.actor, self.responsable)
         instancia.refresh_from_db()
         self.assertEqual(instancia.estado, _InstanciaWorkflow.Estado.EN_ESPERA)
 
-        self.client.login(username="integracion_resp", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("integracion_resp@pruebas.orbita"))
         respuesta = self.client.post(reverse("tareas:completar", args=[tarea.pk]))
         self.assertEqual(respuesta.status_code, 302)
 
@@ -897,7 +763,7 @@ class CompletarTareaWorkflowIntegracionTests(TestCase):
             usuario_responsable=self.responsable,
         )
 
-        self.client.login(username="integracion_resp", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("integracion_resp@pruebas.orbita"))
         respuesta = self.client.post(reverse("tareas:completar", args=[subtarea.pk]))
         self.assertEqual(respuesta.status_code, 302)
 
@@ -957,6 +823,44 @@ class ListaVerificacionTareaTests(TestCase):
             RegistroAuditoria.objects.filter(modelo="tareas.itemverificaciontarea", object_id=item.pk).exists()
         )
 
+    def test_un_punto_con_pregunta_exige_su_conclusion_y_la_guarda(self):
+        from apps.tareas.operaciones import marcar_verificacion
+
+        tarea, responsable = _crear_tarea_con_responsable(
+            verificaciones=[("Esfuerzo estimado", True, "¿Cuánto tiempo estimas?")],
+        )
+        item = tarea.verificaciones.get()
+        self.assertEqual(item.pregunta, "¿Cuánto tiempo estimas?")
+        with self.assertRaisesMessage(ValidationError, "Escribe tu conclusión"):
+            marcar_verificacion(item, responsable, marcado=True, conclusion="  ")
+        item = marcar_verificacion(item, responsable, marcado=True, conclusion="Tres semanas")
+        self.assertTrue(item.marcado)
+        self.assertEqual(item.conclusion, "Tres semanas")
+        evento = tarea.historial.get(tipo_evento=HistorialTarea.TipoEvento.VERIFICACION)
+        self.assertEqual(evento.datos["conclusion"], "Tres semanas")
+        item = marcar_verificacion(item, responsable, marcado=False)
+        self.assertEqual(item.conclusion, "Tres semanas")  # desmarcar conserva lo escrito
+
+    def test_la_vista_guarda_la_conclusion_de_un_punto_sin_pregunta(self):
+        self.client.force_login(self.responsable)
+        self.client.post(
+            reverse("tareas:verificar", args=[self.tarea.pk, self.items[1].pk]),
+            {"marcado": "1", "conclusion": "Avisé por la Conversación"},
+        )
+        self.items[1].refresh_from_db()
+        self.assertTrue(self.items[1].marcado)
+        self.assertEqual(self.items[1].conclusion, "Avisé por la Conversación")
+
+    def test_la_delegacion_se_retiro(self):
+        from django.urls import NoReverseMatch
+
+        from apps.tareas import autorizacion, operaciones
+
+        with self.assertRaises(NoReverseMatch):
+            reverse("tareas:delegar", args=[self.tarea.pk])
+        self.assertFalse(hasattr(operaciones, "delegar_tarea"))
+        self.assertFalse(hasattr(autorizacion, "puede_delegar_tarea"))
+
     def test_desmarcar_y_repetir_el_mismo_valor_no_duplica(self):
         self._marcar(self.items[0])
         self._marcar(self.items[0])  # sin cambio
@@ -966,7 +870,7 @@ class ListaVerificacionTareaTests(TestCase):
         self.assertEqual(self.tarea.historial.filter(tipo_evento=HistorialTarea.TipoEvento.VERIFICACION).count(), 2)
 
     def test_solo_marca_quien_puede_completar(self):
-        otro = Usuario.objects.create_user("verif_otro", password=CLAVE_PRUEBA)
+        otro = Usuario.objects.create_user("verif_otro@pruebas.orbita")
         with self.assertRaises(PermissionDenied):
             self._marcar(self.items[0], actor=otro)
 
@@ -984,12 +888,8 @@ class ListaVerificacionTareaTests(TestCase):
         self.assertIsNone(tarea.fecha_limite)
         completar_tarea(tarea, responsable)  # no bloquea nada
 
-    def test_la_vista_muestra_y_marca_la_lista(self):
-        self.client.login(username=self.responsable.username, password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tareas:detalle", args=[self.tarea.pk]))
-        self.assertContains(respuesta, "Lista de verificación")
-        self.assertContains(respuesta, "Avisar al equipo")
-        self.assertTrue(respuesta.context["puede_marcar_verificacion"])
+    def test_la_vista_marca_la_lista(self):
+        self.client.force_login(self.responsable)
         url = reverse("tareas:verificar", args=[self.tarea.pk, self.items[0].pk])
         self.assertEqual(self.client.get(url).status_code, 405)
         self.client.post(url, {"marcado": "1"})
@@ -999,12 +899,12 @@ class ListaVerificacionTareaTests(TestCase):
     def test_la_vista_rechaza_un_item_de_otra_tarea_y_a_quien_no_puede_completar(self):
         otra, _ = _crear_tarea_con_responsable(verificaciones=[("Ajeno", True)])
         ajeno = otra.verificaciones.get()
-        self.client.login(username=self.responsable.username, password=CLAVE_PRUEBA)
+        self.client.force_login(self.responsable)
         self.assertEqual(
             self.client.post(reverse("tareas:verificar", args=[self.tarea.pk, ajeno.pk]), {"marcado": "1"}).status_code,
             404,
         )
-        intruso = Usuario.objects.create_user("verif_intruso", password=CLAVE_PRUEBA)
-        self.client.login(username=intruso.username, password=CLAVE_PRUEBA)
+        intruso = Usuario.objects.create_user("verif_intruso@pruebas.orbita")
+        self.client.force_login(intruso)
         url = reverse("tareas:verificar", args=[self.tarea.pk, self.items[0].pk])
         self.assertEqual(self.client.post(url, {"marcado": "1"}).status_code, 403)

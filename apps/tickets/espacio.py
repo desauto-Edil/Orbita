@@ -126,7 +126,7 @@ def relacion(usuario, ticket):
         responsable=es_responsable_actual(usuario, ticket),
         responsable_individual=ticket.usuario_responsable_id is not None and ticket.usuario_responsable_id == usuario.pk,
     )
-    # Tareas: solo las de relación directa (responsable, delegada, creadora o candidata a tomarla), no las que se
+    # Tareas: solo las de relación directa (responsable, creadora o candidata a tomarla), no las que se
     # ven por un permiso de supervisión global de tareas.
     tareas = list(
         vinculos.tareas_del_ticket(ticket)
@@ -151,7 +151,6 @@ def relacion(usuario, ticket):
             rel.gacetas.append({
                 "gaceta": gaceta,
                 "revisor": gaceta_aut.es_revisor(usuario, gaceta),
-                "aprobador": gaceta_aut.es_aprobador(usuario, gaceta),
                 "coordina": gaceta_aut.puede_coordinar(usuario, gaceta),
             })
     for parrilla in parrillas_de(ticket):
@@ -223,6 +222,14 @@ def _bloque_de_tarea(tarea):
         "instancia_etapa__bloque_operativo__fase", "instancia_etapa__instancia_workflow"
     ).first()
     return vinculo.instancia_etapa if vinculo is not None else None
+
+
+def es_primer_paso(ejecucion):
+    """¿`ejecucion` es el primer paso del flujo PRINCIPAL del ticket (ninguna ejecución anterior)?"""
+    instancia = ejecucion.instancia_workflow
+    if instancia.instancia_padre_id is not None:
+        return False
+    return not instancia.ejecuciones_etapa.filter(orden__lt=ejecucion.orden).exists()
 
 
 def _ejecucion_de_aprobacion(aprobacion):
@@ -313,6 +320,35 @@ def recorrido_de_item(elemento):
     }
 
 
+def siguiente_de_item(usuario, elemento):
+    """Después de la gaceta, qué sigue con un ítem (para mostrárselo a TODOS los que ven la pieza): el paso en el que
+    va su recorrido, su fecha (la de la actividad abierta: límite o prevista), quién la hace y —si `usuario` puede
+    hacerla ahora (p. ej. cualquier miembro del equipo que sube la evidencia)— la misión del espacio donde se hace.
+    `None` si el ítem no tiene recorrido. Solo lee; cada operación vuelve a autorizar."""
+    from apps.tareas import autorizacion as tarea_aut
+    from apps.workflows.models import TareaWorkflow
+
+    recorrido = recorrido_de_item(elemento)
+    if recorrido is None:
+        return None
+    hija = elemento.recorridos.order_by("-pk").first()
+    vinculo = (
+        TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow=hija)
+        .exclude(tarea__estado__in=Tarea.ESTADOS_CERRADOS)
+        .select_related("tarea__usuario_responsable", "tarea__equipo_responsable", "tarea__responde_por")
+        .order_by("-pk").first()
+    ) if hija is not None else None
+    tarea = vinculo.tarea if vinculo is not None else None
+    return {
+        "paso": recorrido["paso_actual"] or recorrido["estado"],
+        "terminado": recorrido["terminado"],
+        "estado": recorrido["estado"],
+        "fecha": (tarea.fecha_limite or tarea.fecha_prevista) if tarea is not None else None,
+        "responsable": _responsable_de_tarea(tarea) if tarea is not None else "",
+        "mision": f"tarea-{tarea.pk}" if tarea is not None and tarea_aut.puede_completar_tarea(usuario, tarea) else "",
+    }
+
+
 def confirmacion_de_item(usuario, elemento, hecho):
     """Mensaje tras una acción sobre un ítem: qué ocurrió, dónde quedó y quién continúa (leído del recorrido)."""
     elemento.refresh_from_db()
@@ -400,7 +436,28 @@ def _nombre(usuario):
 def _responsable_de_tarea(tarea):
     if tarea.usuario_responsable_id:
         return _nombre(tarea.usuario_responsable)
-    return tarea.equipo_responsable.nombre if tarea.equipo_responsable_id else ""
+    if not tarea.equipo_responsable_id:
+        return ""
+    if tarea.responde_por_id:
+        return f"{tarea.equipo_responsable.nombre} · responde {_nombre(tarea.responde_por)}"
+    return tarea.equipo_responsable.nombre
+
+
+def _gestion_de_tarea(usuario, tarea):
+    """Asignar la actividad (solo si aún no tiene responsable) y el formulario completo de subtarea, con las
+    autorizaciones y los formularios de `apps.tareas` (cada envío vuelve a autorizar en su operación). Reasignar no
+    se ofrece aquí: el ticket se reasigna en «Más» y lo pendiente del responsable pasa con él (2026-11-12)."""
+    from apps.tareas import autorizacion as tarea_aut
+    from apps.tareas.forms import AsignacionTareaForm, SubtareaForm
+
+    prefijo = f"t{tarea.pk}_%s"
+    puede_asignar = tarea_aut.puede_asignar_tarea(usuario, tarea)
+    puede_subtarea = tarea_aut.puede_crear_subtarea(usuario, tarea)
+    return {
+        "puede_asignar": puede_asignar,
+        "asignacion_form": AsignacionTareaForm(auto_id=prefijo) if puede_asignar else None,
+        "subtarea_form": SubtareaForm(auto_id=prefijo) if puede_subtarea else None,
+    }
 
 
 def _accion_tarea(usuario, ticket, tarea, origen):
@@ -409,7 +466,6 @@ def _accion_tarea(usuario, ticket, tarea, origen):
     from apps.tickets import parrilla as parrilla_ops
 
     puede_completar = tarea_aut.puede_completar_tarea(usuario, tarea)
-    puede_tomar_tarea = tarea_aut.puede_tomar_tarea(usuario, tarea)
     verificaciones = list(tarea.verificaciones.select_related("marcado_por").all())
     subtareas = list(tarea.subtareas.select_related("usuario_responsable", "equipo_responsable").all())
     evidencias = list(tarea.adjuntos.select_related("subido_por").all())
@@ -439,13 +495,17 @@ def _accion_tarea(usuario, ticket, tarea, origen):
         subtareas=subtareas,
         evidencias=evidencias,
         responsable=_responsable_de_tarea(tarea),
-        puede_tomar=puede_tomar_tarea,
+        # Una actividad del equipo no se «toma»: quien es del equipo ya puede subir la evidencia y completarla
+        # (`es_responsable_directo`); el espacio nunca ofrece «Tomar la actividad».
+        puede_tomar=False,
         puede_iniciar=tarea_aut.puede_iniciar_tarea(usuario, tarea),
         puede_completar=puede_completar,
         puede_comentar=tarea_aut.puede_comentar_tarea(usuario, tarea),
         puede_crear_subtarea=tarea_aut.puede_crear_subtarea(usuario, tarea),
         puede_marcar=puede_completar and tarea.estado in (Tarea.Estado.PENDIENTE, Tarea.Estado.EN_PROGRESO),
         origen=tipo_origen or "",
+        # Lo que antes solo se hacía en la página de la tarea (retirada: hay una sola vista de trabajo).
+        **_gestion_de_tarea(usuario, tarea),
     )
     if tarea.fecha_prevista:
         accion["informacion"].append(f"Fecha prevista: {timezone.localtime(tarea.fecha_prevista):%d/%m/%Y %H:%M}")
@@ -461,7 +521,19 @@ def _accion_tarea(usuario, ticket, tarea, origen):
         if item.obligatorio:
             accion["requisitos"].append({"texto": item.texto, "cumplido": item.pk not in pendientes_verificacion})
     if tarea.requiere_evidencia:
-        accion["requisitos"].append({"texto": "Adjuntar al menos una evidencia", "cumplido": tiene_evidencia(tarea)})
+        # LA EVIDENCIA ES EL CHECKLIST: si el ítem tiene una «Lista de evidencias», se suben sus pruebas punto por
+        # punto (en la ficha del ítem) y no un adjunto suelto de la actividad.
+        from apps.tickets.evidencias import checklists_de_elemento
+
+        listas = checklists_de_elemento(elemento) if elemento is not None else []
+        accion["evidencia_checklist"] = bool(listas)
+        if listas:
+            for lista in listas:
+                accion["requisitos"].append({
+                    "texto": f"{lista['campo'].etiqueta} ({lista['hechos']}/{lista['total']})", "cumplido": lista["completo"],
+                })
+        else:
+            accion["requisitos"].append({"texto": "Adjuntar al menos una evidencia", "cumplido": tiene_evidencia(tarea)})
     abiertas = [s for s in subtareas if s.estado not in Tarea.ESTADOS_CERRADOS]
     if abiertas:
         accion["requisitos"].append({
@@ -487,6 +559,10 @@ def _accion_tarea(usuario, ticket, tarea, origen):
                     accion["requisitos"].append({"texto": columnas[clave], "cumplido": columnas[clave] not in faltan})
         if not accion["que"] and bloque.descripcion:
             accion["que"] = bloque.descripcion
+        if elemento is None and not tarea.tarea_padre_id:
+            # El trabajo general del flujo parte de lo que se pidió: la misión trae la solicitud a la vista. En el
+            # PRIMER paso del flujo, abierta y como lo primero que hay que hacer («Revisa la solicitud»).
+            accion["revisar_solicitud"] = "primera" if es_primer_paso(ejecucion) else "consulta"
         if not tarea.tarea_padre_id:
             accion["despues"] = despues_de_bloque(bloque)
             accion["etiqueta_avance"] = etiqueta_de_avance(bloque)
@@ -502,14 +578,36 @@ def _accion_tarea(usuario, ticket, tarea, origen):
         accion["subtitulo"] = nombre_de_item(elemento)
         accion["recorrido_item"] = recorrido_de_item(elemento)
 
-    if puede_tomar_tarea and not puede_completar:
-        accion["impedimentos"].append("Esta tarea es del equipo: tómala para poder completarla.")
-    elif not puede_completar and tarea.estado not in Tarea.ESTADOS_CERRADOS:
+    if not puede_completar and tarea.estado not in Tarea.ESTADOS_CERRADOS:
         responsable = accion["responsable"]
         accion["impedimentos"].append(
             f"La atiende {responsable}." if responsable else "Todavía no tiene responsable."
         )
     return accion
+
+
+def _reasignacion_de_aprobacion(usuario, aprobacion):
+    from apps.aprobaciones.autorizacion import puede_reasignar_aprobacion
+    from apps.aprobaciones.forms import ReasignacionAprobacionForm
+
+    if not puede_reasignar_aprobacion(usuario, aprobacion):
+        return None
+    return ReasignacionAprobacionForm(auto_id=f"a{aprobacion.pk}_%s")
+
+
+def _publicacion_de_bloque(ejecucion):
+    from apps.catalogo.gacetas import publicacion_de
+    from apps.gacetas.models import GacetaTicket
+
+    if ejecucion is None or ejecucion.bloque_operativo_id is None:
+        return None
+    publicacion = publicacion_de(ejecucion.bloque_operativo.configuracion)
+    if publicacion is None:
+        return None
+    nombre = GacetaTicket.objects.filter(
+        ticket__instancia_workflow_id=ejecucion.instancia_workflow.raiz_id, clave=publicacion["gaceta"]
+    ).values_list("nombre", flat=True).first()
+    return {**publicacion, "nombre": nombre or "la gaceta de interesados", "dias": range(1, publicacion["dias_maximos"] + 1)}
 
 
 def _accion_aprobacion(usuario, ticket, aprobacion, origen):
@@ -525,9 +623,12 @@ def _accion_aprobacion(usuario, ticket, aprobacion, origen):
     participaciones = list(
         esquema.participaciones.select_related("aprobador_usuario", "aprobador_equipo").order_by("orden")
     )
+    cancelacion = getattr(esquema, "cancelacion", None)
     titulo = ejecucion.bloque_operativo.nombre if ejecucion is not None and ejecucion.bloque_operativo_id else (
         "Prórroga de la fecha objetivo" if prorroga else (
-            f"Gaceta «{item['gaceta'].nombre}»" if item and item.get("gaceta") else f"Aprobación #{aprobacion.pk}"
+            "Cancelación del ticket" if cancelacion is not None else (
+                f"Gaceta «{item['gaceta'].nombre}»" if item and item.get("gaceta") else f"Aprobación #{aprobacion.pk}"
+            )
         )
     )
     accion = _accion(
@@ -539,10 +640,16 @@ def _accion_aprobacion(usuario, ticket, aprobacion, origen):
         esquema=esquema,
         participaciones=participaciones,
         puede_decidir=puede,
-        form=aprobaciones_views._decision_form(aprobacion, es_prorroga=prorroga is not None) if puede else None,
+        form=aprobaciones_views._decision_form(
+            aprobacion, es_prorroga=prorroga is not None or cancelacion is not None
+        ) if puede else None,
+        # Reasignar la aprobación (antes solo en su página propia, retirada): misma autorización y formulario.
+        reasignacion_form=_reasignacion_de_aprobacion(usuario, aprobacion),
         prorroga=prorroga,
         entregable_revisado=entregable,
         item=item,
+        # «Publicar a los interesados» al aprobar este ítem (si el bloque lo ofrece): gaceta y días máximos.
+        publicacion=_publicacion_de_bloque(ejecucion) if puede else None,
     )
     if entregable is not None:
         accion["informacion"].append(f"Revisas el entregable «{entregable['nombre']}» ({entregable['tipo']}).")
@@ -559,6 +666,13 @@ def _accion_aprobacion(usuario, ticket, aprobacion, origen):
             pieza = pieza_de_gaceta(item["gaceta"], item["elemento"])
             item["valores"] = pieza["valores"]
             accion["item_archivos"] = pieza["archivos"]
+    if cancelacion is not None:
+        quien = cancelacion.solicitada_por
+        accion["que"] = (
+            f"{quien.nombre_visible} pidió cancelar este ticket. Mientras decides, "
+            "su trabajo está detenido."
+        )
+        accion["informacion"].append(f"Motivo: {cancelacion.motivo}")
     if prorroga is not None:
         accion["informacion"].append(
             f"Nueva fecha propuesta: {timezone.localtime(prorroga['prorroga'].nueva_fecha_solicitada):%d/%m/%Y}. "
@@ -578,6 +692,11 @@ def _accion_aprobacion(usuario, ticket, aprobacion, origen):
         ]
     elif prorroga is not None:
         accion["despues"] = ["Si apruebas, la fecha objetivo vigente del ticket pasa a la nueva fecha."]
+    elif cancelacion is not None:
+        accion["despues"] = [
+            "Si apruebas, el ticket se cancela y se detiene todo su trabajo (actividades, aprobaciones y gacetas).",
+            "Si rechazas, el ticket sigue como estaba y el trabajo continúa.",
+        ]
     return accion
 
 
@@ -596,7 +715,7 @@ def pieza_de_gaceta(gaceta, elemento):
     por_campo = {v.campo_id: v for v in elemento.valores.all()}
     valores, fecha = [], None
     for campo in columnas:
-        if campo.tipo == "ARCHIVO":
+        if campo.tipo in ("ARCHIVO", "CHECKLIST"):
             continue
         valor = por_campo.get(campo.pk)
         dia = None
@@ -610,31 +729,33 @@ def pieza_de_gaceta(gaceta, elemento):
     de_archivo = {c.pk for c in columnas if c.tipo == "ARCHIVO"}
     archivos = [a for a in parrilla_ops.archivos_de(elemento) if a.campo_elemento_id in de_archivo]
     portada = next((a for a in reversed(archivos) if clase_de(a.nombre_original) in ("imagen", "video")), None)
-    return {"valores": valores, "fecha": fecha, "archivos": archivos, "portada": portada}
+    # Las pruebas (listas de evidencias) se muestran siempre: son lo que los interesados vienen a ver después de la
+    # gaceta («ya se publicó»), aunque la columna no esté entre las visibles de la revisión.
+    from apps.tickets.evidencias import checklists_de_elemento
+
+    return {
+        "valores": valores, "fecha": fecha, "archivos": archivos, "portada": portada,
+        "evidencias": checklists_de_elemento(elemento),
+    }
 
 
 # Cómo se agrupan las tarjetas de una gaceta para filtrarlas (con muchas piezas).
 _GRUPOS_GACETA = (
-    ("pendiente", "Por revisar"), ("correccion", "En corrección"), ("aprobada", "Aprobadas"), ("cerrada", "Fuera"),
+    ("pendiente", "Por revisar"), ("correccion", "En corrección"), ("aprobada", "Aceptadas"), ("cerrada", "Fuera"),
 )
 
 
 def galeria_gaceta(usuario, grupo):
     """UX-4b — la misión de una gaceta como GALERÍA: una tarjeta por pieza con su portada y solo los datos
-    visibles, su estado en la gaceta, sus observaciones y, en la misma tarjeta, lo que la persona puede hacer con
-    ella ahora: observar (`gacetas:observar`) o decidir su aprobación de la ronda (`aprobaciones:decidir`). Cada
-    operación vuelve a autorizar; aquí solo se presenta."""
+    visibles, su estado en la gaceta, sus comentarios y, en la misma tarjeta, lo que la persona puede hacer con
+    ella ahora: comentar (`gacetas:observar`), reenviar su corrección o excluirla. REGLA DE ORO: en una gaceta nadie
+    aprueba, así que ninguna tarjeta ofrece decisiones. Cada operación vuelve a autorizar; aquí solo se presenta."""
     from apps.gacetas import autorizacion as gaceta_aut
     from apps.gacetas.consultas import presentables
     from apps.gacetas.models import ParticipacionItemGaceta
-    from apps.tickets.revision_piezas import salidas_de
 
     gaceta = grupo["gaceta"]
     coordina = gaceta_aut.puede_coordinar(usuario, gaceta)
-    decisiones = {
-        a["item"]["elemento"].pk: a for a in grupo["acciones"]
-        if a["tipo"] == "aprobacion" and a.get("form") is not None and a.get("item")
-    }
     Estado = ParticipacionItemGaceta.Estado
     tarjetas = []
     for participacion in (
@@ -642,9 +763,8 @@ def galeria_gaceta(usuario, grupo):
         .prefetch_related("observaciones__autor").order_by("elemento__numero")
     ):
         participacion.gaceta = gaceta
-        decision = decisiones.get(participacion.elemento_id)
         puede_observar = gaceta_aut.puede_observar(usuario, participacion)
-        if decision is not None or puede_observar:
+        if puede_observar:
             situacion = "pendiente"
         elif participacion.estado == Estado.EN_CORRECCION:
             situacion = "correccion"
@@ -660,30 +780,48 @@ def galeria_gaceta(usuario, grupo):
             "participacion": participacion,
             "elemento": participacion.elemento,
             "titulo": f"{participacion.elemento.parrilla.nombre_elemento or 'Ítem'} #{participacion.elemento.numero}",
+            "nombre": nombre_de_item(participacion.elemento),
             "estado": participacion.estado,
             "estado_texto": participacion.get_estado_display(),
             "situacion": situacion,
             "observaciones": observaciones,
             "puede_observar": puede_observar,
-            "decision": decision,
-            # UX-5: en el visor, Aprobar · Corregir · Eliminar (lo que la ronda admite); sin anotación en una gaceta.
-            "salidas": salidas_de(decision["form"]) if decision is not None else [],
+            "decision": None,  # nadie aprueba en una gaceta
+            "salidas": [],
             "anotable": False,
             "puede_corregir": gaceta_aut.puede_corregir(usuario, participacion),
             "puede_excluir": coordina and not participacion.es_final,
+            # Tras la gaceta (pieza aceptada), todos ven qué sigue: el paso, su fecha y las pruebas ya subidas.
+            "siguiente": (
+                siguiente_de_item(usuario, participacion.elemento) if participacion.estado == Estado.APROBADA else None
+            ),
             **pieza_de_gaceta(gaceta, participacion.elemento),
         })
     conteo = {clave: sum(1 for t in tarjetas if t["situacion"] == clave) for clave, _ in _GRUPOS_GACETA}
     return {
         "gaceta": gaceta,
         "tarjetas": tarjetas,
+        # Por el contenido: con algún audiovisual (imagen o video) cada pieza es una tarjeta con visor; sin ninguno
+        # (p. ej. un plan de trabajo) la gaceta es una lista compacta donde la información es la protagonista.
+        "modo": modo_de_revision(tarjetas),
         # UX-5: el menú «Coordinar» de la gaceta (sustituye a su página propia, ya retirada).
         "coordina": coordina,
         "presentables": presentables(gaceta) if coordina else [],
         "filtros": [{"clave": c, "texto": t, "cantidad": conteo[c]} for c, t in _GRUPOS_GACETA if conteo[c]],
         "conteo": conteo,
-        "por_hacer": sum(1 for t in tarjetas if t["decision"] is not None or t["puede_observar"]),
+        "por_hacer": sum(1 for t in tarjetas if t["puede_observar"]),
+        # «Estoy conforme»: con todos los interesados conformes la gaceta termina antes.
+        "conformidad": _conformidad_de(gaceta, usuario),
     }
+
+
+def _conformidad_de(gaceta, usuario):
+    from apps.gacetas.operaciones import estado_conformidad
+
+    if gaceta.estado != gaceta.Estado.ABIERTA:
+        return None
+    # TODAS las gacetas abiertas muestran «Estoy conforme» (2026-11-12).
+    return estado_conformidad(gaceta, usuario)
 
 
 def _gaceta_de_accion(accion):
@@ -696,7 +834,7 @@ def _gaceta_de_accion(accion):
 
 def gacetas_del_espacio(usuario, rel, acciones):
     """UX-4b — cada gaceta del ticket como ESPACIO DE COLABORACIÓN permanente: la ve todo el que la puede consultar
-    (revisores, aprobadores, coordinador, quien consulta el ticket; `rel.gacetas`), con TODAS sus piezas en
+    (revisores, coordinador, quien consulta el ticket; `rel.gacetas`), con TODAS sus piezas en
     cualquier estado, haya o no algo pendiente para la persona. Lo que le toque hacer (observar, decidir su ronda)
     aparece en la tarjeta de esa pieza. No existe una gaceta que aún no tiene piezas ni se ha abierto."""
     galerias = []
@@ -742,18 +880,18 @@ def _accion_gaceta(usuario, info):
         vence=gaceta.vence_revision_en,
         gaceta=gaceta,
         piezas=piezas,
-        que="Revisa cada pieza presentada y registra una observación si algo debe corregirse.",
+        que="Revisa cada pieza presentada y comenta lo que deba corregirse. En una gaceta nadie aprueba: al cerrar el "
+            "periodo queda aceptado lo que no tenga comentarios pendientes.",
     )
     if gaceta.vence_revision_en:
         accion["informacion"].append(
             f"El periodo de revisión vence el {timezone.localtime(gaceta.vence_revision_en):%d/%m/%Y %H:%M}."
         )
     accion["despues"] = [
-        "Una observación envía la pieza a corrección: su responsable recibe una tarea y, al reenviarla, vuelve a "
+        "Un comentario envía la pieza a corrección: su responsable recibe una tarea y, al reenviarla, vuelve a "
         "esta gaceta con una versión nueva.",
+        "Al cerrar el periodo, lo que no tenga comentarios pendientes queda aceptado.",
     ]
-    if info["aprobador"]:
-        accion["despues"].append("La decisión (aprobar, devolver, rechazar) se registra en tu aprobación de la pieza.")
     return accion
 
 
@@ -922,11 +1060,33 @@ def _acciones_solicitante(usuario, ticket):
     return acciones
 
 
+# Un ticket que ya no está activo (cerrado o cancelado) queda SOLO EN CONSULTA: el espacio no ofrece ninguna acción
+# ni formulario (decisión del usuario, 2026-11-11). Un RESUELTO sigue activo: su solicitante acepta u observa la
+# entrega y su responsable lo cierra o lo reabre. Las operaciones de dominio ya rechazan escribir en estos estados;
+# esto evita además ofrecer lo que el dominio no dejaría hacer.
+ESTADOS_SOLO_CONSULTA = (Ticket.Estado.CERRADO, Ticket.Estado.CANCELADO)
+
+
+def solo_consulta(ticket):
+    return ticket.estado in ESTADOS_SOLO_CONSULTA
+
+
 def acciones_de(usuario, ticket, rel, trabajo):
     """Todas las acciones que `usuario` puede realizar ahora en el ticket, en un orden estable: lo propio del
     ticket (tomar, atender, entregar), luego tareas, aprobaciones, gacetas y revisiones, y lo del solicitante."""
+    from apps.aprobaciones.autorizacion import puede_aprobar
     from apps.tareas import autorizacion as tarea_aut
+    from apps.tickets import cancelaciones
 
+    if solo_consulta(ticket):
+        return []
+    if cancelaciones.esta_congelado(ticket):
+        # Una cancelación por aprobar CONGELA el ticket: la única acción posible es la decisión de su aprobador.
+        return [
+            _accion_aprobacion(usuario, ticket, aprobacion, rel.origen_aprobaciones.get(aprobacion.pk))
+            for aprobacion in rel.aprobaciones
+            if hasattr(aprobacion.esquema, "cancelacion") and puede_aprobar(usuario, aprobacion)
+        ]
     acciones = []
     acciones.extend(_acciones_responsable(usuario, ticket, rel, trabajo))
     if ticket.estado == Ticket.Estado.EN_ATENCION:
@@ -940,14 +1100,12 @@ def acciones_de(usuario, ticket, rel, trabajo):
         if not (tarea_aut.es_responsable_actual(usuario, tarea) or tarea_aut.puede_tomar_tarea(usuario, tarea)):
             continue
         acciones.append(_accion_tarea(usuario, ticket, tarea, rel.origen_tareas.get(tarea.pk)))
-    from apps.aprobaciones.autorizacion import puede_aprobar
-
     for aprobacion in rel.aprobaciones:
         # Una aprobación secuencial que aún no le toca no es una acción (en la bandeja, «en seguimiento»).
         if puede_aprobar(usuario, aprobacion):
             acciones.append(_accion_aprobacion(usuario, ticket, aprobacion, rel.origen_aprobaciones.get(aprobacion.pk)))
     for info in rel.gacetas:
-        if (info["revisor"] or info["aprobador"]) and info["gaceta"].periodo_abierto:
+        if info["revisor"] and info["gaceta"].periodo_abierto:
             accion = _accion_gaceta(usuario, info)
             if accion is not None:
                 acciones.append(accion)
@@ -1269,7 +1427,14 @@ def ficha(usuario, ticket, elemento):
 
     parrilla = elemento.parrilla
     consulta_coleccion = puede_consultar_coleccion(usuario, parrilla, ticket)
-    opera = puede_operar_coleccion(usuario, parrilla, ticket) and elemento.retirado_en is None
+    from apps.tickets import en_revision
+
+    motivo_revision = en_revision.motivo(elemento)
+    es_aprobado = not motivo_revision and en_revision.aprobado(elemento)
+    opera = (
+        puede_operar_coleccion(usuario, parrilla, ticket) and elemento.retirado_en is None
+        and not motivo_revision and not es_aprobado
+    )
     celdas = None
     if opera:
         tabla = parrilla_ops.tabla(ticket, usuario, parrilla=parrilla)
@@ -1287,6 +1452,8 @@ def ficha(usuario, ticket, elemento):
         "valores": parrilla_ops.tabla_de_elemento(elemento) if celdas is None else None,
         "archivos": parrilla_ops.archivos_de(elemento),
         "opera": opera,
+        # Sin tarea abierta que lo pida, un ítem aprobado se ve en solo lectura (con ella, sus columnas se editan).
+        "en_revision": motivo_revision or (en_revision.MENSAJE_APROBADO if es_aprobado and por_tarea is None else None),
         "edita_por_tarea": por_tarea is not None,
         "puede_versionar": opera or por_tarea is not None,
         "versiones": parrilla_ops.versiones_de(elemento),
@@ -1350,9 +1517,6 @@ def ficha(usuario, ticket, elemento):
                         "nombre": bloque.nombre, "tipo": trabajo_ops.TIPOS_BLOQUE.get(bloque.tipo, ""),
                         "situacion": "pendiente", "resultado": "",
                     })
-    from apps.aprobaciones.autorizacion import puede_consultar_aprobacion
-    from apps.tareas.autorizacion import puede_consultar_tarea
-
     for vinculo in TareaWorkflow.objects.filter(instancia_etapa__instancia_workflow=hija).select_related(
         "tarea__usuario_responsable", "tarea__equipo_responsable", "instancia_etapa__bloque_operativo"
     ).order_by("instancia_etapa__orden"):
@@ -1360,7 +1524,7 @@ def ficha(usuario, ticket, elemento):
         datos["actividades"].append({
             "tipo": "Actividad", "nombre": tarea.titulo, "estado": tarea.get_estado_display(),
             "quien": _responsable_de_tarea(tarea), "fecha": tarea.completada_en or tarea.fecha_limite,
-            "url": reverse("tareas:detalle", args=[tarea.pk]) if puede_consultar_tarea(usuario, tarea) else "",
+            "url": "",  # ya se está en el espacio del ticket: la actividad no tiene página propia
         })
     for vinculo in EsquemaAprobacionWorkflow.objects.filter(instancia_etapa__instancia_workflow=hija).select_related(
         "esquema", "instancia_etapa__bloque_operativo"
@@ -1375,7 +1539,7 @@ def ficha(usuario, ticket, elemento):
                 ),
                 "observacion": aprobacion.observacion,
                 "fecha": aprobacion.decidida_en,
-                "url": reverse("aprobaciones:detalle", args=[aprobacion.pk]) if puede_consultar_aprobacion(usuario, aprobacion) else "",
+                "url": "",  # ya se está en el espacio del ticket: la aprobación no tiene página propia
             })
     datos["actividades"].sort(key=lambda a: (a["fecha"] is None, a["fecha"] or timezone.now()))
     return datos
@@ -1411,11 +1575,49 @@ def pestanas_de(ticket, rel, colecciones, hay_proceso):
     return [(clave, etiqueta) for clave, etiqueta in PESTANAS if clave in visibles]
 
 
+def _candidatos_reasignar(usuario, ticket):
+    from apps.tickets.autorizacion import puede_reasignar
+    from apps.tickets.operaciones import candidatos_reasignacion
+
+    if not puede_reasignar(usuario, ticket):
+        return []
+    return [
+        {"pk": u.pk, "nombre": _nombre(u)}
+        for u in candidatos_reasignacion(ticket) if u.pk != ticket.usuario_responsable_id
+    ]
+
+
 def acciones_generales(usuario, ticket, rel):
-    """Acciones del encabezado (las de siempre, solo si su `puede_*` las permite)."""
+    """Acciones del encabezado (las de siempre, solo si su `puede_*` las permite). Con una cancelación por aprobar
+    el ticket está congelado: el menú «Más» solo informa (y deja retirarla a quien la pidió)."""
+    from apps.tickets import cancelaciones
+
+    pendiente = cancelaciones.pendiente_de(ticket)
+    congelado = pendiente is not None
+    responsable = ticket.usuario_responsable
+    aprobador = cancelaciones.aprobador_de(ticket)
+    if solo_consulta(ticket):
+        return {
+            "puede_cancelar": False, "cancelacion_aprobador": "", "cancelacion_pendiente": None,
+            "puede_retirar_cancelacion": False, "puede_reabrir": False, "reasignar_a": [],
+            "responsable_actual": _nombre(responsable) if responsable is not None else (
+                ticket.equipo_responsable.nombre if ticket.equipo_responsable_id else ""
+            ),
+            "puede_comentar": False, "ver_detalle": rel.consulta, "solo_consulta": True,
+        }
     return {
-        "puede_cancelar": puede_cancelar_ticket(usuario, ticket),
+        "puede_cancelar": not congelado and puede_cancelar_ticket(usuario, ticket),
+        # La cancelación de este ticket la acepta un aprobador (Studio › Básico): se avisa antes de pedirla.
+        "cancelacion_aprobador": str(aprobador) if aprobador is not None else "",
+        "cancelacion_pendiente": pendiente,
+        "puede_retirar_cancelacion": congelado and pendiente.solicitada_por_id == getattr(usuario, "pk", None),
         "puede_reabrir": puede_reabrir_ticket(usuario, ticket),
+        # Menú «Más»: reasignar EL TICKET (su responsable), SOLO a alguien del equipo de trabajo
+        # (`operaciones.candidatos_reasignacion`); se dice quién lo tiene hoy.
+        "reasignar_a": [] if congelado else _candidatos_reasignar(usuario, ticket),
+        "responsable_actual": _nombre(responsable) if responsable is not None else (
+            ticket.equipo_responsable.nombre if ticket.equipo_responsable_id else ""
+        ),
         "puede_comentar": puede_comentar_ticket(usuario, ticket),
         "ver_detalle": rel.consulta,
     }
@@ -1525,7 +1727,7 @@ def lluvia(usuario, ticket, accion):
     return {
         "parrilla": parrilla,
         "columnas": [
-            {"campo": c, "exigida": c.clave in exigidas} for c in tabla["columnas"] if c.tipo != "ARCHIVO"
+            {"campo": c, "exigida": c.clave in exigidas} for c in tabla["columnas"] if c.tipo not in ("ARCHIVO", "CHECKLIST")
         ],
         "filas": filas,
         "nueva": [{**c, "nombre": f"n0__campo_{c['campo'].pk}"} for c in tabla["celdas_nuevas"] if not c["es_archivo"]],
@@ -1584,6 +1786,47 @@ def filas_de_mision(usuario, ticket, grupo):
             "faltan": [r["texto"] for r in accion.get("requisitos", []) if r["cumplido"] is False],
         })
     return filas
+
+
+# Una revisión de DATOS (sin audiovisuales) se muestra como tabla mientras quepa; con más columnas, como una lista
+# compacta (una fila por ítem con todas sus respuestas y su decisión al lado).
+COLUMNAS_MAXIMAS_EN_TABLA = 5
+
+
+def modo_de_revision(piezas):
+    """Cómo se revisan unas piezas, POR SU CONTENIDO: «visual» si alguna tiene un audiovisual (imagen o video que se
+    puede previsualizar: tarjeta con la imagen y visor donde la imagen es la protagonista), «datos» si no (p. ej. un
+    plan de trabajo: lista compacta donde la información es la protagonista). Lo usan la revisión del aprobador y la
+    gaceta, con la misma regla. Solo presentación."""
+    return "visual" if any(p.get("portada") for p in piezas) else "datos"
+
+
+def revision_de_datos(filas):
+    """Si la misión revisa DATOS (`modo_de_revision` = «datos»: ningún ítem trae un audiovisual), cómo mostrarlos
+    completos, sin recortar texto: `{"modo": "tabla"|"formulario", "columnas": [etiquetas], "filas": [{"fila",
+    "celdas": [{"etiqueta", "texto"} por columna]}]}`; los archivos que no son audiovisuales (un PDF de evidencia)
+    se enlazan en su fila. `None` si alguna pieza trae un audiovisual (entonces es una revisión visual con tarjetas
+    y visor). Solo presentación: la decisión es la de siempre."""
+    if not filas or modo_de_revision(filas) == "visual":
+        return None
+    columnas = []
+    for fila in filas:
+        for valor in fila["valores"]:
+            # Las columnas de archivo no son celdas de texto: sus archivos se enlazan en la fila.
+            if valor.get("tipo") not in ("ARCHIVO", "CHECKLIST") and valor["etiqueta"] not in columnas:
+                columnas.append(valor["etiqueta"])
+    return {
+        "modo": "tabla" if len(columnas) <= COLUMNAS_MAXIMAS_EN_TABLA else "formulario",
+        "columnas": columnas,
+        "filas": [
+            {"fila": fila, "celdas": [
+                {"etiqueta": etiqueta,
+                 "texto": next((v["texto"] for v in fila["valores"] if v["etiqueta"] == etiqueta), "—")}
+                for etiqueta in columnas
+            ]}
+            for fila in filas
+        ],
+    }
 
 
 def ruta(proceso, colecciones, ruta_estados, grupo):

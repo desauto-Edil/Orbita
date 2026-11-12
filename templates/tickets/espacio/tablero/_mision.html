@@ -44,7 +44,7 @@
         {% elif mision.tipo == "gaceta" %}
           <li class="is-falta"><span class="tabular">{{ galeria.por_hacer }}</span> por revisar</li>
           {% if galeria.conteo.correccion %}<li><span class="tabular">{{ galeria.conteo.correccion }}</span> en corrección</li>{% endif %}
-          {% if galeria.conteo.aprobada %}<li class="is-ok"><span class="tabular">{{ galeria.conteo.aprobada }}</span> aprobadas</li>{% endif %}
+          {% if galeria.conteo.aprobada %}<li class="is-ok"><span class="tabular">{{ galeria.conteo.aprobada }}</span> aceptadas</li>{% endif %}
         {% elif mision.tipo == "revision" or mision.tipo == "items" %}
           <li class="is-falta"><span class="tabular">{{ mision.cantidad }}</span> pendientes</li>
         {% elif mision.accion.vence %}
@@ -60,6 +60,10 @@
         <p class="ms-banner__eyebrow">Tu misión</p>
         <h2 id="ms-t" class="ms-banner__titulo">Nada pendiente para ti ahora</h2>
         {% if espera %}<p class="ms-banner__objetivo">{{ espera }}</p>{% endif %}
+        {% if gacetas_coordinadas and not galeria_pedida %}
+          {# Coordinar una gaceta no es una misión, pero sin misión la vista queda vacía: el acceso queda aquí. #}
+          <p class="ms-banner__objetivo">Coordinas {% for g in gacetas_coordinadas %}<a href="{{ base }}?gaceta={{ g.pk }}#gaceta-{{ g.pk }}">«{{ g.nombre }}»</a>{% if not forloop.last %}, {% endif %}{% endfor %}.</p>
+        {% endif %}
       </div>
     </div>
   {% endif %}

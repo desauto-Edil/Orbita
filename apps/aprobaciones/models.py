@@ -78,7 +78,7 @@ class EsquemaAprobacion(RegistroBase):
     class Meta:
         constraints = [
             CheckConstraint(
-                check=(
+                condition=(
                     Q(modo="PARALELA", politica__in=["TODOS", "CUALQUIERA"])
                     | Q(modo="SECUENCIAL", politica="")
                 ),
@@ -133,7 +133,7 @@ class Aprobacion(RegistroBase):
         constraints = [
             UniqueConstraint(fields=["esquema", "orden"], name="uq_aprobacion_orden"),
             CheckConstraint(
-                check=(
+                condition=(
                     Q(tipo_aprobador="USUARIO", aprobador_usuario__isnull=False, aprobador_equipo__isnull=True)
                     | Q(tipo_aprobador="EQUIPO", aprobador_equipo__isnull=False, aprobador_usuario__isnull=True)
                 ),
@@ -146,7 +146,7 @@ class Aprobacion(RegistroBase):
             # lock) — solo evita que un estado terminal quede con datos de
             # decisión a medias.
             CheckConstraint(
-                check=(
+                condition=(
                     Q(estado__in=["PENDIENTE", "NO_REQUERIDA"], decidido_por__isnull=True, decidida_en__isnull=True)
                     | Q(
                         estado__in=["APROBADA", "RECHAZADA", "DEVUELTA", "EXCLUIDA"],

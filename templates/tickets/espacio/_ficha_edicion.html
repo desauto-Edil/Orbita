@@ -28,6 +28,9 @@
     </form>
   {% endif %}
   {% for celda in ficha_edicion.celdas_archivo %}
+    {% if celda.es_checklist %}
+      {% include "tickets/evidencias/_editar.html" with lista=celda.checklist volver=aqui %}
+    {% else %}
     <div class="esp-archivo">
       <p class="esp-archivo__titulo">{{ celda.campo.etiqueta }}{% if celda.obligatorio %} <abbr title="Obligatorio">*</abbr>{% endif %}</p>
       <ul class="plain-list">
@@ -49,6 +52,7 @@
         <button type="submit" class="btn btn--secondary btn--sm">Adjuntar</button>
       </form>
     </div>
+    {% endif %}
   {% endfor %}
   {% if ficha_edicion.celdas_valor or ficha_edicion.celdas_archivo %}
     <details class="esp-plegable">

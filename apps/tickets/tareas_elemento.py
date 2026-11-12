@@ -458,7 +458,7 @@ def resumen_para_ticket(usuario, ticket):
     for v in vinculos:
         tarea = v.tarea
         if tarea.usuario_responsable_id:
-            responsable = tarea.usuario_responsable.get_full_name().strip() or tarea.usuario_responsable.get_username()
+            responsable = tarea.usuario_responsable.nombre_visible
         else:
             responsable = tarea.equipo_responsable.nombre if tarea.equipo_responsable_id else ""
         filas.append({

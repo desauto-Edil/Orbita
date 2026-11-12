@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{% load static %}
+
+{% block title %}Te damos la bienvenida — {{ sistema.nombre }}{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/perfil.css' %}"><link rel="stylesheet" href="{% static 'css/bienvenida.css' %}">{% endblock %}
+
+{% block content %}
+{% comment %}Bienvenida (Versión 1, etapa 7; `apps.core.bienvenida`). Cada paso es un formulario que guarda SOLO
+preferencias personales y avanza; «Tu organización» es de solo lectura. Sin JS funciona igual.{% endcomment %}
+<article class="bv" aria-labelledby="bv-titulo">
+  <ol class="bv-pasos" aria-label="Pasos de la bienvenida">
+    {% for p in pasos %}
+      <li class="bv-pasos__item{% if p.actual %} is-actual{% endif %}"{% if p.actual %} aria-current="step"{% endif %}>
+        <span class="bv-pasos__numero tabular">{{ p.numero }}</span><span class="bv-pasos__nombre">{{ p.nombre }}</span>
+      </li>
+    {% endfor %}
+  </ol>
+
+  <form method="post" class="bv-tarjeta">
+    {% csrf_token %}
+    <input type="hidden" name="paso" value="{{ paso }}">
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+    <p class="bv-contador">Paso {{ numero }} de {{ total }}</p>
+
+    {% if paso == "bienvenida" %}
+      <h1 id="bv-titulo" class="bv-titulo">Hola{% if request.user.first_name %}, {{ request.user.first_name }}{% endif %}. Te damos la bienvenida a {{ sistema.nombre }}</h1>
+      <p class="bv-texto">Aquí solicitas servicios, sigues tus tickets y atiendes tu trabajo. En cuatro pasos cortos dejamos tu espacio a tu gusto: cómo se ve, tu color y quiénes son tu organización y tus compañeros.</p>
+      <p class="bv-texto bv-texto--tenue">Lo que elijas es solo para ti y lo puedes cambiar cuando quieras en Mi perfil.</p>
+
+    {% elif paso == "apariencia" %}
+      <h1 id="bv-titulo" class="bv-titulo">¿Cómo prefieres verlo?</h1>
+      <p class="bv-texto">Elige el modo claro, el oscuro o que siga a tu dispositivo.</p>
+      <div class="bv-opciones" role="radiogroup" aria-labelledby="bv-titulo">
+        {% for valor, etiqueta in apariencias %}
+          <label class="bv-opcion">
+            <input type="radio" name="apariencia" value="{{ valor }}"{% if request.user.apariencia == valor %} checked{% endif %}>
+            <span class="bv-opcion__cuerpo">
+              {% if valor == "CLARO" %}{% include "components/icon.html" with name="sun" %}{% elif valor == "OSCURO" %}{% include "components/icon.html" with name="moon" %}{% else %}{% include "components/icon.html" with name="monitor" %}{% endif %}
+              <span class="bv-opcion__nombre">{{ etiqueta }}</span>
+            </span>
+          </label>
+        {% endfor %}
+      </div>
+
+    {% elif paso == "color" %}
+      <h1 id="bv-titulo" class="bv-titulo">Elige tu color</h1>
+      <p class="bv-texto">Es el acento de botones y selecciones. Solo cambia para ti: los demás siguen viendo el suyo.</p>
+      <div class="bv-opciones bv-opciones--colores" role="radiogroup" aria-labelledby="bv-titulo">
+        <label class="bv-opcion" data-tema="{{ sistema.tema|default:'cielo' }}">
+          <input type="radio" name="tema" value=""{% if not request.user.tema %} checked{% endif %}>
+          <span class="bv-opcion__cuerpo"><span class="bv-muestra" aria-hidden="true"></span><span class="bv-opcion__nombre">El del sistema</span></span>
+        </label>
+        {% for t in temas %}
+          <label class="bv-opcion" data-tema="{{ t.clave }}">
+            <input type="radio" name="tema" value="{{ t.clave }}"{% if request.user.tema == t.clave %} checked{% endif %}>
+            <span class="bv-opcion__cuerpo"><span class="bv-muestra" aria-hidden="true"></span><span class="bv-opcion__nombre">{{ t.nombre }}</span></span>
+          </label>
+        {% endfor %}
+      </div>
+
+    {% elif paso == "organizacion" %}
+      <h1 id="bv-titulo" class="bv-titulo">Tu organización</h1>
+      <p class="bv-texto">Así te registró el administrador. De esto dependen los servicios que ves y el trabajo que te llega.</p>
+      <dl class="bv-org">
+        <div><dt>Cargo</dt><dd>{{ perfil.cargo|default:"Sin cargo registrado" }}</dd></div>
+        <div><dt>Áreas</dt><dd>{% for ua in areas %}<span class="perfil-pastilla{% if ua.es_principal %} perfil-pastilla--principal{% endif %}">{{ ua.area.nombre }}{% if ua.es_principal %}<small>Principal</small>{% endif %}</span>{% empty %}<span class="perfil-tenue">Sin áreas asignadas</span>{% endfor %}</dd></div>
+        <div><dt>Unidades</dt><dd>{% for uu in unidades %}<span class="perfil-pastilla{% if uu.es_principal %} perfil-pastilla--principal{% endif %}">{{ uu.unidad_negocio.nombre }}{% if uu.es_principal %}<small>Principal</small>{% endif %}</span>{% empty %}<span class="perfil-tenue">Sin unidades de negocio</span>{% endfor %}</dd></div>
+        <div><dt>Equipos</dt><dd>{% for equipo in equipos %}<span class="perfil-pastilla">{{ equipo.nombre }}</span>{% empty %}<span class="perfil-tenue">Aún no perteneces a ningún equipo</span>{% endfor %}</dd></div>
+        <div><dt>Jefe directo</dt><dd>{% if jefe %}{{ jefe.nombre_visible }}{% else %}<span class="perfil-tenue">Sin jefe directo registrado</span>{% endif %}</dd></div>
+      </dl>
+      <p class="bv-aviso">{% include "components/icon.html" with name="info" size="sm" %}<span>¿Falta algo o no es correcto? Pídele al administrador de {{ sistema.nombre }} que lo actualice en Configuración › Usuarios.</span></p>
+
+    {% elif paso == "companeros" %}
+      <h1 id="bv-titulo" class="bv-titulo">Tus compañeros</h1>
+      <p class="bv-texto">Las personas con las que compartes equipo{% if not equipos %} o área{% endif %}.</p>
+      {% for grupo in companeros %}
+        <div class="perfil-equipo">
+          <h2 class="perfil-etiqueta-seccion">{% if grupo.tipo == "area" %}Tu área · {% endif %}{{ grupo.nombre }} <span class="perfil-equipo__cuenta">{{ grupo.total }}</span></h2>
+          <ul class="perfil-personas">
+            {% for persona in grupo.personas %}
+              <li class="perfil-persona">
+                <span class="perfil-persona__foto" aria-hidden="true"><span>{{ persona.nombre_visible|slice:":1"|upper }}</span>{% if persona.google_foto_url %}<img src="{{ persona.foto_mediana }}" alt="" referrerpolicy="no-referrer" loading="lazy">{% endif %}</span>
+                <span class="perfil-persona__nombre">{{ persona.nombre_visible }}</span>
+                {% if persona.perfil_organizacional.cargo %}<span class="perfil-persona__cargo">{{ persona.perfil_organizacional.cargo }}</span>{% endif %}
+              </li>
+            {% endfor %}
+            {% if grupo.restantes %}<li class="perfil-persona perfil-persona--mas"><span class="perfil-persona__foto" aria-hidden="true"><span>+{{ grupo.restantes }}</span></span><span class="perfil-persona__nombre">y {{ grupo.restantes }} más</span></li>{% endif %}
+          </ul>
+        </div>
+      {% empty %}
+        <p class="perfil-tenue">Cuando el administrador te agregue a un equipo o un área, aquí verás a tus compañeros.</p>
+      {% endfor %}
+    {% endif %}
+
+    <div class="bv-acciones">
+      <button type="submit" name="accion" value="omitir" class="btn btn--ghost">Omitir por ahora</button>
+      <span class="bv-acciones__avance">
+        {% if anterior %}<button type="submit" name="accion" value="atras" class="btn btn--secondary">Atrás</button>{% endif %}
+        {% if siguiente %}
+          <button type="submit" name="accion" value="siguiente" class="btn btn--primary">Continuar</button>
+        {% else %}
+          <button type="submit" name="accion" value="terminar" class="btn btn--primary">Empezar a usar {{ sistema.nombre }}</button>
+        {% endif %}
+      </span>
+    </div>
+  </form>
+</article>
+{% endblock %}

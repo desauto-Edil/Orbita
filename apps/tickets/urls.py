@@ -33,6 +33,7 @@ urlpatterns = [
     path("<int:pk>/conversacion/", views.conversacion_mensajes_view, name="conversacion"),
     path("<int:pk>/conversacion/enviar/", views.conversacion_enviar_view, name="conversacion_enviar"),
     path("<int:pk>/conversacion/leido/", views.conversacion_leido_view, name="conversacion_leido"),
+    path("<int:pk>/conversacion/presencia/", views.conversacion_presencia_view, name="conversacion_presencia"),
     path("<int:pk>/tomar/", views.tomar_view, name="tomar"),
     path("<int:pk>/iniciar-atencion/", views.iniciar_atencion_view, name="iniciar_atencion"),
     path("<int:pk>/asignar/", views.asignar_view, name="asignar"),
@@ -43,6 +44,9 @@ urlpatterns = [
     path("<int:pk>/prorrogas/<int:prorroga_id>/cancelar/", views.cancelar_prorroga_view, name="cancelar_prorroga"),
     path("<int:pk>/cerrar/", views.cerrar_view, name="cerrar"),
     path("<int:pk>/cancelar/", views.cancelar_view, name="cancelar"),
+    path(
+        "<int:pk>/cancelacion/<int:solicitud_id>/retirar/", views.cancelacion_retirar_view, name="cancelacion_retirar"
+    ),
     path("<int:pk>/reabrir/", views.reabrir_view, name="reabrir"),
     path("<int:pk>/eliminar/", views.eliminar_borrador_view, name="eliminar"),
     path("<int:pk>/colecciones/<slug:clave>/", views.coleccion_view, name="coleccion"),
@@ -57,6 +61,12 @@ urlpatterns = [
         "<int:pk>/elementos/<int:elemento_id>/archivos/<int:campo_id>/adjuntar/",
         views.elemento_archivo_adjuntar_view, name="elemento_archivo_adjuntar",
     ),
+    path(
+        "<int:pk>/elementos/<int:elemento_id>/evidencias/<int:campo_id>/marcar/",
+        views.evidencia_marcar_view, name="evidencia_marcar",
+    ),
+    path("<int:pk>/evidencias/<int:marca_id>/retirar/", views.evidencia_retirar_view, name="evidencia_retirar"),
+    path("evidencias/<int:marca_id>/", views.evidencia_view, name="evidencia"),
     path("<int:pk>/elementos/alcance/cerrar/", views.alcance_cerrar_view, name="alcance_cerrar"),
     path("<int:pk>/elementos/extraordinario/", views.elemento_extraordinario_view, name="elemento_extraordinario"),
     path("<int:pk>/elementos/<int:elemento_id>/salida/", views.elemento_salida_view, name="elemento_salida"),
@@ -82,7 +92,6 @@ urlpatterns = [
         "<int:pk>/entregables/<int:entregable_id>/elementos/<int:elemento_id>/devolver/",
         views.revision_devolver_view, name="revision_devolver",
     ),
-    path("<int:pk>/comentar/", views.comentar_view, name="comentar"),
     path("<int:pk>/adjuntar/", views.adjuntar_view, name="adjuntar"),
     path("<int:pk>/solicitar-informacion/", views.solicitar_informacion_view, name="solicitar_informacion"),
     path(

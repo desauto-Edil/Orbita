@@ -3,7 +3,8 @@
   izquierda la imagen, el video o los archivos en grande; a la derecha la información (datos, archivos, anotaciones
   y observaciones) y, fija al pie, lo que la persona puede hacer:
   - decidir la revisión (`tickets:decidir_pieza`): Aprobar · Corregir · Eliminar, siempre con comentario; en la
-    aprobación de un ítem (no en una gaceta) con anotación visual sobre la imagen (`p.anotable`);
+    aprobación de un ítem (no en una gaceta) con anotación visual sobre la imagen (`p.anotable`): cinco colores
+    fijos (`--anotacion-*`), lápiz, resaltador y borrador; con un dibujo solo se puede Corregir (también en el servidor);
   - comentar en una gaceta (`gacetas:observar`: manda la pieza a corrección), reenviar la corrección y responder
     observaciones (`gacetas:reenviar` / `gacetas:responder`, quien corrige), o excluirla (`gacetas:excluir`, quien
     coordina).
@@ -25,10 +26,13 @@
           <button type="button" class="pzv__herramienta is-activa" data-herramienta="lapiz" aria-pressed="true" title="Lápiz">{% include "components/icon.html" with name="pencil" size="sm" %}<span class="sr-only">Lápiz</span></button>
           <button type="button" class="pzv__herramienta" data-herramienta="resaltador" aria-pressed="false" title="Resaltador"><span class="pzv__resaltador" aria-hidden="true"></span><span class="sr-only">Resaltador</span></button>
           <span class="pzv__separador" aria-hidden="true"></span>
-          <button type="button" class="pzv__color is-activo" data-color="--status-danger" aria-pressed="true" title="Rojo"><span class="sr-only">Rojo</span></button>
-          <button type="button" class="pzv__color" data-color="--status-warning" aria-pressed="false" title="Ámbar"><span class="sr-only">Ámbar</span></button>
-          <button type="button" class="pzv__color" data-color="--status-info" aria-pressed="false" title="Azul"><span class="sr-only">Azul</span></button>
+          <button type="button" class="pzv__color is-activo" data-color="--anotacion-rojo" aria-pressed="true" title="Rojo"><span class="sr-only">Rojo</span></button>
+          <button type="button" class="pzv__color" data-color="--anotacion-ambar" aria-pressed="false" title="Ámbar"><span class="sr-only">Ámbar</span></button>
+          <button type="button" class="pzv__color" data-color="--anotacion-azul" aria-pressed="false" title="Azul"><span class="sr-only">Azul</span></button>
+          <button type="button" class="pzv__color" data-color="--anotacion-verde" aria-pressed="false" title="Verde"><span class="sr-only">Verde</span></button>
+          <button type="button" class="pzv__color" data-color="--anotacion-negro" aria-pressed="false" title="Negro"><span class="sr-only">Negro</span></button>
           <span class="pzv__separador" aria-hidden="true"></span>
+          <button type="button" class="pzv__herramienta" data-herramienta="borrador" aria-pressed="false" title="Borrador">{% include "components/icon.html" with name="eraser" size="sm" %}<span class="sr-only">Borrador</span></button>
           <button type="button" class="pzv__herramienta" data-anotacion-deshacer title="Deshacer el último trazo">{% include "components/icon.html" with name="repeat" size="sm" %}<span class="sr-only">Deshacer</span></button>
           <button type="button" class="pzv__herramienta" data-anotacion-limpiar title="Borrar todos los trazos">{% include "components/icon.html" with name="x" size="sm" %}<span class="sr-only">Borrar todo</span></button>
         </div>
@@ -60,6 +64,7 @@
     </header>
 
     <div class="pzv__cuerpo">
+      {% include "tickets/espacio/piezas/_siguiente.html" %}
       {% if p.valores %}
         <dl class="pzv__datos">
           {% for v in p.valores %}{% if v.texto != "—" %}<div><dt>{{ v.etiqueta }}</dt><dd>{{ v.texto }}</dd></div>{% endif %}{% endfor %}
@@ -79,7 +84,7 @@
         <p class="pzv__sub">Anotaciones de revisiones anteriores</p>
         <ul class="pzv__anotaciones">
           {% for an in p.anotaciones %}
-            <li><a href="{% url 'tickets:anotacion' an.pk %}" target="_blank" rel="noopener"><img src="{% url 'tickets:anotacion' an.pk %}" alt="Anotación de {{ an.autor.get_full_name|default:an.autor.get_username }}" loading="lazy"></a><span>{{ an.autor.get_full_name|default:an.autor.get_username }} · <span class="tabular">{{ an.creada_en|date:"j M, H:i" }}</span></span></li>
+            <li><a href="{% url 'tickets:anotacion' an.pk %}" target="_blank" rel="noopener"><img src="{% url 'tickets:anotacion' an.pk %}" alt="Anotación de {{ an.autor.nombre_visible }}" loading="lazy"></a><span>{{ an.autor.nombre_visible }} · <span class="tabular">{{ an.creada_en|date:"j M, H:i" }}</span></span></li>
           {% endfor %}
         </ul>
       {% endif %}
@@ -88,11 +93,11 @@
         <ol class="pzv__comentarios">
           {% for obs in p.observaciones %}
             <li>
-              <p class="pzv__autor">{{ obs.autor.get_full_name|default:obs.autor.get_username }} <span class="tabular">{{ obs.creada_en|date:"j M, H:i" }}</span></p>
+              <p class="pzv__autor">{{ obs.autor.nombre_visible }} <span class="tabular">{{ obs.creada_en|date:"j M, H:i" }}</span></p>
               <p class="pzv__texto-obs">{{ obs.texto }}</p>
               {% if obs.respuesta %}<p class="pzv__respuesta">Respuesta: {{ obs.respuesta }}</p>
               {% elif p.puede_corregir %}
-                <form method="post" action="{% url 'gacetas:responder' obs.pk %}" class="pzv__mini">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}#pieza-{{ p.elemento.pk }}">
+                <form method="post" action="{% url 'gacetas:responder' obs.pk %}" class="pzv__mini">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}{% if mision %}?mision={{ mision.clave|urlencode }}{% endif %}#pieza-{{ p.elemento.pk }}">
                   <label class="sr-only" for="pz-resp-{{ obs.pk }}">Responder</label>
                   <input id="pz-resp-{{ obs.pk }}" name="respuesta" type="text" required placeholder="Responder…">
                   <button type="submit" class="btn btn--ghost btn--sm">Responder</button>
@@ -108,21 +113,22 @@
 
     <footer class="pzv__pie">
       {% if p.decision and p.salidas %}
-        <form method="post" action="{% url 'tickets:decidir_pieza' ticket.pk p.decision.aprobacion.pk %}" class="pzv__form" data-pieza-form>
-          {% csrf_token %}<input type="hidden" name="next" value="{{ base }}#pieza-{{ p.elemento.pk }}">
-          {% if p.anotable %}<input type="hidden" name="anotacion" value="" data-anotacion-campo><input type="hidden" name="archivo_base" value="{{ p.portada.pk }}">{% endif %}
+        <form method="post" action="{% url 'tickets:decidir_pieza' ticket.pk p.decision.aprobacion.pk %}" class="pzv__form" data-pieza-form{% if p.anotable %} enctype="multipart/form-data"{% endif %}>
+          {% csrf_token %}<input type="hidden" name="next" value="{{ base }}{% if mision %}?mision={{ mision.clave|urlencode }}{% endif %}#pieza-{{ p.elemento.pk }}">
+          {% if p.anotable %}<input type="file" name="anotacion" accept="image/png" hidden data-anotacion-campo><input type="hidden" name="archivo_base" value="{{ p.portada.pk }}">{% endif %}
           <label class="sr-only" for="pz-com-{{ p.clave }}">Comentario de tu revisión</label>
           <textarea id="pz-com-{{ p.clave }}" name="comentario" rows="2" maxlength="2000" required placeholder="Tu comentario (obligatorio con cualquier decisión)"></textarea>
-          {% if p.anotable %}<p class="pzv__aviso" data-anotacion-aviso hidden>Tu dibujo se enviará con esta revisión.</p>{% endif %}
+          {% if p.decision.publicacion %}{% include "tickets/espacio/acciones/_publicacion.html" with pub=p.decision.publicacion uid=p.clave %}{% endif %}
+          {% if p.anotable %}<p class="pzv__aviso" data-anotacion-aviso hidden>Hay un dibujo: la revisión solo puede ser «Corregir» y tu dibujo viaja con ella. Bórralo para aprobar o eliminar.</p>{% endif %}
           <div class="pzv__botones">
             {% for s in p.salidas %}
-              <button type="submit" name="decision" value="{{ s.valor }}" class="btn btn--sm {% if s.valor == 'APROBADA' %}btn--primary{% elif s.valor == 'DEVUELTA' %}btn--secondary{% else %}btn--ghost pzv__eliminar{% endif %}">{{ s.etiqueta }}</button>
+              <button type="submit" name="decision" value="{{ s.valor }}"{% if p.anotable and s.valor != 'DEVUELTA' %} data-bloquea-con-dibujo{% endif %} class="btn btn--sm {% if s.valor == 'APROBADA' %}btn--primary{% elif s.valor == 'DEVUELTA' %}btn--secondary{% else %}btn--ghost pzv__eliminar{% endif %}">{{ s.etiqueta }}</button>
             {% endfor %}
           </div>
         </form>
       {% elif p.puede_observar %}
         <form method="post" action="{% url 'gacetas:observar' p.participacion.pk %}" class="pzv__form">
-          {% csrf_token %}<input type="hidden" name="next" value="{{ base }}#pieza-{{ p.elemento.pk }}">
+          {% csrf_token %}<input type="hidden" name="next" value="{{ base }}{% if mision %}?mision={{ mision.clave|urlencode }}{% endif %}#pieza-{{ p.elemento.pk }}">
           <label class="sr-only" for="pz-obs-{{ p.clave }}">Comentario</label>
           <textarea id="pz-obs-{{ p.clave }}" name="texto" rows="2" required placeholder="¿Algo que corregir? Tu comentario la envía a corrección."></textarea>
           <div class="pzv__botones"><button type="submit" class="btn btn--secondary btn--sm">Comentar</button></div>
@@ -130,7 +136,7 @@
       {% endif %}
       {% if p.puede_corregir %}
         <form method="post" action="{% url 'gacetas:reenviar' p.participacion.pk %}" class="pzv__form">
-          {% csrf_token %}<input type="hidden" name="next" value="{{ base }}#pieza-{{ p.elemento.pk }}">
+          {% csrf_token %}<input type="hidden" name="next" value="{{ base }}{% if mision %}?mision={{ mision.clave|urlencode }}{% endif %}#pieza-{{ p.elemento.pk }}">
           <label class="sr-only" for="pz-ree-{{ p.clave }}">Comentario de la corrección</label>
           <input id="pz-ree-{{ p.clave }}" name="comentario" type="text" placeholder="Qué corregiste (opcional)">
           <div class="pzv__botones"><button type="submit" class="btn btn--primary btn--sm">Reenviar corregida</button></div>
@@ -140,7 +146,7 @@
         <details class="pzv__excluir">
           <summary>Excluir del alcance</summary>
           <form method="post" action="{% url 'gacetas:excluir' p.participacion.pk %}" class="pzv__form">
-            {% csrf_token %}<input type="hidden" name="next" value="{{ base }}#pieza-{{ p.elemento.pk }}">
+            {% csrf_token %}<input type="hidden" name="next" value="{{ base }}{% if mision %}?mision={{ mision.clave|urlencode }}{% endif %}#pieza-{{ p.elemento.pk }}">
             <label class="sr-only" for="pz-exc-{{ p.clave }}">Justificación</label>
             <input id="pz-exc-{{ p.clave }}" name="justificacion" type="text" required placeholder="Justificación">
             <div class="pzv__botones"><button type="submit" class="btn btn--ghost btn--sm pzv__eliminar">Excluir</button></div>

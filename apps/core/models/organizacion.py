@@ -177,3 +177,26 @@ class EquipoUnidadNegocio(RegistroBase):
 
     def __str__(self):
         return f"{self.equipo} ↔ {self.unidad_negocio}"
+
+
+class JefaturaUsuario(RegistroBase):
+    """Jefatura directa: `jefe` es el jefe de `colaborador` (relación explícita con vigencia, como `MiembroEquipo`;
+    nunca se deduce del área ni del equipo). Una persona tiene a lo sumo UN jefe directo vigente; nadie es su propio
+    jefe y no se forman ciclos (lo valida `apps.core.jefaturas`). Cambiar o quitar el jefe cierra la vigencia
+    (`activo=False`, `fecha_fin`) sin borrar la fila. Es una RELACIÓN, no un rol: permite que el jefe vea en qué
+    trabajan sus colaboradores (Mi equipo, solo lectura), nada más."""
+
+    jefe = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="colaboradores_a_cargo")
+    colaborador = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="jefaturas")
+    activo = models.BooleanField(default=True)
+    fecha_inicio = models.DateField(default=timezone.localdate)
+    fecha_fin = models.DateField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=["colaborador"], condition=Q(activo=True), name="uq_jefatura_vigente_por_colaborador"),
+            models.CheckConstraint(condition=~Q(jefe=models.F("colaborador")), name="ck_jefatura_no_es_su_propio_jefe"),
+        ]
+
+    def __str__(self):
+        return f"{self.jefe} → {self.colaborador}"

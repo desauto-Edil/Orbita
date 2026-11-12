@@ -11,7 +11,7 @@
         <h2 id="gaceta-{{ gaceta.pk }}-t" class="gl-seccion__titulo">{{ gaceta.nombre }}</h2>
         <p class="gl-seccion__meta">
           <span class="estado-etiqueta{% if gaceta.estado == 'ABIERTA' %} estado-etiqueta--en_atencion{% elif gaceta.estado == 'RESUELTA' %} estado-etiqueta--resuelto{% elif gaceta.estado == 'CANCELADA' %} estado-etiqueta--cancelado{% endif %}">{{ gaceta.get_estado_display }}</span>
-          {% if info.coordina %}<span>Coordinas</span>{% elif info.aprobador %}<span>Apruebas</span>{% elif info.revisor %}<span>Revisas</span>{% endif %}
+          {% if info.coordina %}<span>Coordinas</span>{% elif info.revisor %}<span>Revisas</span>{% endif %}
           {% if gaceta.vence_revision_en %}<span class="tabular">Revisión hasta {{ gaceta.vence_revision_en|date:"j M, H:i" }}</span>{% endif %}
           <span class="tabular">{{ galeria.tarjetas|length }} pieza{{ galeria.tarjetas|length|pluralize }}</span>
           {% if galeria.por_hacer %}<span class="gl-seccion__tuyo tabular">{{ galeria.por_hacer }} por revisar de tu parte</span>{% endif %}
@@ -24,17 +24,17 @@
           <summary class="btn btn--ghost btn--sm">Coordinar {% include "components/icon.html" with name="chevron-down" size="sm" %}</summary>
           <div class="gl-coordinar__panel">
             {% if gaceta.estado == "ABIERTA" %}
-              <form method="post" action="{% url 'gacetas:cerrar_periodo' gaceta.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}#gaceta-{{ gaceta.pk }}">
+              <form method="post" action="{% url 'gacetas:cerrar_periodo' gaceta.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}?gaceta={{ gaceta.pk }}#gaceta-{{ gaceta.pk }}">
                 <button type="submit" class="btn btn--secondary btn--sm">Cerrar el periodo de revisión</button>
               </form>
             {% endif %}
-            <form method="post" action="{% url 'gacetas:resolver' gaceta.pk %}" class="gl-coordinar__form">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}#gaceta-{{ gaceta.pk }}">
+            <form method="post" action="{% url 'gacetas:resolver' gaceta.pk %}" class="gl-coordinar__form">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}?gaceta={{ gaceta.pk }}#gaceta-{{ gaceta.pk }}">
               <label for="gl-res-{{ gaceta.pk }}">Resolver la gaceta</label>
               <input id="gl-res-{{ gaceta.pk }}" name="justificacion" type="text" placeholder="Justificación">
               <button type="submit" class="btn btn--primary btn--sm">Resolver</button>
             </form>
             {% if galeria.presentables %}
-              <form method="post" action="{% url 'gacetas:presentar' gaceta.pk %}" class="gl-coordinar__form">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}#gaceta-{{ gaceta.pk }}">
+              <form method="post" action="{% url 'gacetas:presentar' gaceta.pk %}" class="gl-coordinar__form">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}?gaceta={{ gaceta.pk }}#gaceta-{{ gaceta.pk }}">
                 <label for="gl-pre-{{ gaceta.pk }}">Presentar una pieza</label>
                 <select id="gl-pre-{{ gaceta.pk }}" name="elemento_id">
                   {% for elemento in galeria.presentables %}<option value="{{ elemento.pk }}">{{ elemento.parrilla.nombre_elemento|default:"Ítem" }} #{{ elemento.numero }}</option>{% endfor %}
@@ -46,6 +46,28 @@
         </details>
       {% endif %}
     </header>
+    {% with c=galeria.conformidad %}{% if c %}
+      {# «Estoy conforme»: cuando todos los interesados lo están, la revisión termina antes (`operaciones.estar_conforme`). #}
+      <div class="gl-conforme" role="group" aria-label="Conformidad de los interesados">
+        <p class="gl-conforme__texto">
+          <strong class="tabular">{{ c.conformes }} de {{ c.total }}</strong> interesado{{ c.total|pluralize }} conforme{{ c.total|pluralize }}.
+          {% if not c.total %}Esta gaceta no tiene revisores: nadie puede darla todavía.
+          {% elif c.ya_conforme %}Ya dijiste que estás conforme con lo presentado.
+          {% elif c.puede %}Si no tienes nada que comentar, dilo: cuando todos estén conformes, la revisión termina antes.
+          {% elif c.es_interesado and not c.hay_en_revision %}No hay nada en revisión en este momento: podrás darla cuando se presente algo.
+          {% else %}Cuando todos los interesados estén conformes, la revisión termina antes.{% endif %}
+          {% if c.pendientes and not c.puede %}<span class="text-muted">Faltan: {% for u in c.pendientes %}{{ u.nombre_visible }}{% if not forloop.last %}, {% endif %}{% endfor %}.</span>{% endif %}
+        </p>
+        {% if c.puede %}
+          <form method="post" action="{% url 'gacetas:conforme' gaceta.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}?gaceta={{ gaceta.pk }}#gaceta-{{ gaceta.pk }}">
+            <button type="submit" class="btn btn--primary btn--sm">{% include "components/icon.html" with name="check" size="sm" %}Estoy conforme</button>
+          </form>
+        {% elif c.es_interesado %}
+          {# Siempre a la vista para quien puede darla; deshabilitado si ya la dio o no hay nada en revisión. #}
+          <button type="button" class="btn btn--secondary btn--sm" disabled>{% include "components/icon.html" with name="check" size="sm" %}{% if c.ya_conforme %}Conforme{% else %}Estoy conforme{% endif %}</button>
+        {% endif %}
+      </div>
+    {% endif %}{% endwith %}
     {% include "tickets/espacio/tablero/_galeria_gaceta.html" %}
   </section>
 {% endwith %}

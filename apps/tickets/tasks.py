@@ -55,3 +55,37 @@ def generar_ejecuciones_programadas():
     resumen = reconciliar_ejecuciones_programadas()
     logger.info("generar_ejecuciones_programadas: %s", resumen)
     return resumen
+
+
+# --- Conversación en Google Chat (`apps.tickets.espacios_chat`; periodicidad en `0033_conversacion_google_chat`) ---
+
+
+@shared_task
+def publicar_en_google_chat(mensaje_id):
+    from apps.tickets.espacios_chat import publicar_pendiente
+
+    mensaje = publicar_pendiente(mensaje_id)
+    return getattr(mensaje, "estado", None)
+
+
+@shared_task
+def sincronizar_ticket_google_chat(ticket_id):
+    from apps.tickets.espacios_chat import sincronizar_ticket
+
+    sincronizar_ticket(ticket_id)
+
+
+@shared_task
+def importar_google_chat():
+    from apps.tickets.espacios_chat import importar_recientes
+
+    return importar_recientes()
+
+
+@shared_task
+def reconciliar_google_chat():
+    from apps.tickets.espacios_chat import reconciliar
+
+    resumen = reconciliar()
+    logger.info("reconciliar_google_chat: %s", resumen)
+    return resumen

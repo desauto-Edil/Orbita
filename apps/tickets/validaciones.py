@@ -112,6 +112,13 @@ def validar_para_radicar(ticket):
             continue  # oculto: nunca requerido, con o sin valor residual
 
         existente = existentes.get(campo_id)
+        if campo.tipo == Campo.TipoCampo.CHECKLIST:
+            # Lista de evidencias: obligatoria = todos sus puntos con su prueba (`tickets.MarcaEvidencia`).
+            from apps.tickets.evidencias import respuesta_completa
+
+            if estado.requerido and not respuesta_completa(respuesta_formulario.ticket, campo):
+                errores[campo_id] = ["Este campo es obligatorio."]
+            continue
         if campo.tipo == Campo.TipoCampo.ARCHIVO:
             tiene_valor = existente is not None and getattr(existente, "archivo", None) is not None
         else:

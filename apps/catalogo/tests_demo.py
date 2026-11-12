@@ -31,6 +31,7 @@ from apps.catalogo.tests import _permiso_get_or_create
 from apps.catalogo.versionamiento import activar_version, crear_nueva_version
 from apps.core.models import Area, Equipo, MiembroEquipo, RegistroAuditoria, Usuario
 from apps.workflows.models import Workflow
+from apps.core.pruebas import correo_de_prueba, persona
 
 CLAVE = "Clave-Segura-Demo-56"
 HOY_PROGRAMADO = date(2026, 10, 20)
@@ -44,22 +45,22 @@ class _EscenarioDemo:
     PERMISOS = ("catalogo.administrar", "formulario.administrar", "workflows.administrar", "workflows.vincular")
 
     def _preparar(self):
-        self.admin = Usuario.objects.create_user("demo_admin", password=CLAVE)
+        self.admin = Usuario.objects.create_user("demo_admin@pruebas.orbita")
         for codigo in self.PERMISOS:
             _permiso_get_or_create(self.admin, codigo, f"Rol demo {codigo}")
-        crear = Usuario.objects.create_user
-        self.planificador = crear("demo_planificador", password=CLAVE)
-        self.productor = crear("demo_productor", password=CLAVE)
-        self.aprobador = crear("demo_aprobador", password=CLAVE)
-        self.revisor = crear("demo_revisor", password=CLAVE)
-        self.coordinador = crear("demo_coordinador", password=CLAVE)
-        self.disenador = crear("demo_disenador", password=CLAVE)
-        self.comercial = crear("demo_comercial", password=CLAVE)
-        self.solicitante = crear("demo_solicitante", password=CLAVE)
-        self.sin_permisos = crear("demo_sin_permisos", password=CLAVE)
+        crear = lambda alias, **campos: Usuario.objects.create_user(correo_de_prueba(alias), **campos)  # noqa: E731
+        self.planificador = crear("demo_planificador")
+        self.productor = crear("demo_productor")
+        self.aprobador = crear("demo_aprobador")
+        self.revisor = crear("demo_revisor")
+        self.coordinador = crear("demo_coordinador")
+        self.disenador = crear("demo_disenador")
+        self.comercial = crear("demo_comercial")
+        self.solicitante = crear("demo_solicitante")
+        self.sin_permisos = crear("demo_sin_permisos")
         # Publicar exige una ruta de atención: quienes atienden tienen `tickets.atender`.
         for usuario in (self.coordinador, self.disenador, self.comercial):
-            _permiso_get_or_create(usuario, "tickets.atender", f"Rol demo atender {usuario.username}")
+            _permiso_get_or_create(usuario, "tickets.atender", f"Rol demo atender {usuario.email}")
         self.diseno = Equipo.objects.create(nombre="Diseño demo")
         MiembroEquipo.objects.create(equipo=self.diseno, usuario=self.disenador)
         self.area = Area.objects.create(nombre="Mercadeo demo", codigo="MKT-DEMO")
@@ -553,7 +554,7 @@ class EdicionFormularioTests(_EscenarioDemo, TestCase):
         servicio = Servicio.objects.create(
             nombre="Servicio edición", categoria=Categoria.objects.create(nombre="Cat edición"), formulario=self.formulario,
         )
-        self.client.login(username="demo_admin", password=CLAVE)
+        self.client.force_login(persona("demo_admin@pruebas.orbita"))
         with mock.patch("apps.catalogo.studio.guardar_campo", wraps=guardar_campo) as operacion:
             self.client.post(reverse("catalogo:studio_campo_crear", args=[servicio.pk]), {
                 "campo-nuevo-tipo": "EQUIPO", "campo-nuevo-etiqueta": "Equipo", "campo-nuevo-orden": 1,
@@ -956,9 +957,9 @@ class ImperandinaDemoTests(_EscenarioDemo, TestCase):
 
     def setUp(self):
         self._preparar()
-        crear = Usuario.objects.create_user
-        self.lau, self.amasso, self.emm = crear("lau", password=CLAVE), crear("amasso", password=CLAVE), crear("emm", password=CLAVE)
-        self.rbuitrago, self.scortes = crear("rbuitrago", password=CLAVE), crear("scortes", password=CLAVE)
+        crear = lambda alias, **campos: Usuario.objects.create_user(correo_de_prueba(alias), **campos)  # noqa: E731
+        self.lau, self.amasso, self.emm = crear("lau"), crear("amasso"), crear("emm")
+        self.rbuitrago, self.scortes = crear("rbuitrago"), crear("scortes")
 
     def _preparar_imperandina(self):
         # Las opciones de la línea de comandos no cuentan: el contrato fija sus personas y equipos.
@@ -983,24 +984,32 @@ class ImperandinaDemoTests(_EscenarioDemo, TestCase):
         bpo = Equipo.objects.get(nombre="Mercadeo BPO")
         revisor = Equipo.objects.get(nombre="Mercadeo Imperandina")
         miembros = lambda equipo: set(  # noqa: E731
-            MiembroEquipo.objects.filter(equipo=equipo, activo=True).values_list("usuario__username", flat=True)
+            MiembroEquipo.objects.filter(equipo=equipo, activo=True).values_list("usuario__email", flat=True)
         )
-        self.assertEqual(miembros(bpo), {"lau", "amasso", "emm"})
-        self.assertEqual(miembros(revisor), {"rbuitrago", "scortes"})
+        self.assertEqual(miembros(bpo), {f"{a}@pruebas.orbita" for a in ("lau", "amasso", "emm")})
+        self.assertEqual(miembros(revisor), {f"{a}@pruebas.orbita" for a in ("rbuitrago", "scortes")})
         cfg = DefinicionGaceta.objects.get(servicio=servicio).configuracion
         self.assertEqual(cfg["apertura"], "POR_FLUJO")
         self.assertEqual(cfg["plazo_revision"], {"cantidad": 7, "unidad": "DIAS", "habiles": False})
-        self.assertTrue(cfg["aceptacion_automatica"])
         self.assertEqual(cfg["revisores"], [{"tipo": "EQUIPO", "equipo_id": revisor.pk}])
-        self.assertEqual(cfg["aprobadores"], [{"tipo": "USUARIO", "usuario_id": self.amasso.pk}])
+        self.assertNotIn("aprobadores", cfg)  # regla de oro: nadie aprueba en una gaceta
         self.assertEqual(cfg["coordinador"], {"tipo": "USUARIO", "usuario_id": self.lau.pk})
         self.assertEqual(cfg["responsable_correccion_origen"], "ULTIMA_ACTIVIDAD")
         self.assertIn(contrato.MEDIO_PUBLICACION, cfg["columnas_visibles"])
         self.assertEqual(errores_de_uso_por_item(cfg), [])
         bloques = {b.nombre: b for b in BloqueOperativo.objects.filter(version__servicio=servicio)}
-        self.assertEqual(bloques["Evidencia de publicación"].configuracion["tipo_actor"], "EQUIPO")
-        self.assertEqual(bloques["Evidencia de publicación"].configuracion["equipo_id"], bpo.pk)
-        self.assertEqual(bloques["Publicación"].configuracion["usuario_id"], self.emm.pk)
+        # «Publicación» es del equipo (cualquiera sube la evidencia, sin tomarla); responde emm. Ya no hay un paso
+        # aparte de evidencia: la evidencia es la lista «Evidencia de publicación» del ítem.
+        self.assertNotIn("Evidencia de publicación", bloques)
+        publicar = bloques["Publicación"].configuracion
+        self.assertEqual(publicar["tipo_actor"], "EQUIPO")
+        self.assertEqual(publicar["equipo_id"], bpo.pk)
+        self.assertEqual(publicar["responde_usuario_id"], self.emm.pk)
+        self.assertTrue(publicar["requiere_evidencia"])
+        columnas = {c.clave: c for c in servicio.definiciones_parrilla.get().formulario.versiones.get().campos.all()}
+        lista = columnas[contrato.EVIDENCIA_PUBLICACION]
+        self.assertEqual(lista.tipo, "CHECKLIST")
+        self.assertEqual(list(lista.opciones.values_list("valor", flat=True)), [contrato.PUNTO_PUBLICADA])
         self.assertIn(contrato.MEDIO_PUBLICACION, bloques[contrato.RECORRIDO].configuracion["columnas_requeridas_ingreso"])
         self.assertNotIn(contrato.ARCHIVO_PIEZA, bloques[contrato.RECORRIDO].configuracion["columnas_requeridas_ingreso"])
 
@@ -1071,7 +1080,8 @@ class ImperandinaDemoTests(_EscenarioDemo, TestCase):
         self.assertEqual(recurso.servicio.categoria.nombre, "Demostración Órbita")
         self.assertEqual(fases.discrepancias(recurso), [])
         cfg = DefinicionGaceta.objects.get(servicio=recurso.servicio).configuracion
-        self.assertIsNone(cfg["plazo_revision"])
+        # Regla de oro (nadie aprueba en una gaceta): la gaceta por ítem acepta al cerrar su periodo.
+        self.assertEqual(cfg["plazo_revision"], {"cantidad": 5, "unidad": "DIAS", "habiles": True})
 
 
 class StudioConservaOpcionesTests(TestCase):

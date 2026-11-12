@@ -23,7 +23,7 @@
                     <div class="alert__text">
                       <strong>Debes corregir información:</strong> la revisión devolvió {{ a_corregir|length }} elemento{{ a_corregir|length|pluralize }}.
                       <ul>{% for item in a_corregir %}<li>#{{ item.numero }}: {{ item.observacion }}</li>{% endfor %}</ul>
-                      <a href="{% if next_url %}#elementos{% else %}{% url 'tickets:detalle' ticket.pk %}#elementos{% endif %}">Ir a los elementos</a>
+                      <a href="{% if next_url %}#elementos{% else %}{% url 'tickets:espacio' ticket.pk %}?vista=resumen#elementos{% endif %}">Ir a los elementos</a>
                     </div>
                   </div>
                 {% endif %}

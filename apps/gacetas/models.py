@@ -70,7 +70,8 @@ class ParticipacionItemGaceta(RegistroBase):
     class Estado(models.TextChoices):
         EN_REVISION = "EN_REVISION", "En revisión"
         EN_CORRECCION = "EN_CORRECCION", "En corrección"
-        APROBADA = "APROBADA", "Aprobada"
+        # Regla de oro: nadie aprueba en una gaceta; el ítem queda ACEPTADO (el valor guardado sigue siendo APROBADA).
+        APROBADA = "APROBADA", "Aceptada"
         RECHAZADA = "RECHAZADA", "Rechazada"
         EXCLUIDA = "EXCLUIDA", "Excluida"
 
@@ -95,6 +96,9 @@ class ParticipacionItemGaceta(RegistroBase):
     )
     vence_correccion_en = models.DateTimeField(null=True, blank=True)
     correccion_vencida_en = models.DateTimeField(null=True, blank=True)
+    # Ventana de revisión PROPIA de este ítem (la duración que eligió su aprobador al publicarlo a los interesados,
+    # `catalogo.gacetas.eleccion_de_publicacion`). Vacía = rige el periodo de la gaceta, como siempre.
+    vence_revision_en = models.DateTimeField(null=True, blank=True)
     decidida_en = models.DateTimeField(null=True, blank=True)
     decidida_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
@@ -112,6 +116,15 @@ class ParticipacionItemGaceta(RegistroBase):
     def es_final(self):
         return self.estado in self.ESTADOS_FINALES
 
+    @property
+    def ventana_abierta(self):
+        """¿Se puede comentar este ítem? El periodo de la gaceta abierto y, si tiene ventana propia, sin vencer."""
+        from django.utils import timezone
+
+        if not self.gaceta.periodo_abierto:
+            return False
+        return self.vence_revision_en is None or timezone.now() < self.vence_revision_en
+
     def __str__(self):
         return f"{self.elemento} en {self.gaceta}"
 
@@ -123,7 +136,9 @@ class RondaRevisionGaceta(models.Model):
         RECHAZADA = "RECHAZADA", "Rechazada"
         EXCLUIDA = "EXCLUIDA", "Excluida"
         OBSERVADA = "OBSERVADA", "Observada"
-        ACEPTADA_AUTOMATICA = "ACEPTADA_AUTO", "Aceptada automáticamente"
+        ACEPTADA_AUTOMATICA = "ACEPTADA_AUTO", "Aceptada al cerrar el periodo"
+        # Regla de oro (nadie aprueba en una gaceta): la versión corregida que llega con el periodo ya cerrado.
+        ACEPTADA_CORRECCION = "ACEPTADA_CORR", "Aceptada al reenviar la corrección"
         RESUELTA = "RESUELTA", "Definida al resolver la gaceta"
         CANCELADA = "CANCELADA", "Cancelada"
 
@@ -176,3 +191,21 @@ class ObservacionGaceta(models.Model):
 
     def __str__(self):
         return f"Observación de {self.autor} en {self.participacion}"
+
+
+class ConformidadGaceta(models.Model):
+    """«Estoy conforme» (requerimiento del 2026-11-12, CU por asignar): un INTERESADO de la gaceta (revisor que no
+    trabajó el ticket) declara que no tiene nada que comentar sobre lo presentado. Cuando TODOS los interesados
+    están conformes con lo presentado, la gaceta termina antes (`operaciones.estar_conforme`). Vale para lo que ya
+    estaba presentado al darla: si después se presenta una pieza o una versión nueva, deja de contar
+    (`operaciones.conformes_vigentes`) y hay que volver a darla. Append-only: cada vez es una fila nueva."""
+
+    gaceta = models.ForeignKey(GacetaTicket, on_delete=models.CASCADE, related_name="conformidades")
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    creada_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["gaceta_id", "creada_en", "pk"]
+
+    def __str__(self):
+        return f"{self.usuario} conforme con {self.gaceta}"

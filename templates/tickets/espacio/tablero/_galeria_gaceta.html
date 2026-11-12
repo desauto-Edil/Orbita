@@ -1,8 +1,9 @@
 {% comment %}
-  UX-4b / UX-5 — revisión colaborativa de una gaceta como GALERÍA (`espacio.galeria_gaceta`): una tarjeta SOLO
+  UX-4b / UX-5 — revisión colaborativa de una gaceta (`espacio.galeria_gaceta`). Sin audiovisuales (`galeria.modo ==
+  "datos"`, p. ej. un plan de trabajo) es una lista compacta (`_galeria_datos.html`); con ellos, una GALERÍA: una tarjeta SOLO
   VISUAL por pieza (`piezas/_tarjeta.html`: portada, fecha y estado). Al abrirla, el visor muestra a un lado la
   información que la gaceta deja ver (`columnas_visibles`), sus comentarios y lo que la persona puede hacer
-  (comentar, decidir su ronda, reenviar la corrección, excluir). Los filtros son locales (JS); sin JS se ven todas.
+  (comentar, reenviar la corrección, excluir; en una gaceta nadie aprueba). Los filtros son locales (JS); sin JS se ven todas.
 {% endcomment %}
 <div class="gl" data-galeria>
   {% if galeria.filtros|length > 1 %}
@@ -14,6 +15,9 @@
     </div>
   {% endif %}
 
+  {% if galeria.modo == "datos" %}
+  {% include "tickets/espacio/tablero/_galeria_datos.html" %}
+  {% else %}
   <ul class="pz-rejilla">
     {% for t in galeria.tarjetas %}
       {% if t.situacion == "pendiente" and not t.decision and not t.puede_observar %}{% include "tickets/espacio/piezas/_tarjeta.html" with p=t estado_texto="En revisión" %}
@@ -23,4 +27,5 @@
       <li class="gl-nada text-muted">Todavía no hay piezas en esta gaceta.</li>
     {% endfor %}
   </ul>
+  {% endif %}
 </div>

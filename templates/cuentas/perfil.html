@@ -17,12 +17,12 @@
   <div class="perfil__cuerpo">
     <aside class="perfil-id" aria-labelledby="perfil-nombre">
       <div class="perfil-id__foto" aria-hidden="true">
-        <span>{{ usuario.get_full_name|default:usuario.get_username|slice:":1"|upper }}</span>
+        <span>{{ usuario.nombre_visible|slice:":1"|upper }}</span>
         {% if usuario.google_foto_url %}<img src="{{ usuario.foto_grande }}" alt="" referrerpolicy="no-referrer">{% endif %}
       </div>
 
       <div class="perfil-id__titulo">
-        <h1 id="perfil-nombre" class="perfil-id__nombre">{{ usuario.get_full_name|default:usuario.get_username }}</h1>
+        <h1 id="perfil-nombre" class="perfil-id__nombre">{{ usuario.nombre_visible }}</h1>
         {% if perfil.cargo %}<p class="perfil-id__cargo">{{ perfil.cargo }}</p>{% endif %}
         {% if area_principal or unidad_principal %}
           <p class="perfil-id__ubicacion">{% if area_principal %}{{ area_principal.area.nombre }}{% endif %}{% if area_principal and unidad_principal %} · {% endif %}{% if unidad_principal %}{{ unidad_principal.unidad_negocio.nombre }}{% endif %}</p>
@@ -30,10 +30,9 @@
       </div>
 
       <ul class="perfil-id__datos">
-        <li>{% include "components/icon.html" with name="mail" size="sm" %}<span class="sr-only">Correo: </span>{% if usuario.email %}<a href="mailto:{{ usuario.email }}">{{ usuario.email }}</a>{% else %}<span class="perfil-tenue">Sin correo</span>{% endif %}</li>
+        <li>{% include "components/icon.html" with name="mail" size="sm" %}<span class="sr-only">Correo: </span><a href="mailto:{{ usuario.email }}">{{ usuario.email }}</a></li>
         <li>{% include "components/icon.html" with name="phone" size="sm" %}<span class="sr-only">Teléfono: </span>{% if perfil.telefono %}{{ perfil.telefono }}{% else %}<span class="perfil-tenue">Sin teléfono</span>{% endif %}</li>
-        <li>{% include "components/icon.html" with name="user" size="sm" %}<span class="sr-only">Usuario: </span>{{ usuario.get_username }}</li>
-        <li>{% if usuario.google_sub %}{% include "components/icon.html" with name="shield" size="sm" %}Cuenta vinculada con Google{% else %}{% include "components/icon.html" with name="key" size="sm" %}Usuario y contraseña{% endif %}</li>
+        <li>{% include "components/icon.html" with name="shield" size="sm" %}{% if usuario.google_sub %}Cuenta vinculada con Google{% else %}Ingresa con Google{% endif %}</li>
         <li>{% include "components/icon.html" with name="calendar" size="sm" %}En {{ sistema.nombre }} desde {{ usuario.date_joined|date:"F \d\e Y" }}</li>
       </ul>
 
@@ -49,6 +48,23 @@
           {% endfor %}
         </form>
         <p class="perfil-tenue perfil-nota">Solo para ti. «Automático» sigue tu dispositivo.</p>
+      </section>
+
+      <section class="perfil-id__apariencia" aria-labelledby="perfil-color">
+        <h2 id="perfil-color" class="perfil-etiqueta-seccion">Color</h2>
+        <form method="post" action="{% url 'core:tema' %}" class="perfil-colores">
+          {% csrf_token %}
+          <input type="hidden" name="next" value="{{ request.get_full_path }}">
+          <button type="submit" name="tema" value="" class="perfil-color" data-tema="{{ sistema.tema|default:'cielo' }}" aria-pressed="{% if not usuario.tema %}true{% else %}false{% endif %}" title="El color del sistema">
+            <span class="perfil-color__muestra" aria-hidden="true"></span><span class="sr-only">El color del sistema</span>
+          </button>
+          {% for opcion in temas_personales %}
+            <button type="submit" name="tema" value="{{ opcion.clave }}" class="perfil-color" data-tema="{{ opcion.clave }}" aria-pressed="{% if usuario.tema == opcion.clave %}true{% else %}false{% endif %}" title="{{ opcion.nombre }}">
+              <span class="perfil-color__muestra" aria-hidden="true"></span><span class="sr-only">{{ opcion.nombre }}</span>
+            </button>
+          {% endfor %}
+        </form>
+        <p class="perfil-tenue perfil-nota">Solo para ti. El primero es el color del sistema{% if not usuario.tema %} (el que usas ahora){% endif %}.</p>
       </section>
     </aside>
 
@@ -81,10 +97,10 @@
               {% for persona in grupo.personas %}
                 <li class="perfil-persona">
                   <span class="perfil-persona__foto" aria-hidden="true">
-                    <span>{{ persona.get_full_name|default:persona.get_username|slice:":1"|upper }}</span>
+                    <span>{{ persona.nombre_visible|slice:":1"|upper }}</span>
                     {% if persona.google_foto_url %}<img src="{{ persona.foto_mediana }}" alt="" referrerpolicy="no-referrer" loading="lazy">{% endif %}
                   </span>
-                  <span class="perfil-persona__nombre">{{ persona.get_full_name|default:persona.get_username }}</span>
+                  <span class="perfil-persona__nombre">{{ persona.nombre_visible }}</span>
                   {% if persona.perfil_organizacional.cargo %}<span class="perfil-persona__cargo">{{ persona.perfil_organizacional.cargo }}</span>{% endif %}
                 </li>
               {% endfor %}

@@ -1,4 +1,9 @@
-"""Conexión administrativa de un único remitente Gmail; independiente del login."""
+"""Conexión administrativa de un único remitente Gmail; independiente del login.
+
+Versión 1: SOLO EN DESARROLLO (`DEBUG`). Esta vista escribe el refresh token en el `.env` del proyecto desde el
+proceso web, algo inaceptable en un servidor: en producción las rutas responden 404 y el remitente usa la cuenta de
+servicio con delegación de dominio (`GMAIL_AUTH_MODE=service_account`). Además exige
+`plataforma.administracion_avanzada` (antes `is_superuser`)."""
 
 import os
 from pathlib import Path
@@ -10,11 +15,13 @@ from django.conf import settings
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied
+from django.http import Http404
 from django.shortcuts import redirect, render
 from django.views.decorators.cache import never_cache
 from django.views.decorators.debug import sensitive_variables
 from django.views.decorators.http import require_GET, require_http_methods
 
+from apps.core import plataforma
 from apps.core.correo import ErrorCorreo
 
 
@@ -33,7 +40,9 @@ def cliente():
 
 @sensitive_variables()
 def guardar_token(refresh_token):
-    """Actualiza solo modo/token; no imprime ni guarda el token en base de datos."""
+    """Actualiza solo modo/token; no imprime ni guarda el token en base de datos. Solo con DEBUG."""
+    if not settings.DEBUG:
+        raise ErrorCorreo("En producción el remitente usa la cuenta de servicio: no se modifica el .env.")
     if not isinstance(refresh_token, str) or not re.fullmatch(r"[A-Za-z0-9._~+/\-]+", refresh_token):
         raise ErrorCorreo("Google no devolvió un token de renovación válido. Vuelve a autorizar Gmail.")
     path = Path(settings.BASE_DIR) / ".env"
@@ -71,7 +80,9 @@ def guardar_token(refresh_token):
 
 
 def exigir_administrador(request):
-    if not request.user.is_active or not request.user.is_superuser:
+    if not settings.DEBUG:
+        raise Http404  # producción: nunca se escribe el .env desde la web (cuenta de servicio)
+    if not request.user.is_active or not plataforma.administra_plataforma(request.user):
         raise PermissionDenied
 
 

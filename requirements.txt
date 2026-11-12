@@ -1,13 +1,14 @@
 # Único requirements.txt para Sprint 0 (sin separar base/development/production todavía,
 # decisión confirmada en el plan de Sprint 0).
 
-Django>=5.1,<5.2
+# 5.2 es LTS (soporte de seguridad hasta abril de 2028); 5.1 dejó de recibir parches en diciembre de 2025.
+Django>=5.2,<5.3
 psycopg[binary]>=3.2,<4
 celery>=5.4,<6
-redis>=5.0,<6
-django-celery-beat>=2.7,<3
+redis>=6.4,<7  # kombu 5.7 (Celery 5.7) exige redis-py >= 6.4 para el transporte Redis
+django-celery-beat>=2.8,<3  # 2.8 es la primera que declara soporte para Django 5.2
 django-environ>=0.11,<1
-whitenoise>=6.7,<7
+whitenoise>=6.9,<7
 Authlib>=1.7,<2
 requests>=2.32,<3
 google-auth[requests]>=2.38,<3
@@ -18,5 +19,5 @@ channels-redis>=4.2,<5
 daphne>=4.1,<5
 
 # Cargadas condicionalmente en settings.py solo cuando DEBUG=True
-django-debug-toolbar>=4.4,<5
-django-extensions>=3.2,<4
+django-debug-toolbar>=5.1,<6
+django-extensions>=3.2.3,<5

@@ -35,7 +35,6 @@ from apps.tickets.autorizacion import (
     aprobacion_pendiente_de_prorroga,
     motivo_no_elegible_para_prorroga,
     puede_cancelar_prorroga,
-    puede_cancelar_ticket,
     puede_cerrar_ticket,
     puede_comentar_ticket,
     puede_consultar_coleccion,
@@ -43,9 +42,7 @@ from apps.tickets.autorizacion import (
     puede_entregar_ticket,
     puede_escribir_entregables_finales,
     puede_iniciar_atencion,
-    puede_reabrir_ticket,
     puede_consultar_prorrogas,
-    puede_reasignar,
     puede_resolver_prorroga,
     puede_resolver_ticket,
     puede_responder_entrega,
@@ -121,7 +118,7 @@ def mis_tickets_view(request):
         ("respuesta", "Requieren tu respuesta", [t for t in tickets if t.requiere_respuesta]),
         ("borradores", "Borradores", [t for t in tickets if t.estado == Ticket.Estado.BORRADOR]),
         ("curso", "En curso", [t for t in tickets if t.estado in en_curso and not t.requiere_respuesta]),
-        ("finalizados", "Finalizados", [
+        ("historico", "Histórico", [
             t for t in tickets
             if t.estado not in en_curso and t.estado != Ticket.Estado.BORRADOR and not t.requiere_respuesta
         ]),
@@ -130,6 +127,8 @@ def mis_tickets_view(request):
     # es una de ellas. Búsqueda local por código, nombre o etiqueta, sobre la lista ya construida.
     por_clave = {clave: lista for clave, _, lista in secciones}
     ver = request.GET.get("ver")
+    if ver == "finalizados":  # nombre anterior del segmento
+        ver = "historico"
     if ver not in por_clave:
         ver = "todos"
     texto = (request.GET.get("q") or "").strip()[:80]
@@ -146,8 +145,18 @@ def mis_tickets_view(request):
         for clave, titulo, lista in secciones
         if lista or clave != "respuesta"
     ]
+    historico_ctx = None
+    if ver == "historico":
+        # Histórico: lo que solicitó y ya terminó, con filtros de día, mes, persona, tipo, servicio y estado.
+        from apps.tickets import historico
+
+        historico_ctx = historico.contexto(
+            historico.solicitados_por(request.user), request.GET, ver="historico", persona_es="responsable",
+            persona_etiqueta="Lo atendió", vacio="Aún no tienes tickets terminados.",
+        )
     contexto = {
         "tickets": tickets,
+        "historico": historico_ctx,
         "secciones": [(clave, titulo, lista) for clave, titulo, lista in secciones if lista],
         "filas": elegidos,
         "segmentos": segmentos,
@@ -232,14 +241,21 @@ def decidir_pieza_view(request, pk, aprobacion_id):
             ticket, aprobacion_id, request.user,
             decision=request.POST.get("decision") or "",
             comentario=request.POST.get("comentario") or "",
-            anotacion=request.POST.get("anotacion") or "",
+            anotacion=request.FILES.get("anotacion") or request.POST.get("anotacion") or "",
             archivo_base_id=request.POST.get("archivo_base") or None,
+            publicacion=publicacion_de_post(request.POST),
         )
     except ValidationError as error:
         messages.error(request, " ".join(error.messages))
     else:
         messages.success(request, "Revisión registrada.")
     return volver_a(request, "tickets:espacio", ticket.pk)
+
+
+def publicacion_de_post(post):
+    """«Publicar a los interesados» y su duración, tal como llegan del formulario de la decisión (los valida el
+    dominio: `catalogo.gacetas.eleccion_de_publicacion`)."""
+    return {"publicar": post.get("publicar") in ("1", "on", "true"), "dias": post.get("dias_publicacion")}
 
 
 @login_required
@@ -256,44 +272,56 @@ def anotacion_view(request, pk):
     return FileResponse(anotacion.imagen.open("rb"), content_type="image/png")
 
 
-def _ticket_de_conversacion(request, pk):
-    """Ticket de la conversación, solo si la persona puede LEERLA (manipular el id no da acceso)."""
+def _conversacion_de(request, pk, canal):
+    """Ticket y canal de la conversación, solo si la persona pertenece a ESE canal (manipular el id o el canal no da
+    acceso: 403). Sin `canal` (una página abierta con el script anterior a los canales) se usa el primero al que
+    pertenece la persona: nunca amplía el acceso."""
     from apps.tickets import conversacion
 
     ticket = get_object_or_404(Ticket, pk=pk)
-    if not conversacion.puede_leer(request.user, ticket):
+    canales = conversacion.canales_de(request.user, ticket)
+    if not canal and canales:
+        canal = canales[0]
+    if canal not in canales:
         raise PermissionDenied
-    return ticket
+    return ticket, canal
+
+
+def _entero_positivo(valor):
+    try:
+        return int(valor or 0) or None
+    except (TypeError, ValueError):
+        return None
 
 
 @login_required
 @require_GET
 def conversacion_mensajes_view(request, pk):
-    """Conversación del ticket — carga inicial y recuperación (`?despues=<id>`). JSON de solo lectura."""
+    """Conversación del ticket — carga inicial y recuperación de UN canal (`?canal=EQUIPO|INTERESADOS&despues=<id>`)."""
     from apps.tickets import conversacion
 
-    ticket = _ticket_de_conversacion(request, pk)
-    try:
-        despues = int(request.GET.get("despues") or 0) or None
-    except ValueError:
-        despues = None
+    ticket, canal = _conversacion_de(request, pk, request.GET.get("canal") or "")
     return JsonResponse({
-        "mensajes": conversacion.mensajes(ticket, despues_de=despues),
-        "puede_escribir": conversacion.puede_escribir(request.user, ticket),
-        "no_leidos": conversacion.no_leidos(request.user, ticket),
+        "canal": canal,
+        "mensajes": conversacion.mensajes(ticket, canal, despues_de=_entero_positivo(request.GET.get("despues"))),
+        "puede_escribir": conversacion.puede_escribir(request.user, ticket, canal),
+        "no_leidos": conversacion.no_leidos(request.user, ticket, canal),
     })
 
 
 @login_required
 @require_POST
 def conversacion_enviar_view(request, pk):
-    """Conversación del ticket — enviar un mensaje de texto sin recargar (respaldo HTTP del WebSocket). El autor
-    es siempre `request.user`; la operación vuelve a autorizar la escritura."""
+    """Conversación del ticket — enviar un mensaje (texto y archivos) a un canal sin recargar. Es la vía de los
+    mensajes con archivos y el respaldo HTTP del WebSocket para el texto. El autor es siempre `request.user`; la
+    operación vuelve a autorizar la escritura en ese canal y difunde el mensaje a quienes lo leen."""
     from apps.tickets import conversacion
 
-    ticket = _ticket_de_conversacion(request, pk)
+    ticket, canal = _conversacion_de(request, pk, request.POST.get("canal") or "")
     try:
-        mensaje = conversacion.enviar(ticket, request.user, request.POST.get("texto"))
+        mensaje = conversacion.enviar(
+            ticket, request.user, request.POST.get("texto"), canal, archivos=request.FILES.getlist("archivos")
+        )
     except PermissionDenied as error:
         return JsonResponse({"error": str(error)}, status=403)
     except ValidationError as error:
@@ -302,17 +330,25 @@ def conversacion_enviar_view(request, pk):
 
 
 @login_required
-@require_POST
-def conversacion_leido_view(request, pk):
-    """Conversación del ticket — marcar leído al ver la pestaña abierta (regla explícita de `conversacion`)."""
+@require_GET
+def conversacion_presencia_view(request, pk):
+    """Conversación del ticket — quiénes del canal están en línea ahora (`?canal=`); el panel lo pide al abrirse y
+    cada minuto mientras está a la vista."""
     from apps.tickets import conversacion
 
-    ticket = _ticket_de_conversacion(request, pk)
-    try:
-        hasta = int(request.POST.get("hasta") or 0) or None
-    except ValueError:
-        hasta = None
-    return JsonResponse({"no_leidos": conversacion.marcar_leido(request.user, ticket, hasta)})
+    ticket, canal = _conversacion_de(request, pk, request.GET.get("canal") or "")
+    return JsonResponse(conversacion.participantes(request.user, ticket, canal))
+
+
+@login_required
+@require_POST
+def conversacion_leido_view(request, pk):
+    """Conversación del ticket — marcar leído un canal al verlo abierto (regla explícita de `conversacion`)."""
+    from apps.tickets import conversacion
+
+    ticket, canal = _conversacion_de(request, pk, request.POST.get("canal") or "")
+    total = conversacion.marcar_leido(request.user, ticket, canal, _entero_positivo(request.POST.get("hasta")))
+    return JsonResponse({"canal": canal, "no_leidos": total})
 
 
 @login_required
@@ -474,7 +510,16 @@ def _leer_respuestas_de_request(request, version, *, con_archivos=True):
     respuestas = {}
     for campo in version.campos.all():
         nombre = f"campo_{campo.id}"
-        if campo.tipo == Campo.TipoCampo.ARCHIVO:
+        if campo.tipo == Campo.TipoCampo.CHECKLIST:
+            # Lista de evidencias: por punto, su archivo o su enlace (o «quitar»). Solo lo que se tocó.
+            if not con_archivos:
+                continue
+            from apps.tickets.evidencias import cambios_desde_post
+
+            cambios = cambios_desde_post(request.POST, request.FILES, campo, nombre)
+            if cambios:
+                respuestas[campo.id] = cambios
+        elif campo.tipo == Campo.TipoCampo.ARCHIVO:
             if not con_archivos:
                 continue
             if nombre in request.FILES:
@@ -500,12 +545,20 @@ def _construir_campos_formulario(respuesta_formulario, version):
         rc.campo_id: rc
         for rc in respuesta_formulario.respuestas_campo.select_related("archivo", "campo").all()
     }
+    from apps.tickets import evidencias
+
+    campos = list(version.campos.prefetch_related("opciones").all())
+    marcas = (
+        evidencias.marcas_vigentes(ticket=respuesta_formulario.ticket)
+        if any(c.tipo == Campo.TipoCampo.CHECKLIST for c in campos) else []
+    )
     campos_formulario = []
-    for campo in version.campos.prefetch_related("opciones").all():
+    for campo in campos:
         estrategia = ESTRATEGIAS_POR_TIPO[campo.tipo]
         campos_formulario.append(
             {
                 "campo": campo,
+                "checklist": evidencias.checklist(campo, marcas) if campo.tipo == Campo.TipoCampo.CHECKLIST else None,
                 "widget": estrategia.widget,
                 "opciones": campo.opciones.all(),
                 "opciones_referencia": estrategia.queryset(campo) if hasattr(estrategia, "queryset") else None,
@@ -576,7 +629,7 @@ def _guardar_envio(request, ticket, version):
 def borrador_formulario_view(request, pk):
     ticket = _ticket_propio(request, pk)
     if ticket.estado != Ticket.Estado.BORRADOR:
-        return redirect("tickets:detalle", pk=ticket.pk)
+        return redirect("tickets:espacio", pk=ticket.pk)
     version = ticket.respuesta_formulario.formulario_version
     # Proceso manual sin datos previos a la radicación: no hay formulario que diligenciar aquí; se inicia
     # directamente desde la confirmación (los datos de la ejecución se completan dentro del ticket).
@@ -640,7 +693,7 @@ def revisar_view(request, pk):
     con el error junto a cada campo."""
     ticket = _ticket_propio(request, pk)
     if ticket.estado != Ticket.Estado.BORRADOR:
-        return redirect("tickets:enviada", pk=ticket.pk) if ticket.radicado else redirect("tickets:detalle", pk=ticket.pk)
+        return redirect("tickets:enviada", pk=ticket.pk) if ticket.radicado else redirect("tickets:espacio", pk=ticket.pk)
     version = ticket.respuesta_formulario.formulario_version
 
     errores_formato, valores_con_error = {}, {}
@@ -693,7 +746,7 @@ def enviar_view(request, pk):
     if not es_propietario_borrador(request.user, ticket):
         raise PermissionDenied
     if ticket.estado != Ticket.Estado.BORRADOR:
-        return redirect("tickets:enviada", pk=ticket.pk) if ticket.radicado else redirect("tickets:detalle", pk=ticket.pk)
+        return redirect("tickets:enviada", pk=ticket.pk) if ticket.radicado else redirect("tickets:espacio", pk=ticket.pk)
 
     try:
         operaciones.radicar_ticket(ticket, request.user)
@@ -768,90 +821,56 @@ def radicar_view(request, pk):
         return redirect("tickets:borrador", pk=ticket.pk)
 
     messages.success(request, "Ticket radicado correctamente.")
-    return redirect("tickets:detalle", pk=ticket.pk)
+    return redirect("tickets:espacio", pk=ticket.pk)
 
 
 @login_required
 def detalle_view(request, pk):
-    """Incremento 2.2 (radicado, fecha/hora, servicio, estado, respuestas y
-    archivos) + 2.3 (responsable/equipo, acciones Tomar/Asignar/Reasignar
-    según autorización, línea de tiempo) + 2.4 (comunicación, adjuntos
-    operativos, solicitudes de información). Visible para el solicitante
-    (`es_propietario_borrador`) o para quien tenga autorización de
-    atención sobre el ticket (`puede_ver_en_cola`) — un ticket en
-    BORRADOR nunca satisface `puede_ver_en_cola` (ver `autorizacion.py`),
-    así que solo el solicitante llega al `redirect` de abajo."""
+    """Retirada: la vista aislada del detalle ya no existe; todo vive en el espacio del ticket. Sus funciones están
+    en la vista «Resumen» del espacio (`?vista=resumen`). La URL se conserva como REDIRECCIÓN para no romper enlaces
+    ya enviados (correos, notificaciones), con la autorización de siempre (403 si no se podía abrir)."""
     ticket = get_object_or_404(Ticket, pk=pk)
     es_solicitante = es_propietario_borrador(request.user, ticket)
     if not (es_solicitante or puede_ver_en_cola(request.user, ticket)):
         raise PermissionDenied
     if ticket.estado == Ticket.Estado.BORRADOR:
         return redirect("tickets:borrador", pk=ticket.pk)
+    return redirect(url_resumen(ticket.pk))
 
-    respuesta_formulario = ticket.respuesta_formulario
-    version = respuesta_formulario.formulario_version
-    usuario_puede_asignar = puede_asignar(request.user, ticket)
-    usuario_puede_reasignar = puede_reasignar(request.user, ticket)
+
+def url_resumen(ticket_pk, ancla=""):
+    """La vista «Resumen» dentro del espacio del ticket (lo que antes era el detalle)."""
+    return f"{reverse('tickets:espacio', args=[ticket_pk])}?vista=resumen" + (f"#{ancla}" if ancla else "")
+
+
+def _contexto_resumen(usuario, ticket, trabajo):
+    """Lo que la vista «Resumen» del espacio necesita además de lo que el espacio ya arma para quien consulta el
+    ticket (solicitud, archivos, solicitudes, entrega, prórrogas, gacetas, datos de inicio). Solo presentación:
+    cada operación vuelve a validar. Reasignar vive en el menú «Más» (solo al equipo de trabajo)."""
+    usuario_puede_asignar = puede_asignar(usuario, ticket)
     resoluciones = list(
-        ticket.resoluciones.select_related("resuelto_por")
-        .prefetch_related("adjuntos")
-        .order_by("-resuelto_en")
+        ticket.resoluciones.select_related("resuelto_por").prefetch_related("adjuntos").order_by("-resuelto_en")
     )
-    contexto = {
-        "ticket": ticket,
-        "servicio": ticket.detalle_servicio.servicio,
-        "campos_formulario": _construir_campos_formulario(respuesta_formulario, version),
-        "historial": ticket.historial.select_related("actor").all(),
-        "es_solicitante": es_solicitante,
-        # 4.F2: información operativa para quien atiende (no cambia prioridad ni SLA).
-        "plazo_solicitado": plazos.evaluar_plazo(ticket) if puede_ver_en_cola(request.user, ticket) else None,
-        "puede_tomar": puede_tomar(request.user, ticket),
-        "puede_iniciar_atencion": puede_iniciar_atencion(request.user, ticket),
+    tablas = parrilla_ops.tablas(ticket, usuario)
+    return {
+        **trabajo,
+        "plazo_solicitado": plazos.evaluar_plazo(ticket) if puede_ver_en_cola(usuario, ticket) else None,
+        "puede_tomar": puede_tomar(usuario, ticket),
+        "puede_iniciar_atencion": puede_iniciar_atencion(usuario, ticket),
         "direccionamiento": direccionamiento.direccionamiento_de(ticket),
         "puede_asignar": usuario_puede_asignar,
-        "puede_reasignar": usuario_puede_reasignar,
-        "usuarios_disponibles": get_user_model().objects.filter(is_active=True).order_by("username")
-        if (usuario_puede_asignar or usuario_puede_reasignar)
-        else None,
-        "equipos_disponibles": Equipo.objects.filter(activo=True).order_by("nombre")
-        if (usuario_puede_asignar or usuario_puede_reasignar)
-        else None,
-        "comentarios": ticket.comentarios.select_related("autor").prefetch_related("adjuntos").all(),
-        "adjuntos_ticket": ticket.adjuntos.select_related("subido_por").all(),
-        "solicitudes": ticket.solicitudes_informacion.select_related(
-            "solicitada_por", "destinatario", "respuesta__respondida_por"
-        ).prefetch_related("adjuntos", "respuesta__adjuntos"),
-        "puede_comentar": puede_comentar_ticket(request.user, ticket),
-        "puede_solicitar_informacion": puede_solicitar_informacion(request.user, ticket),
-        # Solo el destinatario de una SolicitudInformacion puede responderla, y en
-        # 2.4 el destinatario es siempre el solicitante (R.1) — reutilizar
-        # `es_solicitante` evita evaluar `puede_responder_solicitud` fila por fila
-        # en la plantilla.
-        "usuario_es_destinatario_solicitudes": es_solicitante,
-        # 2.5/2.C — resolución/cierre/cancelación/reapertura. `resoluciones`
-        # ordenadas más reciente primero: la actual es la [0] (si existe);
-        # el resto (tras un ciclo RESOLVER→REABRIR→RESOLVER) son historia.
+        "usuarios_disponibles": get_user_model().objects.filter(is_active=True).order_by("first_name", "last_name", "email")
+        if usuario_puede_asignar else None,
+        "equipos_disponibles": Equipo.objects.filter(activo=True).order_by("nombre") if usuario_puede_asignar else None,
+        "usuario_es_destinatario_solicitudes": es_propietario_borrador(usuario, ticket),
         "resolucion_actual": resoluciones[0] if resoluciones else None,
         "resoluciones_anteriores": resoluciones[1:],
-        "puede_resolver": puede_resolver_ticket(request.user, ticket),
-        "puede_cerrar": puede_cerrar_ticket(request.user, ticket),
-        "puede_cancelar": puede_cancelar_ticket(request.user, ticket),
-        "puede_reabrir": puede_reabrir_ticket(request.user, ticket),
-        "titulo_pagina": f"Ticket {ticket.codigo or ticket.pk} — {ticket.detalle_servicio.servicio.nombre}",
+        "puede_resolver": puede_resolver_ticket(usuario, ticket),
+        "puede_cerrar": puede_cerrar_ticket(usuario, ticket),
+        "recorridos": trabajo_ops.recorridos_del_ticket(usuario, ticket),
+        "tablas_coleccion": tablas,
+        "parrilla": tablas[0] if tablas else None,
     }
-    contexto.update(_contexto_entrega(request.user, ticket))
-    contexto.update(_contexto_prorrogas(request.user, ticket))
-    contexto.update(_contexto_trabajo_actual(request.user, ticket))
-    # Fase 2: datos de inicio diligenciados en la ejecución y recorridos por ítem / actividades en paralelo.
-    contexto["datos_inicio"] = trabajo_ops.datos_inicio_del_ticket(request.user, ticket)
-    contexto["recorridos"] = trabajo_ops.recorridos_del_ticket(request.user, ticket)
-    # Fase 3: gacetas del ticket y condiciones de cierre del Proceso.
-    contexto.update(trabajo_ops.gacetas_y_cierre(request.user, ticket))
-    # 4.G2B1: elementos estructurados (solo si el Proceso los usa).
-    contexto["colecciones"] = parrilla_ops.tablas(ticket, request.user)
-    # La colección por defecto, con el nombre de siempre (una sola colección antes de la Fase 1).
-    contexto["parrilla"] = contexto["colecciones"][0] if contexto["colecciones"] else None
-    return render(request, "tickets/detalle.html", contexto)
 
 
 @login_required
@@ -987,8 +1006,17 @@ def espacio_view(request, pk):
     from apps.tickets import conversacion as conversacion_ops
 
     contexto["conversacion"] = conversacion_ops.contexto(usuario, ticket, rel)
-    contexto["historial_visible"] = rel.consulta
-    if rel.consulta:
+    claves_canal = [c["clave"] for c in contexto["conversacion"]["canales"]]
+    pedido = request.GET.get("canal") or ""
+    contexto["canal_inicial"] = pedido if pedido in claves_canal else (claves_canal[0] if claves_canal else "")
+    # El Historial completo reúne las decisiones y observaciones internas (aprobaciones, revisiones, correcciones):
+    # es del EQUIPO, como su conversación. Los interesados (solicitante, revisores de gaceta) no lo ven aquí; quien
+    # solicitó conserva su propio seguimiento («Ver mi ticket»).
+    historial_visible = rel.consulta and conversacion_ops.EQUIPO in claves_canal
+    contexto["historial_visible"] = historial_visible
+    if contexto["panel_global"] == "historial" and not historial_visible:
+        contexto["panel_global"] = "conversacion"
+    if historial_visible:
         from apps.tickets import linea_tiempo
 
         contexto["linea_tiempo"] = linea_tiempo.eventos(ticket)
@@ -1017,14 +1045,34 @@ def espacio_view(request, pk):
         ]
     contexto["misiones"] = grupos
     contexto["mision"] = grupo
+    # La solicitud dentro de la misión (solo para quien consulta el ticket: es el mismo dato del panel «Solicitud»).
+    if seleccionada is not None and seleccionada.get("revisar_solicitud") and rel.consulta:
+        respuesta_mision = getattr(ticket, "respuesta_formulario", None)
+        campos_mision = (
+            _construir_campos_formulario(respuesta_mision, respuesta_mision.formulario_version)
+            if respuesta_mision is not None else []
+        )
+        if campos_mision:
+            contexto["mision_solicitud"] = {"campos": campos_mision, "primera": seleccionada["revisar_solicitud"] == "primera"}
     if grupo is not None and grupo["tipo"] == "lluvia":
         contexto["lluvia"] = espacio_ops.lluvia(usuario, ticket, grupo["accion"])
     elif grupo is not None and grupo["tipo"] in ("revision", "items"):
         contexto["filas_mision"] = espacio_ops.filas_de_mision(usuario, ticket, grupo)
+        if grupo["tipo"] == "revision":
+            contexto["revision_datos"] = espacio_ops.revision_de_datos(contexto["filas_mision"])
     # UX-4b: cada gaceta es un espacio de colaboración permanente (no solo una misión que desaparece).
     contexto["galerias"] = espacio_ops.gacetas_del_espacio(usuario, rel, acciones)
     if grupo is not None and grupo["tipo"] == "gaceta":
         contexto["galeria"] = next((g for g in contexto["galerias"] if g["gaceta"].pk == grupo["gaceta"].pk), None)
+    # `?gaceta=<pk>`: abrir UNA gaceta concreta (enlaces del Resumen, de los avisos y de «Coordinar»), haya o no
+    # misión; sin misión la vista queda vacía y esta es la forma de llegar a ella. Solo las que la persona consulta.
+    pedida = request.GET.get("gaceta") or ""
+    if pedida.isdigit():
+        contexto["galeria_pedida"] = next((g for g in contexto["galerias"] if g["gaceta"].pk == int(pedida)), None)
+    contexto["gacetas_coordinadas"] = [
+        g["gaceta"] for g in contexto["galerias"]
+        if g["coordina"] and g["gaceta"].estado in ("ABIERTA", "PERIODO_CERRADO")
+    ]
     contexto["ficha_id"] = ficha["elemento"].pk if ficha is not None else None
     if ficha is not None:
         ficha["item"] = espacio_ops.recorrido_de_item(ficha["elemento"])
@@ -1052,7 +1100,6 @@ def espacio_view(request, pk):
         contexto.update({
             "campos_formulario": _construir_campos_formulario(respuesta_formulario, respuesta_formulario.formulario_version),
             "historial": ticket.historial.select_related("actor").all(),
-            "comentarios": ticket.comentarios.select_related("autor").prefetch_related("adjuntos").all(),
             "adjuntos_ticket": ticket.adjuntos.select_related("subido_por").all(),
             "solicitudes": ticket.solicitudes_informacion.select_related(
                 "solicitada_por", "destinatario", "respuesta__respondida_por"
@@ -1073,6 +1120,13 @@ def espacio_view(request, pk):
     # UX-4c: elegir una etapa del recorrido (`?etapa=`) muestra sus ítems en SOLO LECTURA en lugar de la misión
     # (volver a lo ya aprobado o enviado sin poder cambiarlo). Solo etapas del recorrido de la colección consultada.
     vista = espacio_ops.vista_etapa(contexto.get("colecciones"), request.GET.get("etapa") or "")
+    # El resumen del ticket (antes la página aislada del detalle) se abre DENTRO del espacio con `?vista=resumen`,
+    # solo para quien consulta el ticket; reemplaza la misión como lo hace una etapa.
+    vista_resumen = request.GET.get("vista") in ("resumen", "gestion") and rel.consulta  # «gestion»: enlaces anteriores
+    contexto["vista_resumen"] = vista_resumen
+    if vista_resumen:
+        vista = None
+        contexto.update(_contexto_resumen(usuario, ticket, trabajo))
     contexto["vista_etapa"] = vista
     if contexto["ruta"]:
         for etapa in contexto["ruta"]["etapas"]:
@@ -1082,6 +1136,13 @@ def espacio_view(request, pk):
         en_camino = [f"{e['cantidad']} en {e['nombre']}" for e in contexto["ruta"]["etapas"] if e["cantidad"]]
         if en_camino:
             contexto["espera"] = "En camino: " + " · ".join(en_camino) + "."
+    contexto["solo_consulta"] = espacio_ops.solo_consulta(ticket)
+    if contexto["solo_consulta"]:
+        # Cerrado o cancelado: SOLO CONSULTA. Ningún formulario se ofrece, aunque una regla `puede_*` heredada lo
+        # permitiera (el dominio igual rechazaría escribir); lo registrado se sigue viendo completo.
+        for clave in [c for c in contexto if c.startswith("puede_")]:
+            contexto[clave] = False
+        contexto["usuario_es_destinatario_solicitudes"] = False
     return render(request, "tickets/espacio.html", contexto)
 
 
@@ -1109,7 +1170,7 @@ def seguimiento_view(request, pk):
     # 4.G1: un ticket generado por programación no tiene solicitante, y por tanto tampoco
     # «seguimiento de solicitante»: quien puede consultarlo lo ve en su vista operativa.
     if ticket.solicitante_id is None:
-        return redirect("tickets:detalle", pk=ticket.pk)
+        return redirect("tickets:espacio", pk=ticket.pk)
 
     respuesta_formulario = ticket.respuesta_formulario
     entrega = _contexto_entrega(request.user, ticket)
@@ -1218,7 +1279,7 @@ def tomar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Ticket tomado.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -1233,7 +1294,7 @@ def iniciar_atencion_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Atención iniciada.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 def _usuario_y_equipo_de_request(request):
@@ -1257,7 +1318,7 @@ def asignar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Ticket asignado.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -1270,9 +1331,19 @@ def reasignar_view(request, pk):
         operaciones.reasignar_ticket(ticket, request.user, usuario=usuario, equipo=equipo)
     except (PermissionDenied, ValidationError) as exc:
         messages.error(request, _mensaje_error(exc))
+        return volver_a(request, "tickets:espacio", pk)
+    from apps.tickets import espacio as espacio_ops
+
+    if usuario is not None:
+        destino = usuario.nombre_visible
     else:
-        messages.success(request, "Ticket reasignado.")
-    return volver_a(request, "tickets:detalle", pk)
+        destino = equipo.nombre if equipo is not None else ""
+    messages.success(request, f"Reasignaste el ticket {ticket.codigo or ticket.pk} a {destino}: ahora lo atiende esa persona.")
+    ticket.refresh_from_db()
+    # Quien entregó el ticket puede dejar de tener relación con él: entonces vuelve a Mi trabajo, no a un 403.
+    if not espacio_ops.relacion(request.user, ticket).puede_abrir:
+        return redirect("core:mi_trabajo")
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -1290,7 +1361,7 @@ def resolver_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Ticket resuelto.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -1301,7 +1372,7 @@ def solicitar_prorroga_view(request, pk):
     form = SolicitudProrrogaForm(request.POST)
     if not form.is_valid():
         messages.error(request, "Indica una nueva fecha válida y el motivo de la prórroga.")
-        return volver_a(request, "tickets:detalle", pk)
+        return volver_a(request, "tickets:espacio", pk)
     try:
         prorroga = prorrogas.solicitar_prorroga(
             ticket, request.user, nueva_fecha=form.cleaned_data["nueva_fecha"], motivo=form.cleaned_data["motivo"]
@@ -1313,7 +1384,7 @@ def solicitar_prorroga_view(request, pk):
             messages.success(request, "Prórroga aplicada: la fecha objetivo vigente ya es la nueva.")
         else:
             messages.success(request, "Prórroga enviada para aprobación.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -1330,7 +1401,7 @@ def cancelar_prorroga_view(request, pk, prorroga_id):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Prórroga cancelada.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -1344,22 +1415,49 @@ def cerrar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Ticket cerrado.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
 def cancelar_view(request, pk):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
+    from apps.tickets import cancelaciones
+
     ticket = get_object_or_404(Ticket, pk=pk)
     motivo = request.POST.get("motivo", "")
     try:
-        operaciones.cancelar_ticket(ticket, request.user, motivo)
+        resultado = cancelaciones.solicitar_cancelacion(ticket, request.user, motivo)
     except (PermissionDenied, ValidationError) as exc:
         messages.error(request, _mensaje_error(exc))
     else:
-        messages.success(request, "Ticket cancelado.")
-    return volver_a(request, "tickets:detalle", pk)
+        if isinstance(resultado, Ticket):
+            messages.success(request, "Ticket cancelado.")
+        else:
+            aprobador = cancelaciones.aprobador_de(ticket)
+            messages.success(
+                request,
+                f"Pediste cancelar el ticket. {aprobador} debe aceptarlo; mientras tanto el trabajo queda detenido.",
+            )
+    return volver_a(request, "tickets:espacio", pk)
+
+
+@login_required
+def cancelacion_retirar_view(request, pk, solicitud_id):
+    """Quien pidió la cancelación desiste mientras espera la decisión del aprobador."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    from apps.tickets import cancelaciones
+    from apps.tickets.models import SolicitudCancelacion
+
+    solicitud = get_object_or_404(SolicitudCancelacion, pk=solicitud_id, ticket_id=pk)
+    try:
+        cancelaciones.retirar_cancelacion(solicitud, request.user)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Retiraste la solicitud de cancelación: el trabajo del ticket continúa.")
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -1374,7 +1472,7 @@ def reabrir_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Ticket reabierto.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 def _elemento_de_coleccion(request, pk, elemento_id):
@@ -1435,8 +1533,8 @@ def _volver_a_elementos(request, pk):
     proceso) o, por defecto, a los elementos del detalle."""
     destino = request.POST.get("next") or ""
     if destino.startswith("/"):
-        return volver_a(request, "tickets:detalle", pk)
-    return redirect(f"{reverse('tickets:detalle', args=[pk])}#elementos")
+        return volver_a(request, "tickets:espacio", pk)
+    return redirect(url_resumen(pk, "elementos"))
 
 
 @login_required
@@ -1730,8 +1828,8 @@ def elemento_salida_view(request, pk, elemento_id):
 def _volver_a(request, pk, ancla):
     destino = request.POST.get("next") or ""
     if destino.startswith("/"):
-        return volver_a(request, "tickets:detalle", pk)
-    return redirect(f"{reverse('tickets:detalle', args=[pk])}#{ancla}")
+        return volver_a(request, "tickets:espacio", pk)
+    return redirect(url_resumen(pk, ancla))
 
 
 @login_required
@@ -1861,6 +1959,62 @@ def elemento_archivo_adjuntar_view(request, pk, elemento_id, campo_id):
 
 @login_required
 @require_POST
+def evidencia_marcar_view(request, pk, elemento_id, campo_id):
+    """Lista de evidencias — sube la prueba (archivo o enlace) de UN punto del checklist de un ítem. La operación
+    (`evidencias.marcar_punto_elemento`) vuelve a autorizar bajo lock (quien edita esa columna del ítem)."""
+    from apps.tickets import espacio as espacio_ops
+    from apps.tickets import evidencias
+
+    ticket, elemento = _elemento_de_coleccion(request, pk, elemento_id)
+    try:
+        evidencias.marcar_punto_elemento(
+            elemento, campo_id, request.POST.get("punto") or "", request.user,
+            archivo=request.FILES.get("archivo"), enlace=request.POST.get("enlace") or "",
+        )
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, f"Evidencia subida en {espacio_ops.nombre_de_item(elemento)}.")
+    return _volver_a_elementos(request, pk)
+
+
+@login_required
+@require_POST
+def evidencia_retirar_view(request, pk, marca_id):
+    """Quita (retiro lógico) la prueba de un punto de una lista de evidencias."""
+    from apps.tickets import evidencias
+    from apps.tickets.models import MarcaEvidencia
+
+    marca = get_object_or_404(MarcaEvidencia, pk=marca_id, ticket_id=pk)
+    try:
+        evidencias.retirar_marca(marca, request.user)
+    except (PermissionDenied, ValidationError) as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Evidencia quitada.")
+    return _volver_a_elementos(request, pk)
+
+
+@login_required
+@require_GET
+def evidencia_view(request, marca_id):
+    """Descarga (o, con `?ver=1`, muestra) el archivo de la prueba de un punto. Una prueba quitada sigue siendo
+    historia del ticket. Autorización: `evidencias.puede_ver_marca` (la de la ficha del ítem o del formulario)."""
+    from apps.tickets import evidencias
+    from apps.tickets.models import MarcaEvidencia
+    from apps.tickets.vista_previa import tipo_mime_en_linea
+
+    marca = get_object_or_404(MarcaEvidencia.objects.select_related("ticket", "elemento__parrilla"), pk=marca_id)
+    if not marca.archivo or not evidencias.puede_ver_marca(request.user, marca):
+        raise PermissionDenied
+    en_linea = tipo_mime_en_linea(marca.nombre_original) if request.GET.get("ver") else None
+    if en_linea:
+        return FileResponse(marca.archivo.open("rb"), as_attachment=False, filename=marca.nombre_original, content_type=en_linea)
+    return FileResponse(marca.archivo.open("rb"), as_attachment=True, filename=marca.nombre_original)
+
+
+@login_required
+@require_POST
 def elemento_archivo_retirar_view(request, pk, adjunto_id):
     """Fase 1 — retira (lógicamente) un archivo de un elemento."""
     ticket = get_object_or_404(Ticket, pk=pk)
@@ -1931,22 +2085,6 @@ def revision_devolver_view(request, pk, entregable_id, elemento_id):
 
 
 @login_required
-def comentar_view(request, pk):
-    if request.method != "POST":
-        return HttpResponseNotAllowed(["POST"])
-    ticket = get_object_or_404(Ticket, pk=pk)
-    contenido = request.POST.get("contenido", "")
-    archivo = request.FILES.get("archivo")
-    try:
-        operaciones.comentar_ticket(ticket, request.user, contenido, archivos=[archivo] if archivo else None)
-    except (PermissionDenied, ValidationError) as exc:
-        messages.error(request, _mensaje_error(exc))
-    else:
-        messages.success(request, "Comentario agregado.")
-    return volver_a(request, "tickets:detalle", pk)
-
-
-@login_required
 def adjuntar_view(request, pk):
     if request.method != "POST":
         return HttpResponseNotAllowed(["POST"])
@@ -1960,7 +2098,7 @@ def adjuntar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Archivo adjuntado.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -1978,7 +2116,7 @@ def solicitar_informacion_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Solicitud de información enviada.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -1997,7 +2135,7 @@ def responder_solicitud_view(request, pk, solicitud_id):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Respuesta enviada.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -2057,7 +2195,14 @@ def descargar_adjunto_view(request, adjunto_id):
         pk=adjunto_id,
     )
     ticket = adjunto.ticket_relacionado
-    if not puede_consultar_ticket(request.user, ticket):
+    if adjunto.tipo_relacion == Adjunto.TipoRelacion.COMENTARIO:
+        # Conversación del ticket: el archivo de un mensaje se abre solo si se puede leer SU canal (el del equipo
+        # nunca lo abre quien solo es interesado, aunque consulte el ticket).
+        from apps.tickets.conversacion import puede_ver_archivo
+
+        if not puede_ver_archivo(request.user, adjunto):
+            raise PermissionDenied
+    elif not puede_consultar_ticket(request.user, ticket):
         # 4.E2: el aprobador que REVISA un entregable puede descargar sus archivos.
         revisa = (
             adjunto.tipo_relacion == Adjunto.TipoRelacion.ENTREGABLE
@@ -2112,14 +2257,14 @@ def entregable_resultado_view(request, pk, entregable_id):
     entregable = get_object_or_404(EntregableTicket, pk=entregable_id, ticket=ticket)
     if not trabajo_ops.entregable_operable_ahora(ticket, entregable):
         messages.error(request, _MENSAJE_ENTREGABLE_ADELANTADO)
-        return volver_a(request, "tickets:detalle", pk)
+        return volver_a(request, "tickets:espacio", pk)
     try:
         entregables_ops.registrar_resultado_entregable(entregable, request.user, request.POST.get("valor", ""))
     except (PermissionDenied, ValidationError) as exc:
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Resultado guardado.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -2130,14 +2275,14 @@ def entregable_confirmar_view(request, pk, entregable_id):
     entregable = get_object_or_404(EntregableTicket, pk=entregable_id, ticket=ticket)
     if not trabajo_ops.entregable_operable_ahora(ticket, entregable):
         messages.error(request, _MENSAJE_ENTREGABLE_ADELANTADO)
-        return volver_a(request, "tickets:detalle", pk)
+        return volver_a(request, "tickets:espacio", pk)
     try:
         entregables_ops.confirmar_entregable(entregable, request.user)
     except (PermissionDenied, ValidationError) as exc:
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Entregable confirmado.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -2148,18 +2293,18 @@ def entregable_adjuntar_view(request, pk, entregable_id):
     entregable = get_object_or_404(EntregableTicket, pk=entregable_id, ticket=ticket)
     if not trabajo_ops.entregable_operable_ahora(ticket, entregable):
         messages.error(request, _MENSAJE_ENTREGABLE_ADELANTADO)
-        return volver_a(request, "tickets:detalle", pk)
+        return volver_a(request, "tickets:espacio", pk)
     archivo = request.FILES.get("archivo")
     if archivo is None:
         messages.error(request, "Seleccione un archivo.")
-        return volver_a(request, "tickets:detalle", pk)
+        return volver_a(request, "tickets:espacio", pk)
     try:
         entregables_ops.adjuntar_archivo_entregable(entregable, request.user, archivo)
     except (PermissionDenied, ValidationError) as exc:
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Archivo adjuntado.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -2170,14 +2315,14 @@ def entregable_retirar_archivo_view(request, pk, adjunto_id):
     adjunto = get_object_or_404(Adjunto, pk=adjunto_id, entregable__ticket=ticket)
     if not trabajo_ops.entregable_operable_ahora(ticket, adjunto.entregable):
         messages.error(request, _MENSAJE_ENTREGABLE_ADELANTADO)
-        return volver_a(request, "tickets:detalle", pk)
+        return volver_a(request, "tickets:espacio", pk)
     try:
         entregables_ops.retirar_archivo_entregable(adjunto, request.user)
     except (PermissionDenied, ValidationError) as exc:
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Archivo retirado.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -2188,7 +2333,7 @@ def entregar_view(request, pk):
     # Acción irreversible: se exige confirmación explícita en el envío.
     if request.POST.get("confirmar") != "1":
         messages.error(request, "Confirme la entrega para continuar.")
-        return volver_a(request, "tickets:detalle", pk)
+        return volver_a(request, "tickets:espacio", pk)
     try:
         entrega = entregas_ops.entregar_ticket(ticket, request.user)
     except (PermissionDenied, ValidationError) as exc:
@@ -2198,7 +2343,7 @@ def entregar_view(request, pk):
             messages.success(request, "Resultado entregado. El ticket quedó cerrado.")
         else:
             messages.success(request, "Resultado entregado al solicitante.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -2212,7 +2357,7 @@ def aceptar_entrega_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Gracias: el ticket quedó cerrado.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)
 
 
 @login_required
@@ -2226,4 +2371,4 @@ def observar_entrega_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Observaciones enviadas. El responsable realizará los ajustes.")
-    return volver_a(request, "tickets:detalle", pk)
+    return volver_a(request, "tickets:espacio", pk)

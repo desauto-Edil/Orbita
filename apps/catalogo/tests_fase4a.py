@@ -42,6 +42,7 @@ from apps.catalogo.operaciones import configurar_politica_entrega, validar_ejecu
 from apps.catalogo.tests import _permiso_get_or_create
 from apps.catalogo.versionamiento import activar_version, crear_nueva_version
 from apps.core.models import RegistroAuditoria
+from apps.core.pruebas import persona
 
 Usuario = get_user_model()
 CLAVE = "Clave-Segura-4A"
@@ -51,15 +52,15 @@ class _Base4A:
     PERMISOS = ("catalogo.administrar", "formulario.administrar", "workflows.administrar", "workflows.vincular")
 
     def _preparar(self):
-        self.admin = Usuario.objects.create_user("f4a_admin", password=CLAVE)
+        self.admin = Usuario.objects.create_user("f4a_admin@pruebas.orbita")
         for codigo in self.PERMISOS:
             _permiso_get_or_create(self.admin, codigo, f"Rol 4A {codigo}")
-        self.persona = Usuario.objects.create_user("f4a_persona", password=CLAVE)
+        self.persona = Usuario.objects.create_user("f4a_persona@pruebas.orbita")
         # Bloque 2: publicar exige que alguien pueda atender lo publicado (aquí, con alcance global).
-        self.atencion_global = Usuario.objects.create_user("f4a_atencion_global", password=CLAVE)
+        self.atencion_global = Usuario.objects.create_user("f4a_atencion_global@pruebas.orbita")
         _permiso_get_or_create(self.atencion_global, "tickets.atender", "Rol 4A atención global")
         self.categoria = Categoria.objects.create(nombre="Categoría 4A")
-        self.client.login(username="f4a_admin", password=CLAVE)
+        self.client.force_login(persona("f4a_admin@pruebas.orbita"))
 
     def _formulario_activo(self, nombre):
         formulario = Formulario.objects.create(nombre=nombre)
@@ -215,7 +216,7 @@ class ControlesDependientesTests(_Base4A, TestCase):
     def test_parametros_de_campo_por_tipo_y_revision_solo_en_proceso(self):
         crear_nueva_version(self.servicio.formulario, self.admin)
         entrada = self.client.get(self._url(self.servicio, "entrada"))
-        self.assertContains(entrada, 'data-mostrar-si="-tipo=ARCHIVO"')
+        self.assertContains(entrada, 'data-mostrar-si="-tipo=ARCHIVO,CHECKLIST"')
         self.assertContains(entrada, 'data-mostrar-si="-tipo=MULTILISTA"')
         salida = self.client.get(self._url(self.servicio, "salida"))
         self.assertNotContains(salida, 'data-mostrar-si="-tipo=ELEMENTOS"')
@@ -706,11 +707,11 @@ class PermisosYEdicionTests(_Base4A, TestCase):
         self.workflow = self._flujo()
         self.servicio = self._servicio(workflow=self.workflow)
         self.config = preparar_configuracion_ejecucion(self.servicio, self.admin)
-        self.limitado = Usuario.objects.create_user("f4a_limitado", password=CLAVE)
+        self.limitado = Usuario.objects.create_user("f4a_limitado@pruebas.orbita")
         _permiso_get_or_create(self.limitado, "catalogo.administrar", "Rol 4A limitado")
 
     def test_sin_permiso_de_formularios_no_se_ofrecen_controles_inutiles(self):
-        self.client.login(username="f4a_limitado", password=CLAVE)
+        self.client.force_login(persona("f4a_limitado@pruebas.orbita"))
         pagina = self.client.get(self._url(self.servicio, "entrada"))
         self.assertContains(pagina, "requiere el permiso de administrar formularios")
         self.assertNotContains(pagina, "Editar formulario")
@@ -718,7 +719,7 @@ class PermisosYEdicionTests(_Base4A, TestCase):
 
     def test_sin_permiso_de_flujos_no_se_ofrece_agregar_ni_reordenar(self):
         bloque = self._actividad(self.config, self._fase(self.workflow, "Recepción"), "Atender")
-        self.client.login(username="f4a_limitado", password=CLAVE)
+        self.client.force_login(persona("f4a_limitado@pruebas.orbita"))
         pagina = self.client.get(self._url(self.servicio, "ejecucion"))
         self.assertContains(pagina, "requiere el permiso de administrar flujos")
         self.assertNotContains(pagina, "Agregar actividad")

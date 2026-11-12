@@ -6,7 +6,10 @@ Reglas transversales (plan `notificaciones_alertas.md`):
 2. Destinatarios por RELACIÓN con el objeto (`destinatarios`), nunca por rol.
 3. Un Proceso programado no tiene solicitante: nada se dirige a «solicitante».
 4. Lo que llega en lote se AGRUPA por persona (`clave_agrupacion`) y un aviso más específico SUPRIME a uno más
-   general del mismo lote (la observación de una gaceta ya cuenta su tarea de corrección).
+   general del mismo lote (la observación de una gaceta ya cuenta su tarea de corrección). Las aprobaciones de los
+   ítems de un recorrido (p. ej. las actividades de un plan de trabajo enviado completo) son UN aviso por persona y
+   paso («10 aprobaciones pendientes»), y el recorrido se avisa cuando TERMINA (`RECORRIDO_COMPLETADO`), no por
+   cada ítem aprobado.
 5. Centro de notificaciones siempre; correo según el catálogo, lo congelado en el Ticket, las reglas por etapa y
    la preferencia de la persona (lo que exige acción no se apaga).
 
@@ -100,8 +103,12 @@ def _avisos_de_ticket(evento):
         elif ticket.usuario_responsable_id:
             avisos += _para(dest.personas([ticket.usuario_responsable_id]), "TICKET_ASIGNADO", contexto={"dirigido": True},
                             **asignado, **base)
-        elif ticket.equipo_responsable_id:
-            avisos += _para(dest.pueden_tomar(ticket), "TICKET_EN_COLA", **base)
+        else:
+            # Sin responsable individual el ticket entra a la Cola: se avisa a todos los que pueden tomarlo. Si
+            # nadie puede (responsables mal configurados), a quien supervisa: un ticket nunca queda huérfano en
+            # silencio.
+            en_cola = dest.pueden_tomar(ticket)
+            avisos += _para(en_cola or dest.supervisores(ticket), "TICKET_EN_COLA", **base)
     elif tipo in ("TOMADO", "ATENCION_INICIADA"):
         avisos += _para(dest.solicitante(ticket), "TICKET_EN_ATENCION", **base)
     elif tipo in ("ASIGNADO", "REASIGNADO"):
@@ -125,8 +132,13 @@ def _avisos_de_ticket(evento):
         quienes = dest.unir(dest.personas([solicitud.solicitada_por_id]) if solicitud else [], dest.responsable(ticket))
         avisos += _para(quienes, "INFORMACION_RESPONDIDA", **base)
     elif tipo == "COMENTARIO":
-        avisos += _para(dest.unir(dest.solicitante(ticket), dest.responsable(ticket)), "COMENTARIO",
-                        contexto={"extracto": datos.get("contenido", "")}, **base)
+        # Conversación del ticket: avisa a TODOS los que intervienen y pertenecen al canal del mensaje (equipo o
+        # interesados; `conversacion.destinatarios`), nunca a quien no puede leer ese canal.
+        from apps.tickets import conversacion
+
+        canal = datos.get("canal") or conversacion.INTERESADOS
+        avisos += _para(conversacion.destinatarios(ticket, canal, evento.actor_id), "COMENTARIO",
+                        contexto={"extracto": datos.get("contenido", ""), "canal": canal}, **base)
     elif tipo == "PRORROGA_APROBADA":
         avisos += _para(dest.unir(dest.solicitante(ticket), dest.responsable(ticket)), "FECHA_OBJETIVO_CAMBIADA", **base)
     elif tipo == "PRORROGA_RECHAZADA":
@@ -135,6 +147,12 @@ def _avisos_de_ticket(evento):
         prorroga = ProrrogaTicket.objects.filter(pk=datos.get("prorroga_id")).first()
         quienes = dest.unir(dest.personas([prorroga.solicitada_por_id]) if prorroga else [], dest.responsable(ticket))
         avisos += _para(quienes, "PRORROGA_RECHAZADA", contexto={"extracto": datos.get("observaciones", "")}, **base)
+    elif tipo == "CANCELACION_RECHAZADA":
+        from apps.tickets.models import SolicitudCancelacion
+
+        solicitud = SolicitudCancelacion.objects.filter(pk=datos.get("solicitud_id")).first()
+        quienes = dest.unir(dest.personas([solicitud.solicitada_por_id]) if solicitud else [], dest.responsable(ticket))
+        avisos += _para(quienes, "CANCELACION_RECHAZADA", contexto={"extracto": datos.get("observacion", "")}, **base)
     elif tipo == "ENTREGADO":
         avisos += _para(dest.solicitante(ticket), "ENTREGA_DISPONIBLE", contexto={"vence_en": datos.get("vence_en")}, **base)
     elif tipo == "ENTREGA_OBSERVADA":
@@ -149,9 +167,21 @@ def _avisos_de_ticket(evento):
             avisos += _para(dest.responsable(ticket), "ENTREGA_ACEPTADA", **base)
         elif evento.actor_id is None:
             avisos += _para(dest.responsable(ticket), "TICKET_CERRADO", **base)
+    elif tipo == "CANCELACION_SOLICITADA":
+        # Pedir la cancelación CONGELA el ticket: quien lo solicitó y quien lo atiende deben saber que el trabajo
+        # quedó detenido (el aprobador recibe aparte su turno de aprobar).
+        avisos += _para(dest.unir(dest.solicitante(ticket), dest.responsable(ticket)), "CANCELACION_SOLICITADA",
+                        contexto={"extracto": datos.get("motivo", ""), "aprobador": datos.get("aprobador", "")}, **base)
     elif tipo in ("CANCELADO", "REABIERTO"):
-        avisos += _para(dest.unir(dest.solicitante(ticket), dest.responsable(ticket)), f"TICKET_{tipo}",
-                        contexto={"extracto": datos.get("motivo", "")}, **base)
+        quienes = dest.unir(dest.solicitante(ticket), dest.responsable(ticket))
+        if tipo == "CANCELADO" and datos.get("solicitud_cancelacion_id"):
+            # Cancelación aprobada: quien la pidió (el solicitante o quien lo atendía) también se entera.
+            from apps.tickets.models import SolicitudCancelacion
+
+            pidio = SolicitudCancelacion.objects.filter(pk=datos["solicitud_cancelacion_id"]).values_list(
+                "solicitada_por_id", flat=True).first()
+            quienes = dest.unir(quienes, dest.personas([pidio]))
+        avisos += _para(quienes, f"TICKET_{tipo}", contexto={"extracto": datos.get("motivo", "")}, **base)
     return avisos
 
 
@@ -159,7 +189,7 @@ def _avisos_de_tarea(evento):
     from apps.tareas.models import Tarea
 
     tipo = evento.clave.split(":", 1)[1]
-    if tipo not in ("CREADA", "ASIGNADA", "REASIGNADA", "DELEGADA"):
+    if tipo not in ("CREADA", "ASIGNADA", "REASIGNADA"):
         return []
     tarea = Tarea.objects.filter(pk=evento.objetos.get("tarea")).first()
     if tarea is None or tarea.estado in Tarea.ESTADOS_CERRADOS:
@@ -169,8 +199,7 @@ def _avisos_de_tarea(evento):
     agrupacion = f"TAREA_ASIGNADA:t{ticket_id}" if ticket_id else f"TAREA_ASIGNADA:tarea{tarea.pk}"
     return _para(
         dest.de_tarea(tarea), "TAREA_ASIGNADA", ticket=ticket, actor_id=evento.actor_id, agrupacion=agrupacion,
-        contexto={"tarea_id": tarea.pk, "tarea": tarea.titulo, "fecha_limite": tarea.fecha_limite,
-                  "delegada": tipo == "DELEGADA"},
+        contexto={"tarea_id": tarea.pk, "tarea": tarea.titulo, "fecha_limite": tarea.fecha_limite},
     )
 
 
@@ -193,10 +222,16 @@ def _avisos_de_aprobacion(evento):
     for aprobacion in turno:
         origen = _ticket_de_aprobacion(aprobacion)
         ticket = _ticket(origen.get("ticket_id"))
+        de_item = _paso_de_item(aprobacion)
+        # Las de los ítems de un mismo paso se agrupan: un plan enviado completo es UN aviso, no uno por actividad.
+        agrupacion = (
+            f"APROBACION_TURNO:t{origen.get('ticket_id')}:{de_item['clave']}" if de_item else f"APROBACION_TURNO:{aprobacion.pk}"
+        )
         avisos += _para(
             dest.de_aprobacion(aprobacion), "APROBACION_TURNO", ticket=ticket, actor_id=evento.actor_id,
-            agrupacion=f"APROBACION_TURNO:{aprobacion.pk}",
-            contexto={"aprobacion_id": aprobacion.pk, "que": _que_se_aprueba(aprobacion, origen)},
+            agrupacion=agrupacion,
+            contexto={"aprobacion_id": aprobacion.pk, "que": _que_se_aprueba(aprobacion, origen),
+                      **({"paso": de_item["nombre"]} if de_item else {})},
         )
     if tipo == "DECIDIDA" and esquema.resultado in (EsquemaAprobacion.Resultado.DEVUELTA, EsquemaAprobacion.Resultado.RECHAZADA):
         decidida = Aprobacion.objects.filter(pk=evento.objetos.get("aprobacion")).first()
@@ -216,6 +251,8 @@ def _que_se_aprueba(aprobacion, origen):
     """Nombre legible de lo que se aprueba: el bloque del flujo, la gaceta o la prórroga."""
     if origen.get("origen") == "PRORROGA":
         return "una prórroga de la fecha objetivo"
+    if origen.get("origen") == "CANCELACION":
+        return "la cancelación del ticket"
     if origen.get("origen") == "GACETA":
         from apps.gacetas.models import RondaRevisionGaceta
 
@@ -231,6 +268,22 @@ def _que_se_aprueba(aprobacion, origen):
         if bloque is not None:
             return f"«{bloque.nombre}»"
     return "una aprobación"
+
+
+def _paso_de_item(aprobacion):
+    """Si la aprobación es el paso de un ítem dentro de un recorrido (subinstancia con ítem): `{"clave", "nombre"}`
+    de ese paso; si no, `None`."""
+    from apps.workflows.models import EsquemaAprobacionWorkflow
+
+    vinculo = EsquemaAprobacionWorkflow.objects.filter(esquema_id=aprobacion.esquema_id).select_related(
+        "instancia_etapa__bloque_operativo", "instancia_etapa__instancia_workflow",
+    ).first()
+    if vinculo is None:
+        return None
+    ejecucion = vinculo.instancia_etapa
+    if ejecucion.instancia_workflow.elemento_id is None or ejecucion.bloque_operativo is None:
+        return None
+    return {"clave": ejecucion.bloque_operativo.clave, "nombre": ejecucion.bloque_operativo.nombre}
 
 
 def _clave_bloque_de_aprobacion(aprobacion):
@@ -296,8 +349,10 @@ def _nombre_item(elemento):
 
 
 def _avisos_de_flujo(evento):
-    """Avisos por etapa del motor (llegar a una fase, empezar o completar una actividad): solo las reglas."""
-    from apps.workflows.models import InstanciaWorkflow
+    """Avisos por etapa del motor (llegar a una fase, empezar o completar una actividad): las reglas y, al terminar
+    un recorrido de ítems de la instancia principal (p. ej. todo el plan de trabajo aprobado), un aviso al
+    responsable con el resultado del conjunto."""
+    from apps.workflows.models import InstanciaEtapa, InstanciaWorkflow
 
     instancia = InstanciaWorkflow.objects.filter(pk=evento.objetos.get("instancia")).first()
     if instancia is None:
@@ -305,11 +360,24 @@ def _avisos_de_flujo(evento):
     ticket = _ticket(_ticket_de_instancia(instancia))
     if ticket is None:
         return []
+    tipo = evento.clave.split(":", 1)[1]
     momento = {
         "FASE_ALCANZADA": "FASE_ALCANZADA", "BLOQUE_INICIADO": "ACTIVIDAD_INICIADA",
         "BLOQUE_COMPLETADO": "ACTIVIDAD_COMPLETADA",
-    }[evento.clave.split(":", 1)[1]]
-    return _reglas(ticket, momento, evento.datos.get("clave", ""), evento)
+    }[tipo]
+    avisos = _reglas(ticket, momento, evento.datos.get("clave", ""), evento)
+    if tipo == "BLOQUE_COMPLETADO" and instancia.instancia_padre_id is None:
+        ejecucion = InstanciaEtapa.objects.select_related("bloque_operativo").filter(pk=evento.objetos.get("ejecucion")).first()
+        bloque = ejecucion.bloque_operativo if ejecucion is not None else None
+        if bloque is not None and bloque.tipo == "RECORRIDO_ITEMS":
+            resultado = ejecucion.resultado or {}
+            avisos += _para(
+                dest.responsable(ticket), "RECORRIDO_COMPLETADO", ticket=ticket, actor_id=evento.actor_id,
+                agrupacion=f"RECORRIDO_COMPLETADO:{ejecucion.pk}",
+                contexto={"paso": bloque.nombre, "completados": resultado.get("completados") or 0,
+                          "excluidos": (resultado.get("excluidos") or 0) + (resultado.get("rechazados") or 0)},
+            )
+    return avisos
 
 
 TRADUCTORES = {
@@ -413,11 +481,18 @@ def entregar(avisos):
         llave = (aviso.usuario.pk, aviso.agrupacion or id(aviso))
         if llave in agrupados:
             existente = agrupados[llave]
-            # La misma tarea creada y asignada en la misma operación es UNA actividad, no dos.
-            vistas = existente.contexto.setdefault("tarea_ids", {existente.contexto.get("tarea_id")})
-            if aviso.contexto.get("tarea_id") is not None and aviso.contexto["tarea_id"] in vistas:
+            # La misma tarea (o aprobación) avisada dos veces en la misma operación es UNA, no dos.
+            objeto = ("tarea", aviso.contexto.get("tarea_id")) if aviso.contexto.get("tarea_id") is not None else (
+                ("aprobacion", aviso.contexto.get("aprobacion_id")) if aviso.contexto.get("aprobacion_id") is not None else None
+            )
+            primero = ("tarea", existente.contexto.get("tarea_id")) if existente.contexto.get("tarea_id") is not None else (
+                ("aprobacion", existente.contexto.get("aprobacion_id"))
+                if existente.contexto.get("aprobacion_id") is not None else None
+            )
+            vistas = existente.contexto.setdefault("objetos_vistos", {primero})
+            if objeto is not None and objeto in vistas:
                 continue
-            vistas.add(aviso.contexto.get("tarea_id"))
+            vistas.add(objeto)
             existente.cantidad += aviso.cantidad
             continue
         agrupados[llave] = aviso
@@ -430,6 +505,12 @@ def entregar(avisos):
             except Exception:  # noqa: BLE001
                 logger.exception("No se pudo guardar el aviso %s para %s", aviso.clave, aviso.usuario.pk)
     correo.encolar([n for n in creadas if getattr(n, "_con_correo", False)])
+    if any(getattr(n, "_correo_de_conversacion", False) for n in creadas):
+        # El correo de la conversación no depende SOLO de Beat (si Beat se detiene, no saldría): el worker revisa
+        # este lote cuando vence la espera. `enviar_pendientes` es idempotente; Beat sigue como respaldo.
+        from apps.notificaciones.correo_conversacion import programar_revision
+
+        programar_revision()
     return creadas
 
 
@@ -465,6 +546,14 @@ def _guardar(aviso):
         clave_agrupacion=aviso.agrupacion[:200],
     )
     if _quiere_correo(aviso, definicion) and preferencias.acepta_correo(aviso.usuario, definicion):
+        if aviso.clave == "COMENTARIO":
+            # Conversación: nunca al instante. El correo espera unos minutos por si la persona lo lee en Órbita
+            # (`correo_conversacion.enviar_pendientes` agrupa lo del canal en uno y no envía nada ya leído). Tener
+            # Órbita abierta NO cuenta como haberlo visto: la regla es si lo leyó, no si estaba en línea.
+            notificacion.correo_pendiente_desde = notificacion.creada_en
+            notificacion.save(update_fields=["correo_pendiente_desde"])
+            notificacion._correo_de_conversacion = True
+            return notificacion
         EnvioCorreo.objects.create(notificacion=notificacion, correo=aviso.usuario.email)
         notificacion._con_correo = True
     return notificacion

@@ -21,7 +21,7 @@
 
   <dl class="resumen__datos">
     {% if ticket.solicitante %}
-      <div><dt>Solicita</dt><dd>{{ ticket.solicitante.get_full_name|default:ticket.solicitante.get_username }}</dd></div>
+      <div><dt>Solicita</dt><dd>{{ ticket.solicitante.nombre_visible }}</dd></div>
     {% else %}
       <div><dt>Origen</dt><dd>Generado por programación</dd></div>
     {% endif %}
@@ -63,6 +63,6 @@
       </form>
     {% endif %}
     {% if es_mio %}<a class="btn btn--primary" href="{% url 'tickets:trabajo' ticket.pk %}">Continuar</a>{% endif %}
-    <a class="btn btn--ghost" href="{% url 'tickets:detalle' ticket.pk %}">Abrir el ticket completo</a>
+    <a class="btn btn--ghost" href="{% url 'tickets:espacio' ticket.pk %}">Abrir el ticket</a>
   </div>
 </div>

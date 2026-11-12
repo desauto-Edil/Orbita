@@ -1,6 +1,16 @@
 {% autoescape off %}{{ sistema.nombre }}
 
-Hola {{ nombre }},
+{% if conversacion %}{% if conversacion.autores|length == 1 %}{{ conversacion.autores.0 }} te escribió{% else %}Tienes {{ conversacion.total }} mensajes nuevos{% endif %} en la conversación de {% if notificacion.ticket.consecutivo %}{{ notificacion.ticket.codigo }}{% else %}{{ conversacion.ticket }}{% endif %} cuando no estabas:
+{% for m in conversacion.mensajes %}
+{{ m.autor }} ({{ m.hora|date:"j M, H:i" }}):
+{% if m.texto %}{{ m.texto }}
+{% endif %}{% for archivo in m.archivos %}[{{ archivo }}]
+{% endfor %}{% endfor %}{% if enlace %}
+Ir al ticket: {{ enlace }}
+{% endif %}
+--
+Recibes este correo porque {{ motivo }}.
+{% else %}Hola {{ nombre }},
 
 {{ notificacion.titulo }}
 {{ notificacion.resumen }}
@@ -14,4 +24,4 @@ Ver en {{ sistema.nombre }}: {{ enlace }}
 {% endif %}
 --
 Recibes este correo porque {{ motivo }}.
-{% endautoescape %}
+{% endif %}{% endautoescape %}

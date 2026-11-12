@@ -1,0 +1,78 @@
+{% comment %}
+  Histórico (Mi trabajo › Histórico y Mis tickets › Histórico; `apps/tickets/historico.py`): los tickets que ya no
+  están en curso, con filtros de día, mes, persona, tipo, servicio/proceso y estado (GET, sin JS) y una tabla
+  compacta paginada. Espera `historico` = {"pagina", "filtros", "opciones", "ver", "persona_etiqueta", "vacio"}.
+  Cada fila abre el espacio del ticket (cerrado o cancelado = solo consulta). Estilos `.hs-*` en `bandeja.css`.
+{% endcomment %}
+<form class="hs-filtros" method="get" aria-label="Filtrar el histórico">
+  <input type="hidden" name="ver" value="{{ historico.ver }}">
+  <label class="hs-campo hs-campo--buscar"><span>Buscar</span>
+    <input type="search" name="q" value="{{ historico.filtros.q|default:'' }}" placeholder="Código, nombre o etiqueta">
+  </label>
+  <label class="hs-campo"><span>Día</span><input type="date" name="dia" value="{{ historico.filtros.dia|default:'' }}"></label>
+  <label class="hs-campo"><span>Mes</span><input type="month" name="mes" value="{{ historico.filtros.mes|default:'' }}"></label>
+  <label class="hs-campo"><span>{{ historico.persona_etiqueta }}</span>
+    <select name="persona">
+      <option value="">Todas</option>
+      {% for p in historico.opciones.personas %}<option value="{{ p.pk }}"{% if historico.filtros.persona == p.pk %} selected{% endif %}>{{ p.nombre }}</option>{% endfor %}
+    </select>
+  </label>
+  <label class="hs-campo"><span>Tipo</span>
+    <select name="tipo">
+      <option value="">Todos</option>
+      {% for valor, etiqueta in historico.opciones.tipos %}<option value="{{ valor }}"{% if historico.filtros.tipo == valor %} selected{% endif %}>{{ etiqueta }}</option>{% endfor %}
+    </select>
+  </label>
+  <label class="hs-campo"><span>Servicio o proceso</span>
+    <select name="servicio">
+      <option value="">Todos</option>
+      {% for s in historico.opciones.servicios %}<option value="{{ s.pk }}"{% if historico.filtros.servicio == s.pk %} selected{% endif %}>{{ s.nombre }}</option>{% endfor %}
+    </select>
+  </label>
+  <label class="hs-campo"><span>Estado</span>
+    <select name="estado">
+      <option value="">Todos</option>
+      {% for valor, etiqueta in historico.opciones.estados %}<option value="{{ valor }}"{% if historico.filtros.estado == valor %} selected{% endif %}>{{ etiqueta }}</option>{% endfor %}
+    </select>
+  </label>
+  <div class="hs-acciones">
+    <button type="submit" class="btn btn--secondary btn--sm">Filtrar</button>
+    {% if historico.filtros %}<a class="btn btn--ghost btn--sm" href="?ver={{ historico.ver }}">Limpiar</a>{% endif %}
+  </div>
+</form>
+
+{% if historico.pagina.object_list %}
+  <div class="hs-tabla-marco">
+    <table class="hs-tabla">
+      <thead>
+        <tr><th scope="col">Ticket</th><th scope="col">Tipo</th><th scope="col">Solicitó</th><th scope="col">Lo atendió</th><th scope="col">Estado</th><th scope="col" class="hs-num">Finalizado</th></tr>
+      </thead>
+      <tbody>
+        {% for t in historico.pagina.object_list %}
+          <tr>
+            <td data-rotulo="Ticket">
+              <a class="hs-ticket" href="{% url 'tickets:espacio' t.pk %}">{{ t.detalle_servicio.servicio.nombre }}</a>
+              <span class="hs-meta tabular">{{ t.codigo }}{% if t.etiqueta %} · {{ t.etiqueta }}{% endif %}</span>
+            </td>
+            <td data-rotulo="Tipo">{{ t.get_tipo_display }}</td>
+            <td data-rotulo="Solicitó">{% if t.solicitante %}{{ t.solicitante.get_full_name|default:t.solicitante }}{% else %}Sistema{% endif %}</td>
+            <td data-rotulo="Lo atendió">{% if t.usuario_responsable %}{{ t.usuario_responsable.get_full_name|default:t.usuario_responsable }}{% elif t.equipo_responsable %}{{ t.equipo_responsable }}{% else %}—{% endif %}</td>
+            <td data-rotulo="Estado"><span class="estado-etiqueta estado-etiqueta--{{ t.estado|lower }}">{{ t.get_estado_display }}</span></td>
+            <td data-rotulo="Finalizado" class="hs-num tabular">{{ t.finalizado_en|date:"d M Y" }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if historico.pagina.has_other_pages %}
+    <nav class="hs-paginas" aria-label="Páginas del histórico">
+      {% if historico.pagina.has_previous %}<a class="btn btn--ghost btn--sm" href="?{{ historico.consulta }}pagina={{ historico.pagina.previous_page_number }}">Anterior</a>{% endif %}
+      <span class="tabular">Página {{ historico.pagina.number }} de {{ historico.pagina.paginator.num_pages }} · {{ historico.pagina.paginator.count }} tickets</span>
+      {% if historico.pagina.has_next %}<a class="btn btn--ghost btn--sm" href="?{{ historico.consulta }}pagina={{ historico.pagina.next_page_number }}">Siguiente</a>{% endif %}
+    </nav>
+  {% endif %}
+{% else %}
+  <div class="empty-state">
+    <p>{% if historico.filtros %}Ningún ticket del histórico coincide con los filtros.{% else %}{{ historico.vacio }}{% endif %}</p>
+  </div>
+{% endif %}

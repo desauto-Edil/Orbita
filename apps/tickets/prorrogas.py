@@ -99,6 +99,9 @@ def solicitar_prorroga(ticket, actor, *, nueva_fecha, motivo):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if not es_responsable_actual(actor, ticket):
         raise PermissionDenied("Solo quien atiende este ticket puede solicitar una prórroga.")
+    from apps.tickets.cancelaciones import exigir_sin_cancelacion_pendiente
+
+    exigir_sin_cancelacion_pendiente(ticket)  # una cancelación por aprobar congela el ticket
     bloqueo = motivo_no_elegible_para_prorroga(ticket)
     if bloqueo is not None:
         raise ValidationError(bloqueo)

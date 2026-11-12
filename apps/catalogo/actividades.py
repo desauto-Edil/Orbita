@@ -8,7 +8,13 @@
   RELATIVOS al momento en que el flujo llega al bloque. Se calculan con `apps.tickets.tiempos`
   (única aritmética de fechas) y se copian a `Tarea.fecha_prevista` / `Tarea.fecha_limite`.
 - `plazo_habiles` (bool): ambos plazos cuentan solo días/horas hábiles.
-- `verificacion`: lista de `{"texto": str, "obligatorio": bool}` que se copia a la Tarea.
+- `fecha_limite_dia_del_periodo` (opcional, 1–31): en un PROCESO PROGRAMADO la fecha límite es el final de ese
+  día del periodo de la ejecución (p. ej. 20 → «hasta el 20 de noviembre» en la parrilla de noviembre; un día
+  que el mes no tiene se toma como su último día). Excluye `plazo_limite` y `fecha_limite_campo`. Sin periodo
+  (un ticket no programado) la Tarea no recibe esa fecha.
+- `verificacion`: lista de `{"texto": str, "obligatorio": bool, "pregunta": str (opcional)}` que se copia a la
+  Tarea. Con `pregunta`, quien hace la actividad debe escribir su conclusión para marcar el punto (p. ej. «Alcance
+  y esfuerzo estimados» con la pregunta «¿Cuánto tiempo y esfuerzo estimas?»).
 
 Fase 2 (todas opcionales):
 
@@ -31,6 +37,12 @@ UX-4 (opcional):
 - `columnas_requeridas`: `[clave, …]` de columnas del ítem que deben estar completas para COMPLETAR la Tarea
   (solo en un recorrido por ítem; p. ej. el archivo de la pieza antes de enviarla a aprobación). Lo hace
   cumplir la integración Tarea ↔ Workflow (`completar_tarea_workflow`), con la misma completitud de la colección.
+
+Responsable que responde (opcional):
+
+- `responde_usuario_id`: en una actividad de un EQUIPO (cualquiera de sus miembros sube la evidencia y la completa,
+  sin «tomarla»), la persona que RESPONDE si no se hace: recibe los avisos y alertas de la tarea en lugar de todo el
+  equipo. No cambia quién puede actuar. Se copia a `Tarea.responde_por`.
 
 La descripción operativa es la del propio bloque (`BloqueOperativo.descripcion`), que ya se copia a la
 Tarea. Configuraciones anteriores sin estas claves siguen siendo válidas: todo es opcional.
@@ -89,7 +101,14 @@ def _verificaciones(valor, errores):
         if len(texto) > MAX_TEXTO_VERIFICACION:
             errores.append(f"Un ítem de la lista de verificación supera {MAX_TEXTO_VERIFICACION} caracteres.")
             continue
-        items.append({"texto": texto, "obligatorio": bool(dato.get("obligatorio", True))})
+        item = {"texto": texto, "obligatorio": bool(dato.get("obligatorio", True))}
+        pregunta = str(dato.get("pregunta") or "").strip()
+        if len(pregunta) > MAX_TEXTO_VERIFICACION:
+            errores.append(f"Una pregunta de la lista de verificación supera {MAX_TEXTO_VERIFICACION} caracteres.")
+            continue
+        if pregunta:
+            item["pregunta"] = pregunta
+        items.append(item)
     return items
 
 
@@ -111,6 +130,19 @@ def columnas_editables(valor, errores):
     return claves
 
 
+def _dia_del_periodo(valor, errores):
+    if valor in (None, ""):
+        return None
+    try:
+        dia = int(valor)
+    except (TypeError, ValueError):
+        dia = 0
+    if not 1 <= dia <= 31:
+        errores.append("El día del periodo de la fecha límite va de 1 a 31.")
+        return None
+    return dia
+
+
 def normalizar(configuracion):
     """Devuelve `(ampliacion, errores)`: la parte ampliada de la configuración, limpia y canónica, y la
     lista de errores (vacía si es válida). No toca las claves del responsable."""
@@ -128,9 +160,12 @@ def normalizar(configuracion):
         errores.append("La fecha prevista sale de un plazo o de un dato con fecha, no de ambos.")
     if limite_campo and limite:
         errores.append("La fecha límite sale de un plazo o de un dato con fecha, no de ambos.")
+    if cfg.get("fecha_limite_dia_del_periodo") not in (None, "") and (limite or limite_campo):
+        errores.append("La fecha límite sale de un plazo, de un dato con fecha o de un día del periodo: solo una.")
     ampliacion = {
         "requiere_evidencia": bool(cfg.get("requiere_evidencia")),
         "plazo_habiles": bool(cfg.get("plazo_habiles")),
+        "fecha_limite_dia_del_periodo": _dia_del_periodo(cfg.get("fecha_limite_dia_del_periodo"), errores),
         "plazo_previsto": previsto,
         "plazo_limite": limite,
         "verificacion": _verificaciones(cfg.get("verificacion"), errores),
@@ -139,8 +174,22 @@ def normalizar(configuracion):
         "exige_datos_inicio": bool(cfg.get("exige_datos_inicio")),
         "columnas_editables": columnas_editables(cfg.get("columnas_editables"), errores),
         "columnas_requeridas": columnas_editables(cfg.get("columnas_requeridas"), errores),
+        "responde_usuario_id": _persona(cfg.get("responde_usuario_id"), errores),
     }
     return ampliacion, errores
+
+
+def _persona(valor, errores):
+    if valor in (None, ""):
+        return None
+    try:
+        pk = int(valor)
+    except (TypeError, ValueError):
+        pk = 0
+    if pk <= 0:
+        errores.append("La persona que responde por la actividad no es válida.")
+        return None
+    return pk
 
 
 def _referencia_fecha(valor, etiqueta, errores):
@@ -172,7 +221,7 @@ def validar(configuracion):
         raise ValidationError(errores)
 
 
-def fechas_desde(configuracion, desde, resolver=None):
+def fechas_desde(configuracion, desde, resolver=None, *, periodo_inicio=None):
     """`(fecha_prevista, fecha_limite)` (aware o `None`) de una configuración YA validada: los plazos se
     cuentan desde `desde` (la llegada del flujo al bloque); las fechas tomadas de un dato se leen con
     `resolver(referencia)` (p. ej. `ResolutorVariables.resolver`). Sin `resolver`, esas quedan vacías."""
@@ -186,7 +235,19 @@ def fechas_desde(configuracion, desde, resolver=None):
             return None
         return tiempos.calcular_fecha_objetivo(desde, plazo["cantidad"], plazo["unidad"], habiles)
 
-    return (
-        calcular(ampliacion["plazo_previsto"], ampliacion["fecha_prevista_campo"]),
-        calcular(ampliacion["plazo_limite"], ampliacion["fecha_limite_campo"]),
-    )
+    limite = calcular(ampliacion["plazo_limite"], ampliacion["fecha_limite_campo"])
+    if ampliacion["fecha_limite_dia_del_periodo"] and periodo_inicio is not None:
+        limite = _fin_del_dia_del_periodo(periodo_inicio, ampliacion["fecha_limite_dia_del_periodo"])
+    return calcular(ampliacion["plazo_previsto"], ampliacion["fecha_prevista_campo"]), limite
+
+
+def _fin_del_dia_del_periodo(periodo_inicio, dia):
+    """El final (23:59:59, hora local) del día `dia` del mes del periodo; un día que el mes no tiene, su último."""
+    import calendar
+    from datetime import date, datetime, time
+
+    from django.utils import timezone
+
+    ultimo = calendar.monthrange(periodo_inicio.year, periodo_inicio.month)[1]
+    fecha = date(periodo_inicio.year, periodo_inicio.month, min(dia, ultimo))
+    return timezone.make_aware(datetime.combine(fecha, time(23, 59, 59)))

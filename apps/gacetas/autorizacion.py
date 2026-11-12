@@ -1,16 +1,16 @@
 """Autorización de las gacetas — Fase 3. Relación con el objeto, nunca por nombre de rol.
 
 - REVISOR: persona configurada (o miembro activo de un equipo configurado) como revisor de ESTA gaceta, congelado
-  en el ticket. Registra observaciones mientras el periodo de revisión está abierto.
-- APROBADOR: ídem como aprobador; decide en `apps.aprobaciones` y también puede observar.
+  en el ticket. Comenta mientras el periodo de revisión está abierto. REGLA DE ORO: en una gaceta nadie aprueba;
+  quien figuraba como «aprobador» en una gaceta congelada antes de esa regla es un revisor más.
 - COORDINADOR: presenta ítems, cierra el periodo, resuelve la gaceta y excluye un ítem sin otra aprobación.
   Fase 4.A: si la gaceta congeló un coordinador propio (persona o equipo), es esa persona o un miembro activo de
   ese equipo, mientras el ticket esté radicado o en atención. Si no lo tiene (incluidas todas las gacetas creadas
   antes de 4.A), es quien edita los ítems del ticket (`puede_editar_parrilla`), como siempre.
 - CORRECTOR: el responsable de la tarea de corrección del ítem (o el coordinador). Responde observaciones y
   reenvía la corrección.
-- CONSULTA: cualquiera de los anteriores o quien puede consultar el ticket. Revisores y aprobadores ven SOLO la
-  gaceta (ítems, evidencias, versiones, observaciones), no el resto del ticket.
+- CONSULTA: cualquiera de los anteriores o quien puede consultar el ticket. Los revisores ven SOLO la
+  gaceta (ítems, evidencias, versiones, comentarios), no el resto del ticket.
 
 Las operaciones revalidan bajo lock (`apps.gacetas.operaciones`)."""
 
@@ -30,12 +30,15 @@ def _esta_en(usuario, actores):
     return bool(equipos) and MiembroEquipo.objects.filter(equipo_id__in=equipos, usuario_id=usuario.pk, activo=True).exists()
 
 
+def revisores_de(gaceta):
+    """Actores que comentan en la gaceta: sus revisores y, en configuraciones congeladas antes de la regla de oro,
+    también quienes figuraban como aprobadores."""
+    cfg = gaceta.configuracion or {}
+    return list(cfg.get("revisores") or []) + list(cfg.get("aprobadores") or [])
+
+
 def es_revisor(usuario, gaceta):
-    return _esta_en(usuario, (gaceta.configuracion or {}).get("revisores"))
-
-
-def es_aprobador(usuario, gaceta):
-    return _esta_en(usuario, (gaceta.configuracion or {}).get("aprobadores"))
+    return _esta_en(usuario, revisores_de(gaceta))
 
 
 def coordinador_configurado(gaceta):
@@ -82,17 +85,42 @@ def puede_consultar_gaceta(usuario, gaceta):
     from apps.tickets.autorizacion import puede_consultar_ticket
 
     return (
-        es_revisor(usuario, gaceta) or es_aprobador(usuario, gaceta) or es_corrector(usuario, gaceta)
+        es_revisor(usuario, gaceta) or es_corrector(usuario, gaceta)
         or es_coordinador_configurado(usuario, gaceta) or puede_consultar_ticket(usuario, gaceta.ticket)
     )
+
+
+def trabajo_el_ticket(usuario, ticket):
+    """¿`usuario` trabajó el ticket (lo atiende o lo tiene a cargo, hizo o tiene una actividad, o aprobó en su
+    flujo)? Esas personas no son INTERESADAS: su conformidad no cuenta para terminar la gaceta antes."""
+    from apps.tickets import espacio
+
+    rel = espacio.relacion(usuario, ticket)
+    return bool(rel.responsable or rel.responsable_individual or rel.tareas or rel.aprobaciones)
+
+
+def interesados_de(gaceta):
+    """Quienes deben estar conformes para que la gaceta termine antes: sus revisores activos (personas y miembros
+    de equipos) que NO trabajaron el ticket. TODAS las gacetas llevan «Estoy conforme»: si todos sus revisores
+    trabajaron el ticket, los interesados son todos sus revisores (nunca una gaceta sin quién pueda darla, salvo
+    que no tenga revisores)."""
+    from apps.notificaciones.destinatarios import de_actores
+
+    revisores = de_actores(revisores_de(gaceta))
+    ajenos = [u for u in revisores if not trabajo_el_ticket(u, gaceta.ticket)]
+    return ajenos or revisores
+
+
+def es_interesado(usuario, gaceta):
+    return _activo(usuario) and es_revisor(usuario, gaceta) and any(u.pk == usuario.pk for u in interesados_de(gaceta))
 
 
 def puede_observar(usuario, participacion):
     gaceta = participacion.gaceta
     return (
-        gaceta.periodo_abierto
+        participacion.ventana_abierta
         and participacion.estado in participacion.ESTADOS_PENDIENTES
-        and (es_revisor(usuario, gaceta) or es_aprobador(usuario, gaceta))
+        and es_revisor(usuario, gaceta)
     )
 
 
@@ -112,10 +140,10 @@ def puede_corregir(usuario, participacion):
 
 
 def puede_ver_elemento(usuario, elemento):
-    """Revisores y aprobadores de una gaceta en la que participa el ítem ven sus evidencias (descarga)."""
+    """Los revisores de una gaceta en la que participa el ítem ven sus evidencias (descarga)."""
     from apps.gacetas.models import ParticipacionItemGaceta
 
     for participacion in ParticipacionItemGaceta.objects.filter(elemento=elemento).select_related("gaceta"):
-        if es_revisor(usuario, participacion.gaceta) or es_aprobador(usuario, participacion.gaceta):
+        if es_revisor(usuario, participacion.gaceta):
             return True
     return False

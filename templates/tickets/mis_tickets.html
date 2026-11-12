@@ -9,7 +9,7 @@
 
 {% comment %}
   Mis tickets — lo que la persona SOLICITÓ, en la bandeja compartida con Mi trabajo: una fila por ticket, segmentos
-  (lo que espera tu respuesta, borradores, en curso, finalizados), búsqueda local e inspector lateral de solo lectura.
+  (lo que espera tu respuesta, borradores, en curso e histórico —con filtros, `tickets/bandeja/_historico.html`), búsqueda local e inspector lateral de solo lectura.
   Las acciones del solicitante (responder, aceptar u observar una entrega) siguen en el espacio del ticket.
 {% endcomment %}
 
@@ -22,12 +22,14 @@
 
   {% if tickets %}
     <div class="op-barra">
+      {% if not historico %}
       <form class="search op-barra__buscar" method="get" role="search">
         <span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" size="sm" %}</span>
         <label class="sr-only" for="mt-q">Buscar en Mis tickets</label>
         <input class="search__input" id="mt-q" type="search" name="q" value="{{ q }}" placeholder="Buscar por código o nombre">
         {% if ver != "todos" %}<input type="hidden" name="ver" value="{{ ver }}">{% endif %}
       </form>
+      {% endif %}
       <nav class="segmented" aria-label="Filtrar Mis tickets">
         {% for segmento in segmentos %}
           <a class="segmented__item" href="?{% if segmento.clave != 'todos' %}ver={{ segmento.clave }}{% endif %}{% if q %}{% if segmento.clave != 'todos' %}&amp;{% endif %}q={{ q|urlencode }}{% endif %}"{% if ver == segmento.clave %} aria-current="page"{% endif %}>{{ segmento.etiqueta }} <span class="work-count">{{ segmento.total }}</span></a>
@@ -35,7 +37,9 @@
       </nav>
     </div>
 
-    {% if filas %}
+    {% if historico %}
+      {% include "tickets/bandeja/_historico.html" %}
+    {% elif filas %}
       <div class="bt bt--tickets" data-bandeja>
         <div class="bt__lista">
           {% include "tickets/bandeja/_encabezado.html" with situacion=False %}

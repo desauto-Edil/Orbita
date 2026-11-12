@@ -40,6 +40,7 @@ from apps.aprobaciones.consultas import aprobaciones_pendientes_para, aprobacion
 from apps.aprobaciones.models import Aprobacion, EsquemaAprobacion, ReasignacionAprobacion
 from apps.aprobaciones.operaciones import crear_esquema_aprobacion, reasignar_aprobacion, resolver_aprobacion
 from apps.core.models import AsignacionRol, Equipo, MiembroEquipo, Permiso, RegistroAuditoria, RolFuncional, RolPermiso
+from apps.core.pruebas import persona
 
 Usuario = get_user_model()
 CLAVE_PRUEBA = "Clave-Segura-123"
@@ -58,7 +59,7 @@ def _crear_esquema_simple(*, modo=EsquemaAprobacion.Modo.PARALELA, politica=Esqu
 
 class CrearEsquemaAprobacionTests(TestCase):
     def setUp(self):
-        self.a = Usuario.objects.create_user("crear_a", password=CLAVE_PRUEBA)
+        self.a = Usuario.objects.create_user("crear_a@pruebas.orbita")
 
     def test_requiere_al_menos_un_participante(self):
         with self.assertRaises(ValidationError):
@@ -80,7 +81,7 @@ class CrearEsquemaAprobacionTests(TestCase):
             )
 
     def test_orden_se_deriva_de_la_posicion(self):
-        b = Usuario.objects.create_user("crear_b", password=CLAVE_PRUEBA)
+        b = Usuario.objects.create_user("crear_b@pruebas.orbita")
         esquema = crear_esquema_aprobacion(
             modo=EsquemaAprobacion.Modo.SECUENCIAL,
             participantes=[(Aprobacion.TipoAprobador.USUARIO, self.a), (Aprobacion.TipoAprobador.USUARIO, b)],
@@ -91,9 +92,9 @@ class CrearEsquemaAprobacionTests(TestCase):
 
 class AuditoriaOperacionesTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user("auditoria_aprobador")
-        self.otro = Usuario.objects.create_user("auditoria_otro")
-        self.gestor = Usuario.objects.create_user("auditoria_gestor")
+        self.actor = Usuario.objects.create_user("auditoria_aprobador@pruebas.orbita")
+        self.otro = Usuario.objects.create_user("auditoria_otro@pruebas.orbita")
+        self.gestor = Usuario.objects.create_user("auditoria_gestor@pruebas.orbita")
         self.equipo = Equipo.objects.create(nombre="Equipo auditoría")
         _otorgar_permiso(self.gestor, PERMISO_GESTIONAR)
 
@@ -248,7 +249,7 @@ class ResolverAprobacionSimpleTests(TestCase):
     """Esquema de 1 solo participante — el caso base de CU-024."""
 
     def setUp(self):
-        self.aprobador = Usuario.objects.create_user("simple_aprobador", password=CLAVE_PRUEBA)
+        self.aprobador = Usuario.objects.create_user("simple_aprobador@pruebas.orbita")
         self.esquema = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.USUARIO, self.aprobador)])
         self.aprobacion = self.esquema.participaciones.get()
 
@@ -290,7 +291,7 @@ class InmutabilidadTests(TestCase):
     """RN-026 — protegida por la API de dominio, no por señales."""
 
     def setUp(self):
-        self.aprobador = Usuario.objects.create_user("inmut_aprobador", password=CLAVE_PRUEBA)
+        self.aprobador = Usuario.objects.create_user("inmut_aprobador@pruebas.orbita")
         self.esquema = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.USUARIO, self.aprobador)])
         self.aprobacion = self.esquema.participaciones.get()
 
@@ -324,9 +325,9 @@ class InmutabilidadTests(TestCase):
 
 class ParalelaTodosTests(TestCase):
     def setUp(self):
-        self.a = Usuario.objects.create_user("todos_a", password=CLAVE_PRUEBA)
-        self.b = Usuario.objects.create_user("todos_b", password=CLAVE_PRUEBA)
-        self.c = Usuario.objects.create_user("todos_c", password=CLAVE_PRUEBA)
+        self.a = Usuario.objects.create_user("todos_a@pruebas.orbita")
+        self.b = Usuario.objects.create_user("todos_b@pruebas.orbita")
+        self.c = Usuario.objects.create_user("todos_c@pruebas.orbita")
         self.esquema = crear_esquema_aprobacion(
             modo=EsquemaAprobacion.Modo.PARALELA,
             politica=EsquemaAprobacion.Politica.TODOS,
@@ -384,8 +385,8 @@ class ParalelaTodosTests(TestCase):
 
 class ParalelaCualquieraTests(TestCase):
     def setUp(self):
-        self.a = Usuario.objects.create_user("cualq_a", password=CLAVE_PRUEBA)
-        self.b = Usuario.objects.create_user("cualq_b", password=CLAVE_PRUEBA)
+        self.a = Usuario.objects.create_user("cualq_a@pruebas.orbita")
+        self.b = Usuario.objects.create_user("cualq_b@pruebas.orbita")
         self.esquema = crear_esquema_aprobacion(
             modo=EsquemaAprobacion.Modo.PARALELA,
             politica=EsquemaAprobacion.Politica.CUALQUIERA,
@@ -410,9 +411,9 @@ class ParalelaCualquieraTests(TestCase):
 
 class SecuencialTests(TestCase):
     def setUp(self):
-        self.a = Usuario.objects.create_user("sec_a", password=CLAVE_PRUEBA)
-        self.b = Usuario.objects.create_user("sec_b", password=CLAVE_PRUEBA)
-        self.c = Usuario.objects.create_user("sec_c", password=CLAVE_PRUEBA)
+        self.a = Usuario.objects.create_user("sec_a@pruebas.orbita")
+        self.b = Usuario.objects.create_user("sec_b@pruebas.orbita")
+        self.c = Usuario.objects.create_user("sec_c@pruebas.orbita")
         self.esquema = crear_esquema_aprobacion(
             modo=EsquemaAprobacion.Modo.SECUENCIAL,
             participantes=[
@@ -467,9 +468,9 @@ class EquipoTests(TestCase):
 
     def setUp(self):
         self.equipo = Equipo.objects.create(nombre="Equipo Aprobador")
-        self.miembro1 = Usuario.objects.create_user("equipo_m1", password=CLAVE_PRUEBA)
-        self.miembro2 = Usuario.objects.create_user("equipo_m2", password=CLAVE_PRUEBA)
-        self.no_miembro = Usuario.objects.create_user("equipo_ajeno", password=CLAVE_PRUEBA)
+        self.miembro1 = Usuario.objects.create_user("equipo_m1@pruebas.orbita")
+        self.miembro2 = Usuario.objects.create_user("equipo_m2@pruebas.orbita")
+        self.no_miembro = Usuario.objects.create_user("equipo_ajeno@pruebas.orbita")
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.miembro1, activo=True)
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.miembro2, activo=True)
         self.esquema = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.EQUIPO, self.equipo)])
@@ -499,8 +500,8 @@ class EquipoTests(TestCase):
 
 class RN025AutorizacionTests(TestCase):
     def setUp(self):
-        self.aprobador = Usuario.objects.create_user("rn025_aprobador", password=CLAVE_PRUEBA)
-        self.ajeno = Usuario.objects.create_user("rn025_ajeno", password=CLAVE_PRUEBA)
+        self.aprobador = Usuario.objects.create_user("rn025_aprobador@pruebas.orbita")
+        self.ajeno = Usuario.objects.create_user("rn025_ajeno@pruebas.orbita")
         self.esquema = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.USUARIO, self.aprobador)])
         self.aprobacion = self.esquema.participaciones.get()
 
@@ -525,15 +526,15 @@ class RN025AutorizacionTests(TestCase):
 
 class ReasignacionAprobacionTests(TestCase):
     def setUp(self):
-        self.gestor = Usuario.objects.create_user("reasig_gestor", password=CLAVE_PRUEBA)
+        self.gestor = Usuario.objects.create_user("reasig_gestor@pruebas.orbita")
         _otorgar_permiso(self.gestor, PERMISO_GESTIONAR)
-        self.original = Usuario.objects.create_user("reasig_original", password=CLAVE_PRUEBA)
-        self.nuevo = Usuario.objects.create_user("reasig_nuevo", password=CLAVE_PRUEBA)
+        self.original = Usuario.objects.create_user("reasig_original@pruebas.orbita")
+        self.nuevo = Usuario.objects.create_user("reasig_nuevo@pruebas.orbita")
         self.esquema = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.USUARIO, self.original)])
         self.aprobacion = self.esquema.participaciones.get()
 
     def test_reasignar_sin_permiso_falla(self):
-        sin_permiso = Usuario.objects.create_user("reasig_sinpermiso", password=CLAVE_PRUEBA)
+        sin_permiso = Usuario.objects.create_user("reasig_sinpermiso@pruebas.orbita")
         with self.assertRaises(PermissionDenied):
             reasignar_aprobacion(self.aprobacion, sin_permiso, nuevo_aprobador_usuario=self.nuevo)
 
@@ -563,8 +564,8 @@ class ReasignacionAprobacionTests(TestCase):
 
 class ConsultasTests(TestCase):
     def setUp(self):
-        self.aprobador = Usuario.objects.create_user("consulta_aprobador", password=CLAVE_PRUEBA)
-        self.otro = Usuario.objects.create_user("consulta_otro", password=CLAVE_PRUEBA)
+        self.aprobador = Usuario.objects.create_user("consulta_aprobador@pruebas.orbita")
+        self.otro = Usuario.objects.create_user("consulta_otro@pruebas.orbita")
         self.esquema = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.USUARIO, self.aprobador)])
         self.aprobacion = self.esquema.participaciones.get()
 
@@ -593,8 +594,8 @@ class ConcurrenciaEsquemaTests(TransactionTestCase):
     — ver la nota de alcance sobre esto en el informe final)."""
 
     def setUp(self):
-        self.a = Usuario.objects.create_user("conc_a", password=CLAVE_PRUEBA)
-        self.b = Usuario.objects.create_user("conc_b", password=CLAVE_PRUEBA)
+        self.a = Usuario.objects.create_user("conc_a@pruebas.orbita")
+        self.b = Usuario.objects.create_user("conc_b@pruebas.orbita")
         self.esquema = crear_esquema_aprobacion(
             modo=EsquemaAprobacion.Modo.PARALELA,
             politica=EsquemaAprobacion.Politica.CUALQUIERA,
@@ -667,9 +668,9 @@ class ConcurrenciaParalelaTodosTests(TransactionTestCase):
     locks (EsquemaAprobacion → todas sus Aprobacion de una sola vez)."""
 
     def setUp(self):
-        self.a = Usuario.objects.create_user("conc_todos_a", password=CLAVE_PRUEBA)
-        self.b = Usuario.objects.create_user("conc_todos_b", password=CLAVE_PRUEBA)
-        self.c = Usuario.objects.create_user("conc_todos_c", password=CLAVE_PRUEBA)
+        self.a = Usuario.objects.create_user("conc_todos_a@pruebas.orbita")
+        self.b = Usuario.objects.create_user("conc_todos_b@pruebas.orbita")
+        self.c = Usuario.objects.create_user("conc_todos_c@pruebas.orbita")
         self.esquema = crear_esquema_aprobacion(
             modo=EsquemaAprobacion.Modo.PARALELA,
             politica=EsquemaAprobacion.Politica.TODOS,
@@ -734,8 +735,8 @@ class ConcurrenciaResultadosIncompatiblesTests(TransactionTestCase):
     inventado)."""
 
     def setUp(self):
-        self.a = Usuario.objects.create_user("conc_incompat_a", password=CLAVE_PRUEBA)
-        self.b = Usuario.objects.create_user("conc_incompat_b", password=CLAVE_PRUEBA)
+        self.a = Usuario.objects.create_user("conc_incompat_a@pruebas.orbita")
+        self.b = Usuario.objects.create_user("conc_incompat_b@pruebas.orbita")
         self.esquema = crear_esquema_aprobacion(
             modo=EsquemaAprobacion.Modo.PARALELA,
             politica=EsquemaAprobacion.Politica.CUALQUIERA,
@@ -785,7 +786,7 @@ class ConcurrenciaResultadosIncompatiblesTests(TransactionTestCase):
 
 class AutenticacionRequeridaTests(TestCase):
     def setUp(self):
-        aprobador = Usuario.objects.create_user("autreq_aprobador", password=CLAVE_PRUEBA)
+        aprobador = Usuario.objects.create_user("autreq_aprobador@pruebas.orbita")
         esquema = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.USUARIO, aprobador)])
         self.aprobacion = esquema.participaciones.get()
 
@@ -801,87 +802,45 @@ class AutenticacionRequeridaTests(TestCase):
 
 
 class BandejaViewTests(TestCase):
-    def setUp(self):
-        self.aprobador = Usuario.objects.create_user("bandeja_aprobador", password=CLAVE_PRUEBA)
-        self.otro = Usuario.objects.create_user("bandeja_otro", password=CLAVE_PRUEBA)
-        self.esquema_propio = _crear_esquema_simple(
-            participantes=[(Aprobacion.TipoAprobador.USUARIO, self.aprobador)]
-        )
-        self.aprobacion_propia = self.esquema_propio.participaciones.get()
-        self.esquema_ajeno = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.USUARIO, self.otro)])
+    """Una sola vista de trabajo: la bandeja de aprobaciones se retiró; su URL lleva a Mi trabajo."""
 
-    def test_bandeja_renderiza_y_filtra_solo_pendientes_propias(self):
-        self.client.login(username="bandeja_aprobador", password=CLAVE_PRUEBA)
+    def test_la_bandeja_redirige_a_mi_trabajo(self):
+        Usuario.objects.create_user("bandeja_aprobador@pruebas.orbita")
+        self.client.force_login(persona("bandeja_aprobador@pruebas.orbita"))
         respuesta = self.client.get(reverse("aprobaciones:lista"))
-        self.assertEqual(respuesta.status_code, 200)
-        pks = [fila["aprobacion"].pk for fila in respuesta.context["filas"]]
-        self.assertIn(self.aprobacion_propia.pk, pks)
-        self.assertEqual(len(pks), 1)
-
-    def test_tab_todas_sin_permiso_sigue_acotado_a_la_relacion_directa(self):
-        """Sin `aprobaciones.consultar`/`gestionar`, "Todas" no debe
-        ampliar la visibilidad más allá de lo que ya resuelve
-        `aprobaciones_visibles_para` — no se reescribe su QuerySet."""
-        self.client.login(username="bandeja_aprobador", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("aprobaciones:lista"), {"tab": "todas"})
-        pks = [fila["aprobacion"].pk for fila in respuesta.context["filas"]]
-        self.assertIn(self.aprobacion_propia.pk, pks)
-        self.assertNotIn(self.esquema_ajeno.participaciones.get().pk, pks)
-
-    def test_tab_todas_con_permiso_consultar_ve_todo(self):
-        _otorgar_permiso(self.aprobador, PERMISO_CONSULTAR)
-        self.client.login(username="bandeja_aprobador", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("aprobaciones:lista"), {"tab": "todas"})
-        pks = [fila["aprobacion"].pk for fila in respuesta.context["filas"]]
-        self.assertIn(self.esquema_ajeno.participaciones.get().pk, pks)
-
-    def test_bandeja_empty_state(self):
-        sin_trabajo = Usuario.objects.create_user("bandeja_sin_trabajo", password=CLAVE_PRUEBA)
-        self.client.login(username="bandeja_sin_trabajo", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("aprobaciones:lista"))
-        self.assertContains(respuesta, "No tienes aprobaciones pendientes.")
+        self.assertRedirects(respuesta, reverse("core:mi_trabajo"), fetch_redirect_response=False)
 
 
 class DetalleViewTests(TestCase):
+    """El detalle de una aprobación ya no es una página: lleva al espacio de su ticket (o a Mi trabajo si no tiene
+    ticket), con la misma autorización de objeto de siempre."""
+
     def setUp(self):
-        self.aprobador = Usuario.objects.create_user("detalle_aprobador", password=CLAVE_PRUEBA)
-        self.ajeno = Usuario.objects.create_user("detalle_ajeno", password=CLAVE_PRUEBA)
+        self.aprobador = Usuario.objects.create_user("detalle_aprobador@pruebas.orbita")
+        self.ajeno = Usuario.objects.create_user("detalle_ajeno@pruebas.orbita")
         self.esquema = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.USUARIO, self.aprobador)])
         self.aprobacion = self.esquema.participaciones.get()
 
-    def test_detalle_autorizado_para_aprobador_directo(self):
-        self.client.login(username="detalle_aprobador", password=CLAVE_PRUEBA)
+    def test_detalle_redirige_para_el_aprobador_directo(self):
+        self.client.force_login(persona("detalle_aprobador@pruebas.orbita"))
         respuesta = self.client.get(reverse("aprobaciones:detalle", args=[self.aprobacion.pk]))
-        self.assertEqual(respuesta.status_code, 200)
-        self.assertIsNone(respuesta.context["contexto_workflow"])
+        self.assertRedirects(respuesta, reverse("core:mi_trabajo"), fetch_redirect_response=False)
 
     def test_detalle_no_autorizado_devuelve_403(self):
-        self.client.login(username="detalle_ajeno", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("detalle_ajeno@pruebas.orbita"))
         respuesta = self.client.get(reverse("aprobaciones:detalle", args=[self.aprobacion.pk]))
         self.assertEqual(respuesta.status_code, 403)
-
-    def test_acciones_ocultas_cuando_no_corresponden(self):
-        """Un usuario con solo `aprobaciones.consultar` (visibilidad, no
-        relación directa) ve el detalle pero ningún control de decisión."""
-        _otorgar_permiso(self.ajeno, PERMISO_CONSULTAR)
-        self.client.login(username="detalle_ajeno", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("aprobaciones:detalle", args=[self.aprobacion.pk]))
-        self.assertEqual(respuesta.status_code, 200)
-        self.assertFalse(respuesta.context["puede_decidir"])
-        self.assertFalse(respuesta.context["puede_reasignar"])
-        self.assertIsNone(respuesta.context["decision_form"])
-        self.assertNotContains(respuesta, reverse("aprobaciones:decidir", args=[self.aprobacion.pk]))
 
 
 class DecidirViewTests(TestCase):
     def setUp(self):
-        self.aprobador = Usuario.objects.create_user("decidir_aprobador", password=CLAVE_PRUEBA)
-        self.ajeno = Usuario.objects.create_user("decidir_ajeno", password=CLAVE_PRUEBA)
+        self.aprobador = Usuario.objects.create_user("decidir_aprobador@pruebas.orbita")
+        self.ajeno = Usuario.objects.create_user("decidir_ajeno@pruebas.orbita")
         self.esquema = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.USUARIO, self.aprobador)])
         self.aprobacion = self.esquema.participaciones.get()
 
     def test_aprobar_exitoso(self):
-        self.client.login(username="decidir_aprobador", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("decidir_aprobador@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:decidir", args=[self.aprobacion.pk]), {"decision": Aprobacion.Estado.APROBADA}
         )
@@ -890,7 +849,7 @@ class DecidirViewTests(TestCase):
         self.assertEqual(self.aprobacion.estado, Aprobacion.Estado.APROBADA)
 
     def test_rechazar_sin_observacion_no_modifica_dominio(self):
-        self.client.login(username="decidir_aprobador", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("decidir_aprobador@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:decidir", args=[self.aprobacion.pk]), {"decision": Aprobacion.Estado.RECHAZADA}
         )
@@ -899,7 +858,7 @@ class DecidirViewTests(TestCase):
         self.assertEqual(self.aprobacion.estado, Aprobacion.Estado.PENDIENTE)
 
     def test_rechazar_con_observacion_exitoso(self):
-        self.client.login(username="decidir_aprobador", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("decidir_aprobador@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:decidir", args=[self.aprobacion.pk]),
             {"decision": Aprobacion.Estado.RECHAZADA, "observacion": "No cumple."},
@@ -909,7 +868,7 @@ class DecidirViewTests(TestCase):
         self.assertEqual(self.aprobacion.estado, Aprobacion.Estado.RECHAZADA)
 
     def test_devolver_con_observacion_exitoso(self):
-        self.client.login(username="decidir_aprobador", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("decidir_aprobador@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:decidir", args=[self.aprobacion.pk]),
             {"decision": Aprobacion.Estado.DEVUELTA, "observacion": "Ajustar."},
@@ -919,7 +878,7 @@ class DecidirViewTests(TestCase):
         self.assertEqual(self.aprobacion.estado, Aprobacion.Estado.DEVUELTA)
 
     def test_decidir_no_autorizado_devuelve_403(self):
-        self.client.login(username="decidir_ajeno", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("decidir_ajeno@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:decidir", args=[self.aprobacion.pk]), {"decision": Aprobacion.Estado.APROBADA}
         )
@@ -930,35 +889,36 @@ class DecidirViewTests(TestCase):
     def test_post_directo_sobre_aprobacion_ajena_tambien_es_403(self):
         otro_esquema = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.USUARIO, self.ajeno)])
         ajena = otro_esquema.participaciones.get()
-        self.client.login(username="decidir_aprobador", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("decidir_aprobador@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:decidir", args=[ajena.pk]), {"decision": Aprobacion.Estado.APROBADA}
         )
         self.assertEqual(respuesta.status_code, 403)
 
     def test_prg_tras_decision_exitosa(self):
-        self.client.login(username="decidir_aprobador", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("decidir_aprobador@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:decidir", args=[self.aprobacion.pk]),
             {"decision": Aprobacion.Estado.APROBADA},
             follow=True,
         )
-        self.assertRedirects(respuesta, reverse("aprobaciones:detalle", args=[self.aprobacion.pk]))
+        # Vuelve al detalle, que ya no es una página: sin ticket lleva a Mi trabajo.
+        self.assertRedirects(respuesta, reverse("core:mi_trabajo"))
         mensajes = [str(m) for m in respuesta.context["messages"]]
         self.assertIn("Decisión registrada.", mensajes)
 
 
 class ReasignarViewTests(TestCase):
     def setUp(self):
-        self.gestor = Usuario.objects.create_user("reasigview_gestor", password=CLAVE_PRUEBA)
+        self.gestor = Usuario.objects.create_user("reasigview_gestor@pruebas.orbita")
         _otorgar_permiso(self.gestor, PERMISO_GESTIONAR)
-        self.original = Usuario.objects.create_user("reasigview_original", password=CLAVE_PRUEBA)
-        self.nuevo = Usuario.objects.create_user("reasigview_nuevo", password=CLAVE_PRUEBA)
+        self.original = Usuario.objects.create_user("reasigview_original@pruebas.orbita")
+        self.nuevo = Usuario.objects.create_user("reasigview_nuevo@pruebas.orbita")
         self.esquema = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.USUARIO, self.original)])
         self.aprobacion = self.esquema.participaciones.get()
 
     def test_reasignar_exitoso(self):
-        self.client.login(username="reasigview_gestor", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("reasigview_gestor@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:reasignar", args=[self.aprobacion.pk]), {"usuario": self.nuevo.pk}
         )
@@ -967,7 +927,7 @@ class ReasignarViewTests(TestCase):
         self.assertEqual(self.aprobacion.aprobador_usuario_id, self.nuevo.id)
 
     def test_reasignar_no_autorizado_devuelve_403(self):
-        self.client.login(username="reasigview_original", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("reasigview_original@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:reasignar", args=[self.aprobacion.pk]), {"usuario": self.nuevo.pk}
         )
@@ -976,7 +936,7 @@ class ReasignarViewTests(TestCase):
         self.assertEqual(self.aprobacion.aprobador_usuario_id, self.original.id)
 
     def test_formulario_invalido_no_altera_dominio(self):
-        self.client.login(username="reasigview_gestor", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("reasigview_gestor@pruebas.orbita"))
         respuesta = self.client.post(reverse("aprobaciones:reasignar", args=[self.aprobacion.pk]), {})
         self.assertEqual(respuesta.status_code, 302)
         self.aprobacion.refresh_from_db()
@@ -1044,9 +1004,9 @@ def _crear_workflow_con_aprobacion_vinculada(actor, aprobadores, *, modo, politi
 
 class DecidirViewIntegracionWorkflowTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user("aprobint_actor", password=CLAVE_PRUEBA)
-        self.aprobador_a = Usuario.objects.create_user("aprobint_a", password=CLAVE_PRUEBA)
-        self.aprobador_b = Usuario.objects.create_user("aprobint_b", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("aprobint_actor@pruebas.orbita")
+        self.aprobador_a = Usuario.objects.create_user("aprobint_a@pruebas.orbita")
+        self.aprobador_b = Usuario.objects.create_user("aprobint_b@pruebas.orbita")
 
     def test_decision_definitiva_continua_workflow(self):
         instancia, esquema = _crear_workflow_con_aprobacion_vinculada(
@@ -1059,7 +1019,7 @@ class DecidirViewIntegracionWorkflowTests(TestCase):
         self.assertEqual(instancia.estado, _InstanciaWorkflow.Estado.EN_ESPERA)
         aprobacion = esquema.participaciones.get()
 
-        self.client.login(username="aprobint_a", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("aprobint_a@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:decidir", args=[aprobacion.pk]), {"decision": Aprobacion.Estado.APROBADA}
         )
@@ -1082,7 +1042,7 @@ class DecidirViewIntegracionWorkflowTests(TestCase):
         instancia.refresh_from_db()
         aprobacion_a = esquema.participaciones.get(aprobador_usuario=self.aprobador_a)
 
-        self.client.login(username="aprobint_a", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("aprobint_a@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:decidir", args=[aprobacion_a.pk]), {"decision": Aprobacion.Estado.APROBADA}
         )
@@ -1098,7 +1058,7 @@ class DecidirViewIntegracionWorkflowTests(TestCase):
     def test_aprobacion_independiente_funciona_sin_workflow(self):
         esquema = _crear_esquema_simple(participantes=[(Aprobacion.TipoAprobador.USUARIO, self.aprobador_a)])
         aprobacion = esquema.participaciones.get()
-        self.client.login(username="aprobint_a", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("aprobint_a@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:decidir", args=[aprobacion.pk]), {"decision": Aprobacion.Estado.APROBADA}
         )
@@ -1113,9 +1073,8 @@ class DecidirViewIntegracionWorkflowTests(TestCase):
             modo=_ConfiguracionEtapaAprobacion.Modo.PARALELA,
             politica=_ConfiguracionEtapaAprobacion.Politica.CUALQUIERA,
         )
-        aprobacion = esquema.participaciones.get()
-        self.client.login(username="aprobint_a", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("aprobaciones:detalle", args=[aprobacion.pk]))
-        self.assertEqual(respuesta.status_code, 200)
-        self.assertIsNotNone(respuesta.context["contexto_workflow"])
-        self.assertEqual(respuesta.context["contexto_workflow"]["etapa"].nombre, "Aprobar")
+        self.assertTrue(esquema.participaciones.exists())
+        from apps.aprobaciones.views import _contexto_workflow_por_esquema
+
+        contexto = _contexto_workflow_por_esquema([esquema.pk])[esquema.pk]
+        self.assertEqual(contexto["etapa"].nombre, "Aprobar")

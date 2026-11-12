@@ -1,5 +1,5 @@
 {% load static %}<!doctype html>
-<html lang="es" data-tema="{{ sistema.tema|default:'lima' }}" data-apariencia="{{ user.apariencia|default:'SISTEMA' }}" data-modo="{% if user.apariencia == 'OSCURO' %}oscuro{% else %}claro{% endif %}">
+<html lang="es" data-tema="{{ user.tema|default:sistema.tema|default:'cielo' }}" data-apariencia="{{ user.apariencia|default:'SISTEMA' }}" data-modo="{% if user.apariencia == 'OSCURO' %}oscuro{% else %}claro{% endif %}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -21,7 +21,7 @@
   <link rel="stylesheet" href="{% static 'css/components.css' %}">
   {% block extra_head %}{% endblock %}
 </head>
-<body>
+<body{% if user.is_authenticated %} data-presencia="{% url 'core:presencia' %}"{% endif %}>
   <a class="skip-link" href="#main-content">Saltar al contenido</a>
   {% include "layout/icons.html" %}
 

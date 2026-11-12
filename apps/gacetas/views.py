@@ -30,7 +30,7 @@ def _gaceta_visible(request, pk):
 
 def _en_el_ticket(gaceta):
     """La gaceta dentro del espacio de su ticket (su única vista)."""
-    return reverse("tickets:espacio", args=[gaceta.ticket_id]) + f"#gaceta-{gaceta.pk}"
+    return reverse("tickets:espacio", args=[gaceta.ticket_id]) + f"?gaceta={gaceta.pk}#gaceta-{gaceta.pk}"
 
 
 def _ejecutar(request, gaceta_pk, accion, exito):
@@ -122,6 +122,22 @@ def cerrar_periodo_view(request, pk):
     gaceta = _gaceta_visible(request, pk)
     return _ejecutar(request, pk, lambda: operaciones.cerrar_periodo(gaceta, request.user),
                      "Periodo de revisión cerrado.")
+
+
+@login_required
+@require_POST
+def conforme_view(request, pk):
+    """«Estoy conforme»: con todos los interesados conformes, la gaceta termina antes (`operaciones.estar_conforme`)."""
+    gaceta = _gaceta_visible(request, pk)
+    resultado = {}
+
+    def accion():
+        resultado["termino"] = operaciones.estar_conforme(gaceta, request.user)
+
+    respuesta = _ejecutar(request, pk, accion, "Registramos que estás conforme.")
+    if resultado.get("termino"):
+        messages.info(request, "Todos los interesados están conformes: la revisión terminó antes.")
+    return respuesta
 
 
 @login_required

@@ -8,6 +8,7 @@ from .organizacion import (
     Equipo,
     EquipoArea,
     EquipoUnidadNegocio,
+    JefaturaUsuario,
     MiembroEquipo,
     UnidadNegocio,
     UsuarioArea,

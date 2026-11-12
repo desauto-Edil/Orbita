@@ -138,8 +138,16 @@ dd {
   margin: 0;
 }
 
-button {
+/* Todos los controles usan la tipografía del sistema: sin esto, un textarea fuera de `.form` cae en la fuente
+   monoespaciada del navegador. El tamaño y el interlineado los fija cada componente. */
+button,
+input,
+select,
+textarea {
   font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  letter-spacing: inherit;
 }
 
 hr {

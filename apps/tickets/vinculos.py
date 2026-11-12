@@ -11,6 +11,7 @@ la relación vive del lado integrador y hoy tiene exactamente estas formas, toda
 - Aprobación del flujo: `workflows.EsquemaAprobacionWorkflow` → `InstanciaEtapa` → `InstanciaWorkflow`.
 - Aprobación de una ronda de gaceta: `RondaRevisionGaceta.esquema`.
 - Aprobación de una prórroga: `tickets.ProrrogaTicket.esquema_aprobacion`.
+- Aprobación de una cancelación: `tickets.SolicitudCancelacion.esquema_aprobacion`.
 
 Este módulo solo LEE esas relaciones en consultas por lote (una por forma, nunca una por fila) para que la
 bandeja de Trabajo agrupe por Ticket y el espacio del Ticket encuentre lo que le pertenece. No decide permisos
@@ -74,10 +75,10 @@ def origen_de_tareas(tarea_ids):
 
 
 def origen_de_aprobaciones(aprobaciones):
-    """`{aprobacion_id: {"ticket_id", "elemento_id", "origen"}}` (`FLUJO`, `GACETA` o `PRORROGA`) de las
+    """`{aprobacion_id: {"ticket_id", "elemento_id", "origen"}}` (`FLUJO`, `GACETA`, `PRORROGA` o `CANCELACION`) de las
     Aprobaciones dadas que pertenecen a un Ticket. Recibe instancias (usa `esquema_id`, sin consultas extra)."""
     from apps.gacetas.models import RondaRevisionGaceta
-    from apps.tickets.models import ProrrogaTicket
+    from apps.tickets.models import ProrrogaTicket, SolicitudCancelacion
     from apps.workflows.models import EsquemaAprobacionWorkflow
 
     por_esquema = {}
@@ -105,6 +106,10 @@ def origen_de_aprobaciones(aprobaciones):
         "esquema_aprobacion_id", "ticket_id"
     ):
         por_esquema[esquema_id] = {"ticket_id": ticket_id, "elemento_id": None, "origen": "PRORROGA"}
+    for esquema_id, ticket_id in SolicitudCancelacion.objects.filter(esquema_aprobacion_id__in=esquemas).values_list(
+        "esquema_aprobacion_id", "ticket_id"
+    ):
+        por_esquema[esquema_id] = {"ticket_id": ticket_id, "elemento_id": None, "origen": "CANCELACION"}
     return {a.pk: por_esquema[a.esquema_id] for a in aprobaciones if a.esquema_id in por_esquema}
 
 
@@ -135,13 +140,37 @@ def tareas_del_ticket(ticket):
 
 def aprobaciones_del_ticket(ticket):
     """QuerySet de TODAS las Aprobaciones (participaciones) que pertenecen al Ticket: del flujo, de las rondas de
-    sus gacetas y de sus prórrogas."""
+    sus gacetas, de sus prórrogas y de sus solicitudes de cancelación."""
     from django.db.models import Q
 
     instancias = instancias_del_ticket(ticket)
-    condicion = Q(esquema__ronda_gaceta__participacion__gaceta__ticket_id=ticket.pk) | Q(
-        esquema__prorroga__ticket_id=ticket.pk
+    condicion = (
+        Q(esquema__ronda_gaceta__participacion__gaceta__ticket_id=ticket.pk)
+        | Q(esquema__prorroga__ticket_id=ticket.pk)
+        | Q(esquema__cancelacion__ticket_id=ticket.pk)
     )
     if instancias:
         condicion |= Q(esquema__vinculo_workflow__instancia_etapa__instancia_workflow_id__in=instancias)
     return Aprobacion.objects.filter(condicion).distinct()
+
+
+def url_de_tarea(tarea):
+    """Dónde se trabaja una Tarea: el espacio de SU ticket (hay una sola vista de trabajo; las páginas de lista,
+    detalle y vista previa de tareas se retiraron). Una tarea sin ticket lleva a Mi trabajo. Solo navegación: el
+    espacio vuelve a autorizar al abrirse."""
+    from django.urls import reverse
+
+    origen = origen_de_tareas([tarea.pk]).get(tarea.pk)
+    if origen is None:
+        return reverse("core:mi_trabajo")
+    return reverse("tickets:espacio", args=[origen["ticket_id"]])
+
+
+def url_de_aprobacion(aprobacion):
+    """Dónde se decide una Aprobación: el espacio de SU ticket (sin ticket, Mi trabajo). Solo navegación."""
+    from django.urls import reverse
+
+    origen = origen_de_aprobaciones([aprobacion]).get(aprobacion.pk)
+    if origen is None:
+        return reverse("core:mi_trabajo")
+    return reverse("tickets:espacio", args=[origen["ticket_id"]])

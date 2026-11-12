@@ -49,7 +49,7 @@ def contexto_studio(servicio, vista=""):
         "notif_campos_persona": cfg.campos_de_persona(servicio),
         "notif_momentos": ReglaNotificacion.Momento.choices,
         "notif_destinatarios": destinatarios,
-        "notif_usuarios": Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "username"),
+        "notif_usuarios": Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email"),
         "notif_equipos": Equipo.objects.filter(activo=True).order_by("nombre"),
         "notif_parametros": parametros,
         "notif_config": configuracion,

@@ -28,7 +28,9 @@ _AVISOS = (
     Aviso("TICKET_RADICADO", Grupo.TICKETS, "Ticket radicado (con su código)", correo=True, para_solicitante=True),
     Aviso("TICKET_EN_ATENCION", Grupo.TICKETS, "Alguien tomó el ticket o empezó la atención", para_solicitante=True),
     Aviso("INFORMACION_SOLICITADA", Grupo.TICKETS, "Le piden información", requiere_accion=True, correo=True, para_solicitante=True),
-    Aviso("COMENTARIO", Grupo.TICKETS, "Nuevo comentario en el ticket"),
+    # Un mensaje de la conversación sale por correo SOLO si la persona estaba fuera de línea y sigue sin leerlo
+    # unos minutos después (todo lo de ese canal en un solo correo: `correo_conversacion`).
+    Aviso("COMENTARIO", Grupo.TICKETS, "Nuevo mensaje en la conversación del ticket (por correo si estabas fuera de línea)", correo=True),
     Aviso("FECHA_OBJETIVO_CAMBIADA", Grupo.TICKETS, "Cambió la fecha objetivo (prórroga aprobada)"),
     Aviso("ENTREGA_DISPONIBLE", Grupo.TICKETS, "Hay una entrega para revisar y aceptar", requiere_accion=True, correo=True, para_solicitante=True),
     Aviso("TICKET_RESUELTO", Grupo.TICKETS, "Ticket resuelto", correo=True, para_solicitante=True),
@@ -36,7 +38,7 @@ _AVISOS = (
     Aviso("TICKET_CANCELADO", Grupo.TICKETS, "Ticket cancelado (con el motivo)", correo=True),
     Aviso("TICKET_REABIERTO", Grupo.TICKETS, "Ticket reabierto", correo=True),
     # --- Para quien atiende ---
-    Aviso("TICKET_EN_COLA", Grupo.ATENCION, "Nuevo ticket en la Cola del equipo"),
+    Aviso("TICKET_EN_COLA", Grupo.ATENCION, "Nuevo ticket en la Cola: puedes tomarlo", requiere_accion=True, correo=True),
     Aviso("TICKET_ASIGNADO", Grupo.ATENCION, "Ticket asignado o dirigido a una persona", correo=True),
     Aviso("TICKET_REASIGNADO_FUERA", Grupo.ATENCION, "Le quitaron un ticket (reasignación)"),
     Aviso("TICKET_GENERADO", Grupo.ATENCION, "Se generó la ejecución de un proceso programado", correo=True),
@@ -44,10 +46,14 @@ _AVISOS = (
     Aviso("ENTREGA_ACEPTADA", Grupo.ATENCION, "El solicitante aceptó la entrega", correo=True),
     Aviso("ENTREGA_OBSERVADA", Grupo.ATENCION, "El solicitante observó la entrega", correo=True),
     Aviso("PRORROGA_RECHAZADA", Grupo.ATENCION, "La prórroga fue rechazada", correo=True),
+    Aviso("CANCELACION_SOLICITADA", Grupo.ATENCION, "Se pidió cancelar el ticket: queda detenido hasta que el aprobador decida", correo=True),
+    Aviso("CANCELACION_RECHAZADA", Grupo.ATENCION, "La cancelación del ticket fue rechazada: el trabajo continúa", correo=True),
     # --- Actividades y aprobaciones ---
-    Aviso("TAREA_ASIGNADA", Grupo.TRABAJO, "Actividad asignada, delegada o reasignada", correo=True),
+    Aviso("TAREA_ASIGNADA", Grupo.TRABAJO, "Actividad asignada o reasignada", correo=True),
     Aviso("APROBACION_TURNO", Grupo.TRABAJO, "Es su turno de aprobar", requiere_accion=True, correo=True),
     Aviso("TRABAJO_DEVUELTO", Grupo.TRABAJO, "Una aprobación devolvió o rechazó el trabajo", correo=True),
+    # Un plan de trabajo (o cualquier colección que recorre sus ítems) se avisa COMPLETO, no ítem por ítem.
+    Aviso("RECORRIDO_COMPLETADO", Grupo.TRABAJO, "Todos los ítems de un recorrido terminaron (p. ej. el plan de trabajo quedó aprobado)", correo=True),
     # --- Gacetas ---
     Aviso("GACETA_ABIERTA", Grupo.GACETAS, "Se abrió la gaceta: hay piezas para revisar", correo=True),
     Aviso("GACETA_OBSERVACION", Grupo.GACETAS, "Recibió una observación: debe corregir", requiere_accion=True, correo=True),

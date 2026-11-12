@@ -1,0 +1,9 @@
+{% comment %} Archivos de un ítem que NO son audiovisuales (un PDF de evidencia, una hoja de cálculo) en la revisión de
+  datos y en la gaceta de datos: enlaces compactos que abren o descargan con la autorización de siempre. Espera
+  `archivos`. {% endcomment %}
+{% load archivos %}
+<ul class="pi__archivos" aria-label="Archivos">
+  {% for a in archivos %}
+    <li><a href="{% url 'tickets:descargar_adjunto' a.pk %}{% if a|clase_vista_previa %}?ver=1{% endif %}" target="_blank" rel="noopener">{% include "components/icon.html" with name="file" size="sm" %}<span>{{ a.nombre_original }}</span></a></li>
+  {% endfor %}
+</ul>

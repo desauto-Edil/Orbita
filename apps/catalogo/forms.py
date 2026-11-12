@@ -23,7 +23,7 @@ from apps.catalogo.models import (
     ServicioVisibilidad,
     TerminoServicio,
 )
-from apps.core.models import Area, Equipo, UnidadNegocio, Usuario
+from apps.core.models import Area, Equipo, MiembroEquipo, UnidadNegocio, Usuario
 from apps.workflows.models import ConfiguracionEtapaAprobacion, TransicionEtapa
 
 # --- GENERAL -------------------------------------------------------------
@@ -68,7 +68,7 @@ class PoliticaProrrogaForm(forms.Form):
         choices=[("", "— Seleccione —")] + list(Servicio.PoliticaProrroga.choices), label="Prórroga de la fecha objetivo"
     )
     aprobador_usuario = forms.ModelChoiceField(
-        queryset=Usuario.objects.filter(is_active=True).order_by("username"), required=False, label="Aprobador (usuario)"
+        queryset=Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email"), required=False, label="Aprobador (usuario)"
     )
     aprobador_equipo = forms.ModelChoiceField(
         queryset=Equipo.objects.filter(activo=True).order_by("nombre"), required=False, label="o aprobador (equipo)"
@@ -79,6 +79,30 @@ class PoliticaProrrogaForm(forms.Form):
         if datos.get("politica") == Servicio.PoliticaProrroga.CON_APROBACION:
             if bool(datos.get("aprobador_usuario")) == bool(datos.get("aprobador_equipo")):
                 raise forms.ValidationError("Con aprobación, indique un aprobador: un usuario o un equipo, no ambos.")
+        return datos
+
+
+class PoliticaCancelacionForm(forms.Form):
+    """Cancelación con aprobación (Studio → Básico → Tiempos y prórrogas). Solo forma/UX: la regla final vive en
+    `operaciones.configurar_politica_cancelacion`."""
+
+    SIN, CON = "SIN_APROBACION", "CON_APROBACION"
+    politica = forms.ChoiceField(
+        choices=[(SIN, "Se cancela directamente"), (CON, "Un aprobador debe aceptarla")],
+        label="Cancelación de un ticket",
+    )
+    aprobador_usuario = forms.ModelChoiceField(
+        queryset=Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email"), required=False, label="Aprobador (usuario)"
+    )
+    aprobador_equipo = forms.ModelChoiceField(
+        queryset=Equipo.objects.filter(activo=True).order_by("nombre"), required=False, label="o aprobador (equipo)"
+    )
+
+    def clean(self):
+        datos = super().clean()
+        if datos.get("politica") == self.CON:
+            if bool(datos.get("aprobador_usuario")) == bool(datos.get("aprobador_equipo")):
+                raise forms.ValidationError("Con aprobación, indica un aprobador: un usuario o un equipo, no ambos.")
         return datos
 
 
@@ -119,8 +143,8 @@ class InicioProcesoForm(forms.Form):
         kwargs.pop("servicio", None)  # compatibilidad: ya no depende del proceso
         super().__init__(*args, **kwargs)
         personas = [
-            (f"U:{u.pk}", u.get_full_name() or u.get_username())
-            for u in Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "username")
+            (f"U:{u.pk}", u.nombre_visible)
+            for u in Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email")
         ]
         equipos = [(f"E:{e.pk}", e.nombre) for e in Equipo.objects.filter(activo=True).order_by("nombre")]
         self.fields["responsable_inicial"].choices = [
@@ -216,7 +240,7 @@ class VisibilidadForm(forms.Form):
 
     tipo_alcance = forms.ChoiceField(choices=ServicioVisibilidad.TipoAlcance.choices, label="Conceder a")
     usuario = forms.ModelChoiceField(
-        queryset=Usuario.objects.filter(is_active=True).order_by("username"), required=False, label="Usuario"
+        queryset=Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email"), required=False, label="Usuario"
     )
     area = forms.ModelChoiceField(queryset=Area.objects.filter(activo=True).order_by("nombre"), required=False, label="Área")
     unidad_negocio = forms.ModelChoiceField(
@@ -241,7 +265,7 @@ class ResponsableForm(forms.Form):
 
     tipo_responsable = forms.ChoiceField(choices=ServicioResponsable.TipoResponsable.choices, label="Agregar")
     usuario = forms.ModelChoiceField(
-        queryset=Usuario.objects.filter(is_active=True).order_by("username"), required=False, label="Usuario"
+        queryset=Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email"), required=False, label="Usuario"
     )
     equipo = forms.ModelChoiceField(queryset=Equipo.objects.filter(activo=True).order_by("nombre"), required=False, label="Equipo")
 
@@ -344,6 +368,7 @@ class CampoForm(forms.ModelForm):
             "FECHA_HORA": ("fecha_minima", "fecha_maxima", "dentro_del_periodo"),
             "MULTILISTA": ("minimo_selecciones", "maximo_selecciones"),
             "ARCHIVO": ("extensiones_permitidas", "tamano_maximo_mb"),
+            "CHECKLIST": ("extensiones_permitidas", "tamano_maximo_mb"),
             "USUARIO": ("solo_activos",),
             "AREA": ("solo_activos",),
             "UNIDAD": ("solo_activos",),
@@ -474,6 +499,20 @@ def _sin_solicitante(choices, quitar, actual):
 UNIDAD_PLAZO_CHOICES = [("DIAS", "días"), ("HORAS", "horas")]
 
 
+def _punto_de_linea(linea, obligatorio):
+    """«Texto | pregunta» → un punto de la lista de verificación (la pregunta es opcional)."""
+    texto, _, pregunta = linea.partition("|")
+    punto = {"texto": texto.strip(), "obligatorio": obligatorio}
+    if pregunta.strip():
+        punto["pregunta"] = pregunta.strip()
+    return punto
+
+
+def linea_de_punto(punto):
+    """Inversa de `_punto_de_linea` (para repintar el formulario del Studio)."""
+    return f"{punto['texto']} | {punto['pregunta']}" if punto.get("pregunta") else punto["texto"]
+
+
 class ActividadConfigForm(forms.Form):
     # Sin opción "sin asignar": `apps.catalogo.ejecucion._configurar_actividad`
     # exige un actor real (fijo o dinámico) al crear/reconfigurar una
@@ -485,6 +524,11 @@ class ActividadConfigForm(forms.Form):
     usuario = forms.ModelChoiceField(queryset=Usuario.objects.filter(is_active=True), required=False, label="Persona")
     equipo = forms.ModelChoiceField(queryset=Equipo.objects.filter(activo=True), required=False, label="Equipo")
     permite_subtareas = forms.BooleanField(required=False, label="Permite dividirla en subtareas")
+    # Actividad de un equipo: cualquiera del equipo la hace; esta persona responde si no se hace (recibe los avisos).
+    responde_usuario = forms.ModelChoiceField(
+        queryset=Usuario.objects.filter(is_active=True), required=False,
+        label="Responde si no se hace", empty_label="— Todo el equipo —",
+    )
     # Fase 4.A — guía de la experiencia (NO se guarda): de dónde sale la fecha. Al guardar descarta lo que no
     # corresponde al modo elegido; sin ella (clientes anteriores) el formulario se comporta como antes.
     MODOS_FECHA = [("SIN_FECHA", "Sin fecha"), ("PLAZO", "Plazo desde que llega la actividad"), ("DATO", "Fecha tomada de un dato")]
@@ -500,11 +544,14 @@ class ActividadConfigForm(forms.Form):
     plazo_habiles = forms.BooleanField(required=False, label="Contar solo días y horas hábiles")
     verificacion_obligatoria = forms.CharField(
         required=False, widget=forms.Textarea(attrs={"rows": 3}),
-        label="Lista de verificación obligatoria (un ítem por línea)",
+        label="Lista de verificación obligatoria (un punto por línea)",
+        help_text="Cada punto es un criterio que quien hace la actividad revisa y concluye. Para pedirle que "
+                  "escriba su conclusión, agrega la pregunta tras una barra: «Alcance y esfuerzo estimados | "
+                  "¿Cuánto tiempo y esfuerzo estimas?».",
     )
     verificacion_opcional = forms.CharField(
         required=False, widget=forms.Textarea(attrs={"rows": 2}),
-        label="Lista de verificación opcional (un ítem por línea)",
+        label="Lista de verificación opcional (un punto por línea, también admite « | pregunta»)",
     )
     # Fase 2 — responsable desde una columna del ítem, fechas tomadas de un dato y exigencia de datos de inicio.
     columna = forms.ChoiceField(required=False, choices=[("", "— Elige la columna —")], label="Columna del ítem")
@@ -562,9 +609,9 @@ class ActividadConfigForm(forms.Form):
 
         def lineas(campo, obligatorio):
             return [
-                {"texto": linea.strip(), "obligatorio": obligatorio}
+                _punto_de_linea(linea, obligatorio)
                 for linea in (datos.get(campo) or "").splitlines()
-                if linea.strip()
+                if linea.split("|", 1)[0].strip()
             ]
 
         ampliacion = {
@@ -582,6 +629,8 @@ class ActividadConfigForm(forms.Form):
             ampliacion["exige_datos_inicio"] = True
         if datos.get("columnas_editables"):
             ampliacion["columnas_editables"] = list(datos["columnas_editables"])
+        if datos.get("tipo_actor") == "EQUIPO" and datos.get("responde_usuario"):
+            ampliacion["responde_usuario_id"] = datos["responde_usuario"].pk
         return ampliacion
 
     def clean(self):
@@ -591,6 +640,10 @@ class ActividadConfigForm(forms.Form):
             raise forms.ValidationError("Seleccione un usuario responsable.")
         if tipo_actor == "EQUIPO" and not datos.get("equipo"):
             raise forms.ValidationError("Seleccione un equipo responsable.")
+        if tipo_actor == "EQUIPO" and datos.get("responde_usuario") and not MiembroEquipo.objects.filter(
+            equipo=datos["equipo"], usuario=datos["responde_usuario"], activo=True,
+        ).exists():
+            raise forms.ValidationError("Quien responde por la actividad debe ser un miembro activo del equipo.")
         if tipo_actor == "COLUMNA" and not datos.get("columna"):
             raise forms.ValidationError("Seleccione la columna del ítem de la que sale el responsable.")
         if not self.errors:
@@ -865,7 +918,7 @@ class DefinicionEntregableForm(forms.Form):
         widget=forms.CheckboxSelectMultiple,
     )
     revisores_usuarios = forms.ModelMultipleChoiceField(
-        queryset=Usuario.objects.filter(is_active=True).order_by("username"), required=False,
+        queryset=Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email"), required=False,
         label="Revisan (personas)", widget=forms.SelectMultiple(attrs={"data-multiselect": ""}),
     )
     revisores_equipos = forms.ModelMultipleChoiceField(
@@ -968,29 +1021,12 @@ class DefinicionGacetaForm(forms.Form):
         queryset=Equipo.objects.filter(activo=True), required=False, label="Revisores (equipos)",
         widget=forms.SelectMultiple(attrs={"data-multiselect": ""}),
     )
-    aprobadores_usuarios = forms.ModelMultipleChoiceField(
-        queryset=Usuario.objects.filter(is_active=True), required=False, label="Aprobadores (personas)",
-        widget=forms.SelectMultiple(attrs={"data-multiselect": ""}),
-    )
-    aprobadores_equipos = forms.ModelMultipleChoiceField(
-        queryset=Equipo.objects.filter(activo=True), required=False, label="Aprobadores (equipos)",
-        widget=forms.SelectMultiple(attrs={"data-multiselect": ""}),
-    )
-    politica = forms.ChoiceField(
-        choices=[("TODOS", "Todos deben aprobar"), ("CUALQUIERA", "Cualquiera aprueba")],
-        label="Con varios aprobadores",
-    )
     plazo_revision_cantidad = forms.IntegerField(required=False, min_value=1, max_value=999, label="Periodo de revisión")
     plazo_revision_unidad = forms.ChoiceField(choices=UNIDAD_PLAZO_CHOICES, required=False)
     plazo_revision_habiles = forms.BooleanField(required=False, label="hábiles")
     plazo_correccion_cantidad = forms.IntegerField(required=False, min_value=1, max_value=999, label="Plazo de corrección")
     plazo_correccion_unidad = forms.ChoiceField(choices=UNIDAD_PLAZO_CHOICES, required=False)
     plazo_correccion_habiles = forms.BooleanField(required=False, label="hábiles")
-    aceptacion_automatica = forms.BooleanField(
-        required=False, label="Al vencer el periodo, aceptar los ítems en revisión sin observaciones pendientes",
-    )
-    permite_exclusion = forms.BooleanField(required=False, label="Los aprobadores pueden excluir un ítem")
-    justificacion_al_aprobar = forms.BooleanField(required=False, label="Exigir justificación también al aprobar")
     al_resolver_pendientes = forms.ChoiceField(choices=PENDIENTES_GACETA_CHOICES, label="Al resolver la gaceta")
     resolucion_automatica = forms.BooleanField(
         required=False, label="Resolver sola al cerrar el periodo, cuando se pueda",
@@ -1064,14 +1100,8 @@ class DefinicionGacetaForm(forms.Form):
             "exige_item_completo": bool(datos.get("exige_item_completo")),
             "revisores": [{"tipo": "USUARIO", "usuario_id": u.pk} for u in datos.get("revisores_usuarios") or []]
             + [{"tipo": "EQUIPO", "equipo_id": e.pk} for e in datos.get("revisores_equipos") or []],
-            "aprobadores": [{"tipo": "USUARIO", "usuario_id": u.pk} for u in datos.get("aprobadores_usuarios") or []]
-            + [{"tipo": "EQUIPO", "equipo_id": e.pk} for e in datos.get("aprobadores_equipos") or []],
-            "politica": datos["politica"],
             "plazo_revision": _plazo_de(datos, "plazo_revision"),
             "plazo_correccion": _plazo_de(datos, "plazo_correccion"),
-            "aceptacion_automatica": bool(datos.get("aceptacion_automatica")),
-            "permite_exclusion": bool(datos.get("permite_exclusion")),
-            "justificacion_al_aprobar": bool(datos.get("justificacion_al_aprobar")),
             "al_resolver_pendientes": datos["al_resolver_pendientes"],
             "resolucion_automatica": bool(datos.get("resolucion_automatica")),
             "responsable_correccion_columna": correccion if correccion != self.ULTIMA_ACTIVIDAD else "",
@@ -1084,7 +1114,10 @@ class DefinicionGacetaForm(forms.Form):
 
     @staticmethod
     def inicial(definicion):
-        cfg = definicion.configuracion or {}
+        from apps.catalogo.gacetas import normalizar
+
+        # Normalizada: los antiguos aprobadores aparecen como revisores (regla de oro: nadie aprueba en una gaceta).
+        cfg, _errores = normalizar(definicion.configuracion)
         condicion = cfg.get("condicion_ingreso") or {}
         revisa, prueba = cfg.get("plazo_revision") or {}, cfg.get("plazo_correccion") or {}
         actores = lambda lista, tipo, llave: [a[llave] for a in cfg.get(lista) or [] if a.get("tipo") == tipo]  # noqa: E731
@@ -1097,16 +1130,10 @@ class DefinicionGacetaForm(forms.Form):
             "exige_item_completo": cfg.get("exige_item_completo", True),
             "revisores_usuarios": actores("revisores", "USUARIO", "usuario_id"),
             "revisores_equipos": actores("revisores", "EQUIPO", "equipo_id"),
-            "aprobadores_usuarios": actores("aprobadores", "USUARIO", "usuario_id"),
-            "aprobadores_equipos": actores("aprobadores", "EQUIPO", "equipo_id"),
-            "politica": cfg.get("politica", "TODOS"),
             "plazo_revision_cantidad": revisa.get("cantidad"), "plazo_revision_unidad": revisa.get("unidad") or "DIAS",
             "plazo_revision_habiles": revisa.get("habiles", False),
             "plazo_correccion_cantidad": prueba.get("cantidad"), "plazo_correccion_unidad": prueba.get("unidad") or "DIAS",
             "plazo_correccion_habiles": prueba.get("habiles", False),
-            "aceptacion_automatica": cfg.get("aceptacion_automatica", False),
-            "permite_exclusion": cfg.get("permite_exclusion", False),
-            "justificacion_al_aprobar": cfg.get("justificacion_al_aprobar", False),
             "al_resolver_pendientes": cfg.get("al_resolver_pendientes", "IMPEDIR"),
             "resolucion_automatica": cfg.get("resolucion_automatica", False),
             "responsable_correccion_columna": (

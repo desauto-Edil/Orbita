@@ -76,7 +76,7 @@ class ReasignacionAprobacionForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["usuario"].queryset = Usuario.objects.filter(is_active=True).order_by("username")
+        self.fields["usuario"].queryset = Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email")
         self.fields["equipo"].queryset = Equipo.objects.filter(activo=True).order_by("nombre")
 
     def clean(self):

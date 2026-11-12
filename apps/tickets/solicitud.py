@@ -57,6 +57,7 @@ CONTROL_POR_TIPO = {
     TipoCampo.FECHA_HORA: "fecha_hora",
     TipoCampo.BOOLEANO: "switch",
     TipoCampo.ARCHIVO: "archivo",
+    TipoCampo.CHECKLIST: "checklist",
     TipoCampo.USUARIO: "select",
     TipoCampo.AREA: "select",
     TipoCampo.UNIDAD: "select",
@@ -222,7 +223,15 @@ def errores_de_formato(ticket, respuestas_crudas):
             continue
         estrategia = ESTRATEGIAS_POR_TIPO[campo.tipo]
         try:
-            if campo.tipo == TipoCampo.ARCHIVO:
+            if campo.tipo == TipoCampo.CHECKLIST:
+                # Cada prueba enviada: un archivo (control técnico + extensión/tamaño) o un enlace.
+                for cambio in crudo.values():
+                    if cambio.get("quitar"):
+                        continue
+                    if cambio.get("archivo"):
+                        _validar_archivo_tecnico(cambio["archivo"])
+                    estrategia.validar_prueba(campo, archivo=cambio.get("archivo"), enlace=cambio.get("enlace") or "")
+            elif campo.tipo == TipoCampo.ARCHIVO:
                 _validar_archivo_tecnico(crudo)
                 estrategia.validar_valor(
                     campo, {"nombre": crudo.name, "tamano_mb": crudo.size / (1024 * 1024)}
@@ -375,7 +384,7 @@ def _atributos_y_pista(campo):
         )
         if rango:
             pistas.append(rango)
-    elif tipo == TipoCampo.ARCHIVO:
+    elif tipo in (TipoCampo.ARCHIVO, TipoCampo.CHECKLIST):
         extensiones = configuracion.get("extensiones_permitidas") or []
         if extensiones:
             atributos["accept"] = ",".join("." + e.lstrip(".").lower() for e in extensiones)
@@ -394,14 +403,21 @@ def _atributos_y_pista(campo):
     return atributos, " · ".join(pistas)
 
 
-def _construir_items(version, existentes=None, *, errores=None, valores_envio=None):
+def _construir_items(version, existentes=None, *, errores=None, valores_envio=None, ticket=None):
     """Una entrada por campo de la versión congelada, en su orden, lista
-    para renderizar (control, ancho, estado, valores, errores)."""
+    para renderizar (control, ancho, estado, valores, errores). Con `ticket`, las listas de evidencias muestran
+    las pruebas ya subidas."""
+    from apps.tickets import evidencias
+
     errores = errores or {}
     valores_envio = valores_envio or {}
     existentes = existentes or {}
     campos = list(version.campos.prefetch_related("opciones").all())
-    ids_archivo = {c.id for c in campos if c.tipo == TipoCampo.ARCHIVO}
+    ids_archivo = {c.id for c in campos if c.tipo in (TipoCampo.ARCHIVO, TipoCampo.CHECKLIST)}
+    marcas = (
+        evidencias.marcas_vigentes(ticket=ticket)
+        if ticket is not None and any(c.tipo == TipoCampo.CHECKLIST for c in campos) else []
+    )
 
     valores = _valores_para_evaluar(
         existentes, {k: v for k, v in valores_envio.items() if k not in ids_archivo}
@@ -415,7 +431,7 @@ def _construir_items(version, existentes=None, *, errores=None, valores_envio=No
     for campo in campos:
         estrategia = ESTRATEGIAS_POR_TIPO[campo.tipo]
         rc = existentes.get(campo.id)
-        hay_envio = campo.id in valores_envio and campo.tipo != TipoCampo.ARCHIVO
+        hay_envio = campo.id in valores_envio and campo.id not in ids_archivo
         valor, seleccion, marcado = _valores_del_campo(campo, rc, hay_envio, valores_envio.get(campo.id))
 
         if campo.tipo in (TipoCampo.LISTA, TipoCampo.MULTILISTA):
@@ -466,6 +482,7 @@ def _construir_items(version, existentes=None, *, errores=None, valores_envio=No
             "seleccion": seleccion,
             "marcado": marcado,
             "archivo": _archivo_de(rc) if campo.tipo == TipoCampo.ARCHIVO else None,
+            "checklist": evidencias.checklist(campo, marcas) if campo.tipo == TipoCampo.CHECKLIST else None,
             "atributos": atributos,
             "pista": pista,
             "limite": limite,
@@ -488,6 +505,7 @@ def construir_items(ticket, *, errores=None, valores_envio=None):
         _existentes(respuesta_formulario),
         errores=errores,
         valores_envio=valores_envio,
+        ticket=ticket,
     )
 
 
@@ -501,6 +519,8 @@ def _completado(item):
         return True  # False también es una respuesta válida y se guarda (ver `radicar`)
     if control == "archivo":
         return bool(item["archivo"])
+    if control == "checklist":
+        return bool(item["checklist"] and item["checklist"]["completo"])
     if control in ("chips", "multiselect"):
         return bool(item["seleccion"])
     return bool((item["valor"] or "").strip())

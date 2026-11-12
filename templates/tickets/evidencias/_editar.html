@@ -1,0 +1,42 @@
+{% comment %}
+  Una lista de evidencias que la persona PUEDE completar en un ítem: cada punto con su prueba (archivo o enlace) y
+  «Quitar», o un formulario para subirla. Cada formulario es independiente (no va dentro de otro formulario) y va a
+  `tickets:evidencia_marcar` / `tickets:evidencia_retirar`, que vuelven a autorizar bajo lock. Espera `lista`,
+  `elemento`, `ticket` y `volver` (URL de regreso).
+{% endcomment %}
+{% load archivos %}
+<div class="evd evd--editable">
+  <p class="evd__titulo">{{ lista.campo.etiqueta }}{% if lista.campo.obligatorio %} <abbr title="Obligatorio">*</abbr>{% endif %} <span class="evd__cuenta tabular{% if lista.completo %} is-completa{% endif %}">{{ lista.hechos }}/{{ lista.total }}</span></p>
+  {% if lista.campo.ayuda %}<p class="evd__ayuda">{{ lista.campo.ayuda }}</p>{% endif %}
+  <ul class="evd__puntos">
+    {% for punto in lista.puntos %}
+      <li class="evd__punto{% if punto.marca %} is-hecho{% endif %}">
+        <span class="evd__check" aria-hidden="true">{% if punto.marca %}✓{% endif %}</span>
+        <span class="evd__texto">{{ punto.etiqueta }}</span>
+        {% if punto.marca %}
+          {% with m=punto.marca %}
+            {% if m.es_archivo %}
+              <a class="evd__prueba" href="{% url 'tickets:evidencia' m.pk %}{% if m|clase_vista_previa %}?ver=1{% endif %}" target="_blank" rel="noopener">{{ m.nombre_original|truncatechars:40 }}</a>
+            {% else %}
+              <a class="evd__prueba" href="{{ m.enlace }}" target="_blank" rel="noopener noreferrer">{{ m.enlace|truncatechars:48 }}</a>
+            {% endif %}
+            <form method="post" action="{% url 'tickets:evidencia_retirar' ticket.pk m.pk %}" class="evd__quitar">
+              {% csrf_token %}<input type="hidden" name="next" value="{{ volver }}">
+              <button type="submit" class="btn btn--ghost btn--sm">Quitar</button>
+            </form>
+          {% endwith %}
+        {% else %}
+          {% with ext=lista.campo.configuracion.extensiones_permitidas %}
+            <form method="post" enctype="multipart/form-data" action="{% url 'tickets:evidencia_marcar' ticket.pk elemento.pk lista.campo.pk %}" class="evd__subir">
+              {% csrf_token %}<input type="hidden" name="next" value="{{ volver }}"><input type="hidden" name="punto" value="{{ punto.valor }}">
+              <input type="file" name="archivo" aria-label="Archivo de la prueba: {{ punto.etiqueta }}"{% if ext %} accept="{% for e in ext %}.{{ e }}{% if not forloop.last %},{% endif %}{% endfor %}"{% endif %}>
+              <span class="evd__o">o</span>
+              <input type="url" name="enlace" placeholder="https://…" aria-label="Enlace de la prueba: {{ punto.etiqueta }}">
+              <button type="submit" class="btn btn--secondary btn--sm">Subir evidencia</button>
+            </form>
+          {% endwith %}
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</div>

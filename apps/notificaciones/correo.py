@@ -81,16 +81,38 @@ def contenido(notificacion):
     contexto = {
         "sistema": sistema,
         "notificacion": notificacion,
-        "nombre": destinatario.first_name or destinatario.get_full_name() or destinatario.get_username(),
+        "nombre": destinatario.first_name or destinatario.nombre_visible,
         "enlace": enlace,
         "logo_cid": CID_LOGO if logo else "",
         "motivo": _motivo(notificacion),
         "preferencias": f"{settings.APP_BASE_URL}/perfil/#notificaciones",
+        "conversacion": _conversacion(notificacion),
     }
     texto = render_to_string("correo/notificacion.txt", contexto)
     html = render_to_string("correo/notificacion.html", contexto)
     imagenes = [(CID_LOGO, *logo)] if logo else []
     return asunto, texto, html, imagenes
+
+
+def _conversacion(notificacion):
+    """Mensajes sin leer para el correo de la Conversación (estilo chat: quién y qué escribió), o `None` si el aviso
+    no es de la conversación o ya no queda nada sin leer (entonces sale el formato de siempre)."""
+    if notificacion.evento != "COMENTARIO" or notificacion.ticket_id is None:
+        return None
+    from apps.tickets import conversacion
+
+    etiqueta = next((v for e, v in notificacion.hechos or [] if e == conversacion.HECHO_CANAL), "")
+    canal = next((k for k, v in conversacion.ETIQUETAS.items() if v == etiqueta), "")
+    if not canal:
+        return None
+    datos = conversacion.para_correo(notificacion.destinatario, notificacion.ticket, canal)
+    if not datos["mensajes"]:
+        return None
+    from apps.notificaciones.mensajes import nombre_ticket
+
+    datos["canal"] = etiqueta
+    datos["ticket"] = nombre_ticket(notificacion.ticket) or "el ticket"
+    return datos
 
 
 def _motivo(notificacion):

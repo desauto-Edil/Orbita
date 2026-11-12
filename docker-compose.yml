@@ -30,9 +30,33 @@ services:
       - db
       - redis
 
+  # Administración avanzada (Versión 1, etapa 4): la MISMA aplicación con ADMIN_HABILITADA, publicada SOLO en el
+  # 127.0.0.1 del equipo (en el VPS se llega por túnel SSH: ssh -L 8001:127.0.0.1:8001 usuario@servidor). No arranca
+  # con `docker compose up`: se enciende cuando hace falta con `docker compose --profile admin up admin`.
+  # Su callback de Google es local: registra http://127.0.0.1:8001/auth/google/callback/ en el cliente OAuth.
+  admin:
+    build: .
+    profiles: ["admin"]
+    command: python manage.py runserver 0.0.0.0:8001
+    volumes:
+      - .:/app
+    ports:
+      - "127.0.0.1:8001:8001"
+    env_file:
+      - .env
+    environment:
+      ADMIN_HABILITADA: "True"
+      APP_BASE_URL: "http://127.0.0.1:8001"
+      GOOGLE_OAUTH_REDIRECT_URI: "http://127.0.0.1:8001/auth/google/callback/"
+    depends_on:
+      - db
+      - redis
+
   celery_worker:
     build: .
     command: celery -A config worker -l info
+    # Si arranca antes que la base de datos o se cae, vuelve solo (los correos y avisos dependen de él).
+    restart: unless-stopped
     volumes:
       - .:/app
     env_file:
@@ -44,6 +68,8 @@ services:
   celery_beat:
     build: .
     command: celery -A config beat -l info
+    # Beat corre lo periódico (alertas, gacetas, ejecuciones programadas, reintentos): nunca debe quedarse detenido.
+    restart: unless-stopped
     volumes:
       - .:/app
     env_file:

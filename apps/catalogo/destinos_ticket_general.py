@@ -37,7 +37,7 @@ _SELECCION = ("area", "equipo", "usuario", "responsable_usuario", "responsable_e
 
 
 def _nombre_de_usuario(usuario):
-    return usuario.get_full_name() or usuario.get_username()
+    return usuario.nombre_visible
 
 
 def _consulta():
@@ -160,9 +160,9 @@ def candidatos_para_administracion():
     return {
         "areas": Area.objects.filter(activo=True).exclude(pk__in=usados[Tipo.AREA]).order_by("nombre"),
         "equipos": Equipo.objects.filter(activo=True).exclude(pk__in=usados[Tipo.EQUIPO]).order_by("nombre"),
-        "usuarios": Usuario.objects.filter(is_active=True).exclude(pk__in=usados[Tipo.USUARIO]).order_by("username"),
+        "usuarios": Usuario.objects.filter(is_active=True).exclude(pk__in=usados[Tipo.USUARIO]).order_by("first_name", "last_name", "email"),
         "responsables_equipos": Equipo.objects.filter(activo=True).order_by("nombre"),
-        "responsables_usuarios": Usuario.objects.filter(is_active=True).order_by("username"),
+        "responsables_usuarios": Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email"),
     }
 
 

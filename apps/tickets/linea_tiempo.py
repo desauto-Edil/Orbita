@@ -48,6 +48,9 @@ ACCIONES_TICKET = {
     "PRORROGA_APROBADA": "aprobó la prórroga",
     "PRORROGA_RECHAZADA": "rechazó la prórroga",
     "PRORROGA_CANCELADA": "canceló la prórroga",
+    "CANCELACION_SOLICITADA": "pidió cancelar el ticket",
+    "CANCELACION_RECHAZADA": "rechazó la cancelación del ticket",
+    "CANCELACION_RETIRADA": "retiró la solicitud de cancelación",
     "DIRECCIONADO": "direccionó el ticket",
     "ATENCION_INICIADA": "inició la atención",
     "DATOS_COMPLETADOS": "completó los datos de inicio",
@@ -84,7 +87,7 @@ _CLAVES_PERSONA = ("usuario_id", "usuario_anterior_id")
 
 
 def _nombre(usuario):
-    return usuario.get_full_name() or usuario.get_username()
+    return usuario.nombre_visible
 
 
 def _corto(texto):
@@ -289,7 +292,7 @@ def _de_actividades(ticket, instancias_ids, elementos_ids, rondas):
     for tarea in Tarea.objects.filter(pk__in=tareas).select_related("creada_por", "usuario_responsable", "equipo_responsable"):
         para = tarea.usuario_responsable or tarea.equipo_responsable
         eventos.append(_evento(tarea.creado_en, tarea.creada_por, "creó la actividad", tarea.titulo,
-                               [f"Para: {_nombre(para) if hasattr(para, 'get_username') else para}" if para else ""]))
+                               [f"Para: {_nombre(para) if hasattr(para, 'nombre_visible') else para}" if para else ""]))
     for fila in HistorialTarea.objects.filter(tarea_id__in=tareas).select_related("actor", "tarea"):
         accion = ACCIONES_TAREA.get(fila.tipo_evento, fila.get_tipo_evento_display().lower())
         eventos.append(_evento(fila.creado_en, fila.actor, accion, fila.tarea.titulo,

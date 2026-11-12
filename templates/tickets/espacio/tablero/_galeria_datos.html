@@ -1,0 +1,80 @@
+{% comment %}
+  Gaceta de DATOS (`galeria.modo == "datos"`: ninguna pieza trae un audiovisual, p. ej. un plan de trabajo): en lugar
+  de tarjetas con portada, una LISTA COMPACTA donde la información es la protagonista (`pi-*`, la misma de la revisión
+  de datos del aprobador). Cada ítem: número, nombre y estado; todos los datos que la gaceta deja ver, completos; sus
+  archivos (enlaces) y sus comentarios; y al lado lo que la persona puede hacer: comentar (lo manda a corrección),
+  responder y reenviar la corrección, o excluir (quien coordina). En una gaceta nadie aprueba. Cada operación vuelve
+  a autorizar. Espera `galeria`, `ticket` y `base`.
+{% endcomment %}
+<ol class="pi-lista">
+  {% for t in galeria.tarjetas %}
+    <li class="pi" data-situacion="{{ t.situacion }}" id="pieza-{{ t.elemento.pk }}">
+      <div class="pi__cuerpo">
+        <p class="pi__cabeza">
+          <span class="pi__num tabular">#{{ t.elemento.numero }}</span>
+          <span class="pi__titulo">{{ t.nombre|default:t.titulo }}</span>
+          <span class="pz__estado pz__estado--{{ t.situacion }}">{% if t.situacion == "pendiente" and t.puede_observar %}Por revisar{% elif t.situacion == "pendiente" %}En revisión{% else %}{{ t.estado_texto }}{% endif %}</span>
+          {% if t.participacion.ronda > 1 %}<span class="pi__meta">Ronda {{ t.participacion.ronda }}</span>{% endif %}
+        </p>
+        {% if t.valores %}
+          <dl class="pi__datos">
+            {% for v in t.valores %}<div{% if v.texto == "—" %} class="is-vacio"{% endif %}><dt>{{ v.etiqueta }}</dt><dd>{{ v.texto|linebreaksbr }}</dd></div>{% endfor %}
+          </dl>
+        {% endif %}
+        {% if t.archivos %}{% include "tickets/espacio/tablero/_archivos_item.html" with archivos=t.archivos %}{% endif %}
+        {% include "tickets/espacio/piezas/_siguiente.html" with p=t %}
+        {% if t.observaciones %}
+          <ol class="pi__comentarios" aria-label="Comentarios">
+            {% for obs in t.observaciones %}
+              <li>
+                <p class="pi__autor">{{ obs.autor.nombre_visible }} <span class="tabular">{{ obs.creada_en|date:"j M, H:i" }}</span></p>
+                <p class="pi__texto">{{ obs.texto }}</p>
+                {% if obs.respuesta %}<p class="pi__respuesta">Respuesta: {{ obs.respuesta }}</p>
+                {% elif t.puede_corregir %}
+                  <form method="post" action="{% url 'gacetas:responder' obs.pk %}" class="pi__mini">{% csrf_token %}<input type="hidden" name="next" value="{{ base }}{% if mision %}?mision={{ mision.clave|urlencode }}{% endif %}#pieza-{{ t.elemento.pk }}">
+                    <label class="sr-only" for="pi-resp-{{ obs.pk }}">Responder a {{ obs.autor.nombre_visible }}</label>
+                    <input id="pi-resp-{{ obs.pk }}" name="respuesta" type="text" required placeholder="Responder…">
+                    <button type="submit" class="btn btn--ghost btn--sm">Responder</button>
+                  </form>
+                {% endif %}
+              </li>
+            {% endfor %}
+          </ol>
+        {% endif %}
+      </div>
+      {% if t.puede_observar or t.puede_corregir or t.puede_excluir %}
+        <div class="pi__lado">
+          {% if t.puede_observar %}
+            <form method="post" action="{% url 'gacetas:observar' t.participacion.pk %}" class="pi__form">
+              {% csrf_token %}<input type="hidden" name="next" value="{{ base }}{% if mision %}?mision={{ mision.clave|urlencode }}{% endif %}#pieza-{{ t.elemento.pk }}">
+              <label class="sr-only" for="pi-obs-{{ t.clave }}">Comentario sobre {{ t.titulo }}</label>
+              <textarea id="pi-obs-{{ t.clave }}" name="texto" rows="2" maxlength="2000" required placeholder="¿Algo que corregir? Tu comentario lo envía a corrección."></textarea>
+              <div class="pi__botones"><button type="submit" class="btn btn--secondary btn--sm">Comentar</button></div>
+            </form>
+          {% endif %}
+          {% if t.puede_corregir %}
+            <form method="post" action="{% url 'gacetas:reenviar' t.participacion.pk %}" class="pi__form">
+              {% csrf_token %}<input type="hidden" name="next" value="{{ base }}{% if mision %}?mision={{ mision.clave|urlencode }}{% endif %}#pieza-{{ t.elemento.pk }}">
+              <label class="sr-only" for="pi-ree-{{ t.clave }}">Qué corregiste en {{ t.titulo }}</label>
+              <input id="pi-ree-{{ t.clave }}" name="comentario" type="text" placeholder="Qué corregiste (opcional)">
+              <div class="pi__botones"><button type="submit" class="btn btn--primary btn--sm">Reenviar corregida</button></div>
+            </form>
+          {% endif %}
+          {% if t.puede_excluir %}
+            <details class="pi__excluir">
+              <summary>Excluir del alcance</summary>
+              <form method="post" action="{% url 'gacetas:excluir' t.participacion.pk %}" class="pi__form">
+                {% csrf_token %}<input type="hidden" name="next" value="{{ base }}{% if mision %}?mision={{ mision.clave|urlencode }}{% endif %}#pieza-{{ t.elemento.pk }}">
+                <label class="sr-only" for="pi-exc-{{ t.clave }}">Justificación para excluir {{ t.titulo }}</label>
+                <input id="pi-exc-{{ t.clave }}" name="justificacion" type="text" required placeholder="Justificación">
+                <div class="pi__botones"><button type="submit" class="btn btn--ghost btn--sm pzv__eliminar">Excluir</button></div>
+              </form>
+            </details>
+          {% endif %}
+        </div>
+      {% endif %}
+    </li>
+  {% empty %}
+    <li class="gl-nada text-muted">Todavía no hay ítems en esta gaceta.</li>
+  {% endfor %}
+</ol>

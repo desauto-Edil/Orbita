@@ -56,7 +56,7 @@ class RegistroAuditoria(models.Model):
     class Meta:
         constraints = [
             models.CheckConstraint(
-                check=(
+                condition=(
                     Q(origen="USUARIO", usuario__isnull=False)
                     | Q(origen="SISTEMA", usuario__isnull=True)
                 ),

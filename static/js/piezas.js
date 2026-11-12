@@ -5,8 +5,11 @@
      normales que van a la operación de siempre). Se cierra con el botón, Escape o un clic fuera. Sin JS, la tarjeta
      lleva a la ficha del ítem.
    - Anotación (`[data-anotacion]`, solo en la aprobación de un ítem, nunca en una gaceta): lápiz o resaltador en
-     tres colores tomados de los tokens de estado, deshacer y borrar. Si hay trazos al enviar la decisión, se compone
-     la imagen con ellos en un PNG (máx. 2000 px por lado) y viaja en el campo `anotacion` del mismo formulario:
+     cinco colores fijos (`--anotacion-*` de tokens.css), borrador, deshacer y borrar todo. Mientras haya algo
+     dibujado, Aprobar y Eliminar (`[data-bloquea-con-dibujo]`) quedan deshabilitados: dibujar es pedir una
+     corrección (el servidor también lo exige). Si hay trazos al enviar la decisión, se compone
+     la imagen con ellos en un PNG (máx. 2000 px por lado) y viaja como ARCHIVO `anotacion` del mismo formulario
+     (multipart; como texto superaría `DATA_UPLOAD_MAX_MEMORY_SIZE`):
      «apenas hay un rayón, acompaña a la revisión». El servidor la valida (`revision_piezas.decodificar_anotacion`). */
 (function () {
   "use strict";
@@ -75,7 +78,8 @@
     var campo = form && form.querySelector("[data-anotacion-campo]");
     var aviso = form && form.querySelector("[data-anotacion-aviso]");
     var herramienta = "lapiz";
-    var color = token("--status-danger");
+    var color = token("--anotacion-rojo");
+    var bloqueables = form ? form.querySelectorAll("[data-bloquea-con-dibujo]") : [];
     var trazos = [];
     var actual = null;
 
@@ -88,6 +92,7 @@
 
     function grosor(t) {
       var base = Math.max(canvas.width, canvas.height) / 300;
+      if (t.herramienta === "borrador") return base * 8;
       return t.herramienta === "resaltador" ? base * 6 : base * 1.2;
     }
 
@@ -97,6 +102,8 @@
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.strokeStyle = t.color;
+      // El borrador quita lo dibujado (nunca la imagen: está en otro elemento).
+      ctx.globalCompositeOperation = t.herramienta === "borrador" ? "destination-out" : "source-over";
       ctx.globalAlpha = t.herramienta === "resaltador" ? 0.35 : 1;
       ctx.lineWidth = grosor(t);
       ctx.beginPath();
@@ -110,7 +117,27 @@
     function redibujar() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
       trazos.forEach(pintar);
-      if (aviso) aviso.hidden = trazos.length === 0;
+    }
+
+    // ¿Queda algo visible? Sin trazos de dibujo, no; si alguno se borró, se mira el lienzo (solo al soltar).
+    var dibujado = false;
+    function hayDibujo() {
+      if (!trazos.some(function (t) { return t.herramienta !== "borrador"; })) return false;
+      if (!trazos.some(function (t) { return t.herramienta === "borrador"; })) return true;
+      var datos = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+      for (var i = 3; i < datos.length; i += 16) if (datos[i] > 8) return true;
+      return false;
+    }
+
+    function actualizarEstado() {
+      dibujado = canvas.width > 0 && hayDibujo();
+      if (aviso) aviso.hidden = !dibujado;
+      bloqueables.forEach(function (boton) {
+        // «Publicar a los interesados» marcado también lo bloquea (app.js): borrar el dibujo no lo reactiva.
+        var porPublicar = boton.hasAttribute("data-bloqueado-por-publicar");
+        boton.disabled = dibujado || porPublicar;
+        if (!porPublicar) boton.title = dibujado ? "Con un dibujo solo puedes Corregir. Bórralo para usar esta opción." : "";
+      });
     }
 
     function punto(e) {
@@ -133,23 +160,33 @@
       actual.puntos.push(punto(e));
       redibujar();
     });
-    function soltar() { actual = null; }
+    function soltar() {
+      if (!actual) return;
+      actual = null;
+      actualizarEstado();
+    }
     canvas.addEventListener("pointerup", soltar);
     canvas.addEventListener("pointercancel", soltar);
 
     raiz.querySelectorAll("[data-herramienta]").forEach(function (boton) {
       boton.addEventListener("click", function () {
-        herramienta = boton.getAttribute("data-herramienta");
-        raiz.querySelectorAll("[data-herramienta]").forEach(function (b) {
-          var activa = b === boton;
-          b.classList.toggle("is-activa", activa);
-          b.setAttribute("aria-pressed", activa ? "true" : "false");
-        });
+        elegirHerramienta(boton.getAttribute("data-herramienta"));
       });
     });
+
+    function elegirHerramienta(nombre) {
+      herramienta = nombre;
+      lienzo.classList.toggle("is-borrando", nombre === "borrador");
+      raiz.querySelectorAll("[data-herramienta]").forEach(function (b) {
+        var activa = b.getAttribute("data-herramienta") === nombre;
+        b.classList.toggle("is-activa", activa);
+        b.setAttribute("aria-pressed", activa ? "true" : "false");
+      });
+    }
     raiz.querySelectorAll("[data-color]").forEach(function (boton) {
       boton.addEventListener("click", function () {
         color = token(boton.getAttribute("data-color"));
+        if (herramienta === "borrador") elegirHerramienta("lapiz");
         raiz.querySelectorAll("[data-color]").forEach(function (b) {
           var activo = b === boton;
           b.classList.toggle("is-activo", activo);
@@ -158,16 +195,16 @@
       });
     });
     var deshacer = raiz.querySelector("[data-anotacion-deshacer]");
-    if (deshacer) deshacer.addEventListener("click", function () { trazos.pop(); redibujar(); });
+    if (deshacer) deshacer.addEventListener("click", function () { trazos.pop(); redibujar(); actualizarEstado(); });
     var limpiar = raiz.querySelector("[data-anotacion-limpiar]");
-    if (limpiar) limpiar.addEventListener("click", function () { trazos = []; redibujar(); });
+    if (limpiar) limpiar.addEventListener("click", function () { trazos = []; redibujar(); actualizarEstado(); });
 
     if (imagen.complete) ajustar();
     else imagen.addEventListener("load", ajustar);
 
     if (form && campo) {
       form.addEventListener("submit", function () {
-        if (!trazos.length || !canvas.width) {
+        if (!dibujado || !canvas.width) {
           campo.value = "";
           return;
         }
@@ -179,8 +216,15 @@
         var sctx = salida.getContext("2d");
         sctx.drawImage(imagen, 0, 0, salida.width, salida.height);
         sctx.drawImage(canvas, 0, 0, salida.width, salida.height);
+        // Viaja como ARCHIVO (multipart): un PNG grande en un campo de texto supera el límite de Django.
         try {
-          campo.value = salida.toDataURL("image/png");
+          var url = salida.toDataURL("image/png");
+          var binario = atob(url.slice(url.indexOf(",") + 1));
+          var bytes = new Uint8Array(binario.length);
+          for (var i = 0; i < binario.length; i += 1) bytes[i] = binario.charCodeAt(i);
+          var transferencia = new DataTransfer();
+          transferencia.items.add(new File([bytes], "anotacion.png", { type: "image/png" }));
+          campo.files = transferencia.files;
         } catch (err) {
           campo.value = "";
         }

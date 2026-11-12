@@ -7,16 +7,24 @@ from apps.gacetas.operaciones import resumen
 
 
 def gacetas_visibles_para(usuario):
-    """Gacetas activas (abiertas o con el periodo cerrado) donde `usuario` es revisor, aprobador o coordinador
+    """Gacetas activas (abiertas o con el periodo cerrado) donde `usuario` es revisor o coordinador
     configurado (directo o por equipo). La consulta filtra en Python sobre las activas: las gacetas activas son pocas a la vez."""
     activas = GacetaTicket.objects.filter(estado__in=GacetaTicket.ESTADOS_ACTIVOS).select_related(
         "ticket__detalle_servicio__servicio"
     ).order_by("vence_revision_en", "pk")
     return [
         g for g in activas
-        if autorizacion.es_revisor(usuario, g) or autorizacion.es_aprobador(usuario, g)
-        or autorizacion.es_coordinador_configurado(usuario, g)
+        if autorizacion.es_revisor(usuario, g) or autorizacion.es_coordinador_configurado(usuario, g)
     ]
+
+
+def se_llena_por_el_flujo(gaceta):
+    """¿La gaceta revisa cada ítem dentro de su recorrido (un paso GACETA por ítem, p. ej. «Publicar a los
+    interesados»)? Entonces a ella entra SOLO el ítem que llega por su recorrido —el que su aprobador publicó—, nunca
+    uno presentado a mano (2026-11-12)."""
+    from apps.gacetas.integracion import llegadas_pendientes
+
+    return llegadas_pendientes(gaceta).usada_por_item
 
 
 def presentables(gaceta):
@@ -24,7 +32,7 @@ def presentables(gaceta):
     presentar. Solo con la gaceta ABIERTA (la operación `presentar` vuelve a validarlo todo)."""
     from apps.tickets import parrilla as parrilla_ops
 
-    if gaceta.estado != GacetaTicket.Estado.ABIERTA:
+    if gaceta.estado != GacetaTicket.Estado.ABIERTA or se_llena_por_el_flujo(gaceta):
         return []
     ya = set(ParticipacionItemGaceta.objects.filter(gaceta=gaceta).values_list("elemento_id", flat=True))
     elementos = []

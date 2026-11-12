@@ -42,202 +42,51 @@ comprobación adicional aquí."""
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.http import FileResponse, HttpResponse, HttpResponseNotAllowed
-from django.shortcuts import get_object_or_404, render
-from django.template.loader import render_to_string
-from django.utils import timezone
-from django.views.decorators.http import require_GET
+from django.http import FileResponse, HttpResponseNotAllowed
+from django.shortcuts import get_object_or_404, redirect
 
 from apps.core.redirecciones import volver_a
+from apps.tickets.vinculos import url_de_tarea
 from apps.tareas import operaciones
 from apps.tareas.autorizacion import (
-    delegado_actual,
-    es_creadora,
-    es_responsable_actual,
     puede_asignar_tarea,
     puede_comentar_tarea,
     puede_completar_tarea,
     puede_consultar_tarea,
     puede_crear_subtarea,
-    puede_delegar_tarea,
     puede_iniciar_tarea,
     puede_reasignar_tarea,
     puede_tomar_tarea,
 )
-from apps.tareas.consultas import tareas_asignadas_a, tareas_disponibles_para_tomar
 from apps.tareas.forms import (
     AsignacionTareaForm,
     ComentarioTareaForm,
-    DelegacionTareaForm,
     EvidenciaTareaForm,
     ReasignacionTareaForm,
     SubtareaForm,
 )
 from apps.tareas.models import AdjuntoTarea, ItemVerificacionTarea, Tarea
-from apps.tickets.autorizacion import puede_consultar_ticket
-from apps.tickets.edicion_por_tarea import elemento_de_tarea
-from apps.tickets.models import Ticket
 from apps.workflows.integracion import completar_tarea_workflow
-from apps.workflows.models import TareaWorkflow
 
 
 def _mensaje_error(exc):
     return "; ".join(exc.messages) if hasattr(exc, "messages") else str(exc)
 
 
-def _es_vencida(tarea, ahora):
-    return tarea.fecha_limite is not None and tarea.fecha_limite < ahora and tarea.estado not in Tarea.ESTADOS_CERRADOS
-
-
 @login_required
 def bandeja_view(request):
-    """RQF-071/072/073 — "Asignadas a mí" (`tareas_asignadas_a`) y
-    "Disponibles para tomar" (`tareas_disponibles_para_tomar`), ambas
-    consultas ya existentes de `apps.tareas.consultas`, usadas sin
-    reescribir su `QuerySet`. `vencida` se deriva por fila con exactamente
-    el mismo criterio que `apps.tareas.consultas.tareas_vencidas`
-    (`fecha_limite` pasada y no COMPLETADA) — nunca se persiste."""
-    tab = request.GET.get("tab")
-    if tab == "disponibles":
-        tareas = tareas_disponibles_para_tomar(request.user)
-    else:
-        tab = "mias"
-        tareas = tareas_asignadas_a(request.user)
-    tareas = tareas.select_related("usuario_responsable", "equipo_responsable").order_by("-creado_en")
-
-    ahora = timezone.now()
-    filas = [{"tarea": tarea, "vencida": _es_vencida(tarea, ahora)} for tarea in tareas]
-    contexto = {"tab": tab, "filas": filas, "titulo_pagina": "Tareas"}
-    return render(request, "tareas/lista.html", contexto)
-
-
-def _ticket_de_la_tarea(tarea, usuario):
-    """4.A2 — navegación Tarea → Ticket. Una Tarea que provino de un Workflow de
-    un Ticket (`TareaWorkflow`, o la de su Tarea padre si es una subtarea) lleva
-    al Ticket; el enlace solo se ofrece a quien puede consultarlo. Es solo
-    navegación: la prórroga (y cualquier acción) pertenece al Ticket."""
-    principal = tarea.tarea_padre if tarea.tarea_padre_id else tarea
-    vinculo = (
-        TareaWorkflow.objects.filter(tarea=principal).select_related("instancia_etapa__instancia_workflow").first()
-    )
-    if vinculo is None:
-        # Fase 3: la corrección de una gaceta lleva a su ticket.
-        ronda = getattr(principal, "ronda_gaceta", None)
-        ticket = ronda.participacion.gaceta.ticket if ronda is not None else None
-        return ticket if ticket is not None and puede_consultar_ticket(usuario, ticket) else None
-    ticket = (
-        # Fase 2: una tarea de un recorrido por ítem pertenece al Ticket de la instancia principal.
-        Ticket.objects.filter(instancia_workflow_id=vinculo.instancia_etapa.instancia_workflow.raiz_id)
-        .select_related("detalle_servicio__servicio")
-        .first()
-    )
-    if ticket is None or not puede_consultar_ticket(usuario, ticket):
-        return None
-    return ticket
-
-
-def _ticket_espacio_de(tarea, usuario):
-    """UX-1 — id del Ticket al que pertenece la Tarea si `usuario` puede trabajarla allí (es su responsable o
-    delegada, la creó o puede tomarla), o `None`. Solo navegación: el espacio vuelve a autorizar al abrirse."""
-    from apps.tickets.vinculos import origen_de_tareas
-
-    if not (
-        es_responsable_actual(usuario, tarea) or es_creadora(usuario, tarea) or puede_tomar_tarea(usuario, tarea)
-    ):
-        return None
-    origen = origen_de_tareas([tarea.pk]).get(tarea.pk)
-    return origen["ticket_id"] if origen is not None else None
-
-
-@login_required
-@require_GET
-def vista_previa_view(request, pk):
-    """Fragmento de LECTURA para el panel de vista previa de Mi trabajo: lo
-    esencial de la Tarea sin salir de la lista. Misma autorización de objeto
-    que el detalle (`puede_consultar_tarea`); no ofrece acciones — se actúa
-    al abrirla. Sin `request` en el render: es un fragmento que no usa el
-    shell, así que no se ejecutan los context processors de navegación."""
-    tarea = get_object_or_404(
-        Tarea.objects.select_related("usuario_responsable", "equipo_responsable", "tarea_padre"), pk=pk
-    )
-    if not puede_consultar_tarea(request.user, tarea):
-        raise PermissionDenied
-    ahora = timezone.now()
-    contexto = {
-        "tarea": tarea,
-        "vencida": _es_vencida(tarea, ahora),
-        "delegado_actual": delegado_actual(tarea, ahora=ahora),
-        "por_tomar": puede_tomar_tarea(request.user, tarea),
-        "ticket_vinculado": _ticket_de_la_tarea(tarea, request.user),
-        "n_comentarios": tarea.comentarios.count(),
-        "n_evidencias": tarea.adjuntos.count(),
-        "subtareas": tarea.subtareas.count(),
-        "subtareas_listas": tarea.subtareas.filter(estado=Tarea.Estado.COMPLETADA).count(),
-    }
-    return HttpResponse(render_to_string("tareas/_vista_previa.html", contexto))
+    """Retirada: las tareas se trabajan en Mi trabajo (bandeja por ticket). La URL se conserva como redirección."""
+    return redirect("core:mi_trabajo")
 
 
 @login_required
 def detalle_view(request, pk):
-    tarea = get_object_or_404(
-        Tarea.objects.select_related(
-            "usuario_responsable", "equipo_responsable", "creada_por", "completada_por", "tarea_padre"
-        ),
-        pk=pk,
-    )
+    """Retirada como página: redirige al espacio del ticket de la tarea, así siguen sirviendo los enlaces de correos
+    y notificaciones ya enviados. Misma autorización de objeto de siempre (`puede_consultar_tarea`)."""
+    tarea = get_object_or_404(Tarea, pk=pk)
     if not puede_consultar_tarea(request.user, tarea):
         raise PermissionDenied
-
-    ahora = timezone.now()
-    puede_asignar = puede_asignar_tarea(request.user, tarea)
-    puede_reasignar = puede_reasignar_tarea(request.user, tarea)
-    puede_delegar = puede_delegar_tarea(request.user, tarea)
-    puede_comentar = puede_comentar_tarea(request.user, tarea)
-    puede_subtarea = puede_crear_subtarea(request.user, tarea)
-    muestra_subtareas = tarea.permite_subtareas or tarea.subtareas.exists()
-
-    contexto = {
-        "tarea": tarea,
-        "vencida": _es_vencida(tarea, ahora),
-        "ticket_vinculado": _ticket_de_la_tarea(tarea, request.user),
-        # UX-1: el espacio del ticket se abre por la relación directa con la tarea (sin ganar el resto del ticket).
-        "ticket_espacio_id": _ticket_espacio_de(tarea, request.user),
-        # Bloque 3.1: el ítem que esta tarea abierta permite editar (solo las columnas que autoriza).
-        "elemento_editable": elemento_de_tarea(tarea, request.user),
-        "delegado_actual": delegado_actual(tarea, ahora=ahora),
-        "puede_tomar": puede_tomar_tarea(request.user, tarea),
-        "puede_iniciar": puede_iniciar_tarea(request.user, tarea),
-        "puede_completar": puede_completar_tarea(request.user, tarea),
-        "puede_asignar": puede_asignar,
-        "puede_reasignar": puede_reasignar,
-        "puede_delegar": puede_delegar,
-        "puede_comentar": puede_comentar,
-        "puede_crear_subtarea": puede_subtarea,
-        "asignacion_form": AsignacionTareaForm() if puede_asignar else None,
-        "reasignacion_form": ReasignacionTareaForm() if puede_reasignar else None,
-        "delegacion_form": DelegacionTareaForm() if puede_delegar else None,
-        "subtarea_form": SubtareaForm() if puede_subtarea else None,
-        "comentario_form": ComentarioTareaForm() if puede_comentar else None,
-        "evidencia_form": EvidenciaTareaForm() if puede_comentar else None,
-        "muestra_subtareas": muestra_subtareas,
-        "subtareas": (
-            tarea.subtareas.select_related("usuario_responsable", "equipo_responsable").all()
-            if muestra_subtareas
-            else Tarea.objects.none()
-        ),
-        "comentarios": tarea.comentarios.select_related("autor").prefetch_related("adjuntos").all(),
-        "evidencias": tarea.adjuntos.select_related("subido_por").all(),
-        "delegaciones": tarea.delegaciones.select_related("delegado_a", "delegada_por").all(),
-        "historial": tarea.historial.select_related("actor").all(),
-        "verificaciones": tarea.verificaciones.select_related("marcado_por").all(),
-        # Marca la lista quien puede completar la Tarea, mientras siga abierta (`marcar_verificacion`).
-        "puede_marcar_verificacion": (
-            tarea.estado in (Tarea.Estado.PENDIENTE, Tarea.Estado.EN_PROGRESO)
-            and puede_completar_tarea(request.user, tarea)
-        ),
-        "titulo_pagina": tarea.titulo,
-    }
-    return render(request, "tareas/detalle.html", contexto)
+    return redirect(url_de_tarea(tarea))
 
 
 @login_required
@@ -249,7 +98,10 @@ def verificar_view(request, pk, item_id):
     if not puede_completar_tarea(request.user, tarea):
         raise PermissionDenied
     try:
-        operaciones.marcar_verificacion(item, request.user, marcado=request.POST.get("marcado") == "1")
+        operaciones.marcar_verificacion(
+            item, request.user, marcado=request.POST.get("marcado") == "1",
+            conclusion=request.POST.get("conclusion") if "conclusion" in request.POST else None,
+        )
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))
     return volver_a(request, "tareas:detalle", pk)
@@ -352,33 +204,6 @@ def reasignar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Tarea reasignada.")
-    return volver_a(request, "tareas:detalle", pk)
-
-
-@login_required
-def delegar_view(request, pk):
-    if request.method != "POST":
-        return HttpResponseNotAllowed(["POST"])
-    tarea = get_object_or_404(Tarea, pk=pk)
-    if not puede_delegar_tarea(request.user, tarea):
-        raise PermissionDenied
-    form = DelegacionTareaForm(request.POST)
-    if not form.is_valid():
-        messages.error(request, "Revise los datos del formulario de delegación.")
-        return volver_a(request, "tareas:detalle", pk)
-    try:
-        operaciones.delegar_tarea(
-            tarea,
-            request.user,
-            delegado_a=form.cleaned_data["delegado_a"],
-            desde=form.cleaned_data["desde"],
-            hasta=form.cleaned_data["hasta"],
-            motivo=form.cleaned_data.get("motivo", ""),
-        )
-    except ValidationError as exc:
-        messages.error(request, _mensaje_error(exc))
-    else:
-        messages.success(request, "Tarea delegada.")
     return volver_a(request, "tareas:detalle", pk)
 
 

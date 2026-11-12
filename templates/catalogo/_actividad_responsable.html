@@ -5,6 +5,7 @@
   <div class="field">{{ form.tipo_actor.label_tag }}{{ form.tipo_actor }}</div>
   <div class="field" data-mostrar-si="tipo_actor=USUARIO">{{ form.usuario.label_tag }}{{ form.usuario }}</div>
   <div class="field" data-mostrar-si="tipo_actor=EQUIPO">{{ form.equipo.label_tag }}{{ form.equipo }}</div>
+  <div class="field" data-mostrar-si="tipo_actor=EQUIPO">{{ form.responde_usuario.label_tag }}{{ form.responde_usuario }}<span class="svc-help">Cualquiera del equipo sube la evidencia y la completa, sin tomarla. Esta persona recibe los avisos si no se hace a tiempo.</span></div>
   {% if form.columna.field.choices|length > 1 %}
     <div class="field" data-mostrar-si="tipo_actor=COLUMNA">{{ form.columna.label_tag }}{{ form.columna }}<span class="svc-help">Solo para un paso «para cada ítem»: el responsable es la persona o el equipo de esa columna del ítem.</span></div>
   {% endif %}

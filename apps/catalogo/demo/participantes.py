@@ -2,15 +2,15 @@
 
 Referencias aceptadas en la línea de comandos:
 
-- persona: su `username` (activa);
+- persona: su correo, o solo la parte local del correo si no se repite (`lau` → `lau@…`), activa;
 - equipo: `equipo:<nombre>` o `equipo:<id>` (activo; un nombre repetido es ambiguo y se rechaza);
 - área: su `codigo`, su nombre o `area:<id>` (activa).
 
 `Participantes` guarda los objetos resueltos; `a_parametros` / `desde_parametros` los convierten en ids para
 `RecursoDemo.parametros`, así publicar y generar ejemplos usan exactamente lo que se eligió al preparar.
 
-Un caso con personas y equipos FIJOS en su contrato (demo Imperandina) no usa la línea de comandos:
-`Participantes.del_caso` resuelve sus usernames y asegura sus equipos (`asegurar_equipo`: lo crea solo si no existe
+Un caso con personas y equipos FIJOS en su contrato (Imperandina, Desarrollo de software) no usa la línea de comandos:
+`Participantes.del_caso` resuelve sus correos (o partes locales) y asegura sus equipos (`asegurar_equipo`: lo crea solo si no existe
 uno con ese nombre y agrega solo las membresías que falten, auditado; nunca duplica ni retira a nadie).
 """
 
@@ -27,9 +27,12 @@ PERIODOS = ("MES_ACTUAL", "MES_SIGUIENTE")
 
 def resolver_usuario(referencia, etiqueta):
     referencia = (referencia or "").strip()
-    usuario = Usuario.objects.filter(username=referencia).first()
+    candidatos = list(Usuario.objects.por_referencia(referencia)[:2])
+    if len(candidatos) > 1:
+        raise ValidationError(f"{etiqueta}: «{referencia}» coincide con más de una persona; usa el correo completo.")
+    usuario = candidatos[0] if candidatos else None
     if usuario is None:
-        raise ValidationError(f"{etiqueta}: no existe el usuario «{referencia}».")
+        raise ValidationError(f"{etiqueta}: no existe una persona con el correo «{referencia}».")
     if not usuario.is_active:
         raise ValidationError(f"{etiqueta}: el usuario «{referencia}» no está activo.")
     return usuario
@@ -76,7 +79,7 @@ def resolver_area(referencia, etiqueta):
 def asegurar_equipo(spec, actor):
     """El equipo `spec.nombre` (activo) con sus `spec.miembros` como integrantes activos. Lo crea si no existe y
     agrega las membresías que falten; no toca las que ya hay ni retira a nadie. Auditado."""
-    miembros = [resolver_usuario(username, f"Integrante de «{spec.nombre}»") for username in spec.miembros]
+    miembros = [resolver_usuario(referencia, f"Integrante de «{spec.nombre}»") for referencia in spec.miembros]
     equipos = list(Equipo.objects.filter(nombre__iexact=spec.nombre))
     if len(equipos) > 1:
         raise ValidationError(f"Hay varios equipos llamados «{spec.nombre}»: deja uno solo antes de preparar.")
@@ -107,7 +110,6 @@ class Participantes:
     aprobador: object = None
     responsable_publicacion: object = None
     revisores: list = field(default_factory=list)  # [(tipo, objeto)]
-    aprobadores_gaceta: list = field(default_factory=list)  # [(tipo, objeto)]
     dia_creacion: int = 20
     periodo: str = "MES_SIGUIENTE"
     # Webinar
@@ -120,6 +122,9 @@ class Participantes:
     # Imperandina (equipos fijos del contrato)
     equipo_operativo: object = None
     equipo_revisor: object = None
+    # Desarrollo de software (responsable técnico y su equipo; el aprobador y los revisores son los de la parrilla)
+    desarrollador: object = None
+    equipo_desarrollo: object = None
     # Comunes
     area_visibilidad: object = None
 
@@ -136,9 +141,6 @@ class Participantes:
         p.aprobador = usuario("aprobador", "--aprobador")
         p.responsable_publicacion = usuario("responsable_publicacion", "--responsable-publicacion") or p.planificador
         p.revisores = [resolver_actor(r, "--revisores") for r in _lista(opciones.get("revisores"))]
-        p.aprobadores_gaceta = [resolver_actor(a, "--aprobadores-gaceta") for a in _lista(opciones.get("aprobadores_gaceta"))]
-        if not p.aprobadores_gaceta and p.aprobador is not None:
-            p.aprobadores_gaceta = [("USUARIO", p.aprobador)]
         if opciones.get("dia_creacion") is not None:
             p.dia_creacion = int(opciones["dia_creacion"])
         if opciones.get("periodo"):
@@ -163,8 +165,12 @@ class Participantes:
         personas existentes y asegura los equipos. Escribe (equipos y membresías): se llama dentro de la
         transacción de `preparar_caso`."""
         p = cls()
-        for atributo, username in caso.personas:
-            setattr(p, atributo, resolver_usuario(username, f"Usuario «{username}» de «{caso.nombre}»"))
+        for atributo, referencia in caso.personas:
+            usuario = resolver_usuario(referencia, f"Usuario «{referencia}» de «{caso.nombre}»")
+            if isinstance(getattr(p, atributo), list):  # revisores / aprobadores de gaceta: se suman
+                getattr(p, atributo).append(("USUARIO", usuario))
+            else:
+                setattr(p, atributo, usuario)
         for spec in caso.equipos:
             setattr(p, spec.atributo, asegurar_equipo(spec, actor))
         if caso.calendario:
@@ -184,8 +190,18 @@ class Participantes:
             contrato.WEBINAR: (("coordinador", "--coordinador"), ("aprobador_webinar", "--aprobador-webinar o --aprobador")),
             contrato.PIEZA_GRAFICA: (("equipo_diseno", "--equipo-diseno"),),
             contrato.PRESENTACIONES: (("responsable_presentaciones", "--responsable-presentaciones"),),
-        }[caso]
+            contrato.DESARROLLO: (("desarrollador", "ylizz"), ("aprobador", "amasso"), ("equipo_desarrollo", "equipo Desarrollo")),
+        }
+        # Solar Andina usa las personas y equipos de Imperandina; Diseño de nuevas soluciones, los de Desarrollo.
+        requeridos[contrato.SOLAR_ANDINA] = requeridos[contrato.IMPERANDINA]
+        requeridos[contrato.DISENO] = requeridos[contrato.DESARROLLO]
+        requeridos = requeridos[caso]
         faltan = [opcion for atributo, opcion in requeridos if getattr(self, atributo) is None]
+        if caso in (contrato.DESARROLLO, contrato.DISENO):
+            if not self.revisores:
+                faltan.append("los revisores del plan en la gaceta")
+            if self.desarrollador is not None and self.desarrollador in (self.aprobador, *[o for _, o in self.revisores]):
+                faltan.append("un desarrollador distinto del aprobador y de los revisores")
         if contrato.CONTRATOS[caso].programado:
             if not 1 <= self.dia_creacion <= 28:
                 faltan.append("--dia-creacion (de 1 a 28)")
@@ -210,7 +226,7 @@ class Participantes:
         return {
             "planificador_id": pk(self.planificador), "productor_id": pk(self.productor),
             "aprobador_id": pk(self.aprobador), "responsable_publicacion_id": pk(self.responsable_publicacion),
-            "revisores": actores(self.revisores), "aprobadores_gaceta": actores(self.aprobadores_gaceta),
+            "revisores": actores(self.revisores),
             "dia_creacion": self.dia_creacion, "periodo": self.periodo,
             "coordinador_id": pk(self.coordinador), "aprobador_webinar_id": pk(self.aprobador_webinar),
             "equipo_audiovisual_id": pk(self.equipo_audiovisual), "equipo_diseno_id": pk(self.equipo_diseno),
@@ -220,6 +236,7 @@ class Participantes:
             ),
             "area_visibilidad_id": pk(self.area_visibilidad),
             "equipo_operativo_id": pk(self.equipo_operativo), "equipo_revisor_id": pk(self.equipo_revisor),
+            "desarrollador_id": pk(self.desarrollador), "equipo_desarrollo_id": pk(self.equipo_desarrollo),
         }
 
     @classmethod
@@ -240,7 +257,6 @@ class Participantes:
         p.planificador, p.productor, p.aprobador = usuario("planificador_id"), usuario("productor_id"), usuario("aprobador_id")
         p.responsable_publicacion = usuario("responsable_publicacion_id")
         p.revisores = [a for a in (actor(x) for x in datos.get("revisores") or []) if a]
-        p.aprobadores_gaceta = [a for a in (actor(x) for x in datos.get("aprobadores_gaceta") or []) if a]
         p.dia_creacion = datos.get("dia_creacion") or 20
         p.periodo = datos.get("periodo") or "MES_SIGUIENTE"
         p.coordinador, p.aprobador_webinar = usuario("coordinador_id"), usuario("aprobador_webinar_id")
@@ -250,4 +266,6 @@ class Participantes:
         p.area_visibilidad = Area.objects.filter(pk=datos.get("area_visibilidad_id")).first() if datos.get("area_visibilidad_id") else None
         p.equipo_operativo = Equipo.objects.filter(pk=datos.get("equipo_operativo_id")).first() if datos.get("equipo_operativo_id") else None
         p.equipo_revisor = Equipo.objects.filter(pk=datos.get("equipo_revisor_id")).first() if datos.get("equipo_revisor_id") else None
+        p.desarrollador = usuario("desarrollador_id")
+        p.equipo_desarrollo = Equipo.objects.filter(pk=datos.get("equipo_desarrollo_id")).first() if datos.get("equipo_desarrollo_id") else None
         return p

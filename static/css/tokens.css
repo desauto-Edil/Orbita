@@ -116,17 +116,24 @@
   /* ------------------------------------------------------------------ */
 
   /* Color de marca / acción */
-  --color-primary: var(--palette-lima-500);
-  --color-primary-hover: var(--palette-lima-600);
-  --color-primary-active: var(--palette-lima-700);
-  --color-primary-soft: var(--palette-lima-50);
-  --color-primary-soft-hover: var(--palette-lima-100);
+  --color-primary: var(--palette-cielo-500);
+  --color-primary-hover: var(--palette-cielo-600);
+  --color-primary-active: var(--palette-cielo-700);
+  --color-primary-soft: var(--palette-cielo-50);
+  --color-primary-soft-hover: var(--palette-cielo-100);
   /* Texto/icono SOBRE el acento (siempre oscuro). */
   --color-on-primary: var(--palette-ink);
-  /* El foco es carbón: el lima no se ve sobre fondo claro. */
+  /* El foco es carbón: el acento no se ve sobre fondo claro. */
   --color-focus-ring: var(--palette-neutral-900);
   /* Uso MUY limitado: marca y avatar. */
-  --gradient-brand: linear-gradient(135deg, var(--palette-lima-300) 0%, var(--palette-lima-500) 55%, var(--palette-lima-600) 100%);
+  --gradient-brand: linear-gradient(135deg, var(--palette-cielo-300) 0%, var(--palette-cielo-500) 55%, var(--palette-cielo-600) 100%);
+  /* Paleta de ANOTACIÓN (dibujo sobre una pieza en revisión, UX-5): la imagen anotada se guarda como PNG, así que
+     estos colores son los mismos en modo claro y oscuro (no se redefinen en §5). */
+  --anotacion-rojo: #d92d20;
+  --anotacion-ambar: #f79009;
+  --anotacion-azul: #1570ef;
+  --anotacion-verde: #16a34a;
+  --anotacion-negro: var(--palette-ink);
 
   /* Superficies. El contenido principal vive en superficies sólidas; el
      glass queda para elementos flotantes (dock, header, popovers, modales). */
@@ -308,8 +315,8 @@
   --ring-focus: 0 0 0 3px rgba(23, 24, 27, 0.12);
   --ring-error: 0 0 0 3px rgba(168, 49, 47, 0.14);
   /* Selección: acento lima con contorno controlado (1px + halo suave), nunca bordes carbón gruesos. */
-  --border-selected: var(--palette-lima-700);
-  --ring-selected: 0 0 0 3px var(--palette-lima-100);
+  --border-selected: var(--palette-cielo-700);
+  --ring-selected: 0 0 0 3px var(--palette-cielo-100);
   --icon-select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%234a483f' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 
   /* Movimiento Órbita: fluido (desacelera al llegar), continuo (lo que aparece nace de lo que se tocó),

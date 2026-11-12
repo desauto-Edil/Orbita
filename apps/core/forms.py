@@ -6,7 +6,6 @@ inactivo, para conservar la trazabilidad histórica.
 """
 
 from django import forms
-from django.contrib.auth.forms import BaseUserCreationForm
 from django.db.models import Q
 from django.utils import timezone
 
@@ -83,6 +82,12 @@ class _PerfilMixin(forms.Form):
 
     cargo = forms.CharField(max_length=150, required=False)
     telefono = forms.CharField(max_length=30, required=False, label="Teléfono")
+    # Jefatura directa (relación explícita con vigencia, `apps.core.jefaturas`): quien la tenga verá «Mi equipo».
+    jefe = forms.ModelChoiceField(
+        queryset=Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email"),
+        required=False, label="Jefe directo", empty_label="— Sin jefe directo —",
+        help_text="Su jefe podrá ver en «Mi equipo» los tickets que tiene a cargo y sus pendientes (solo lectura).",
+    )
 
     def perfil_con_datos(self, usuario):
         """Perfil (sin guardar) con los datos del formulario y, si ya
@@ -95,61 +100,82 @@ class _PerfilMixin(forms.Form):
         return perfil, existia
 
 
-class UsuarioCrearForm(_PerfilMixin, BaseUserCreationForm):
+class _CuentaMixin:
+    """Versión 1: la cuenta es un CORREO de un dominio permitido (con él ingresa con Google) y lo que ven los
+    compañeros es su NOMBRE. No hay usuario ni contraseña."""
+
+    def _ajustar_cuenta(self):
+        self.fields["email"].required = True
+        self.fields["email"].help_text = "Con este correo corporativo ingresará con Google. Es único."
+        self.fields["first_name"].required = True
+
+    def clean_email(self):
+        from django.conf import settings
+
+        from apps.core.models.identidad import normalizar_correo
+
+        correo = normalizar_correo(self.cleaned_data.get("email"))
+        permitidos = {d.lower() for d in settings.GOOGLE_OAUTH_ALLOWED_DOMAINS}
+        sin_cambio = self.instance.pk is not None and correo == normalizar_correo(self.instance.email)
+        if not sin_cambio and correo.rpartition("@")[2] not in permitidos:
+            raise forms.ValidationError(
+                f"Usa un correo de un dominio permitido ({', '.join(sorted(permitidos))}): con él ingresará con Google."
+            )
+        repetido = Usuario.objects.filter(email__iexact=correo)
+        if self.instance.pk is not None:
+            repetido = repetido.exclude(pk=self.instance.pk)
+        if repetido.exists():
+            raise forms.ValidationError("Ya existe una persona con ese correo.")
+        return correo
+
+
+_ETIQUETAS_CUENTA = {"first_name": "Nombres", "last_name": "Apellidos", "email": "Correo", "is_active": "Cuenta activa"}
+
+
+class UsuarioCrearForm(_CuentaMixin, _PerfilMixin, forms.ModelForm):
+    """El administrador registra la cuenta ANTES del primer ingreso (nadie no registrado entra a Órbita)."""
+
     class Meta:
         model = Usuario
-        fields = ("username", "first_name", "last_name", "email")
-        labels = {"username": "Usuario", "first_name": "Nombres", "last_name": "Apellidos", "email": "Correo"}
+        fields = ("email", "first_name", "last_name")
+        labels = _ETIQUETAS_CUENTA
 
-    field_order = ("username", "first_name", "last_name", "email", "cargo", "telefono", "password1", "password2")
+    field_order = ("email", "first_name", "last_name", "cargo", "telefono", "jefe")
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["password1"].label = "Contraseña inicial"
-        self.fields["password2"].label = "Confirmar contraseña"
-        self.fields["password2"].help_text = ""
+        self._ajustar_cuenta()
 
 
-class UsuarioDatosForm(_PerfilMixin, forms.ModelForm):
+class UsuarioDatosForm(_CuentaMixin, _PerfilMixin, forms.ModelForm):
     class Meta:
         model = Usuario
-        fields = ("username", "first_name", "last_name", "email", "is_active", "is_staff", "is_superuser")
-        labels = {
-            "username": "Usuario",
-            "first_name": "Nombres",
-            "last_name": "Apellidos",
-            "email": "Correo",
-            "is_active": "Cuenta activa",
-            "is_staff": "Puede entrar a la administración avanzada",
-            "is_superuser": "Superusuario",
-        }
+        # Versión 1: sin usuario, contraseña, «Administración avanzada» ni «Superusuario». El acceso es por roles y
+        # permisos (`plataforma.administracion_avanzada`).
+        fields = ("email", "first_name", "last_name", "is_active")
+        labels = _ETIQUETAS_CUENTA
         help_texts = {
-            "is_active": "Una cuenta inactiva no puede iniciar sesión; su historial se conserva.",
-            "is_staff": "",
-            "is_superuser": "Tiene todos los permisos de la administración avanzada sin asignación explícita.",
+            "is_active": "Una cuenta inactiva no puede ingresar; su historial se conserva.",
         }
 
-    field_order = ("username", "first_name", "last_name", "email", "cargo", "telefono")
+    field_order = ("email", "first_name", "last_name", "cargo", "telefono", "jefe")
 
     def __init__(self, *args, editor, **kwargs):
         super().__init__(*args, **kwargs)
+        self._ajustar_cuenta()
         self.editor = editor
+        if self.instance.pk is not None:
+            self.fields["jefe"].queryset = self.fields["jefe"].queryset.exclude(pk=self.instance.pk)
         perfil = PerfilOrganizacional.objects.filter(usuario=self.instance).first()
         if perfil:
             self.fields["cargo"].initial = perfil.cargo
             self.fields["telefono"].initial = perfil.telefono
-        # Solo un superusuario decide quién más lo es o entra a Django Admin.
-        if not editor.is_superuser:
-            del self.fields["is_staff"]
-            del self.fields["is_superuser"]
 
     def clean(self):
         datos = super().clean()
         if self.instance.pk == self.editor.pk:
             if datos.get("is_active") is False:
                 self.add_error("is_active", "No puedes desactivar tu propia cuenta.")
-            if "is_superuser" in self.fields and datos.get("is_superuser") is False and self.editor.is_superuser:
-                self.add_error("is_superuser", "No puedes quitarte a ti mismo el acceso de superusuario.")
         return datos
 
 
@@ -377,7 +403,7 @@ class EquipoForm(forms.ModelForm):
         for campo, modelo, relacion, fk, filtro, orden in (
             ("areas", Area, EquipoArea, "area", Q(activo=True), ("nombre",)),
             ("unidades", UnidadNegocio, EquipoUnidadNegocio, "unidad_negocio", Q(activo=True), ("nombre",)),
-            ("miembros", Usuario, MiembroEquipo, "usuario", Q(is_active=True), ("first_name", "username")),
+            ("miembros", Usuario, MiembroEquipo, "usuario", Q(is_active=True), ("first_name", "email")),
         ):
             actuales = []
             if self.instance.pk:
@@ -386,7 +412,7 @@ class EquipoForm(forms.ModelForm):
                 )
             self.fields[campo].queryset = modelo.objects.filter(filtro | Q(pk__in=actuales)).order_by(*orden)
             self.fields[campo].initial = actuales
-        self.fields["miembros"].label_from_instance = lambda u: u.get_full_name() or u.get_username()
+        self.fields["miembros"].label_from_instance = lambda u: u.nombre_visible
 
     def clean_nombre(self):
         nombre = self.cleaned_data["nombre"].strip()

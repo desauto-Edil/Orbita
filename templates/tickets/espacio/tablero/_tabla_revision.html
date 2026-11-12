@@ -1,14 +1,70 @@
 {% comment %}
-  UX-4b / UX-5 — revisar varias ideas o piezas (`espacio.filas_de_mision`): una tarjeta SOLO VISUAL por ítem
-  (`piezas/_tarjeta.html`). Al abrirla, el visor muestra sus datos y archivos y la revisión: Aprobar · Corregir ·
-  Eliminar, siempre con comentario (`tickets:decidir_pieza`), y —sobre una imagen— la anotación visual que acompaña
-  la decisión. Cada decisión es la operación de siempre, que vuelve a autorizar.
+  UX-4b / UX-5 — revisar varias ideas o piezas (`espacio.filas_de_mision`).
+  - Revisión VISUAL (alguna pieza trae un audiovisual: imagen o video): una tarjeta SOLO VISUAL por ítem
+    (`piezas/_tarjeta.html`); al abrirla, el visor hace protagonista a la imagen, con los datos al lado y la anotación
+    visual sobre una imagen.
+  - Revisión de DATOS (sin audiovisuales, p. ej. un plan de trabajo; `revision_datos` = `espacio.revision_de_datos`):
+    una TABLA con todas las columnas o, con muchas columnas, una LISTA COMPACTA (`pi-*`, la misma de la gaceta de
+    datos) donde la información es la protagonista; el texto se ve completo (nunca se recorta), los archivos que no
+    son audiovisuales se enlazan y cada ítem lleva su revisión al lado.
+  En ambos casos: Aprobar · Corregir · Eliminar, siempre con comentario (`tickets:decidir_pieza`). Cada decisión es la
+  operación de siempre, que vuelve a autorizar.
 {% endcomment %}
-<div class="pz-bloque">
-  <ul class="pz-rejilla">
-    {% for fila in filas_mision %}
-      {% include "tickets/espacio/piezas/_tarjeta.html" with p=fila estado_texto="Por revisar" %}
-    {% endfor %}
-  </ul>
-  <p class="tb-nota">Abre cada {{ mision.nombre_item|default:"pieza" }} para revisarla. Lo aprobado pasa solo al siguiente paso; lo que mandas a corregir vuelve a quien lo preparó con tu comentario y tu dibujo.</p>
-</div>
+{% if revision_datos %}
+  <div class="rd" data-revision-datos>
+    {% if revision_datos.modo == "tabla" %}
+      <div class="rd-tabla-marco">
+        <table class="rd-tabla">
+          <thead>
+            <tr>
+              <th scope="col" class="rd-tabla__num">#</th>
+              {% for columna in revision_datos.columnas %}<th scope="col">{{ columna }}</th>{% endfor %}
+              <th scope="col" class="rd-tabla__decision">Tu revisión</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for r in revision_datos.filas %}
+              <tr id="pieza-{{ r.fila.elemento.pk }}">
+                <td class="rd-tabla__num tabular">{{ r.fila.elemento.numero }}</td>
+                {% for celda in r.celdas %}<td data-etiqueta="{{ celda.etiqueta }}">{{ celda.texto|linebreaksbr }}</td>{% endfor %}
+                <td class="rd-tabla__decision">
+                  {% if r.fila.archivos %}{% include "tickets/espacio/tablero/_archivos_item.html" with archivos=r.fila.archivos %}{% endif %}
+                  {% include "tickets/espacio/tablero/_decision_datos.html" with p=r.fila %}
+                </td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <ol class="pi-lista">
+        {% for r in revision_datos.filas %}
+          <li class="pi" id="pieza-{{ r.fila.elemento.pk }}">
+            <div class="pi__cuerpo">
+              <p class="pi__cabeza">
+                <span class="pi__num tabular">#{{ r.fila.elemento.numero }}</span>
+                <span class="pi__titulo">{{ r.fila.titulo }}</span>
+                <span class="pz__estado pz__estado--pendiente">Por revisar</span>
+              </p>
+              <dl class="pi__datos">
+                {% for celda in r.celdas %}<div{% if celda.texto == "—" %} class="is-vacio"{% endif %}><dt>{{ celda.etiqueta }}</dt><dd>{{ celda.texto|linebreaksbr }}</dd></div>{% endfor %}
+              </dl>
+              {% if r.fila.archivos %}{% include "tickets/espacio/tablero/_archivos_item.html" with archivos=r.fila.archivos %}{% endif %}
+            </div>
+            <div class="pi__lado">{% include "tickets/espacio/tablero/_decision_datos.html" with p=r.fila %}</div>
+          </li>
+        {% endfor %}
+      </ol>
+    {% endif %}
+    <p class="tb-nota">Lo aprobado pasa solo al siguiente paso; lo que mandas a corregir vuelve a quien lo preparó con tu comentario.</p>
+  </div>
+{% else %}
+  <div class="pz-bloque">
+    <ul class="pz-rejilla">
+      {% for fila in filas_mision %}
+        {% include "tickets/espacio/piezas/_tarjeta.html" with p=fila estado_texto="Por revisar" %}
+      {% endfor %}
+    </ul>
+    <p class="tb-nota">Abre cada {{ mision.nombre_item|default:"pieza" }} para revisarla. Lo aprobado pasa solo al siguiente paso; lo que mandas a corregir vuelve a quien lo preparó con tu comentario y tu dibujo.</p>
+  </div>
+{% endif %}

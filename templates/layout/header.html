@@ -33,18 +33,23 @@
               aria-expanded="false"
               aria-controls="menu-usuario">
         {% include "components/avatar.html" with persona=request.user %}
-        <span class="user-menu__name">{{ request.user.get_full_name|default:request.user.get_username }}</span>
+        <span class="user-menu__name">{{ request.user.nombre_visible }}</span>
         {% include "components/icon.html" with name="chevron-down" size="sm" %}
         <span class="sr-only">Menú de usuario</span>
       </button>
       <div class="popover" id="menu-usuario" role="menu" aria-label="Menú de usuario" hidden>
         <div class="menu__header">
-          <span class="menu__header-name">{{ request.user.get_full_name|default:request.user.get_username }}</span>
-          <span class="menu__header-meta">{{ request.user.get_username }}</span>
+          <span class="menu__header-name">{{ request.user.nombre_visible }}</span>
+          <span class="menu__header-meta">{{ request.user.email }}</span>
         </div>
         <a class="menu__item" role="menuitem" href="{% url 'core:perfil' %}"{% if request.resolver_match.view_name == "core:perfil" %} aria-current="page"{% endif %}>
           {% include "components/icon.html" with name="user" %}Mi perfil
         </a>
+        {% if nav_mi_equipo %}
+          <a class="menu__item" role="menuitem" href="{% url 'core:mi_equipo' %}"{% if request.resolver_match.view_name == "core:mi_equipo" or request.resolver_match.view_name == "core:mi_equipo_persona" %} aria-current="page"{% endif %}>
+            {% include "components/icon.html" with name="users" %}Mi equipo
+          </a>
+        {% endif %}
         <form method="post" action="{% url 'core:logout' %}" role="none">
           {% csrf_token %}
           <button type="submit" class="menu__item menu__item--danger" role="menuitem">

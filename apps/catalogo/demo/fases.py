@@ -11,7 +11,10 @@ Todas actúan SOLO sobre un `RecursoDemo` (lo que la demo creó) y con las opera
 - `ejemplos`: un ticket por caso. El programado SOLO con `generar_ejecucion_programada` y solo si su periodo YA
   venció (nunca el reconciliador global ni fechas alteradas); los demás, radicados por la persona indicada como
   solicitante, con las operaciones del portal. Imperandina: su ticket de PRUEBA se crea de inmediato con sus ideas
-  como borradores (`demo.imperandina.ticket_de_prueba`).
+  como borradores (`demo.imperandina.ticket_de_prueba`). Desarrollo de software: el ticket del solicitante avanza
+  hasta el plan en revisión (`demo.desarrollo.ticket_de_ejemplo`).
+- `avanzar` (solo Imperandina): lleva su ticket de prueba a los estados posteriores a la gaceta
+  (`demo.imperandina_avanzado.avanzar`).
 - `retirar`: cancela los tickets abiertos que el actor puede cancelar, pausa la programación y despublica el
   Servicio. No borra nada.
 """
@@ -108,8 +111,12 @@ def discrepancias(recurso):
         if gaceta is None:
             errores.append(f"Salida: falta la gaceta «{caso.gaceta.nombre}».")
         else:
-            if errores_de_uso_por_item(gaceta.configuracion):
+            por_item = any(b.opcion == "gaceta_item" for b in caso.bloques)  # la revisa cada recorrido
+            if por_item and errores_de_uso_por_item(gaceta.configuracion):
                 errores.append("Salida: la gaceta ya no es compatible con la revisión por ítem.")
+    for extra in caso.gacetas_extra:
+        if not DefinicionGaceta.objects.filter(servicio=servicio, activa=True, nombre=extra.nombre).exists():
+            errores.append(f"Salida: falta la gaceta «{extra.nombre}».")
     if caso.fases:
         errores += _discrepancias_del_flujo(servicio, caso, p)
     return errores
@@ -353,7 +360,7 @@ def _ejemplo_solicitado(recurso, solicitante, area, hoy):
         estado__in=(Ticket.Estado.BORRADOR, Ticket.Estado.CANCELADO)
     ).first()
     if existente is not None:
-        return [f"Ya existe el ticket de ejemplo {existente.codigo} de {solicitante.username}."]
+        return [f"Ya existe el ticket de ejemplo {existente.codigo} de {solicitante.email}."]
     hoy = hoy or timezone.localdate()
     version = servicio.formulario.version_activa
     respuestas = _respuestas_de_ejemplo(recurso.caso, version.campos.all(), hoy, area)
@@ -363,7 +370,7 @@ def _ejemplo_solicitado(recurso, solicitante, area, hoy):
     guardar_respuestas_borrador(ticket, solicitante, respuestas)
     radicar_ticket(ticket, solicitante)
     ticket.refresh_from_db()
-    return [f"Ticket radicado por {solicitante.username}: {ticket.codigo}."]
+    return [f"Ticket radicado por {solicitante.email}: {ticket.codigo}."]
 
 
 @transaction.atomic
@@ -374,11 +381,53 @@ def ejemplos(recurso, actor, *, solicitante=None, area=None, hoy=None):
         from apps.catalogo.demo.imperandina import ticket_de_prueba
 
         return ticket_de_prueba(recurso, hoy)
+    if recurso.caso == contrato.SOLAR_ANDINA:
+        from apps.catalogo.demo.solar_andina import ticket_de_prueba as ticket_solar
+
+        return ticket_solar(recurso, hoy)
     if recurso.caso == contrato.PARRILLA:
         return _ejemplo_programado(recurso, hoy)
     if area is None:
         area = Participantes.desde_parametros(recurso.parametros).area_visibilidad
+    if recurso.caso in (contrato.DESARROLLO, contrato.DISENO):
+        from apps.catalogo.demo.desarrollo import ticket_de_ejemplo
+        from apps.catalogo.demo.participantes import resolver_usuario
+
+        if solicitante is None:  # el del contrato (scortes)
+            referencia = contrato.CONTRATOS[recurso.caso].solicitante
+            solicitante = resolver_usuario(referencia, f"Solicitante «{referencia}»")
+
+        return ticket_de_ejemplo(recurso, solicitante=solicitante, area=area, hoy=hoy)
     return _ejemplo_solicitado(recurso, solicitante, area, hoy)
+
+
+@transaction.atomic
+def avanzar(recurso, actor):
+    """Ejemplo AVANZADO: Imperandina (`demo.imperandina_avanzado`) y Desarrollo de software (`demo.desarrollo`)."""
+    if recurso.retirado_en is not None:
+        return ["El caso está retirado: publícalo de nuevo para avanzarlo."]
+    if recurso.caso in (contrato.DESARROLLO, contrato.DISENO):
+        from apps.catalogo.demo.desarrollo import avanzar as avanzar_desarrollo
+
+        return avanzar_desarrollo(recurso)
+    if recurso.caso != contrato.IMPERANDINA:
+        return ["La fase avanzar solo aplica a --casos imperandina, desarrollo y diseno."]
+    from apps.catalogo.demo.imperandina_avanzado import avanzar as avanzar_imperandina
+
+    return avanzar_imperandina(recurso)
+
+
+@transaction.atomic
+def cierre(recurso, actor):
+    """Demo de CIERRE: el ticket de ejemplo de Desarrollo de software o de Diseño de nuevas soluciones, con la gaceta
+    del plan ya resuelta y el flujo terminado, listo para resolverse (`demo.desarrollo.hasta_el_cierre`)."""
+    if recurso.retirado_en is not None:
+        return ["El caso está retirado: publícalo de nuevo."]
+    if recurso.caso not in (contrato.DESARROLLO, contrato.DISENO):
+        return ["La fase cierre solo aplica a --casos desarrollo y diseno."]
+    from apps.catalogo.demo.desarrollo import hasta_el_cierre
+
+    return hasta_el_cierre(recurso)
 
 
 # --- Retirar ------------------------------------------------------------------------

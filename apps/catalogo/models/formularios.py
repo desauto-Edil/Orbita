@@ -97,6 +97,10 @@ class Campo(RegistroBase):
         # Fase 2 — un equipo de trabajo (`core.Equipo`). Solo se ofrece en las columnas de una colección de
         # ítems (responsable por equipo de un recorrido); el formulario de inicio no lo usa.
         EQUIPO = "EQUIPO", "Equipo"
+        # Lista de evidencias: sus puntos son `OpcionCampo`; cada punto se marca con su prueba (un archivo o un
+        # enlace) en `tickets.MarcaEvidencia`. Si el ítem de una actividad con evidencia tiene esta columna, la
+        # evidencia de la actividad ES este checklist completo (`apps.tickets.evidencias`).
+        CHECKLIST = "CHECKLIST", "Lista de evidencias"
 
     version = models.ForeignKey(FormularioVersion, on_delete=models.CASCADE, related_name="campos")
     tipo = models.CharField(max_length=20, choices=TipoCampo.choices)

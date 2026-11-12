@@ -106,11 +106,13 @@ def _flujo(servicio, actor, caso, ctx, sufijo):
             definicion_entregable=entregables[spec.entregable] if spec.entregable else None,
             entregable_revisado=bloques[spec.revisa] if spec.revisa else None,
         )
+        # La clave estable de cada bloque ya creado: la configuración de un bloque posterior puede referenciarla.
+        ctx.bloques[spec.nombre] = bloques[spec.nombre].clave
     for ruta in caso.rutas:
         if ruta.requiere and getattr(ctx.p, ruta.requiere) is None:
             continue
         destino = bloques[ruta.destino] if ruta.destino else None
-        conectar_bloques_operativos(bloques[ruta.origen], destino, actor, **ruta.reglas())
+        conectar_bloques_operativos(bloques[ruta.origen], destino, actor, **ruta.reglas(ctx))
     # UX-4: el paso por el que entra un ítem enviado se guarda por la CLAVE estable del bloque, que solo existe
     # después de crearlo; se registra en su recorrido con la operación de edición de siempre.
     for spec in caso.bloques:
@@ -196,6 +198,12 @@ def preparar_caso(codigo, actor, p, *, categoria_nombre, sufijo):
             configuracion=caso.gaceta.configuracion(ctx),
         )
         ctx.gaceta = gaceta.clave
+        ctx.gacetas[caso.gaceta.nombre] = gaceta.clave
+    for extra in caso.gacetas_extra:
+        gaceta = configurar_gaceta(
+            servicio, actor, nombre=extra.nombre, descripcion=extra.descripcion, configuracion=extra.configuracion(ctx),
+        )
+        ctx.gacetas[extra.nombre] = gaceta.clave
     if caso.finalizacion:
         configurar_reglas_finalizacion(servicio, actor, caso.finalizacion)
     workflow = _flujo(servicio, actor, caso, ctx, sufijo) if caso.fases else None

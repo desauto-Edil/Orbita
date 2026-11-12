@@ -1,0 +1,21 @@
+{% comment %}
+  La revisión de UN ítem de datos (tabla o formulario de `_tabla_revision.html`): la observación de una devolución
+  anterior y Aprobar · Corregir · Eliminar con comentario obligatorio (`tickets:decidir_pieza`, la misma operación
+  del visor de piezas). Espera `p` (fila de `espacio.filas_de_mision`), `ticket` y `base`.
+{% endcomment %}
+{% if p.observacion %}<p class="rd-previa"><span>Devuelto antes:</span> {{ p.observacion }}</p>{% endif %}
+{% if p.decision and p.salidas %}
+  <form method="post" action="{% url 'tickets:decidir_pieza' ticket.pk p.decision.aprobacion.pk %}" class="rd-decision">
+    {% csrf_token %}<input type="hidden" name="next" value="{{ base }}{% if mision %}?mision={{ mision.clave|urlencode }}{% endif %}#pieza-{{ p.elemento.pk }}">
+    <label class="sr-only" for="rd-com-{{ p.clave }}">Comentario de tu revisión de {{ p.titulo }}</label>
+    <textarea id="rd-com-{{ p.clave }}" name="comentario" rows="2" maxlength="2000" required placeholder="Tu comentario (obligatorio)"></textarea>
+    {% if p.decision.publicacion %}{% include "tickets/espacio/acciones/_publicacion.html" with pub=p.decision.publicacion uid=p.clave %}{% endif %}
+    <div class="rd-decision__botones">
+      {% for s in p.salidas %}
+        <button type="submit" name="decision" value="{{ s.valor }}" class="btn btn--sm {% if s.valor == 'APROBADA' %}btn--primary{% elif s.valor == 'DEVUELTA' %}btn--secondary{% else %}btn--ghost pzv__eliminar{% endif %}">{{ s.etiqueta }}</button>
+      {% endfor %}
+    </div>
+  </form>
+{% else %}
+  <p class="text-muted">Sin decisión pendiente para ti.</p>
+{% endif %}

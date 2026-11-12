@@ -35,7 +35,7 @@
     {% elif not conjunto.puede_revisar %}
       <p class="text-muted">Solo las personas o equipos configurados como revisores pueden aprobar o devolver.</p>
     {% endif %}
-    <p><a href="{% url 'tickets:detalle' ticket.pk %}#elementos">Volver al ticket</a></p>
+    <p><a href="{% url 'tickets:espacio' ticket.pk %}?vista=resumen#elementos">Volver al ticket</a></p>
   </section>
 
   {% if conjunto.filas %}

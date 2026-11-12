@@ -8,13 +8,14 @@ válidos, su nombre visible y su descripción. Agregar un estilo exige su escala
 libre.
 """
 
-TEMA_POR_DEFECTO = "lima"
+# Versión 1 (2026-11-12): Cielo es el estilo predeterminado; Lima sigue disponible (era el original).
+TEMA_POR_DEFECTO = "cielo"
 
 # clave → (nombre visible, descripción corta). El orden es el de la pantalla.
 TEMAS = {
-    "lima": ("Lima", "La identidad original de Órbita: enérgica y tecnológica."),
+    "lima": ("Lima", "La identidad con la que nació Órbita: enérgica y tecnológica."),
     "menta": ("Menta", "Fresca y serena, con un verde limpio."),
-    "cielo": ("Cielo", "Clara y confiable, con un azul luminoso."),
+    "cielo": ("Cielo", "El estilo predeterminado: claro y confiable, con un azul luminoso."),
     "ambar": ("Ámbar", "Cálida y optimista, con un dorado suave."),
     "coral": ("Coral", "Cercana y vibrante, con un tono humano."),
     "lavanda": ("Lavanda", "Creativa y tranquila, con un violeta claro."),

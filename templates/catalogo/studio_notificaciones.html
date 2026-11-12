@@ -59,7 +59,7 @@
           <li class="notif-regla{% if regla.pk in notif_huerfanas %} notif-regla--atencion{% endif %}">
             <div class="notif-regla__texto">
               <span class="notif-regla__cuando">{{ regla.get_momento_display }}: <strong>{{ regla.nombre_objetivo|default:regla.clave_objetivo }}</strong></span>
-              <span class="notif-regla__quien">Avisar a {% if regla.destinatario == "USUARIO" %}{{ regla.usuario.get_full_name|default:regla.usuario.username }}{% elif regla.destinatario == "EQUIPO" %}el equipo {{ regla.equipo.nombre }}{% else %}{{ regla.get_destinatario_display|lower }}{% endif %} · {% if regla.correo %}en {{ sistema.nombre }} y por correo{% else %}solo en {{ sistema.nombre }}{% endif %}</span>
+              <span class="notif-regla__quien">Avisar a {% if regla.destinatario == "USUARIO" %}{{ regla.usuario.nombre_visible }}{% elif regla.destinatario == "EQUIPO" %}el equipo {{ regla.equipo.nombre }}{% else %}{{ regla.get_destinatario_display|lower }}{% endif %} · {% if regla.correo %}en {{ sistema.nombre }} y por correo{% else %}solo en {{ sistema.nombre }}{% endif %}</span>
               {% if regla.mensaje %}<span class="notif-regla__mensaje">«{{ regla.mensaje }}»</span>{% endif %}
               {% if regla.pk in notif_huerfanas %}<span class="estado estado--attention">Esa etapa ya no existe en el flujo: retira este aviso o vuelve a crearlo.</span>{% endif %}
             </div>
@@ -120,7 +120,7 @@
             </div>
             <div class="field" data-mostrar-si="destinatario=USUARIO">
               <label for="notif-usuario">Persona</label>
-              <select id="notif-usuario" name="usuario"><option value="">Elige una persona</option>{% for u in notif_usuarios %}<option value="{{ u.pk }}">{{ u.get_full_name|default:u.username }}</option>{% endfor %}</select>
+              <select id="notif-usuario" name="usuario"><option value="">Elige una persona</option>{% for u in notif_usuarios %}<option value="{{ u.pk }}">{{ u.nombre_visible }}</option>{% endfor %}</select>
             </div>
             <div class="field" data-mostrar-si="destinatario=EQUIPO">
               <label for="notif-equipo">Equipo</label>
@@ -184,7 +184,7 @@
           </div>
           <div class="field" data-mostrar-si="escalar_a=USUARIO">
             <label for="notif-escalar-usuario">Persona</label>
-            <select id="notif-escalar-usuario" name="escalar_usuario"><option value="">Elige una persona</option>{% for u in notif_usuarios %}<option value="{{ u.pk }}"{% if notif_config.escalar_usuario_id == u.pk %} selected{% endif %}>{{ u.get_full_name|default:u.username }}</option>{% endfor %}</select>
+            <select id="notif-escalar-usuario" name="escalar_usuario"><option value="">Elige una persona</option>{% for u in notif_usuarios %}<option value="{{ u.pk }}"{% if notif_config.escalar_usuario_id == u.pk %} selected{% endif %}>{{ u.nombre_visible }}</option>{% endfor %}</select>
           </div>
           <div class="field" data-mostrar-si="escalar_a=EQUIPO">
             <label for="notif-escalar-equipo">Equipo</label>

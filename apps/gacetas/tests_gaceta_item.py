@@ -2,7 +2,8 @@
 
 Recorrido por ítem: Producir pieza → Revisar pieza (aprobación interna, devuelve a Producir) → Revisión en gaceta
 (GACETA, rama ITEM) → Publicar (actividad con fecha del ítem y evidencia). La gaceta contiene varios ítems, pero
-cada uno se revisa y continúa por su cuenta. El aprobador de la gaceta es el mismo de la aprobación interna.
+cada uno se revisa por su cuenta. REGLA DE ORO: en la gaceta nadie aprueba; un comentario manda el ítem a
+corrección y, al cerrar el periodo, queda aceptado (y su recorrido continúa) lo que no tenga comentarios pendientes.
 El Bloque 5.3 protege el cierre: la gaceta no cierra su periodo ni se resuelve mientras falten ítems por llegar.
 Reutilizan el escenario de la Fase 3 (`apps.gacetas.tests._EscenarioGacetasMixin`). Se entregan SIN ejecutar.
 """
@@ -42,7 +43,7 @@ class _EscenarioGacetaItemMixin(_EscenarioGacetasMixin):
         servicio.save(update_fields=["tipo", "workflow", "actualizado_en"])
         responsable = ServicioResponsable.objects.create(servicio=servicio, tipo_responsable="EQUIPO", equipo=self.analitica)
         definicion, cols = self._definir_parrilla(servicio, columnas or self.COLUMNAS_F2)
-        self.regla = self._gaceta(servicio, definicion, permite_exclusion=True, **cfg_gaceta)
+        self.regla = self._gaceta(servicio, definicion, **cfg_gaceta)
         config = crear_nueva_version_configuracion(servicio, self.admin)
 
         def agregar(**datos):
@@ -116,11 +117,20 @@ class _EscenarioGacetaItemMixin(_EscenarioGacetasMixin):
     def _resultado_publicado(self, elemento):
         return self._hija(elemento).contexto["resultados_bloques"]["gacetas"][self.paso_gaceta.clave]
 
+    def _cerrar_gaceta(self):
+        """Quien coordina cierra el periodo: lo que está en revisión sin comentarios queda aceptado."""
+        operaciones.cerrar_periodo(GacetaTicket.objects.get(pk=self.gaceta.pk), self.analista)
+        self.gaceta.refresh_from_db()
+
+    def _comentar(self, elemento, texto="Ajustar el logo"):
+        operaciones.observar(self._participacion(self.gaceta, elemento), self.observador, texto)
+
 
 class GacetaPorItemEjecucionTests(_EscenarioGacetaItemMixin, TestCase):
     def setUp(self):
         self._preparar_gacetas()
-        self._arrancar()
+        # La corrección de la gaceta concede «Pieza» a quien corrige (la única vía para editar un ítem aprobado).
+        self._arrancar(columnas_editables=["pieza"])
 
     def test_al_llegar_se_presenta_solo_ese_item_y_su_recorrido_espera(self):
         self._hasta_la_gaceta(self.banner, self.disenadora)
@@ -133,32 +143,34 @@ class GacetaPorItemEjecucionTests(_EscenarioGacetaItemMixin, TestCase):
         self.assertEqual(self._bloque_actual(self._hija(self.video)), "Producir pieza")
         self.assertFalse(ParticipacionItemGaceta.objects.filter(gaceta=self.gaceta, elemento=self.video).exists())
 
-    def test_dos_items_avanzan_por_separado_y_solo_el_aprobado_continua(self):
+    def test_al_cerrar_el_periodo_solo_continua_lo_que_no_tiene_comentarios(self):
         self._hasta_la_gaceta(self.banner, self.disenadora)
         self._hasta_la_gaceta(self.video, self.disenador)
-        self._decidir(self._participacion(self.gaceta, self.banner), "APROBADA")
+        self._comentar(self.video)
+        self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Revisión en gaceta")  # nadie aprueba: espera
+        self._cerrar_gaceta()
         self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Publicar")
         self.assertEqual(self._resultado_publicado(self.banner)["resultado"], Estado.APROBADA)
         self.assertEqual(self._bloque_actual(self._hija(self.video)), "Revisión en gaceta")
-        self.assertEqual(self._participacion(self.gaceta, self.video).estado, Estado.EN_REVISION)
-        # La principal sigue esperando el recorrido; la gaceta no se resolvió.
+        self.assertEqual(self._participacion(self.gaceta, self.video).estado, Estado.EN_CORRECCION)
+        # La principal sigue esperando el recorrido; la gaceta cerró su periodo pero no se resolvió.
         self.assertEqual(self._bloque_actual(self._principal(self.ticket)), "Parrilla por pieza")
-        self.gaceta.refresh_from_db()
-        self.assertEqual(self.gaceta.estado, GacetaTicket.Estado.ABIERTA)
+        self.assertEqual(self.gaceta.estado, GacetaTicket.Estado.PERIODO_CERRADO)
 
     def test_la_publicacion_se_crea_con_la_fecha_del_item_y_evidencia(self):
         self._hasta_la_gaceta(self.banner, self.disenadora)
-        self._decidir(self._participacion(self.gaceta, self.banner), "APROBADA")
+        parrilla_ops.excluir_elemento(self.video, self.analista, "Fuera de la campaña")  # ya no está por llegar
+        self._cerrar_gaceta()
         tarea = self._tarea_de(self._hija(self.banner))
         self.assertEqual(tarea.usuario_responsable, self.disenadora)
         self.assertTrue(tarea.requiere_evidencia)
         self.assertIsNotNone(tarea.fecha_limite)
 
-    def test_devolver_manda_a_correccion_y_el_recorrido_sigue_esperando(self):
+    def test_comentar_manda_a_correccion_y_el_recorrido_sigue_esperando(self):
         self._hasta_la_gaceta(self.banner, self.disenadora)
         self._hasta_la_gaceta(self.video, self.disenador)
+        self._comentar(self.banner)
         participacion = self._participacion(self.gaceta, self.banner)
-        self._decidir(participacion, "DEVUELTA", "Ajustar el logo")
         self.assertEqual(participacion.estado, Estado.EN_CORRECCION)
         ronda = participacion.rondas.get(numero=1)
         self.assertEqual(ronda.tarea_correccion.usuario_responsable, self.disenadora)
@@ -168,37 +180,41 @@ class GacetaPorItemEjecucionTests(_EscenarioGacetaItemMixin, TestCase):
         self.assertEqual(self._participacion(self.gaceta, self.video).estado, Estado.EN_REVISION)
         self.assertEqual(self._bloque_actual(self._hija(self.video)), "Revisión en gaceta")
 
-    def test_la_correccion_abre_otra_ronda_con_su_version_y_la_aprobacion_continua(self):
+    def test_la_correccion_abre_otra_ronda_con_su_version_y_el_cierre_la_acepta(self):
         self._hasta_la_gaceta(self.banner, self.disenadora)
+        self._hasta_la_gaceta(self.video, self.disenador)
+        self._comentar(self.banner)
         participacion = self._participacion(self.gaceta, self.banner)
-        self._decidir(participacion, "DEVUELTA", "Ajustar el logo")
-        parrilla_ops.actualizar_valores(self.banner, self.analista, {self.columnas["Pieza"].pk: "Banner v2"})
+        # Devuelto con un comentario: lo corrige SOLO quien tiene la corrección; quien atiende ya no lo edita.
+        with self.assertRaises(ValidationError):
+            parrilla_ops.actualizar_valores(self.banner, self.analista, {self.columnas["Pieza"].pk: "Banner v2"})
+        parrilla_ops.actualizar_valores(self.banner, self.disenadora, {self.columnas["Pieza"].pk: "Banner v2"})
         operaciones.reenviar(participacion, self.disenadora)
         participacion.refresh_from_db()
         self.assertEqual((participacion.ronda, participacion.estado), (2, Estado.EN_REVISION))
         self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Revisión en gaceta")  # sigue esperando
-        self._decidir(participacion, "APROBADA")
+        self._cerrar_gaceta()
         self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Publicar")
         publicado = self._resultado_publicado(self.banner)
         self.assertEqual((publicado["ronda"], publicado["version"]), (2, 2))
 
-    def test_rechazar_termina_solo_ese_recorrido(self):
+    def test_la_correccion_que_llega_con_el_periodo_cerrado_queda_aceptada_al_reenviarse(self):
         self._hasta_la_gaceta(self.banner, self.disenadora)
         self._hasta_la_gaceta(self.video, self.disenador)
-        self._decidir(self._participacion(self.gaceta, self.banner), "RECHAZADA", "No cumple la marca")
-        hija = self._hija(self.banner)
-        self.assertEqual((hija.estado, hija.contexto["resultado_recorrido"]), (InstanciaWorkflow.Estado.CANCELADA, "RECHAZADO"))
-        self.assertEqual(parrilla_ops.decision_de_salida(self.banner).tipo, "RECHAZADO")
-        self.assertEqual(self._bloque_actual(self._hija(self.video)), "Revisión en gaceta")
-        self.assertEqual(self._hija(self.video).estado, EN_ESPERA)
+        self._comentar(self.banner)
+        self._cerrar_gaceta()
+        self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Revisión en gaceta")
+        operaciones.reenviar(self._participacion(self.gaceta, self.banner), self.disenadora)
+        self.assertEqual(self._participacion(self.gaceta, self.banner).estado, Estado.APROBADA)
+        self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Publicar")
 
     def test_excluir_termina_solo_ese_recorrido_y_el_ultimo_libera_la_principal(self):
         self._hasta_la_gaceta(self.banner, self.disenadora)
         self._hasta_la_gaceta(self.video, self.disenador)
-        self._decidir(self._participacion(self.gaceta, self.banner), "EXCLUIDA", "Se cayó la pauta")
+        operaciones.excluir_directo(self._participacion(self.gaceta, self.banner), self.analista, "Se cayó la pauta")
         self.assertEqual(self._hija(self.banner).contexto["resultado_recorrido"], "EXCLUIDO")
         self.assertEqual(self._hija(self.video).estado, EN_ESPERA)
-        self._decidir(self._participacion(self.gaceta, self.video), "APROBADA")
+        self._cerrar_gaceta()
         completar = self._tarea_de(self._hija(self.video))
         Tarea.objects.filter(pk=completar.pk).update(requiere_evidencia=False)  # la evidencia no es lo que se prueba
         self._producir(self.video, self.disenador)
@@ -209,8 +225,9 @@ class GacetaPorItemEjecucionTests(_EscenarioGacetaItemMixin, TestCase):
 
     def test_un_aviso_repetido_no_duplica_tareas_ni_transiciones(self):
         self._hasta_la_gaceta(self.banner, self.disenadora)
+        self._hasta_la_gaceta(self.video, self.disenador)
+        self._cerrar_gaceta()
         participacion = self._participacion(self.gaceta, self.banner)
-        self._decidir(participacion, "APROBADA")
         hija = self._hija(self.banner)
         ejecuciones = hija.ejecuciones_etapa.count()
         participacion.refresh_from_db()
@@ -230,28 +247,6 @@ class GacetaPorItemEjecucionTests(_EscenarioGacetaItemMixin, TestCase):
         self.assertEqual(ParticipacionItemGaceta.objects.filter(gaceta=self.gaceta, elemento=self.banner).count(), 1)
         self.assertEqual(self._participacion(self.gaceta, self.banner).rondas.count(), 1)
 
-    def test_un_item_aprobado_antes_de_llegar_continua_sin_esperar(self):
-        participacion = operaciones.presentar(self.gaceta, self.banner, self.analista)
-        self._decidir(participacion, "APROBADA")
-        self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Producir pieza")  # nada que reanudar aún
-        self._hasta_la_gaceta(self.banner, self.disenadora)
-        self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Publicar")
-        self.assertEqual(self._resultado_publicado(self.banner)["version"], 1)
-
-    def test_una_aprobacion_previa_de_otra_version_detiene_el_recorrido_y_se_reintenta(self):
-        participacion = operaciones.presentar(self.gaceta, self.banner, self.analista)
-        self._decidir(participacion, "APROBADA")
-        parrilla_ops.actualizar_valores(self.banner, self.analista, {self.columnas["Pieza"].pk: "Banner cambiado"})
-        self._hasta_la_gaceta(self.banner, self.disenadora)
-        hija, ejecucion = self._espera(self.banner)
-        self.assertEqual(hija.estado, InstanciaWorkflow.Estado.ERROR)
-        self.assertEqual(ejecucion.error["tipo"], "FUNCIONAL")
-        self.assertIn("cambió", ejecucion.error["mensaje"])
-        self.assertEqual(self._hija(self.video).estado, EN_ESPERA)  # los demás no se detienen
-        parrilla_ops.actualizar_valores(self.banner, self.analista, {self.columnas["Pieza"].pk: "Banner"})
-        reintentar_recorrido(hija, self.analista)
-        self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Publicar")
-
     def test_cancelar_el_ticket_detiene_el_recorrido_que_espera_la_gaceta(self):
         self._hasta_la_gaceta(self.banner, self.disenadora)
         cancelar_ticket(self.ticket, self.analista, "Se canceló la campaña")
@@ -264,7 +259,7 @@ class GacetaPorItemIngresoTests(_EscenarioGacetaItemMixin, TestCase):
     def setUp(self):
         self._preparar_gacetas()
 
-    def test_un_item_incompleto_queda_detenido_con_un_error_visible_y_se_reintenta(self):
+    def test_un_item_aprobado_e_incompleto_queda_detenido_y_ya_no_se_completa(self):
         columnas = (*self.COLUMNAS_F2, ("Pieza final", "TEXTO", {}, True))
         self._arrancar(columnas=columnas)
         self._hasta_la_gaceta(self.banner, self.disenadora)
@@ -275,11 +270,19 @@ class GacetaPorItemIngresoTests(_EscenarioGacetaItemMixin, TestCase):
         self.assertFalse(ParticipacionItemGaceta.objects.filter(gaceta=self.gaceta, elemento=self.banner).exists())
         # La principal no se libera con un recorrido detenido.
         self.assertEqual(self._bloque_actual(self._principal(self.ticket)), "Parrilla por pieza")
-        parrilla_ops.actualizar_valores(self.banner, self.analista, {self.columnas["Pieza final"].pk: "https://cdn/banner.png"})
+        # Regla vigente (`apps.tickets.en_revision`): ya aprobado, nadie lo edita por la colección; solo se corrige
+        # si lo devuelven. Reintentar sin cambios lo deja detenido igual (la salida es excluirlo del alcance).
+        from apps.tickets import en_revision
+
+        with self.assertRaisesMessage(ValidationError, en_revision.MENSAJE_APROBADO):
+            parrilla_ops.actualizar_valores(
+                self.banner, self.analista, {self.columnas["Pieza final"].pk: "https://cdn/banner.png"}
+            )
+        self.assertNotIn(self.columnas["Pieza final"].clave, parrilla_ops.valores_de(self.banner))
         reintentar_recorrido(hija, self.analista)
         hija, ejecucion = self._espera(self.banner)
-        self.assertEqual((hija.estado, ejecucion.motivo_espera), (EN_ESPERA, InstanciaEtapa.MotivoEspera.GACETA))
-        self.assertEqual(self._participacion(self.gaceta, self.banner).estado, Estado.EN_REVISION)
+        self.assertEqual(hija.estado, InstanciaWorkflow.Estado.ERROR)
+        self.assertFalse(ParticipacionItemGaceta.objects.filter(gaceta=self.gaceta, elemento=self.banner).exists())
 
     def test_una_gaceta_opcional_se_salta_si_no_se_cumple_la_condicion_y_lo_registra(self):
         self._arrancar(condicion_ingreso={"variable": "item.pieza", "operador": "IGUAL_A", "valor": "Banner"})
@@ -345,7 +348,7 @@ class GacetaPorItemConfiguracionTests(_EscenarioGacetaItemMixin, TestCase):
         servicio, *_ = self._proceso_gaceta_item()
         DefinicionGaceta.objects.filter(pk=self.regla.pk).update(configuracion={
             **self.regla.configuracion, "plazo_revision": {"cantidad": 3, "unidad": "DIAS", "habiles": False},
-            "aceptacion_automatica": True, "resolucion_automatica": True, "ingreso": "AL_CUMPLIR_CONDICION",
+            "resolucion_automatica": True, "ingreso": "AL_CUMPLIR_CONDICION",
         })
         errores = self._errores(self._borrador(servicio))
         for texto in ("resolverse automáticamente", "no automáticamente"):
@@ -359,7 +362,7 @@ class GacetaPorItemConfiguracionTests(_EscenarioGacetaItemMixin, TestCase):
         periodo = {"cantidad": 7, "unidad": "DIAS", "habiles": False}
         configurar_gaceta(
             servicio, self.admin, nombre=self.regla.nombre, definicion=self.regla,
-            configuracion={**self.regla.configuracion, "plazo_revision": periodo, "aceptacion_automatica": True},
+            configuracion={**self.regla.configuracion, "plazo_revision": periodo},
         )
         self.regla.refresh_from_db()
         self.assertEqual(self.regla.configuracion["plazo_revision"], periodo)
@@ -519,15 +522,11 @@ class GacetaPorItemCierreTests(_EscenarioGacetaItemMixin, TestCase):
         self.gaceta.refresh_from_db()
         return self.gaceta.estado
 
-    def _aprobar_en_gaceta(self, elemento, productor):
-        self._hasta_la_gaceta(elemento, productor)
-        self._decidir(self._participacion(self.gaceta, elemento), "APROBADA")
-
-    def test_a_aprobada_continua_y_resolver_con_b_en_produccion_se_bloquea(self):
+    def test_con_b_en_produccion_no_se_resuelve_y_a_espera_en_la_gaceta(self):
         self._arrancar()
-        self._aprobar_en_gaceta(self.banner, self.disenadora)
-        # La aprobación individual no espera el cierre general.
-        self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Publicar")
+        self._hasta_la_gaceta(self.banner, self.disenadora)
+        # Nadie aprueba en la gaceta: A espera el cierre del periodo.
+        self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Revisión en gaceta")
         self.assertEqual(self._bloque_actual(self._hija(self.video)), "Producir pieza")
         motivos = self._motivos(self._resolver)
         self.assertIn("todavía faltan ítems por llegar", motivos)
@@ -537,46 +536,48 @@ class GacetaPorItemCierreTests(_EscenarioGacetaItemMixin, TestCase):
 
     def test_cerrar_el_periodo_con_b_por_llegar_tambien_se_bloquea(self):
         self._arrancar()
-        self._aprobar_en_gaceta(self.banner, self.disenadora)
+        self._hasta_la_gaceta(self.banner, self.disenadora)
         self.assertIn("cerrar su periodo", self._motivos(self._cerrar_periodo))
         self.assertEqual(self._estado_gaceta(), GacetaTicket.Estado.ABIERTA)
 
     def test_b_excluido_antes_de_llegar_deja_de_bloquear(self):
         self._arrancar()
-        self._aprobar_en_gaceta(self.banner, self.disenadora)
+        self._hasta_la_gaceta(self.banner, self.disenadora)
         parrilla_ops.excluir_elemento(self.video, self.analista, "Se cayó la pauta")
         self.assertEqual(integracion.bloqueos_de_cierre(self.gaceta, resolver=True), [])
         self._resolver()
         self.assertEqual(self._estado_gaceta(), GacetaTicket.Estado.RESUELTA)
-        self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Publicar")  # su recorrido no cambió
+        self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Publicar")  # resolver cerró y la aceptó
 
     def test_b_rechazado_antes_de_llegar_deja_de_bloquear(self):
         self._arrancar()
-        self._aprobar_en_gaceta(self.banner, self.disenadora)
+        self._hasta_la_gaceta(self.banner, self.disenadora)
         parrilla_ops.rechazar_elemento(self.video, self.analista, "No va en esta campaña")
         self._resolver()
         self.assertEqual(self._estado_gaceta(), GacetaTicket.Estado.RESUELTA)
 
-    def test_b_en_revision_impide_resolver_pero_no_cerrar_el_periodo(self):
+    def test_b_en_correccion_impide_resolver_pero_no_cerrar_el_periodo(self):
         self._arrancar()
-        self._aprobar_en_gaceta(self.banner, self.disenadora)
+        self._hasta_la_gaceta(self.banner, self.disenadora)
         self._hasta_la_gaceta(self.video, self.disenador)
+        self._comentar(self.video, "Ajustar el corte")
         motivos = self._motivos(self._resolver)
-        self.assertIn("en revisión o corrección", motivos)
+        self.assertIn("en corrección", motivos)
         self.assertNotIn("faltan ítems por llegar", motivos)
-        self._cerrar_periodo()  # ya llegaron todos: cerrar las observaciones sí se puede
+        self._cerrar_periodo()  # ya llegaron todos: cerrar los comentarios sí se puede
         self.assertEqual(self._estado_gaceta(), GacetaTicket.Estado.PERIODO_CERRADO)
-        self._decidir(self._participacion(self.gaceta, self.video), "APROBADA")
+        self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Publicar")
+        operaciones.reenviar(self._participacion(self.gaceta, self.video), self.disenador)
         self.assertEqual(self._bloque_actual(self._hija(self.video)), "Publicar")
         self._resolver()
         self.assertEqual(self._estado_gaceta(), GacetaTicket.Estado.RESUELTA)
 
     def test_b_en_correccion_impide_resolver_aunque_la_regla_excluya_lo_pendiente(self):
         self._arrancar(al_resolver_pendientes="EXCLUIR")
-        self._aprobar_en_gaceta(self.banner, self.disenadora)
+        self._hasta_la_gaceta(self.banner, self.disenadora)
         self._hasta_la_gaceta(self.video, self.disenador)
-        self._decidir(self._participacion(self.gaceta, self.video), "DEVUELTA", "Ajustar el corte")
-        self.assertIn("en revisión o corrección", self._motivos(self._resolver))
+        self._comentar(self.video, "Ajustar el corte")
+        self.assertIn("en corrección", self._motivos(self._resolver))
         self.assertEqual(self._participacion(self.gaceta, self.video).estado, Estado.EN_CORRECCION)
 
     def test_un_ingreso_fallido_sigue_contando_como_por_llegar(self):
@@ -588,8 +589,8 @@ class GacetaPorItemCierreTests(_EscenarioGacetaItemMixin, TestCase):
 
     def test_con_el_alcance_abierto_y_un_recorrido_que_admite_nuevos_no_se_resuelve(self):
         self._arrancar(recorrido={"incorporar_nuevos": True})
-        self._aprobar_en_gaceta(self.banner, self.disenadora)
-        self._aprobar_en_gaceta(self.video, self.disenador)
+        self._hasta_la_gaceta(self.banner, self.disenadora)
+        self._hasta_la_gaceta(self.video, self.disenador)
         motivos = self._motivos(self._resolver)
         self.assertIn("sigue abierto", motivos)
         self.assertNotIn("faltan ítems por llegar", motivos)
@@ -599,8 +600,8 @@ class GacetaPorItemCierreTests(_EscenarioGacetaItemMixin, TestCase):
 
     def test_un_item_nuevo_incorporado_tambien_debe_llegar(self):
         self._arrancar(recorrido={"incorporar_nuevos": True})
-        self._aprobar_en_gaceta(self.banner, self.disenadora)
-        self._aprobar_en_gaceta(self.video, self.disenador)
+        self._hasta_la_gaceta(self.banner, self.disenadora)
+        self._hasta_la_gaceta(self.video, self.disenador)
         audio = self._item(self.ticket, self.columnas, "Audio", responsable=self.disenadora)
         self.assertEqual(self._bloque_actual(self._hija(audio)), "Producir pieza")
         parrilla_ops.cerrar_alcance(self.ticket, self.analista, clave=self.definicion.clave)
@@ -608,8 +609,8 @@ class GacetaPorItemCierreTests(_EscenarioGacetaItemMixin, TestCase):
 
     def test_con_el_alcance_cerrado_y_todo_procesado_se_resuelve(self):
         self._arrancar()
-        self._aprobar_en_gaceta(self.banner, self.disenadora)
-        self._aprobar_en_gaceta(self.video, self.disenador)
+        self._hasta_la_gaceta(self.banner, self.disenadora)
+        self._hasta_la_gaceta(self.video, self.disenador)
         parrilla_ops.cerrar_alcance(self.ticket, self.analista, clave=self.definicion.clave)
         self._resolver()
         self.assertEqual(self._estado_gaceta(), GacetaTicket.Estado.RESUELTA)
@@ -617,8 +618,8 @@ class GacetaPorItemCierreTests(_EscenarioGacetaItemMixin, TestCase):
     def test_un_alcance_abierto_no_bloquea_si_el_recorrido_no_admite_items_nuevos(self):
         # Sin `incorporar_nuevos`, un ítem agregado ya no entraría a ningún recorrido de esta gaceta.
         self._arrancar()
-        self._aprobar_en_gaceta(self.banner, self.disenadora)
-        self._aprobar_en_gaceta(self.video, self.disenador)
+        self._hasta_la_gaceta(self.banner, self.disenadora)
+        self._hasta_la_gaceta(self.video, self.disenador)
         self._resolver()
         self.assertEqual(self._estado_gaceta(), GacetaTicket.Estado.RESUELTA)
 
@@ -630,7 +631,7 @@ class GacetaPorItemCierreTests(_EscenarioGacetaItemMixin, TestCase):
 
     def test_cancelar_el_ticket_no_se_bloquea(self):
         self._arrancar()
-        self._aprobar_en_gaceta(self.banner, self.disenadora)
+        self._hasta_la_gaceta(self.banner, self.disenadora)
         cancelar_ticket(self.ticket, self.analista, "Se canceló la campaña")
         self.assertEqual(self._estado_gaceta(), GacetaTicket.Estado.CANCELADA)
         self.assertEqual(self._hija(self.video).estado, InstanciaWorkflow.Estado.CANCELADA)
@@ -652,7 +653,7 @@ class GacetaGeneralCompatibilidadTests(_EscenarioGacetasMixin, TestCase):
         self._preparar_gacetas()
         self.servicio, self.resp, self.definicion, self.columnas = self._proceso_simple()
 
-    def test_aprobar_en_una_gaceta_general_no_reanuda_ningun_recorrido(self):
+    def test_aceptar_en_una_gaceta_general_no_reanuda_ningun_recorrido(self):
         regla = self._gaceta(self.servicio, self.definicion)
         self._activar_flujo(self.servicio, bloque_gaceta={"gaceta": regla.clave, "presentar_items": True, "esperar": "RESOLUCION"})
         ticket = self._ticket(self.servicio, self.resp)
@@ -660,7 +661,9 @@ class GacetaGeneralCompatibilidadTests(_EscenarioGacetasMixin, TestCase):
         self._completar_como(ticket, "Planear", self.analista)
         gaceta = self._de(ticket, regla.clave)
         participacion = self._participacion(gaceta, banner)
-        self._decidir(participacion, "APROBADA")
+        operaciones.cerrar_periodo(gaceta, self.analista)
+        participacion.refresh_from_db()
+        self.assertEqual(participacion.estado, Estado.APROBADA)
         self.assertEqual(self._bloque_actual(self._principal(ticket)), "Revisión en gaceta")  # espera la resolución
         participacion.gaceta = gaceta
         self.assertEqual(integracion.continuar_por_item(participacion), 0)
@@ -696,16 +699,15 @@ class GacetaGeneralCompatibilidadTests(_EscenarioGacetasMixin, TestCase):
 
 
 class GacetaPorItemSilencioPositivoTests(_EscenarioGacetaItemMixin, TestCase):
-    """Demo Imperandina — periodo COMPARTIDO de la gaceta por ítem con aceptación automática: corre desde la primera
-    pieza (apertura POR_FLUJO) sin reiniciarse, no cierra mientras falten piezas por llegar (Bloque 5.3: la ventana
-    se extiende hasta la última) y al cerrar acepta lo que está en revisión sin observaciones pendientes; lo que
-    está en corrección espera la decisión del aprobador."""
+    """Demo Imperandina — periodo COMPARTIDO de la gaceta por ítem (silencio positivo): corre desde la primera pieza
+    (apertura POR_FLUJO) sin reiniciarse, no cierra mientras falten piezas por llegar (Bloque 5.3: la ventana se
+    extiende hasta la última) y al cerrar acepta lo que está en revisión sin comentarios pendientes; lo que está en
+    corrección queda aceptado al reenviarse (nadie aprueba en una gaceta)."""
 
     def setUp(self):
         self._preparar_gacetas()
         self._arrancar(
             apertura="POR_FLUJO", plazo_revision={"cantidad": 7, "unidad": "DIAS", "habiles": False},
-            aceptacion_automatica=True,
         )
 
     def _vencer(self):
@@ -746,7 +748,7 @@ class GacetaPorItemSilencioPositivoTests(_EscenarioGacetaItemMixin, TestCase):
             self.assertTrue(participacion.aceptada_automaticamente)
             self.assertEqual(self._bloque_actual(self._hija(elemento)), "Publicar")
 
-    def test_una_pieza_con_observacion_no_se_acepta_sola_y_la_decide_el_aprobador(self):
+    def test_una_pieza_con_comentario_no_se_acepta_sola_y_queda_aceptada_al_reenviarse(self):
         self._hasta_la_gaceta(self.banner, self.disenadora)
         operaciones.observar(self._participacion(self.gaceta, self.banner), self.observador, "Ajustar el color")
         self._hasta_la_gaceta(self.video, self.disenador)
@@ -758,3 +760,6 @@ class GacetaPorItemSilencioPositivoTests(_EscenarioGacetaItemMixin, TestCase):
         self.assertEqual(banner.estado, Estado.EN_CORRECCION)  # nunca se aprueba sola con pendientes
         self.assertFalse(banner.aceptada_automaticamente)
         self.assertEqual(self._espera(self.banner)[1].motivo_espera, InstanciaEtapa.MotivoEspera.GACETA)
+        operaciones.reenviar(banner, self.disenadora)
+        self.assertEqual(self._participacion(self.gaceta, self.banner).estado, Estado.APROBADA)
+        self.assertEqual(self._bloque_actual(self._hija(self.banner)), "Publicar")

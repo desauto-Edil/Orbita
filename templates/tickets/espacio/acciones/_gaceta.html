@@ -10,7 +10,7 @@
       {% if pieza.observaciones %}
         <ul class="esp-observaciones">
           {% for obs in pieza.observaciones %}
-            <li><strong>{{ obs.autor.get_full_name|default:obs.autor.get_username }}</strong> <span class="text-muted">{{ obs.creada_en|date:"d/m H:i" }}</span><br>{{ obs.texto }}{% if obs.respuesta %}<br><span class="text-muted">Respuesta: {{ obs.respuesta }}</span>{% endif %}</li>
+            <li><strong>{{ obs.autor.nombre_visible }}</strong> <span class="text-muted">{{ obs.creada_en|date:"d/m H:i" }}</span><br>{{ obs.texto }}{% if obs.respuesta %}<br><span class="text-muted">Respuesta: {{ obs.respuesta }}</span>{% endif %}</li>
           {% endfor %}
         </ul>
       {% endif %}

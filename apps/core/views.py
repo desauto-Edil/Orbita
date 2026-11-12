@@ -26,14 +26,13 @@ realmente comparten, vía `RegistroBase`) como criterio simple y
 determinista de reciente-primero, no como señal de urgencia.
 """
 
+from urllib.parse import urlencode
+
 import redis as redis_client
 from django.conf import settings
-from django.contrib.auth import login as auth_login
 from django.contrib.auth import logout as auth_logout
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.forms import AuthenticationForm
 from django.core.exceptions import PermissionDenied
-from django.core.paginator import Paginator
 from django.db import connections
 from django.db.models import Q
 from django.db.utils import OperationalError
@@ -41,16 +40,14 @@ from django.http import HttpResponse, JsonResponse
 from django.shortcuts import redirect, render
 from django.template.loader import render_to_string
 from django.urls import reverse
-from django.utils import timezone
-from django.views.decorators.http import require_GET, require_POST
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 
 from apps.aprobaciones.consultas import aprobaciones_pendientes_para
-from apps.aprobaciones.models import Aprobacion
 from apps.catalogo import busqueda
 from apps.core import accesos, disenador, inicio
 from apps.core import perfil as perfil_ops
 from apps.core.models import Usuario
-from apps.core.redirecciones import volver_a
+from apps.core.redirecciones import destino_interno, volver_a
 from apps.tickets import bandeja as bandeja_ops
 from apps.tickets import parrilla as parrilla_ops
 from apps.tickets import revision_elementos as revision_ops
@@ -91,26 +88,34 @@ def error_500(request):
     return render(request, "errors/500.html", status=500)
 
 
+@require_GET
 def login_view(request):
-    """CU-001 — Autenticarse en Órbita (RQF-001, RQF-004, RN-001)."""
-    if request.user.is_authenticated:
-        return redirect(settings.LOGIN_REDIRECT_URL)
+    """CU-001 — Autenticarse en Órbita (RQF-001, RQF-004, RN-001).
 
-    form = AuthenticationForm(request, data=request.POST or None)
-    if request.method == "POST" and form.is_valid():
-        auth_login(request, form.get_user())
-        return redirect(settings.LOGIN_REDIRECT_URL)
+    Versión 1: el único ingreso es Google (`apps.core.google_auth`); ya no hay usuario y contraseña.
+    La página solo muestra el botón y lleva el `next` validado (p. ej. el enlace de un correo) al
+    formulario que inicia el viaje a Google."""
+    destino = destino_interno(request, request.GET.get("next"))
+    if request.user.is_authenticated:
+        return redirect(destino or settings.LOGIN_REDIRECT_URL)
 
     from apps.core.google_auth import configurado
 
-    return render(request, "cuentas/login.html", {"form": form, "google_login_disponible": configurado()})
+    return render(request, "cuentas/login.html", {"next": destino, "google_login_disponible": configurado()})
 
 
+@require_POST
 @login_required
 def logout_view(request):
     """CU-002 — Cerrar sesión (RQF-002, RN-001)."""
     auth_logout(request)
     return redirect(settings.LOGIN_URL)
+
+
+def _temas():
+    from apps.core import temas
+
+    return temas
 
 
 @login_required
@@ -137,11 +142,23 @@ def perfil_view(request):
         "accesos": accesos.ultimos_accesos(usuario, request),
         "companeros": perfil_ops.companeros_de(usuario, area_principal),
         "apariencias": Usuario.Apariencia.choices,
+        # Versión 1: color personal (vacío = el del sistema), la misma lista curada de Configuración › General.
+        "temas_personales": [{"clave": clave, "nombre": nombre} for clave, (nombre, _d) in _temas().TEMAS.items()],
         # CU-037 (Sprint 7, adelanto): qué grupos de avisos quiere recibir también por correo.
         "notif_preferencias": notif_preferencias.de(usuario),
         "titulo_pagina": "Mi perfil",
     }
     return render(request, "cuentas/perfil.html", contexto)
+
+
+@login_required
+@require_POST
+def presencia_view(request):
+    """Señal de presencia que envía cada minuto una pestaña de Órbita visible (`static/js/app.js`): la persona sigue
+    en línea aunque no navegue. El middleware ya la registró al atender esta petición; aquí no hay nada más."""
+    from django.http import HttpResponse
+
+    return HttpResponse(status=204)
 
 
 @login_required
@@ -154,6 +171,77 @@ def apariencia_view(request):
         request.user.apariencia = valor
         request.user.save(update_fields=["apariencia"])
     return volver_a(request, "core:perfil")
+
+
+@login_required
+@require_POST
+def tema_view(request):
+    """Color PERSONAL de acento (Versión 1, etapa 7): uno de la lista curada (`apps.core.temas`) o vacío = el del
+    sistema. Solo la propia persona; no cambia nada para nadie más ni se audita (como la apariencia)."""
+    from apps.core import temas
+
+    valor = request.POST.get("tema", "")
+    if (valor == "" or valor in temas.TEMAS) and valor != request.user.tema:
+        request.user.tema = valor
+        request.user.save(update_fields=["tema"])
+    return volver_a(request, "core:perfil")
+
+
+@login_required
+@require_http_methods(["GET", "POST"])
+def bienvenida_view(request):
+    """Bienvenida de cinco pasos (Versión 1, etapa 7; `apps.core.bienvenida`). GET muestra un paso (`?paso=`);
+    POST guarda la apariencia o el color del paso (solo para esta persona) y avanza, o termina / omite."""
+    from apps.core import bienvenida, temas
+
+    usuario = request.user
+    destino = destino_interno(request, request.POST.get("next") or request.GET.get("next")) or ""
+    if request.method == "POST":
+        accion = request.POST.get("accion", "")
+        paso = bienvenida.paso_valido(request.POST.get("paso"))
+        if accion in ("omitir", "terminar"):
+            bienvenida.completar(usuario)
+            return redirect(destino or settings.LOGIN_REDIRECT_URL)
+        if paso == "apariencia" and request.POST.get("apariencia") in Usuario.Apariencia.values:
+            usuario.apariencia = request.POST["apariencia"]
+            usuario.save(update_fields=["apariencia"])
+        if paso == "color":
+            valor = request.POST.get("tema", usuario.tema)
+            if valor == "" or valor in temas.TEMAS:
+                usuario.tema = valor
+                usuario.save(update_fields=["tema"])
+        anterior, siguiente = bienvenida.vecinos(paso)
+        ir = anterior if accion == "atras" else (siguiente if accion == "siguiente" else paso)
+        parametros = {"paso": ir or paso, **({"next": destino} if destino else {})}
+        return redirect(f"{reverse('core:bienvenida')}?{urlencode(parametros)}")
+
+    paso = bienvenida.paso_valido(request.GET.get("paso"))
+    anterior, siguiente = bienvenida.vecinos(paso)
+    contexto = {
+        "paso": paso,
+        "pasos": [
+            {"clave": clave, "nombre": nombre, "numero": i, "actual": clave == paso}
+            for i, (clave, nombre) in enumerate(bienvenida.PASOS, start=1)
+        ],
+        "numero": bienvenida.CLAVES.index(paso) + 1,
+        "total": len(bienvenida.PASOS),
+        "anterior": anterior,
+        "siguiente": siguiente,
+        "next": destino,
+        "titulo_pagina": "Te damos la bienvenida",
+    }
+    if paso == "apariencia":
+        contexto["apariencias"] = Usuario.Apariencia.choices
+    elif paso == "color":
+        contexto["temas"] = [
+            {"clave": clave, "nombre": nombre, "descripcion": descripcion}
+            for clave, (nombre, descripcion) in temas.TEMAS.items()
+        ]
+    elif paso in ("organizacion", "companeros"):
+        contexto.update(bienvenida.organizacion_de(usuario))
+        if paso == "companeros":
+            contexto["companeros"] = perfil_ops.companeros_de(usuario, contexto["area_principal"])
+    return render(request, "cuentas/bienvenida.html", contexto)
 
 
 @login_required
@@ -236,151 +324,19 @@ def necesidad_view(request):
     return render(request, "portal/necesidad.html", contexto)
 
 
-def _clase_badge_tarea(estado):
-    if estado == Tarea.Estado.COMPLETADA:
-        return "success"
-    if estado == Tarea.Estado.CANCELADA:
-        return "danger"
-    if estado == Tarea.Estado.EN_PROGRESO:
-        return "info"
-    return "warning"
-
-
-def _clase_badge_aprobacion(estado):
-    if estado == Aprobacion.Estado.APROBADA:
-        return "success"
-    if estado == Aprobacion.Estado.RECHAZADA:
-        return "danger"
-    if estado == Aprobacion.Estado.DEVUELTA:
-        return "info"
-    if estado == Aprobacion.Estado.PENDIENTE:
-        return "warning"
-    return ""
-
-
-def _responsable(usuario, equipo):
-    if usuario is not None:
-        return usuario.get_full_name() or usuario.get_username()
-    return str(equipo) if equipo is not None else ""
-
-
-def _fila_tarea(tarea, ahora):
-    """Representación de presentación mínima (3.UI.5, punto 4) — no una
-    nueva entidad de dominio: nada de esto se persiste ni se reutiliza
-    fuera del render de `mi_trabajo.html`."""
-    pendiente = tarea.estado not in Tarea.ESTADOS_CERRADOS
-    return {
-        "tipo": "tarea",
-        "titulo": tarea.titulo,
-        "estado": tarea.get_estado_display(),
-        "estado_clase": _clase_badge_tarea(tarea.estado),
-        "fecha_relevante": tarea.fecha_limite,
-        "vencida": pendiente and tarea.fecha_limite is not None and tarea.fecha_limite < ahora,
-        # Sin responsable directo: está disponible para que alguien la tome.
-        "por_tomar": pendiente and tarea.usuario_responsable_id is None,
-        "responsable": _responsable(tarea.usuario_responsable, tarea.equipo_responsable),
-        "url": reverse("tareas:detalle", args=[tarea.pk]),
-        "vista_url": reverse("tareas:vista_previa", args=[tarea.pk]),
-        "creado_en": tarea.creado_en,
-    }
-
-
-def _fila_aprobacion(aprobacion):
-    return {
-        "tipo": "aprobacion",
-        "titulo": f"Aprobación #{aprobacion.pk}",
-        "estado": aprobacion.get_estado_display(),
-        "estado_clase": _clase_badge_aprobacion(aprobacion.estado),
-        "fecha_relevante": None,
-        "vencida": False,
-        "por_tomar": False,
-        "responsable": _responsable(aprobacion.aprobador_usuario, aprobacion.aprobador_equipo),
-        "url": reverse("aprobaciones:detalle", args=[aprobacion.pk]),
-        "vista_url": reverse("aprobaciones:vista_previa", args=[aprobacion.pk]),
-        "creado_en": aprobacion.creado_en,
-    }
-
-
-def _fila_revision(revision):
-    """4.G2C2 — un conjunto de elementos que la persona debe revisar. Es una fila de presentación de la
-    misma bandeja (no una tarea por elemento): lleva a la pantalla de revisión del entregable."""
-    entregable, ticket, resumen = revision["entregable"], revision["ticket"], revision["resumen"]
-    return {
-        "tipo": "revision",
-        "titulo": f"{entregable.nombre} · {ticket.codigo or ticket.pk}",
-        "detalle": revision["servicio"].nombre,
-        "estado": f"{resumen.progreso} aprobados",
-        "estado_clase": "warning",
-        "pendientes": resumen.pendientes,
-        "devueltos": resumen.devueltos,
-        "fecha_relevante": None,
-        "vencida": False,
-        "por_tomar": False,
-        "responsable": "",
-        "url": reverse("tickets:revision_conjunto", args=[ticket.pk, entregable.pk]),
-        "vista_url": "",  # sin vista previa: la fila abre directamente la revisión
-        "creado_en": ticket.radicado_en or entregable.creado_en,
-    }
-
-
-def _fila_coleccion(parrilla):
-    """Bloque 3 — una colección en la que la persona PARTICIPA (crea y edita ítems sin ser responsable del
-    ticket). Fila de presentación de la misma bandeja: abre la colección, no el ticket."""
-    ticket = parrilla.ticket
-    return {
-        "tipo": "coleccion",
-        "titulo": f"{parrilla.nombre_elemento} · {ticket.codigo or ticket.pk}",
-        "detalle": ticket.detalle_servicio.servicio.nombre,
-        "estado": "En atención",
-        "estado_clase": "info",
-        "pendientes": 0,
-        "devueltos": 0,
-        "fecha_relevante": None,
-        "vencida": False,
-        "por_tomar": False,
-        "responsable": "",
-        "url": reverse("tickets:coleccion", args=[ticket.pk, parrilla.clave]),
-        "vista_url": "",
-        "creado_en": ticket.radicado_en or parrilla.creado_en,
-    }
-
-
-MI_TRABAJO_POR_PAGINA = 30
-MI_TRABAJO_TICKETS = 24
 
 
 @login_required
 def mi_trabajo_view(request):
-    """3.UI.5 — sin CU propio: agregador operativo de lectura de
-    `Tareas` (RQF-071/073) + `Aprobaciones` (RQF-078), ya expuestas por sus
-    propias consultas de dominio. Visible para cualquier autenticado —la
-    pertenencia real depende de relaciones con objetos (responsable,
-    aprobador), no de poseer un rol global— y no concede ninguna capacidad
-    nueva: cada enlace apunta al detalle real, que revalida su propia
-    autorización de objeto.
+    """Mi trabajo: UNA bandeja agrupada por TICKET (`apps.tickets.bandeja`), con búsqueda y filtro locales. No concede
+    ninguna capacidad: cada fila abre el espacio del ticket, que revalida su propia autorización. Las bandejas
+    técnicas (`?tab=tareas|aprobaciones|revisiones`) y los pendientes «sin ticket asociado» se retiraron: el trabajo se
+    hace en una sola vista, la del ticket (no existe una ruta para crear tareas sueltas).
 
-    Deduplicación: `tareas_asignadas_a` y `tareas_disponibles_para_tomar`
-    pueden solaparse (una tarea de equipo sin `usuario_responsable` directo
-    es simultáneamente "asignada" —vía membresía de equipo— y "disponible
-    para tomar"). Se combinan con `|` sobre el mismo QuerySet de `Tarea` y
-    se aplica `.distinct()` — deduplicación real por identidad de fila en
-    SQL, no un ajuste de presentación después de construir los dicts.
-
-    UX-1: la pestaña por defecto agrupa los pendientes por TICKET (`apps.tickets.bandeja`); las demás pestañas
-    conservan la lista técnica de siempre.
-    """
-    tab = request.GET.get("tab")
-    if tab not in ("todo", "tareas", "aprobaciones", "revisiones"):
-        tab = "todo"
-
+    Unión por pertenencia de `pk` (subconsultas), no `qs_a | qs_b`: Django no combina un QuerySet con `.distinct()`
+    (`tareas_asignadas_a`) con uno sin él (`tareas_disponibles_para_tomar`)."""
     usuario = request.user
-    # Unión por pertenencia de `pk` (subconsultas), no `qs_a | qs_b`: Django
-    # no combina un QuerySet con `.distinct()` (`tareas_asignadas_a`) con uno
-    # sin él (`tareas_disponibles_para_tomar` para quien tiene
-    # `tareas.gestionar`) y lanza TypeError. Con `pk__in` la deduplicación
-    # sigue siendo por identidad de fila en SQL y no depende de cómo cada
-    # consulta de dominio decida usar `distinct`.
-    tareas_qs = (
+    tareas = list(
         Tarea.objects.filter(
             Q(pk__in=tareas_asignadas_a(usuario).values("pk"))
             | Q(pk__in=tareas_disponibles_para_tomar(usuario).values("pk"))
@@ -389,95 +345,98 @@ def mi_trabajo_view(request):
         .select_related("usuario_responsable", "equipo_responsable")
         .order_by("-creado_en")
     )
-    aprobaciones_qs = (
+    aprobaciones = list(
         aprobaciones_pendientes_para(usuario)
         .select_related("esquema", "aprobador_usuario", "aprobador_equipo")
         .order_by("-creado_en")
     )
-
-    # 4.F3: «Mi trabajo» empieza por los TICKETS que la persona atiende (no los que solicitó): cada
-    # tarjeta lleva a la experiencia operativa. Tareas y aprobaciones sueltas siguen debajo.
     a_cargo = list(trabajo_ops.tickets_a_cargo(usuario))
-    tarjetas = [trabajo_ops.tarjeta(usuario, ticket) for ticket in a_cargo[:MI_TRABAJO_TICKETS]]
+    bandeja = bandeja_ops.construir(
+        usuario, tareas=tareas, aprobaciones=aprobaciones,
+        revisiones=revision_ops.revisiones_pendientes_para(usuario),
+        colecciones=list(parrilla_ops.colecciones_de_participante(usuario)), a_cargo=a_cargo,
+    )
+    bandeja["total_atencion"] = len(bandeja["atencion"])
+    bandeja["total_seguimiento"] = len(bandeja["seguimiento"])
+    texto = (request.GET.get("q") or "").strip()[:80]
+    ver = request.GET.get("ver")
+    if ver == "historico":
+        # Histórico: lo que la persona ATENDIÓ y ya terminó (resuelto, cerrado o cancelado), con sus filtros.
+        from apps.tickets import historico
 
-    ahora = timezone.now()
-    tareas = list(tareas_qs)
-    aprobaciones = list(aprobaciones_qs)
-    revisiones = revision_ops.revisiones_pendientes_para(usuario)
-    colecciones = list(parrilla_ops.colecciones_de_participante(usuario))
-    filas_tareas = [_fila_tarea(tarea, ahora) for tarea in tareas]
-    filas_aprobaciones = [_fila_aprobacion(aprobacion) for aprobacion in aprobaciones]
-    # 4.G2C2: revisiones de conjuntos de elementos asignadas a la persona (misma bandeja).
-    filas_revisiones = [_fila_revision(r) for r in revisiones]
-    # Bloque 3: colecciones en las que participa (sin ser responsable del ticket); solo en «Todo».
-    filas_colecciones = [_fila_coleccion(p) for p in colecciones]
+        return render(request, "core/mi_trabajo.html", {
+            "bandeja": {**bandeja, "ver": "historico", "q": "", "filas": [],
+                        "total": bandeja["total_atencion"] + bandeja["total_seguimiento"],
+                        "total_historico": historico.contar_atendidos(usuario)},
+            "historico": historico.contexto(
+                historico.atendidos_por(usuario), request.GET, ver="historico", persona_es="ambos",
+                persona_etiqueta="Persona", vacio="Aún no tienes tickets atendidos que hayan terminado.",
+            ),
+            "titulo_pagina": "Mi trabajo",
+        })
+    if ver not in ("atencion", "seguimiento"):
+        ver = "todos"
+    for grupo_clave in ("atencion", "seguimiento"):
+        if ver not in ("todos", grupo_clave):
+            bandeja[grupo_clave] = []
+        else:
+            bandeja[grupo_clave] = [g for g in bandeja[grupo_clave] if g.coincide(texto)]
+    bandeja["q"] = texto
+    bandeja["ver"] = ver
+    # Una fila por ticket, primero lo que requiere atención (ya ordenado por vencimiento) y luego lo que está en
+    # seguimiento. La clasificación es la de `bandeja.construir`; aquí solo se presenta.
+    filas = bandeja["atencion"] + bandeja["seguimiento"]
+    fases = seguimiento.fases_actuales([g.ticket for g in filas])
+    for grupo in filas:
+        grupo.fase = fases.get(grupo.ticket.pk, "")
+        grupo.situacion = "atencion" if grupo.requiere_atencion else "seguimiento"
+    bandeja["filas"] = filas
+    bandeja["total"] = bandeja["total_atencion"] + bandeja["total_seguimiento"]
+    from apps.tickets import historico
 
-    # UX-1: la vista por defecto agrupa todo por TICKET (una entrada por ticket); las pestañas técnicas
-    # (Tareas / Aprobaciones / Revisiones) siguen listando cada pendiente por separado.
-    bandeja = None
-    if tab == "todo":
-        bandeja = bandeja_ops.construir(
-            usuario, tareas=tareas, aprobaciones=aprobaciones, revisiones=revisiones,
-            colecciones=colecciones, a_cargo=a_cargo,
-        )
-        bandeja["sueltos"] = [
-            _fila_tarea(objeto, ahora) if tipo == "tarea" else _fila_aprobacion(objeto)
-            for tipo, objeto in bandeja["sueltos"]
-        ]
-        # UX-2: búsqueda y filtro sencillos sobre la bandeja ya construida (no consultan nada más).
-        bandeja["total_atencion"] = len(bandeja["atencion"])
-        bandeja["total_seguimiento"] = len(bandeja["seguimiento"])
-        texto = (request.GET.get("q") or "").strip()[:80]
-        ver = request.GET.get("ver")
-        if ver not in ("atencion", "seguimiento"):
-            ver = "todos"
-        for grupo_clave in ("atencion", "seguimiento"):
-            if ver not in ("todos", grupo_clave):
-                bandeja[grupo_clave] = []
-            else:
-                bandeja[grupo_clave] = [g for g in bandeja[grupo_clave] if g.coincide(texto)]
-        bandeja["q"] = texto
-        bandeja["ver"] = ver
-        # Bandeja única: una fila por ticket, primero lo que requiere atención (ya ordenado por vencimiento) y luego
-        # lo que está en seguimiento. La clasificación es la de `bandeja.construir`; aquí solo se presenta.
-        filas = bandeja["atencion"] + bandeja["seguimiento"]
-        fases = seguimiento.fases_actuales([g.ticket for g in filas])
-        for grupo in filas:
-            grupo.fase = fases.get(grupo.ticket.pk, "")
-            grupo.situacion = "atencion" if grupo.requiere_atencion else "seguimiento"
-        bandeja["filas"] = filas
-        bandeja["total"] = bandeja["total_atencion"] + bandeja["total_seguimiento"]
-
-    if tab == "tareas":
-        filas = filas_tareas
-    elif tab == "aprobaciones":
-        filas = filas_aprobaciones
-    elif tab == "revisiones":
-        filas = filas_revisiones
-    else:
-        filas = sorted(
-            filas_tareas + filas_aprobaciones + filas_revisiones + filas_colecciones,
-            key=lambda fila: fila["creado_en"], reverse=True,
-        )
-
-    # Con mucho trabajo acumulado la lista se pagina: la pantalla nunca crece
-    # sin límite. Los totales de las pestañas siguen siendo los reales.
-    pagina = Paginator(filas, MI_TRABAJO_POR_PAGINA).get_page(request.GET.get("pagina"))
-    contexto = {
-        "tab": tab,
-        "filas": pagina.object_list,
-        "pagina": pagina,
-        "tarjetas": tarjetas,
+    bandeja["total_historico"] = historico.contar_atendidos(usuario)
+    return render(request, "core/mi_trabajo.html", {
         "bandeja": bandeja,
-        "total": len(filas_tareas) + len(filas_aprobaciones) + len(filas_revisiones) + len(filas_colecciones),
-        # Directo de las listas ya construidas — ninguna consulta adicional
-        # solo para contar (punto 11).
-        "total_tareas": len(filas_tareas),
-        "total_aprobaciones": len(filas_aprobaciones),
-        "total_revisiones": len(filas_revisiones),
+        # 4.F3: los tickets bajo su responsabilidad individual (tarjeta con fase, bloque actual y progreso).
+        "tarjetas": [trabajo_ops.tarjeta(usuario, ticket) for ticket in a_cargo[:MI_TRABAJO_TICKETS]],
         "titulo_pagina": "Mi trabajo",
-    }
-    return render(request, "core/mi_trabajo.html", contexto)
+    })
+
+
+MI_TRABAJO_TICKETS = 24
+
+
+@login_required
+def mi_equipo_view(request):
+    """«Mi equipo» — vista general para quien tiene personal a cargo (jefatura directa, `apps.core.jefaturas`): una
+    fila por colaborador con sus tickets activos a cargo, sus pendientes y vencidos, y un resumen de cada ticket.
+    Solo lectura; sin colaboradores, 404 (el menú no lo ofrece)."""
+    from django.http import Http404
+
+    from apps.core import jefaturas
+
+    equipo = jefaturas.resumen_de_equipo(request.user)
+    if not equipo:
+        raise Http404
+    areas = sorted({fila["area"] for fila in equipo if fila["area"]})
+    return render(request, "core/mi_equipo.html", {"equipo": equipo, "areas": areas, "titulo_pagina": "Mi equipo"})
+
+
+@login_required
+def mi_equipo_persona_view(request, pk):
+    """«Mi equipo» — el detalle de UN colaborador directo: su bandeja de trabajo completa, en solo lectura."""
+    from django.http import Http404
+    from django.shortcuts import get_object_or_404
+
+    from apps.core import jefaturas
+
+    colaborador = get_object_or_404(Usuario, pk=pk)
+    detalle = jefaturas.detalle_de_colaborador(request.user, colaborador)
+    if detalle is None:
+        raise Http404
+    return render(request, "core/mi_equipo_persona.html", {
+        "detalle": detalle, "titulo_pagina": f"{colaborador.nombre_visible} — Mi equipo",
+    })
 
 
 @login_required
@@ -486,10 +445,11 @@ def sistema_visual_view(request):
     componentes y patrones). Herramienta de desarrollo/diseño, no una pantalla
     de producto: sin datos de dominio ni lógica propia.
 
-    Protección mínima con el mecanismo que ya existe: `is_staff`, la misma
-    compuerta nativa de Django Admin. No introduce ningún rol ni permiso nuevo
-    y no aparece en la navegación; se abre por su URL (`/sistema-visual/`)."""
-    if not request.user.is_staff:
+    Versión 1: lo abre `plataforma.administracion_avanzada` (antes `is_staff`).
+    No aparece en la navegación; se abre por su URL (`/sistema-visual/`)."""
+    from apps.core import plataforma
+
+    if not plataforma.administra_plataforma(request.user):
         raise PermissionDenied
     return render(request, "core/sistema_visual.html", {"titulo_pagina": "Sistema visual"})
 

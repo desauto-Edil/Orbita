@@ -224,7 +224,7 @@ class AccesoYAtencionTests(_BaseCoherencia, TestCase):
         from apps.core.models import Area, Equipo, MiembroEquipo, Permiso, RolFuncional, RolPermiso
 
         area = Area.objects.create(nombre="Área coherencia")
-        miembro = Usuario.objects.create_user("coherencia_miembro", password=CLAVE)
+        miembro = Usuario.objects.create_user("coherencia_miembro@pruebas.orbita")
         equipo = Equipo.objects.create(nombre="Equipo coherencia")
         MiembroEquipo.objects.create(equipo=equipo, usuario=miembro)
         permiso, _ = Permiso.objects.get_or_create(codigo="tickets.atender", defaults={"nombre": "Atender"})

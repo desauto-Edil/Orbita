@@ -185,7 +185,7 @@ def _nombre(ticket):
 
 def _quien(ticket):
     if ticket.usuario_responsable_id:
-        return ticket.usuario_responsable.get_full_name() or ticket.usuario_responsable.get_username()
+        return ticket.usuario_responsable.nombre_visible
     return ticket.equipo_responsable.nombre if ticket.equipo_responsable_id else "Sin responsable"
 
 

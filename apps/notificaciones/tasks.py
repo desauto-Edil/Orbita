@@ -1,6 +1,6 @@
 """Tareas Celery de las notificaciones. Mismo patrón que `apps.tickets.tasks`: sin lógica de dominio propia, cada
 una delega en su módulo y un error aislado no tumba el lote. Periodicidad sembrada por migración
-(`0002_seed_periodic_tasks`)."""
+(`0002_seed_periodic_tasks`, `0003_correo_de_conversacion`)."""
 
 import logging
 from datetime import timedelta
@@ -39,6 +39,15 @@ def reintentar_correos():
         except Exception:  # noqa: BLE001
             logger.exception("Error reintentando el correo %s", envio_id)
     return procesados
+
+
+@shared_task
+def correos_de_conversacion():
+    """El correo de los mensajes que siguen sin leer tras la espera. Lo corre Beat cada minuto y, además, el worker
+    cuando vence la espera de cada lote (`correo_conversacion.programar_revision`)."""
+    from apps.notificaciones.correo_conversacion import enviar_pendientes
+
+    return enviar_pendientes()
 
 
 @shared_task

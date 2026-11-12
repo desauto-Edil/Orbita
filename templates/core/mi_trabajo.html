@@ -3,7 +3,7 @@
 
 {% block title %}Mi trabajo — {{ sistema.nombre }}{% endblock %}
 
-{% block content_modifier %}content-area--operativo{% if tab == "todo" and bandeja.filas %} content-area--bandeja{% endif %}{% endblock %}
+{% block content_modifier %}content-area--operativo{% if bandeja.filas %} content-area--bandeja{% endif %}{% endblock %}
 
 {% block extra_head %}<link rel="stylesheet" href="{% static 'css/trabajo.css' %}"><link rel="stylesheet" href="{% static 'css/espacio.css' %}"><link rel="stylesheet" href="{% static 'css/bandeja.css' %}">{% endblock %}
 
@@ -13,23 +13,27 @@
     {% include "layout/trabajo_tabs.html" %}
   </header>
 
-  {% if tab == "todo" %}
     {# Bandeja única: UNA fila por ticket (`apps/tickets/bandeja.py`), filtros y búsqueda locales e inspector lateral. #}
     <div class="op-barra">
+      {% if not historico %}
       <form class="search op-barra__buscar" method="get" role="search">
         <span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" size="sm" %}</span>
         <label class="sr-only" for="bj-q">Buscar en Mi trabajo</label>
         <input class="search__input" id="bj-q" type="search" name="q" value="{{ bandeja.q }}" placeholder="Buscar por código, nombre o proceso">
         {% if bandeja.ver != "todos" %}<input type="hidden" name="ver" value="{{ bandeja.ver }}">{% endif %}
       </form>
+      {% endif %}
       <nav class="segmented" aria-label="Filtrar Mi trabajo">
         <a class="segmented__item" href="?{% if bandeja.q %}q={{ bandeja.q|urlencode }}{% endif %}"{% if bandeja.ver == "todos" %} aria-current="page"{% endif %}>Todos <span class="work-count">{{ bandeja.total }}</span></a>
         <a class="segmented__item" href="?ver=atencion{% if bandeja.q %}&amp;q={{ bandeja.q|urlencode }}{% endif %}"{% if bandeja.ver == "atencion" %} aria-current="page"{% endif %}>Requieren atención <span class="work-count">{{ bandeja.total_atencion }}</span></a>
         <a class="segmented__item" href="?ver=seguimiento{% if bandeja.q %}&amp;q={{ bandeja.q|urlencode }}{% endif %}"{% if bandeja.ver == "seguimiento" %} aria-current="page"{% endif %}>En seguimiento <span class="work-count">{{ bandeja.total_seguimiento }}</span></a>
+        <a class="segmented__item" href="?ver=historico"{% if bandeja.ver == "historico" %} aria-current="page"{% endif %}>Histórico <span class="work-count">{{ bandeja.total_historico }}</span></a>
       </nav>
     </div>
 
-    {% if bandeja.filas %}
+    {% if historico %}
+      {% include "tickets/bandeja/_historico.html" %}
+    {% elif bandeja.filas %}
       <div class="bt bt--trabajo" data-bandeja>
         <div class="bt__lista">
           {% include "tickets/bandeja/_encabezado.html" with situacion=True %}
@@ -46,42 +50,6 @@
       </div>
     {% endif %}
 
-    {# Pendientes que no pertenecen a ningún ticket: nunca se mezclan con los tickets (ver el informe de UX-2). #}
-    {% if bandeja.sueltos %}
-      <details class="bj-sueltos">
-        <summary>Sin ticket asociado <span class="work-count">{{ bandeja.sueltos|length }}</span></summary>
-        <ul class="work-list" aria-label="Pendientes sin ticket">
-          {% for fila in bandeja.sueltos %}{% include "tickets/espacio/_fila_tecnica.html" %}{% endfor %}
-        </ul>
-      </details>
-    {% endif %}
-
-  {% else %}
-    {# --- Bandejas técnicas (compatibilidad de URL `?tab=`): ya no se ofrecen en la navegación visible --- #}
-    <p class="esp-volver"><a href="{% url 'core:mi_trabajo' %}">← Mi trabajo por ticket</a></p>
-    {% if filas %}
-      <div class="work-split" data-trabajo>
-        <div class="work-split__list">
-          <ul class="work-list" aria-label="Trabajo pendiente">
-            {% for fila in filas %}{% include "tickets/espacio/_fila_tecnica.html" %}{% endfor %}
-          </ul>
-          {% include "layout/_paginacion.html" with extra="tab" valor=tab %}
-        </div>
-        <aside class="work-preview" aria-label="Vista previa" aria-live="polite" data-trabajo-vista hidden>
-          <button type="button" class="work-preview__cerrar" data-trabajo-cerrar aria-label="Cerrar la vista previa">{% include "components/icon.html" with name="x" size="sm" %}</button>
-          <div class="work-preview__body" data-trabajo-contenido hidden></div>
-        </aside>
-      </div>
-    {% else %}
-      <div class="empty-state">
-        <p>
-          {% if tab == "tareas" %}No tienes tareas pendientes.
-          {% elif tab == "aprobaciones" %}No tienes aprobaciones pendientes.
-          {% else %}No tienes revisiones pendientes.{% endif %}
-        </p>
-      </div>
-    {% endif %}
-  {% endif %}
 {% endblock %}
 
 {% block extra_scripts %}<script src="{% static 'js/trabajo.js' %}" defer></script><script src="{% static 'js/bandeja.js' %}" defer></script>{% endblock %}

@@ -172,6 +172,15 @@ class Ticket(RegistroBase):
     prorroga_aprobador_equipo = models.ForeignKey(
         Equipo, on_delete=models.PROTECT, null=True, blank=True, editable=False, related_name="+"
     )
+    # Cancelación con aprobación, CONGELADA al crear el ticket (`Servicio.cancelacion_*`). False = cancelar es
+    # directo (tickets anteriores incluidos). La solicitud vive en `SolicitudCancelacion`.
+    cancelacion_con_aprobacion = models.BooleanField(default=False, editable=False)
+    cancelacion_aprobador_usuario = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, editable=False, related_name="+"
+    )
+    cancelacion_aprobador_equipo = models.ForeignKey(
+        Equipo, on_delete=models.PROTECT, null=True, blank=True, editable=False, related_name="+"
+    )
 
     # 4.G1 — etiqueta de la EJECUCIÓN («Noviembre 2026»), congelada al crear el ticket. Identifica
     # cuál ejecución es; no reemplaza el nombre del Proceso ni se concatena a él. Vacía en los
@@ -226,6 +235,17 @@ class Ticket(RegistroBase):
             ),
             models.CheckConstraint(
                 condition=(
+                    Q(cancelacion_con_aprobacion=True, cancelacion_aprobador_usuario__isnull=False,
+                      cancelacion_aprobador_equipo__isnull=True)
+                    | Q(cancelacion_con_aprobacion=True, cancelacion_aprobador_usuario__isnull=True,
+                        cancelacion_aprobador_equipo__isnull=False)
+                    | Q(cancelacion_con_aprobacion=False, cancelacion_aprobador_usuario__isnull=True,
+                        cancelacion_aprobador_equipo__isnull=True)
+                ),
+                name="ck_ticket_cancelacion_coherente",
+            ),
+            models.CheckConstraint(
+                condition=(
                     Q(tiempo_objetivo_cantidad__isnull=True, tiempo_objetivo_unidad="", tiempo_objetivo_habiles=False)
                     | Q(tiempo_objetivo_cantidad__isnull=False, tiempo_objetivo_cantidad__gte=1, tiempo_objetivo_unidad__in=["HORAS", "DIAS"])
                 ),
@@ -252,7 +272,10 @@ class Ticket(RegistroBase):
         return formatear(self.consecutivo)
 
     _CAMPOS_TIEMPO_CONGELADOS = ("tiempo_objetivo_cantidad", "tiempo_objetivo_unidad", "tiempo_objetivo_habiles")
-    _CAMPOS_PRORROGA_CONGELADOS = ("prorroga_politica", "prorroga_aprobador_usuario_id", "prorroga_aprobador_equipo_id")
+    _CAMPOS_PRORROGA_CONGELADOS = (
+        "prorroga_politica", "prorroga_aprobador_usuario_id", "prorroga_aprobador_equipo_id",
+        "cancelacion_con_aprobacion", "cancelacion_aprobador_usuario_id", "cancelacion_aprobador_equipo_id",
+    )
 
     def save(self, *args, **kwargs):
         if self.pk is not None:
@@ -279,7 +302,9 @@ class Ticket(RegistroBase):
                 if any(anterior[campo] != getattr(self, campo) for campo in self._CAMPOS_TIEMPO_CONGELADOS):
                     raise ValidationError("El tiempo objetivo de un Ticket se congela al crearlo y no puede modificarse.")
                 if any(anterior[campo] != getattr(self, campo) for campo in self._CAMPOS_PRORROGA_CONGELADOS):
-                    raise ValidationError("La política de prórroga de un Ticket se congela al crearlo y no puede modificarse.")
+                    raise ValidationError(
+                        "Las políticas de prórroga y de cancelación de un Ticket se congelan al crearlo y no pueden modificarse."
+                    )
                 if (
                     anterior["fecha_objetivo_original"] is not None
                     and anterior["fecha_objetivo_original"] != self.fecha_objetivo_original
@@ -415,6 +440,11 @@ class HistorialTicket(models.Model):
         PRORROGA_APROBADA = "PRORROGA_APROBADA", "Prórroga aprobada"
         PRORROGA_RECHAZADA = "PRORROGA_RECHAZADA", "Prórroga rechazada"
         PRORROGA_CANCELADA = "PRORROGA_CANCELADA", "Prórroga cancelada"
+        # Cancelación con aprobación: se pide, el aprobador la rechaza o quien la pidió la retira (aprobarla
+        # registra CANCELADO, como siempre).
+        CANCELACION_SOLICITADA = "CANCELACION_SOLICITADA", "Cancelación solicitada"
+        CANCELACION_RECHAZADA = "CANCELACION_RECHAZADA", "Cancelación rechazada"
+        CANCELACION_RETIRADA = "CANCELACION_RETIRADA", "Solicitud de cancelación retirada"
         # 4.C2 — el direccionamiento inicial del Ticket General (destino y
         # responsable) y el inicio de atención de un ticket ya dirigido a una
         # persona. Direccionar NO inicia la atención: son eventos distintos.
@@ -509,7 +539,7 @@ class TicketContextoAtencion(RegistroBase):
     class Meta:
         constraints = [
             models.CheckConstraint(
-                check=(
+                condition=(
                     Q(tipo_alcance="AREA", area__isnull=False, unidad_negocio__isnull=True)
                     | Q(tipo_alcance="UNIDAD", unidad_negocio__isnull=False, area__isnull=True)
                 ),
@@ -580,6 +610,7 @@ COLUMNA_POR_TIPO = {
     Campo.TipoCampo.UNIDAD: "valor_unidad",
     Campo.TipoCampo.EQUIPO: "valor_equipo",
     Campo.TipoCampo.ARCHIVO: None,  # vive en ArchivoRespuestaCampo, no aquí
+    Campo.TipoCampo.CHECKLIST: None,  # vive en MarcaEvidencia (una marca por punto, con su prueba)
 }
 
 _COLUMNAS_ESCALARES = ("valor_texto", "valor_numero", "valor_fecha", "valor_fecha_hora", "valor_booleano", "valor_json")
@@ -727,13 +758,29 @@ class ComentarioTicket(models.Model):
     (verificado explícitamente contra RQF-057 y las Reglas de negocio: no
     existe esa distinción) — no se inventa aquí."""
 
+    class Canal(models.TextChoices):
+        # Conversación del ticket en tiempo real (`apps.tickets.conversacion`): dos canales AISLADOS por ticket.
+        # EQUIPO = quienes desarrollan el servicio o proceso; INTERESADOS = el equipo con los usuarios finales
+        # (solicitante, revisores de una gaceta). Quien solo es interesado nunca lee el canal del equipo.
+        EQUIPO = "EQUIPO", "Equipo"
+        INTERESADOS = "INTERESADOS", "Interesados"
+
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="comentarios")
     autor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
     contenido = models.TextField()
+    class Origen(models.TextChoices):
+        # Dónde se escribió: en Órbita o en el espacio de Google Chat del canal (`apps.tickets.espacios_chat`).
+        ORBITA = "ORBITA", "Órbita"
+        GOOGLE_CHAT = "GOOGLE_CHAT", "Google Chat"
+
+    # Los comentarios anteriores a los canales eran la comunicación solicitante ↔ responsable: INTERESADOS.
+    canal = models.CharField(max_length=12, choices=Canal.choices, default=Canal.INTERESADOS)
+    origen = models.CharField(max_length=12, choices=Origen.choices, default=Origen.ORBITA)
     creado_en = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["creado_en"]
+        indexes = [models.Index(fields=["ticket", "canal", "id"], name="ix_comentario_ticket_canal")]
 
     def __str__(self):
         return f"{self.ticket} — comentario de {self.autor}"
@@ -768,16 +815,17 @@ class LecturaConversacion(models.Model):
     Marca de lectura, no un mensaje ni otra fuente de verdad: guarda solo el último comentario visto
     (`ultimo_leido_id`, los ids crecen con el tiempo) para contar los NO LEÍDOS = comentarios de OTRAS personas
     posteriores a la marca. Regla explícita: se marca al ver la pestaña «Conversación» abierta
-    (`apps.tickets.conversacion.marcar_leido`); la marca solo avanza. Una por persona y ticket."""
+    (`apps.tickets.conversacion.marcar_leido`); la marca solo avanza. Una por persona, ticket y canal."""
 
     usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="lecturas_conversacion")
+    canal = models.CharField(max_length=12, choices=ComentarioTicket.Canal.choices, default=ComentarioTicket.Canal.INTERESADOS)
     ultimo_leido_id = models.PositiveBigIntegerField(default=0)
     actualizado_en = models.DateTimeField(auto_now=True)
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=["usuario", "ticket"], name="uq_lectura_conversacion_usuario_ticket"),
+            models.UniqueConstraint(fields=["usuario", "ticket", "canal"], name="uq_lectura_conversacion_canal"),
         ]
 
     def __str__(self):
@@ -984,7 +1032,7 @@ class Adjunto(RegistroBase):
     class Meta:
         constraints = [
             models.CheckConstraint(
-                check=(
+                condition=(
                     Q(
                         entregable__isnull=True,
                         tipo_relacion="TICKET",
@@ -1385,6 +1433,68 @@ class ProrrogaTicket(RegistroBase):
         return f"Prórroga #{self.numero} de {self.ticket}"
 
 
+class SolicitudCancelacion(RegistroBase):
+    """Solicitud de cancelación de UN Ticket cuya política exige aprobación (`Ticket.cancelacion_con_aprobacion`).
+
+    La pide quien puede cancelar (`puede_cancelar_ticket`); la ACEPTA el aprobador congelado en el Ticket con un
+    esquema de `apps.aprobaciones` (la relación vive aquí, como en `ProrrogaTicket`). Mientras está PENDIENTE el
+    ticket se CONGELA: nadie avanza su trabajo (`apps.tickets.cancelaciones`). APROBADA = el ticket se canceló con
+    `cancelar_ticket`; RECHAZADA = el ticket sigue igual; RETIRADA = quien la pidió desistió. Una fila por
+    solicitud, nunca se borra; una vez resuelta queda cerrada. A lo sumo UNA PENDIENTE por Ticket."""
+
+    class Estado(models.TextChoices):
+        PENDIENTE = "PENDIENTE", "Pendiente de aprobación"
+        APROBADA = "APROBADA", "Aprobada"
+        RECHAZADA = "RECHAZADA", "Rechazada"
+        RETIRADA = "RETIRADA", "Retirada"
+
+    ticket = models.ForeignKey(Ticket, on_delete=models.PROTECT, related_name="solicitudes_cancelacion")
+    solicitada_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    motivo = models.TextField()
+    estado = models.CharField(max_length=10, choices=Estado.choices, default=Estado.PENDIENTE)
+    esquema_aprobacion = models.OneToOneField(
+        "aprobaciones.EsquemaAprobacion", on_delete=models.PROTECT, editable=False, related_name="cancelacion"
+    )
+    resuelta_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+    resuelta_en = models.DateTimeField(null=True, blank=True)
+    observaciones_resolucion = models.TextField(blank=True)
+
+    _CAMPOS_INMUTABLES = ("ticket_id", "solicitada_por_id", "motivo", "esquema_aprobacion_id")
+
+    class Meta:
+        ordering = ["ticket_id", "creado_en"]
+        constraints = [
+            UniqueConstraint(
+                fields=["ticket"], condition=Q(estado="PENDIENTE"), name="uq_cancelacion_pendiente_por_ticket"
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(estado="PENDIENTE", resuelta_en__isnull=True, resuelta_por__isnull=True)
+                    | (~Q(estado="PENDIENTE") & Q(resuelta_en__isnull=False))
+                ),
+                name="ck_cancelacion_resolucion_coherente",
+            ),
+        ]
+
+    def save(self, *args, **kwargs):
+        if self.pk is not None:
+            anterior = type(self).objects.filter(pk=self.pk).values("estado", *self._CAMPOS_INMUTABLES).first()
+            if anterior is not None:
+                if anterior["estado"] != self.Estado.PENDIENTE:
+                    raise ValidationError("Una solicitud de cancelación ya resuelta forma parte de la historia.")
+                if any(anterior[campo] != getattr(self, campo) for campo in self._CAMPOS_INMUTABLES):
+                    raise ValidationError("Los datos de una solicitud de cancelación no pueden modificarse.")
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        raise ValidationError("Una solicitud de cancelación forma parte de la historia del ticket y no puede eliminarse.")
+
+    def __str__(self):
+        return f"Cancelación ({self.get_estado_display().lower()}) de {self.ticket}"
+
+
 class DireccionamientoTicket(RegistroBase):
     """A quién se dirigió un Ticket General — 4.C2.
 
@@ -1772,8 +1882,8 @@ class ValorElemento(RegistroBase):
             raise ValidationError(
                 "El campo no pertenece a la estructura congelada de este ticket (otra versión del formulario)."
             )
-        if self.campo.tipo == Campo.TipoCampo.ARCHIVO:
-            raise ValidationError("Los campos de tipo archivo todavía no se admiten en los elementos.")
+        if self.campo.tipo in (Campo.TipoCampo.ARCHIVO, Campo.TipoCampo.CHECKLIST):
+            raise ValidationError("Los archivos y las listas de evidencias de un ítem no se guardan como valor.")
         # 4.G2B2: un elemento retirado queda como historia; se consulta en la base para no fiarse de
         # una instancia desactualizada en memoria.
         if ElementoParrilla.objects.filter(pk=self.elemento_id, retirado_en__isnull=False).exists():
@@ -1814,8 +1924,8 @@ class ColumnaRevisadaEntregable(RegistroBase):
         parrilla = ParrillaTicket.objects.filter(ticket_id=self.entregable.ticket_id).first()
         if parrilla is None or self.campo.version_id != parrilla.formulario_version_id:
             raise ValidationError("La columna no pertenece a la estructura congelada de este ticket.")
-        if self.campo.tipo == Campo.TipoCampo.ARCHIVO:
-            raise ValidationError("Las columnas de tipo archivo todavía no se admiten en los elementos.")
+        if self.campo.tipo in (Campo.TipoCampo.ARCHIVO, Campo.TipoCampo.CHECKLIST):
+            raise ValidationError("Las columnas de archivo o de evidencias no se revisan por conjunto.")
 
     def save(self, *args, **kwargs):
         if self.pk is not None:
@@ -2023,3 +2133,147 @@ class TareaElemento(RegistroBase):
 
     def __str__(self):
         return f"{self.elemento} → {self.tarea}"
+
+
+# --- Conversación del ticket en Google Chat (plan `.claude/plans/conversacion_google_chat.md`) --------------------
+
+
+class EspacioChatTicket(models.Model):
+    """El espacio de Google Chat de UN canal de la Conversación de un ticket (D3: nace con el primer mensaje de ese
+    canal). Es otra superficie del canal, nunca otra autoridad: `ComentarioTicket` sigue siendo la fuente de verdad
+    y la pertenencia la decide Órbita (`apps.tickets.espacios_chat`). No se borra: al cerrar o cancelar el ticket
+    queda en SOLO_LECTURA (D4)."""
+
+    class Estado(models.TextChoices):
+        PENDIENTE = "PENDIENTE", "Creándose"
+        ACTIVO = "ACTIVO", "Activo"
+        SOLO_LECTURA = "SOLO_LECTURA", "Solo lectura"
+
+    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="espacios_chat")
+    canal = models.CharField(max_length=12, choices=ComentarioTicket.Canal.choices)
+    nombre = models.CharField(max_length=120, blank=True, default="")  # `spaces/…` en Google Chat
+    uri = models.URLField(max_length=300, blank=True, default="")
+    estado = models.CharField(max_length=14, choices=Estado.choices, default=Estado.PENDIENTE)
+    suscripcion = models.CharField(max_length=200, blank=True, default="")  # Workspace Events (opcional)
+    suscripcion_vence = models.DateTimeField(null=True, blank=True)
+    ultimo_importado_en = models.DateTimeField(null=True, blank=True)  # `createTime` del último mensaje leído
+    sincronizado_en = models.DateTimeField(null=True, blank=True)
+    error = models.CharField(max_length=300, blank=True, default="")
+    creado_en = models.DateTimeField(auto_now_add=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=["ticket", "canal"], name="uq_espacio_chat_ticket_canal")]
+
+    def __str__(self):
+        return f"{self.ticket} · {self.canal} → {self.nombre or 'sin crear'}"
+
+
+class MiembroEspacioChat(models.Model):
+    """Una persona en el espacio de Google Chat de un canal, según la regla del canal (R1). `usuario_chat` es su
+    identificador en Chat (`users/<id>`): con él se reconoce al autor de lo que se escribe en el espacio. Retirar
+    es desactivar (la fila queda como historia)."""
+
+    espacio = models.ForeignKey(EspacioChatTicket, on_delete=models.CASCADE, related_name="miembros")
+    usuario = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="+")
+    membresia = models.CharField(max_length=200, blank=True, default="")
+    usuario_chat = models.CharField(max_length=120, blank=True, default="")
+    activo = models.BooleanField(default=False)
+    error = models.CharField(max_length=300, blank=True, default="")
+    actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [UniqueConstraint(fields=["espacio", "usuario"], name="uq_miembro_espacio_chat")]
+        indexes = [models.Index(fields=["espacio", "usuario_chat"], name="ix_miembro_chat_usuario")]
+
+    def __str__(self):
+        return f"{self.espacio_id} · {self.usuario_id} ({'activo' if self.activo else 'fuera'})"
+
+
+class MensajeChat(models.Model):
+    """Vínculo entre un mensaje de la Conversación y su mensaje en Google Chat. SALIDA = bandeja de salida de lo
+    escrito en Órbita (reintentar es seguro: `messageId` propio por comentario). ENTRADA = lo escrito en Chat:
+    IMPORTADO (con su comentario) o RECHAZADO (quien escribió no puede escribir en ese canal; se registra sin
+    importarlo). `nombre` único: ningún mensaje de Chat entra dos veces (R6)."""
+
+    class Direccion(models.TextChoices):
+        SALIDA = "SALIDA", "De Órbita a Chat"
+        ENTRADA = "ENTRADA", "De Chat a Órbita"
+
+    class Estado(models.TextChoices):
+        PENDIENTE = "PENDIENTE", "Pendiente"
+        ENVIADO = "ENVIADO", "Enviado"
+        FALLIDO = "FALLIDO", "Falló"
+        IMPORTADO = "IMPORTADO", "Importado"
+        RECHAZADO = "RECHAZADO", "Rechazado"
+
+    comentario = models.OneToOneField(
+        ComentarioTicket, on_delete=models.CASCADE, null=True, blank=True, related_name="mensaje_chat"
+    )
+    espacio = models.ForeignKey(EspacioChatTicket, on_delete=models.CASCADE, null=True, blank=True, related_name="mensajes")
+    nombre = models.CharField(max_length=200, blank=True, default="")  # `spaces/…/messages/…`
+    direccion = models.CharField(max_length=8, choices=Direccion.choices)
+    estado = models.CharField(max_length=10, choices=Estado.choices, default=Estado.PENDIENTE)
+    intentos = models.PositiveSmallIntegerField(default=0)
+    error = models.CharField(max_length=300, blank=True, default="")
+    creado_en = models.DateTimeField(auto_now_add=True)
+    enviado_en = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            UniqueConstraint(fields=["nombre"], condition=~Q(nombre=""), name="uq_mensaje_chat_nombre"),
+        ]
+        indexes = [models.Index(fields=["direccion", "estado", "creado_en"], name="ix_mensaje_chat_estado")]
+
+    def __str__(self):
+        return f"{self.direccion} {self.estado} {self.nombre or self.comentario_id}"
+
+
+class MarcaEvidencia(RegistroBase):
+    """Marca de UN punto de una «Lista de evidencias» (`Campo` CHECKLIST) con su prueba: un archivo O un enlace
+    (exactamente uno). Vive en el Ticket (formulario de inicio: `elemento` vacío) o en un ítem de una colección.
+    Nunca se borra: desmarcar es un retiro LÓGICO (`retirada_en`/`retirada_por`); a lo sumo una marca vigente por
+    punto. Las operaciones viven en `apps.tickets.evidencias`."""
+
+    ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, related_name="marcas_evidencia")
+    elemento = models.ForeignKey(
+        "ElementoParrilla", on_delete=models.CASCADE, null=True, blank=True, related_name="marcas_evidencia"
+    )
+    campo = models.ForeignKey(Campo, on_delete=models.PROTECT, related_name="marcas_evidencia")
+    punto = models.CharField(max_length=100)  # `OpcionCampo.valor` del punto
+    enlace = models.URLField(max_length=2048, blank=True, default="")
+    archivo = models.FileField(upload_to="tickets/evidencias/%Y/%m/", blank=True, default="")
+    nombre_original = models.CharField(max_length=255, blank=True, default="")
+    tipo_mime = models.CharField(max_length=255, blank=True, default="")
+    tamano_bytes = models.PositiveIntegerField(default=0)
+    marcada_por = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="+")
+    retirada_en = models.DateTimeField(null=True, blank=True)
+    retirada_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
+
+    class Meta:
+        ordering = ["creado_en", "pk"]
+        constraints = [
+            models.CheckConstraint(
+                condition=(Q(enlace="") & ~Q(archivo="")) | (~Q(enlace="") & Q(archivo="")),
+                name="ck_marca_evidencia_una_prueba",
+            ),
+            UniqueConstraint(
+                fields=["elemento", "campo", "punto"],
+                condition=Q(retirada_en__isnull=True, elemento__isnull=False),
+                name="uq_marca_evidencia_item_vigente",
+            ),
+            UniqueConstraint(
+                fields=["ticket", "campo", "punto"],
+                condition=Q(retirada_en__isnull=True, elemento__isnull=True),
+                name="uq_marca_evidencia_ticket_vigente",
+            ),
+        ]
+
+    @property
+    def es_archivo(self):
+        return bool(self.archivo)
+
+    def __str__(self):
+        return f"{self.campo} · {self.punto}"

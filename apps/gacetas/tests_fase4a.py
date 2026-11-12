@@ -28,7 +28,7 @@ from apps.tickets.tests import CLAVE_PRUEBA, Usuario
 class CoordinadorDeGacetaTests(_EscenarioGacetasMixin, TestCase):
     def setUp(self):
         self._preparar_gacetas()
-        self.coordinadora = Usuario.objects.create_user(username="f4a_coordinadora", password=CLAVE_PRUEBA)
+        self.coordinadora = Usuario.objects.create_user("f4a_coordinadora@pruebas.orbita")
         self.servicio, self.resp, self.definicion, self.columnas = self._proceso_simple()
 
     def _con_coordinador(self, coordinador):
@@ -170,8 +170,8 @@ class DependenciasDelProcesoTests(_EscenarioGacetasMixin, TestCase):
 
     def test_errores_de_gacetas_se_corrigen_en_salida(self):
         self._gaceta(self.servicio, self.definicion)
-        self.revisor.is_active = False
-        self.revisor.save(update_fields=["is_active"])
+        self.observador.is_active = False  # el único revisor de la gaceta
+        self.observador.save(update_fields=["is_active"])
         mensajes = errores_de_gacetas(self.servicio)
         self.assertTrue(mensajes)
         grupos = errores_por_seccion(self.servicio, mensajes)

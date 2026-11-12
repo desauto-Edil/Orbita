@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 def reconciliar(ahora=None):
-    """1) cierra el periodo de las gacetas abiertas cuyo plazo de revisión venció (con aceptación automática si
-    está configurada); 2) registra las correcciones vencidas; 3) intenta la resolución automática de las gacetas
+    """1) cierra el periodo de las gacetas abiertas cuyo plazo de revisión venció (acepta lo que no tenga
+    comentarios pendientes); 2) registra las correcciones vencidas; 3) intenta la resolución automática de las gacetas
     con el periodo cerrado. Devuelve cuántas acciones hizo."""
     ahora = ahora or timezone.now()
     acciones = 0
@@ -31,6 +31,16 @@ def reconciliar(ahora=None):
             logger.info("La gaceta %s sigue abierta: %s", gaceta.pk, "; ".join(exc.messages))
         except Exception:  # noqa: BLE001 — aislar el error de una gaceta
             logger.exception("No se pudo cerrar el periodo de la gaceta %s", gaceta.pk)
+    for participacion in ParticipacionItemGaceta.objects.filter(
+        estado=ParticipacionItemGaceta.Estado.EN_REVISION, vence_revision_en__lte=ahora,
+        gaceta__estado=GacetaTicket.Estado.ABIERTA,
+    ).order_by("pk"):
+        # Ventana PROPIA de un ítem (publicado a los interesados por su aprobador): silencio positivo de ese ítem.
+        try:
+            if operaciones.cerrar_ventana_de_item(participacion):
+                acciones += 1
+        except Exception:  # noqa: BLE001
+            logger.exception("No se pudo cerrar la ventana de revisión del ítem %s", participacion.pk)
     for participacion in ParticipacionItemGaceta.objects.filter(
         estado=ParticipacionItemGaceta.Estado.EN_CORRECCION, vence_correccion_en__lte=ahora,
         correccion_vencida_en__isnull=True,

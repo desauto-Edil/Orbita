@@ -58,7 +58,7 @@ def url_seccion(servicio_pk, pestana, uso=""):
 
 
 def _persona(usuario):
-    return (usuario.get_full_name() or "").strip() or usuario.get_username()
+    return usuario.nombre_visible
 
 
 def _conjuntos(servicio):

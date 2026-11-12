@@ -113,6 +113,11 @@ class Tarea(RegistroBase):
     # RQF-076). Propiedad de la propia Tarea (como `permite_subtareas`): quien la crea decide si la exige y
     # `operaciones.completar_tarea` la hace cumplir, sin que este dominio conozca quién la originó.
     requiere_evidencia = models.BooleanField(default=False)
+    # Actividad de un EQUIPO: la persona que RESPONDE si no se hace (recibe los avisos y alertas en lugar de todo el
+    # equipo). No es responsable directo: no cambia quién puede actuar (cualquier miembro activo del equipo).
+    responde_por = models.ForeignKey(
+        settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
+    )
     tarea_padre = models.ForeignKey(
         "self", on_delete=models.PROTECT, null=True, blank=True, related_name="subtareas"
     )
@@ -120,7 +125,7 @@ class Tarea(RegistroBase):
     class Meta:
         constraints = [
             CheckConstraint(
-                check=Q(origen="SISTEMA", creada_por__isnull=True) | ~Q(origen="SISTEMA"),
+                condition=Q(origen="SISTEMA", creada_por__isnull=True) | ~Q(origen="SISTEMA"),
                 name="ck_tarea_sistema_sin_creador",
             ),
         ]
@@ -145,14 +150,19 @@ class Tarea(RegistroBase):
 
 class ItemVerificacionTarea(models.Model):
     """Fase 1 (modelo configurable de procesos) — lista de verificación de una Tarea: un atributo de la
-    propia Tarea, no una fase, un bloque ni otra Tarea. Quien la crea copia los ítems (texto + si es
-    obligatorio); `operaciones.completar_tarea` exige los obligatorios marcados. Marcar y desmarcar deja
-    el último actor y momento aquí y el detalle en `HistorialTarea`; los ítems no se editan ni se borran."""
+    propia Tarea, no una fase, un bloque ni otra Tarea. Quien la crea copia los ítems (texto, si es
+    obligatorio y, opcional, la PREGUNTA que debe responder quien la hace); `operaciones.completar_tarea` exige
+    los obligatorios marcados. Cada punto es un criterio que se revisa y se CONCLUYE: al marcarlo se puede
+    escribir la conclusión (obligatoria si el punto tiene pregunta: p. ej. «¿Cuánto esfuerzo estimas?»), que
+    queda a la vista de quienes siguen. Marcar y desmarcar deja el último actor y momento aquí y el detalle en
+    `HistorialTarea`; el texto y la pregunta no se editan ni se borran."""
 
     tarea = models.ForeignKey(Tarea, on_delete=models.CASCADE, related_name="verificaciones")
     orden = models.PositiveIntegerField()
     texto = models.CharField(max_length=200)
     obligatorio = models.BooleanField(default=True)
+    pregunta = models.CharField(max_length=200, blank=True, default="")
+    conclusion = models.TextField(blank=True, default="")
     marcado = models.BooleanField(default=False)
     marcado_por = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, null=True, blank=True, related_name="+"
@@ -218,7 +228,7 @@ class AdjuntoTarea(RegistroBase):
     class Meta:
         constraints = [
             CheckConstraint(
-                check=(
+                condition=(
                     Q(tipo_relacion="TAREA", tarea__isnull=False, comentario__isnull=True)
                     | Q(tipo_relacion="COMENTARIO", comentario__isnull=False, tarea__isnull=True)
                 ),
@@ -258,7 +268,7 @@ class DelegacionTarea(models.Model):
 
     class Meta:
         constraints = [
-            CheckConstraint(check=Q(desde__lt=models.F("hasta")), name="ck_delegaciontarea_vigencia_valida"),
+            CheckConstraint(condition=Q(desde__lt=models.F("hasta")), name="ck_delegaciontarea_vigencia_valida"),
         ]
         ordering = ["-desde"]
 

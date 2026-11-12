@@ -27,12 +27,12 @@
                 <span class="cola-fila__nombre">{{ ticket.detalle_servicio.servicio.nombre }}{% if ticket.etiqueta %} <span class="bj-fila__etiqueta ticket-etiqueta">· {{ ticket.etiqueta }}</span>{% endif %}</span>
               </div>
               <div class="cola-fila__meta">
-                <span>{% if ticket.solicitante %}Solicita {{ ticket.solicitante.get_full_name|default:ticket.solicitante.get_username }}{% else %}Generado por programación{% endif %}</span>
+                <span>{% if ticket.solicitante %}Solicita {{ ticket.solicitante.nombre_visible }}{% else %}Generado por programación{% endif %}</span>
                 <span class="text-muted" title="{{ ticket.radicado_en|date:'j \d\e F \d\e Y, H:i' }}">llegó {{ ticket.radicado_en|naturaltime }}</span>
               </div>
               <div class="cola-fila__estado">
                 <span class="estado-etiqueta estado-etiqueta--radicado">Sin tomar</span>
-                {% if ticket.usuario_responsable %}<span class="text-muted">Dirigido a {{ ticket.usuario_responsable.get_full_name|default:ticket.usuario_responsable.get_username }}</span>
+                {% if ticket.usuario_responsable %}<span class="text-muted">Dirigido a {{ ticket.usuario_responsable.nombre_visible }}</span>
                 {% elif ticket.equipo_responsable %}<span class="text-muted">{{ ticket.equipo_responsable }}</span>{% endif %}
               </div>
               <div class="cola-fila__objetivo">

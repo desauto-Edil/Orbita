@@ -7,6 +7,7 @@ varios subsistemas independientes — no se justificó Facade (propuesta 1.2,
 sección G).
 """
 
+from django.core.exceptions import ValidationError
 from django.db import transaction
 
 from apps.catalogo.models.formularios import Campo, FormularioVersion, OpcionCampo, ReglaCondicional
@@ -102,6 +103,13 @@ def activar_version(formulario, version, actor):
     if version.estado != FormularioVersion.Estado.BORRADOR:
         raise ValueError("Solo se puede activar una versión en estado BORRADOR.")
     _exigir_compatible_con_procesos_programados(formulario, version)
+    vacias = list(
+        version.campos.filter(tipo=Campo.TipoCampo.CHECKLIST, opciones__isnull=True).values_list("etiqueta", flat=True)
+    )
+    if vacias:
+        raise ValidationError(
+            "Agrega al menos un punto a cada lista de evidencias: " + ", ".join(f"«{e}»" for e in vacias) + "."
+        )
 
     datos_anteriores = {"version_activa_id": formulario.version_activa_id}
 

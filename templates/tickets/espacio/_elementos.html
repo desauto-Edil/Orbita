@@ -55,7 +55,7 @@
         </form>
       {% endif %}
       {% if rel.consulta %}
-        <p class="ws-nota">Retirar, excluir y altas extraordinarias: <a href="{% url 'tickets:detalle' ticket.pk %}#elementos">gestión avanzada de la colección</a>.</p>
+        <p class="ws-nota">Retirar, excluir y altas extraordinarias: <a href="{% url 'tickets:espacio' ticket.pk %}?vista=resumen#elementos">gestión avanzada de la colección</a>.</p>
       {% elif coleccion.participante %}
         <p class="ws-nota"><a href="{% url 'tickets:coleccion' ticket.pk tabla.parrilla.clave %}">Ver la colección completa</a></p>
       {% endif %}

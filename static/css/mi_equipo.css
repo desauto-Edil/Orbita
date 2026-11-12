@@ -1,0 +1,304 @@
+/* «Mi equipo» (jefaturas): cuadrícula de tarjetas por persona (foto y cifras) y, en el detalle,
+   una ficha y una tabla compacta de sus tickets. Solo tokens (ver `tokens.css`). */
+
+/* --- Cabecera y herramientas --------------------------------------------------------------------------------- */
+
+.eq-cabecera {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.eq-buscar {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: min(280px, 100%);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-pill);
+  background: var(--surface-control);
+  color: var(--text-muted);
+}
+
+.eq-buscar input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--space-2) 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-small);
+}
+
+.eq-buscar input:focus { outline: none; }
+.eq-buscar:focus-within { border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--color-focus-ring); }
+.eq-buscar--sm { min-width: min(240px, 100%); }
+
+.eq-herramientas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
+.eq-filtros { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+
+.eq-control { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); font-size: var(--font-size-small); }
+
+.eq-control select {
+  padding: var(--space-1) var(--space-3);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-pill);
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--font-size-small);
+}
+
+.eq-vista {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+}
+
+.eq-vista .btn-icon { border-radius: var(--radius-pill); }
+.eq-vista .btn-icon.is-activo { background: var(--surface-card); box-shadow: var(--shadow-xs); color: var(--text-primary); }
+
+/* --- Tarjetas por persona ----------------------------------------------------------------------------------- */
+
+.eq-personas {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: var(--space-4);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.eq-tarjeta {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  transition: box-shadow 0.15s ease, border-color 0.15s ease;
+}
+
+.eq-tarjeta:hover { border-color: var(--border-strong); box-shadow: var(--shadow-card); }
+.eq-tarjeta.is-vencido { border-color: color-mix(in srgb, var(--status-danger) 35%, var(--border-subtle)); }
+
+.eq-tarjeta__enlace {
+  display: grid;
+  justify-items: center;
+  gap: var(--space-3);
+  height: 100%;
+  padding: var(--space-5) var(--space-4) var(--space-4);
+  color: inherit;
+  text-align: center;
+  text-decoration: none;
+}
+
+.eq-tarjeta__enlace:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; border-radius: var(--radius-lg); }
+
+.eq-foto {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 88px;
+  height: 88px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--surface-sunken);
+  box-shadow: 0 0 0 3px var(--surface-card), 0 0 0 4px var(--border-subtle);
+}
+
+.eq-foto.is-en-linea { box-shadow: 0 0 0 3px var(--surface-card), 0 0 0 5px var(--status-success); }
+
+.eq-foto img,
+.eq-foto__inicial {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+}
+
+.eq-foto img { object-fit: cover; }
+
+.eq-foto__inicial {
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  font-size: var(--font-size-section-title);
+  font-weight: var(--font-weight-semibold);
+}
+
+.eq-foto__punto {
+  position: absolute;
+  right: 4px;
+  bottom: 4px;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--surface-card);
+  border-radius: 50%;
+  background: var(--status-success);
+}
+
+.eq-foto--md { width: 72px; height: 72px; }
+.eq-foto--sm { width: 40px; height: 40px; }
+
+.eq-tarjeta__id { display: grid; gap: 2px; min-width: 0; max-width: 100%; }
+.eq-tarjeta__nombre { color: var(--text-primary); font-weight: var(--font-weight-semibold); }
+.eq-tarjeta__correo { overflow: hidden; color: var(--text-secondary); font-size: var(--font-size-small); text-overflow: ellipsis; white-space: nowrap; }
+
+.eq-cifras { display: grid; grid-template-columns: repeat(3, 1fr); width: 100%; border-block: 1px solid var(--border-subtle); }
+
+.eq-cifra { display: grid; gap: 0; padding: var(--space-2) 0; }
+.eq-cifra + .eq-cifra { border-left: 1px solid var(--border-subtle); }
+.eq-cifra b { color: var(--text-primary); font-size: var(--font-size-body-lg); font-weight: var(--font-weight-semibold); }
+.eq-cifra span { color: var(--text-muted); font-size: var(--font-size-caption); }
+.eq-cifra--vencido b, .eq-cifra--vencido span { color: var(--status-danger); }
+
+.eq-tarjeta__pie { display: grid; gap: 2px; }
+
+.eq-tarjeta__cargo {
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.eq-tarjeta__proxima { color: var(--text-secondary); font-size: var(--font-size-caption); }
+
+/* Vista de lista: la misma tarjeta en una fila. */
+.eq-personas.is-lista { grid-template-columns: minmax(0, 1fr); gap: var(--space-2); }
+
+.eq-personas.is-lista .eq-tarjeta__enlace {
+  grid-template-columns: auto minmax(0, 1.4fr) minmax(0, 1.2fr) minmax(0, 1fr) minmax(0, 1fr);
+  align-items: center;
+  justify-items: start;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  text-align: left;
+}
+
+.eq-personas.is-lista .eq-foto { width: 40px; height: 40px; }
+.eq-personas.is-lista .eq-foto__inicial { font-size: var(--font-size-body); }
+.eq-personas.is-lista .eq-foto__punto { right: 0; bottom: 0; width: 10px; height: 10px; }
+.eq-personas.is-lista .eq-cifras { border: 0; }
+.eq-personas.is-lista .eq-cifra { padding: 0 var(--space-3); text-align: center; }
+
+.eq-sin-resultados { margin: var(--space-4) 0; color: var(--text-muted); font-size: var(--font-size-small); }
+
+/* --- Detalle de una persona ---------------------------------------------------------------------------------- */
+
+.eq-ficha {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-4);
+  margin-bottom: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+}
+
+.eq-ficha__id .op-cabecera__titulo { margin: 0; }
+
+.eq-ficha__datos {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+}
+
+.eq-ficha__linea { color: var(--status-success); }
+
+.eq-kpis { display: flex; gap: var(--space-2); margin: 0; }
+
+.eq-kpis > div {
+  min-width: 76px;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  text-align: center;
+}
+
+.eq-kpis dt { color: var(--text-muted); font-size: var(--font-size-caption); }
+.eq-kpis dd { margin: 0; color: var(--text-primary); font-size: var(--font-size-section-title); font-weight: var(--font-weight-semibold); }
+.eq-kpis .is-vencido { background: var(--status-danger-soft); }
+.eq-kpis .is-vencido dt, .eq-kpis .is-vencido dd { color: var(--status-danger); }
+
+.eq-tabla-barra {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.eq-tabla-marco {
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+}
+
+.eq-tabla { width: 100%; border-collapse: collapse; font-size: var(--font-size-small); }
+
+.eq-tabla th {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  text-align: left;
+  white-space: nowrap;
+}
+
+.eq-tabla td {
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  vertical-align: top;
+}
+
+.eq-tabla tbody tr:last-child td { border-bottom: 0; }
+.eq-tabla tbody tr:hover td { background: var(--surface-hover); }
+.eq-tabla tr.is-vencido td:first-child { box-shadow: inset 3px 0 0 var(--status-danger); }
+
+.eq-tabla__ticket, .eq-tabla__que { display: block; font-weight: var(--font-weight-medium); }
+.eq-tabla__sub { display: block; color: var(--text-secondary); font-size: var(--font-size-caption); }
+.eq-tabla__papel { color: var(--text-secondary); }
+.eq-tabla__fecha { white-space: nowrap; }
+
+@media (max-width: 900px) {
+  .eq-ficha { grid-template-columns: auto minmax(0, 1fr); }
+  .eq-kpis { grid-column: 1 / -1; flex-wrap: wrap; }
+  .eq-personas.is-lista .eq-tarjeta__enlace { grid-template-columns: auto minmax(0, 1fr); }
+  .eq-personas.is-lista .eq-cifras,
+  .eq-personas.is-lista .eq-tarjeta__pie { grid-column: 1 / -1; }
+}
+
+@media (max-width: 640px) {
+  .eq-cabecera, .eq-buscar { width: 100%; }
+  .eq-tabla thead { display: none; }
+  .eq-tabla, .eq-tabla tbody, .eq-tabla tr, .eq-tabla td { display: block; width: 100%; }
+  .eq-tabla tr { padding: var(--space-2) 0; border-bottom: 1px solid var(--border-subtle); }
+  .eq-tabla td { padding: 2px var(--space-3); border: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .eq-tarjeta { transition: none; }
+}

@@ -8,12 +8,12 @@ gestionar (supervisar asignación) ≠ ejecutar el trabajo (relación directa).
 Solo 2 permisos (W.16/aprobado, evita granularidad sin frontera real):
 
 - `tareas.consultar` — visibilidad amplia por alcance.
-- `tareas.gestionar` — función supervisora: asignar/reasignar/delegar a un
+- `tareas.gestionar` — función supervisora: asignar/reasignar a un
   tercero, igual que `tickets.atender` cubre asignar/reasignar de Ticket.
 
 Tomar/iniciar/completar/comentar/crear subtarea NO exigen un permiso nuevo
-— exigen relación directa con la Tarea (ser el responsable actual, directo
-o delegado vigente), mismo criterio que `puede_resolver_ticket`/
+— exigen relación directa con la Tarea (ser su responsable actual: la
+persona o un miembro activo de su equipo), mismo criterio que `puede_resolver_ticket`/
 `puede_tomar` en Tickets: `tareas.gestionar` es una función supervisora,
 nunca sustituye la relación operacional real (`tareas.gestionar no permite
 completar trabajo ajeno`, instrucción explícita del usuario).
@@ -30,11 +30,9 @@ llama siempre sin `area`/`unidad_negocio`, consultando exclusivamente el
 alcance GLOBAL, tal como ya lo documenta `apps.core.autorizacion`.
 """
 
-from django.utils import timezone
-
 from apps.core.autorizacion import usuario_tiene_permiso
 from apps.core.models import MiembroEquipo
-from apps.tareas.models import DelegacionTarea, Tarea
+from apps.tareas.models import Tarea
 
 PERMISO_CONSULTAR = "tareas.consultar"
 PERMISO_GESTIONAR = "tareas.gestionar"
@@ -60,32 +58,11 @@ def es_responsable_directo(usuario, tarea):
     ).exists()
 
 
-def delegado_actual(tarea, *, ahora=None):
-    """Delegado con vigencia activa AHORA para `tarea`, o `None`. La
-    "vigencia resuelve el problema" (W.1): no hay estado propio de
-    `DelegacionTarea` que consultar, solo la ventana `[desde, hasta)`."""
-    ahora = ahora or timezone.now()
-    delegacion = (
-        DelegacionTarea.objects.filter(tarea=tarea, desde__lte=ahora, hasta__gt=ahora)
-        .order_by("-desde")
-        .first()
-    )
-    return delegacion.delegado_a if delegacion else None
-
-
-def es_delegada_actual(usuario, tarea):
-    if not _autenticado(usuario):
-        return False
-    delegado = delegado_actual(tarea)
-    return delegado is not None and delegado.id == usuario.id
-
-
 def es_responsable_actual(usuario, tarea):
-    """Relación operacional vigente: responsable directo (usuario o
-    miembro de su equipo) O delegado con vigencia activa — durante la
-    delegación, el delegado puede actuar como si fuera el responsable, sin
-    que este cambie formalmente (W.1)."""
-    return es_responsable_directo(usuario, tarea) or es_delegada_actual(usuario, tarea)
+    """Relación operacional vigente: responsable directo (usuario o miembro activo de su equipo). La DELEGACIÓN
+    temporal se retiró del sistema (2026-11-12, decisión del usuario): `DelegacionTarea` queda solo como historia y
+    ya no concede nada."""
+    return es_responsable_directo(usuario, tarea)
 
 
 def puede_consultar_tarea(usuario, tarea):
@@ -131,19 +108,10 @@ def puede_reasignar_tarea(usuario, tarea):
     return usuario_tiene_permiso(usuario, PERMISO_GESTIONAR) or es_responsable_actual(usuario, tarea)
 
 
-def puede_delegar_tarea(usuario, tarea):
-    """DELEGAR — CU-022, actor "Gestor / Ejecutor autorizado": misma
-    población que reasignar (`tareas.gestionar`, o el responsable directo
-    delegando su propio trabajo)."""
-    if tarea.estado in Tarea.ESTADOS_CERRADOS:
-        return False
-    return usuario_tiene_permiso(usuario, PERMISO_GESTIONAR) or es_responsable_directo(usuario, tarea)
-
-
 def puede_iniciar_tarea(usuario, tarea):
     """INICIAR (RQF-073) — ejecutar el trabajo, no supervisarlo:
     exclusivamente quien tiene relación operacional actual. Tener
-    `tareas.gestionar` sin ser responsable/delegado NO basta (mismo
+    `tareas.gestionar` sin ser responsable NO basta (mismo
     criterio que `puede_resolver_ticket`: `tareas.gestionar` no permite
     completar/iniciar trabajo ajeno)."""
     if tarea.estado != Tarea.Estado.PENDIENTE:
@@ -153,7 +121,7 @@ def puede_iniciar_tarea(usuario, tarea):
 
 def puede_completar_tarea(usuario, tarea):
     """COMPLETAR — mismo criterio que `puede_iniciar_tarea`: exclusivamente
-    responsable actual (directo o delegado), nunca solo por
+    responsable actual, nunca solo por
     `tareas.gestionar`. RQF-073 no exige pasar por EN_PROGRESO antes
     (ninguna RN lo impone) — se permite completar directamente desde
     PENDIENTE."""

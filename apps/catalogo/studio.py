@@ -122,6 +122,7 @@ from apps.catalogo.forms import (
     ParticipanteAprobacionForm,
     ParticipanteAprobacionFormSet,
     PoliticaEntregaForm,
+    PoliticaCancelacionForm,
     PoliticaProrrogaForm,
     ReglaCondicionalForm,
     ResponsableForm,
@@ -158,6 +159,7 @@ from apps.catalogo.operaciones import (
     conceder_visibilidad,
     configurar_datos_inicio,
     configurar_politica_entrega,
+    configurar_politica_cancelacion,
     configurar_politica_prorroga,
     configurar_tiempo_objetivo,
     crear_categoria,
@@ -1170,6 +1172,13 @@ def _contexto_general(servicio, ev=None):
                 "aprobador_equipo": servicio.prorroga_aprobador_equipo_id,
             }
         ),
+        "form_cancelacion": PoliticaCancelacionForm(
+            initial={
+                "politica": PoliticaCancelacionForm.CON if servicio.cancelacion_con_aprobacion else PoliticaCancelacionForm.SIN,
+                "aprobador_usuario": servicio.cancelacion_aprobador_usuario_id,
+                "aprobador_equipo": servicio.cancelacion_aprobador_equipo_id,
+            }
+        ),
         "form_tiempo": TiempoObjetivoForm(
             initial={
                 "cantidad": servicio.tiempo_objetivo_cantidad,
@@ -1240,7 +1249,7 @@ def _contexto_tareas_elemento(servicio):
 # Icono lineal de cada tipo de campo/columna en la lista del constructor (solo presentación).
 ICONOS_TIPO_CAMPO = {
     "TEXTO": "type", "TEXTO_LARGO": "type", "CORREO": "type", "URL": "type", "NUMERO": "hash",
-    "FECHA": "calendar", "FECHA_HORA": "calendar-clock", "LISTA": "list", "MULTILISTA": "list",
+    "FECHA": "calendar", "FECHA_HORA": "calendar-clock", "LISTA": "list", "MULTILISTA": "list", "CHECKLIST": "check-circle",
     "BOOLEANO": "check-circle", "ARCHIVO": "file", "USUARIO": "user", "EQUIPO": "users", "AREA": "layers",
     "UNIDAD": "layers",
 }
@@ -1258,7 +1267,7 @@ def _contexto_participantes(definicion):
         "participantes_usuarios": [u.pk for u in usuarios],
         "participantes_equipos": [e.pk for e in equipos],
         "participantes_opciones_usuarios": get_user_model().objects.filter(is_active=True).order_by(
-            "first_name", "last_name", "username"
+            "first_name", "last_name", "email"
         ),
         "participantes_opciones_equipos": Equipo.objects.filter(activo=True).order_by("nombre"),
     }
@@ -1401,7 +1410,10 @@ def _fases_para_resumen(version):
 # como estaban, así la configuración publicada (p. ej. la lluvia de ideas que se envía completa) no se pierde.
 CONSERVADAS_AL_EDITAR = {
     "RECORRIDO_ITEMS": ("ingreso", "paso_al_enviar", "columnas_requeridas_ingreso", "envio", "etapa_borradores"),
-    "ACTIVIDAD": ("columnas_requeridas",),
+    "ACTIVIDAD": ("columnas_requeridas", "fecha_limite_dia_del_periodo"),
+    # «Publicar a los interesados» de la aprobación de un ítem (aún sin editor en el Studio).
+    "APROBACION": ("publicacion",),
+    "GACETA": ("dias_desde_aprobacion",),
 }
 
 
@@ -1462,6 +1474,7 @@ def _serializar_configuracion_bloque_operativo(tipo, config_kwargs):
 
 def _inicial_actividad_ampliada(cfg):
     from apps.catalogo.actividades import normalizar
+    from apps.catalogo.forms import linea_de_punto
 
     datos, _errores = normalizar(cfg)
     previsto, limite = datos["plazo_previsto"] or {}, datos["plazo_limite"] or {}
@@ -1472,12 +1485,13 @@ def _inicial_actividad_ampliada(cfg):
         "plazo_previsto_unidad": previsto.get("unidad") or "DIAS",
         "plazo_limite_cantidad": limite.get("cantidad"),
         "plazo_limite_unidad": limite.get("unidad") or "DIAS",
-        "verificacion_obligatoria": "\n".join(i["texto"] for i in datos["verificacion"] if i["obligatorio"]),
-        "verificacion_opcional": "\n".join(i["texto"] for i in datos["verificacion"] if not i["obligatorio"]),
+        "verificacion_obligatoria": "\n".join(linea_de_punto(i) for i in datos["verificacion"] if i["obligatorio"]),
+        "verificacion_opcional": "\n".join(linea_de_punto(i) for i in datos["verificacion"] if not i["obligatorio"]),
         "fecha_prevista_campo": datos["fecha_prevista_campo"],
         "fecha_limite_campo": datos["fecha_limite_campo"],
         "exige_datos_inicio": datos["exige_datos_inicio"],
         "columnas_editables": datos["columnas_editables"],
+        "responde_usuario": datos["responde_usuario_id"],
     }
 
 
@@ -2725,6 +2739,31 @@ def studio_prorroga_guardar_view(request, pk):
         messages.error(request, _mensaje_error(exc))
     else:
         messages.success(request, "Política de prórroga guardada. Aplica a los tickets que se creen desde ahora.")
+    return redirect(_volver(pk, "general"))
+
+
+@login_required
+def studio_cancelacion_guardar_view(request, pk):
+    """Cancelación con aprobación, dentro de Básico › Tiempos y prórrogas."""
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["POST"])
+    if not _puede_catalogo(request.user):
+        raise PermissionDenied
+    servicio = get_object_or_404(Servicio, pk=pk)
+    form = PoliticaCancelacionForm(request.POST)
+    if not form.is_valid():
+        messages.error(request, "; ".join(e for errores in form.errors.values() for e in errores))
+        return redirect(_volver(pk, "general"))
+    try:
+        configurar_politica_cancelacion(
+            servicio, request.user, con_aprobacion=form.cleaned_data["politica"] == PoliticaCancelacionForm.CON,
+            aprobador_usuario=form.cleaned_data.get("aprobador_usuario"),
+            aprobador_equipo=form.cleaned_data.get("aprobador_equipo"),
+        )
+    except ValidationError as exc:
+        messages.error(request, _mensaje_error(exc))
+    else:
+        messages.success(request, "Política de cancelación guardada. Aplica a los tickets que se creen desde ahora.")
     return redirect(_volver(pk, "general"))
 
 

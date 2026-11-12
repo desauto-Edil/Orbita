@@ -22,7 +22,7 @@
               <td>
                 {% if fila.observacion %}<p class="tb-observacion">↺ {{ fila.observacion }}</p>{% endif %}
                 {% if fila.devuelto and fila.anotaciones %}{% with an=fila.anotaciones.0 %}
-                  <a class="tb-anotacion" href="{% url 'tickets:anotacion' an.pk %}" target="_blank" rel="noopener" title="Lo que señaló {{ an.autor.get_full_name|default:an.autor.get_username }}">
+                  <a class="tb-anotacion" href="{% url 'tickets:anotacion' an.pk %}" target="_blank" rel="noopener" title="Lo que señaló {{ an.autor.nombre_visible }}">
                     <img src="{% url 'tickets:anotacion' an.pk %}" alt="Anotación de la revisión" loading="lazy"><span>Ver lo que se señaló</span>
                   </a>
                 {% endwith %}{% endif %}
@@ -33,6 +33,9 @@
                   <label class="tb-campo"><span>{{ celda.campo.etiqueta }}</span>{% include "tickets/espacio/tablero/_celda.html" with nombre=celda.nombre %}</label>
                 {% endfor %}
                 {% for celda in fila.archivos_editables %}
+                  {% if celda.es_checklist %}
+                    {% include "tickets/evidencias/_editar.html" with lista=celda.checklist elemento=fila.elemento volver=base|add:"#mision" %}
+                  {% else %}
                   <div class="tb-campo">
                     <span>{{ celda.campo.etiqueta }}</span>
                     {% if celda.archivos %}<div class="tb-archivos">{% for archivo in celda.archivos %}{% include "tickets/espacio/tablero/_archivo.html" with archivo=archivo %}{% endfor %}</div>{% endif %}
@@ -41,6 +44,7 @@
                       {% if ext or maximo %}<span class="tb-ayuda">{% if ext %}Admite {{ ext|join:", " }}{% endif %}{% if ext and maximo %} · {% endif %}{% if maximo %}hasta {{ maximo }} MB{% endif %}</span>{% endif %}
                     {% endwith %}
                   </div>
+                  {% endif %}
                 {% endfor %}
                 {% if fila.faltan %}<p class="tb-falta">Falta {{ fila.faltan|join:", "|lower }}</p>{% endif %}
               </td>

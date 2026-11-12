@@ -130,6 +130,7 @@ from apps.tickets.operaciones import (
     solicitar_informacion,
     tomar_ticket,
 )
+from apps.core.pruebas import persona
 
 Usuario = get_user_model()
 
@@ -149,7 +150,7 @@ def _otorgar_tickets_atender(usuario, *, tipo_alcance=AsignacionRol.TipoAlcance.
     permiso, _ = Permiso.objects.get_or_create(
         codigo="tickets.atender", defaults={"nombre": "Atender tickets (tomar, asignar, reasignar)"}
     )
-    rol = RolFuncional.objects.create(nombre=f"Rol atender {usuario.username}")
+    rol = RolFuncional.objects.create(nombre=f"Rol atender {usuario.email}")
     RolPermiso.objects.create(rol=rol, permiso=permiso)
     return AsignacionRol.objects.create(
         usuario=usuario, rol=rol, tipo_alcance=tipo_alcance, area=area, unidad_negocio=unidad_negocio
@@ -158,7 +159,7 @@ def _otorgar_tickets_atender(usuario, *, tipo_alcance=AsignacionRol.TipoAlcance.
 
 def _otorgar_permiso(usuario, codigo, *, nombre_rol=None):
     permiso, _ = Permiso.objects.get_or_create(codigo=codigo, defaults={"nombre": codigo})
-    rol = RolFuncional.objects.create(nombre=nombre_rol or f"Rol {codigo} {usuario.username}")
+    rol = RolFuncional.objects.create(nombre=nombre_rol or f"Rol {codigo} {usuario.email}")
     RolPermiso.objects.create(rol=rol, permiso=permiso)
     return AsignacionRol.objects.create(
         usuario=usuario, rol=rol, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL
@@ -239,7 +240,7 @@ class TicketModelosTests(TestCase):
     especializaciones/respuestas."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="asolano", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("asolano@pruebas.orbita")
         self.servicio, self.version, _ = _crear_servicio_con_formulario(self.usuario, [])
 
     def test_ticketservicio_es_unico_por_ticket(self):
@@ -267,7 +268,7 @@ class TicketModelosTests(TestCase):
 
 class CrearBorradorTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="bcortes", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("bcortes@pruebas.orbita")
         self.servicio, self.version, _ = _crear_servicio_con_formulario(
             self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Motivo"}]
         )
@@ -317,7 +318,7 @@ class CrearBorradorTests(TestCase):
 
 class CongelacionVersionTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="ccastro", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("ccastro@pruebas.orbita")
         self.servicio, self.version_1, _ = _crear_servicio_con_formulario(
             self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Motivo"}]
         )
@@ -340,7 +341,7 @@ class CongelacionVersionTests(TestCase):
 
 class PersistenciaRespuestasTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="dpaez", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("dpaez@pruebas.orbita")
         self.area = Area.objects.create(nombre="TIC", codigo="TIC-TCK")
         self.unidad = UnidadNegocio.objects.create(nombre="Infraestructura", codigo="INFRA-TCK")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
@@ -472,7 +473,7 @@ class ReglasCondicionalesEnBorradorTests(TestCase):
                 efecto=ReglaCondicional.Efecto.MOSTRAR,
             )
 
-        self.usuario = Usuario.objects.create_user(username="egomez", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("egomez@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario,
             [
@@ -522,7 +523,7 @@ class IntegridadRespuestaCampoTests(TestCase):
     dominio, no solo por convención en `operaciones.py`."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="fnino", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("fnino@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
         )
@@ -567,8 +568,8 @@ class ArchivoRespuestaCampoTests(_MediaAisladaMixin, TestCase):
     ARCHIVO, distinto de los adjuntos de comunicación (2.4)."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="gluna", password=CLAVE_PRUEBA)
-        self.otro_usuario = Usuario.objects.create_user(username="hrojas", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("gluna@pruebas.orbita")
+        self.otro_usuario = Usuario.objects.create_user("hrojas@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario,
             [
@@ -640,7 +641,7 @@ class ArchivoRespuestaCampoTests(_MediaAisladaMixin, TestCase):
         guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Soporte"].id: archivo})
         archivo_id = self._respuesta_soporte().archivo.pk
 
-        self.client.login(username="hrojas", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("hrojas@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:descargar_archivo", args=[archivo_id]))
         self.assertEqual(respuesta.status_code, 403)
 
@@ -649,15 +650,15 @@ class ArchivoRespuestaCampoTests(_MediaAisladaMixin, TestCase):
         guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Soporte"].id: archivo})
         archivo_id = self._respuesta_soporte().archivo.pk
 
-        self.client.login(username="gluna", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("gluna@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:descargar_archivo", args=[archivo_id]))
         self.assertEqual(respuesta.status_code, 200)
 
 
 class EliminarBorradorTests(_MediaAisladaMixin, TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="ivargas2", password=CLAVE_PRUEBA)
-        self.otro_usuario = Usuario.objects.create_user(username="jmora", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("ivargas2@pruebas.orbita")
+        self.otro_usuario = Usuario.objects.create_user("jmora@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario,
             [
@@ -709,8 +710,8 @@ class EliminarBorradorTests(_MediaAisladaMixin, TestCase):
 
 class AutorizacionBorradorTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="kalvarez", password=CLAVE_PRUEBA)
-        self.otro_usuario = Usuario.objects.create_user(username="lmontes", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("kalvarez@pruebas.orbita")
+        self.otro_usuario = Usuario.objects.create_user("lmontes@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
         )
@@ -738,21 +739,21 @@ class AutorizacionBorradorTests(TestCase):
 
 class VistasBorradorTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="mrivas", password=CLAVE_PRUEBA)
-        self.otro_usuario = Usuario.objects.create_user(username="npardo", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("mrivas@pruebas.orbita")
+        self.otro_usuario = Usuario.objects.create_user("npardo@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
         )
 
     def test_iniciar_borrador_crea_ticket_y_redirige(self):
-        self.client.login(username="mrivas", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("mrivas@pruebas.orbita"))
         respuesta = self.client.post(reverse("tickets:iniciar", args=[self.servicio.pk]))
         self.assertEqual(respuesta.status_code, 302)
         self.assertTrue(Ticket.objects.filter(solicitante=self.usuario).exists())
 
     def test_guardar_respuestas_via_post(self):
         ticket = crear_borrador(self.usuario, self.servicio)
-        self.client.login(username="mrivas", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("mrivas@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:borrador", args=[ticket.pk]), {f"campo_{self.campos['Texto'].id}": "Desde la vista"}
         )
@@ -762,13 +763,13 @@ class VistasBorradorTests(TestCase):
 
     def test_usuario_ajeno_recibe_403_en_borrador_de_otro(self):
         ticket = crear_borrador(self.usuario, self.servicio)
-        self.client.login(username="npardo", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("npardo@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:borrador", args=[ticket.pk]))
         self.assertEqual(respuesta.status_code, 403)
 
     def test_mis_tickets_lista_solo_los_propios(self):
         crear_borrador(self.usuario, self.servicio)
-        self.client.login(username="npardo", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("npardo@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:mis_tickets"))
         self.assertEqual(respuesta.status_code, 200)
         self.assertEqual(len(respuesta.context["tickets"]), 0)
@@ -782,8 +783,8 @@ class RadicarTicketTests(TestCase):
     """CU-014/RQF-053/054, RN-014/RN-016 — incremento 2.2."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="oquintero", password=CLAVE_PRUEBA)
-        self.otro_usuario = Usuario.objects.create_user(username="pbarrios", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("oquintero@pruebas.orbita")
+        self.otro_usuario = Usuario.objects.create_user("pbarrios@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario,
             [
@@ -895,7 +896,7 @@ class ObligatoriedadDinamicaEnRadicarTests(TestCase):
                 efecto=ReglaCondicional.Efecto.NO_REQUERIR,
             )
 
-        self.usuario = Usuario.objects.create_user(username="qsierra", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("qsierra@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario,
             [
@@ -978,7 +979,7 @@ class ObligatoriedadDinamicaEnRadicarTests(TestCase):
 
 class InmutabilidadPosteriorARadicarTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="rzapata", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("rzapata@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
         )
@@ -1018,7 +1019,7 @@ class InmutabilidadPosteriorARadicarTests(TestCase):
 
 class InvariantesDeVersionEnRadicacionTests(TestCase):
     def test_invariantes_de_version_se_preservan_tras_radicar(self):
-        usuario = Usuario.objects.create_user(username="sflores", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("sflores@pruebas.orbita")
         servicio, version, campos = _crear_servicio_con_formulario(
             usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
         )
@@ -1036,8 +1037,8 @@ class InvariantesDeVersionEnRadicacionTests(TestCase):
 
 class RadicarViewTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="tnunez", password=CLAVE_PRUEBA)
-        self.otro_usuario = Usuario.objects.create_user(username="uvelez", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("tnunez@pruebas.orbita")
+        self.otro_usuario = Usuario.objects.create_user("uvelez@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario,
             [
@@ -1048,17 +1049,17 @@ class RadicarViewTests(TestCase):
 
     def test_radicar_view_exitoso_redirige_al_detalle(self):
         ticket = crear_borrador(self.usuario, self.servicio)
-        self.client.login(username="tnunez", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("tnunez@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:radicar", args=[ticket.pk]), {f"campo_{self.campos['Texto'].id}": "Listo"}
         )
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[ticket.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:espacio", args=[ticket.pk]))
         ticket.refresh_from_db()
         self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
 
     def test_radicar_view_conserva_lo_guardado_si_falla_la_validacion(self):
         ticket = crear_borrador(self.usuario, self.servicio)
-        self.client.login(username="tnunez", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("tnunez@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:radicar", args=[ticket.pk]),
             {f"campo_{self.campos['Opcional'].id}": "No se pierde"},
@@ -1073,7 +1074,7 @@ class RadicarViewTests(TestCase):
 
     def test_actor_ajeno_recibe_403_al_radicar(self):
         ticket = crear_borrador(self.usuario, self.servicio)
-        self.client.login(username="uvelez", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("uvelez@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:radicar", args=[ticket.pk]), {f"campo_{self.campos['Texto'].id}": "x"}
         )
@@ -1082,8 +1083,8 @@ class RadicarViewTests(TestCase):
 
 class DetalleViewTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="vcorrea", password=CLAVE_PRUEBA)
-        self.otro_usuario = Usuario.objects.create_user(username="wgomez", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("vcorrea@pruebas.orbita")
+        self.otro_usuario = Usuario.objects.create_user("wgomez@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
         )
@@ -1092,24 +1093,24 @@ class DetalleViewTests(TestCase):
         radicar_ticket(self.ticket, self.usuario)
 
     def test_propietario_ve_el_detalle(self):
-        self.client.login(username="vcorrea", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.client.force_login(persona("vcorrea@pruebas.orbita"))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen")
         self.assertEqual(respuesta.status_code, 200)
 
     def test_usuario_ajeno_recibe_403_en_detalle(self):
-        self.client.login(username="wgomez", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.client.force_login(persona("wgomez@pruebas.orbita"))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen")
         self.assertEqual(respuesta.status_code, 403)
 
     def test_detalle_de_un_borrador_redirige_al_formulario_editable(self):
         borrador = crear_borrador(self.usuario, self.servicio)
-        self.client.login(username="vcorrea", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[borrador.pk]))
+        self.client.force_login(persona("vcorrea@pruebas.orbita"))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[borrador.pk]) + "?vista=resumen")
         self.assertRedirects(respuesta, reverse("tickets:borrador", args=[borrador.pk]))
 
     def test_mis_tickets_incluye_borradores_y_radicados(self):
         crear_borrador(self.usuario, self.servicio)
-        self.client.login(username="vcorrea", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("vcorrea@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:mis_tickets"))
         estados = {t.estado for t in respuesta.context["tickets"]}
         self.assertEqual(estados, {Ticket.Estado.BORRADOR, Ticket.Estado.RADICADO})
@@ -1124,7 +1125,7 @@ class EstadosTests(TestCase):
     """`apps/tickets/estados.py` — RN-018, única transición real de 2.3."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="xrivera", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("xrivera@pruebas.orbita")
         self.servicio, _, self.campos = _crear_servicio_con_formulario(
             self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
         )
@@ -1164,7 +1165,7 @@ class ContextoAtencionSnapshotTests(TestCase):
     cuando el servicio es transversal."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="ysalazar", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("ysalazar@pruebas.orbita")
         self.servicio, _, self.campos = _crear_servicio_con_formulario(
             self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
         )
@@ -1234,12 +1235,12 @@ class _EscenarioAtencionMixin:
     Ticket ya RADICADO con ese contexto congelado."""
 
     def _preparar_escenario(self):
-        self.solicitante = Usuario.objects.create_user(username="solicitante23", password=CLAVE_PRUEBA)
-        self.responsable_directo = Usuario.objects.create_user(username="responsable23", password=CLAVE_PRUEBA)
-        self.miembro_equipo = Usuario.objects.create_user(username="miembro23", password=CLAVE_PRUEBA)
-        self.gestor_area = Usuario.objects.create_user(username="gestorarea23", password=CLAVE_PRUEBA)
-        self.gestor_otra_area = Usuario.objects.create_user(username="gestorotra23", password=CLAVE_PRUEBA)
-        self.ajeno = Usuario.objects.create_user(username="ajeno23", password=CLAVE_PRUEBA)
+        self.solicitante = Usuario.objects.create_user("solicitante23@pruebas.orbita")
+        self.responsable_directo = Usuario.objects.create_user("responsable23@pruebas.orbita")
+        self.miembro_equipo = Usuario.objects.create_user("miembro23@pruebas.orbita")
+        self.gestor_area = Usuario.objects.create_user("gestorarea23@pruebas.orbita")
+        self.gestor_otra_area = Usuario.objects.create_user("gestorotra23@pruebas.orbita")
+        self.ajeno = Usuario.objects.create_user("ajeno23@pruebas.orbita")
 
         self.equipo = Equipo.objects.create(nombre="Mesa de ayuda 2.3")
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.miembro_equipo, activo=True)
@@ -1311,7 +1312,7 @@ class AutorizacionAtencionTests(_EscenarioAtencionMixin, TestCase):
         self.assertFalse(puede_ver_en_cola(self.gestor_otra_area, self.ticket))
 
     def test_miembro_de_equipo_sin_permiso_atender_no_ve_ni_asigna(self):
-        otro_miembro = Usuario.objects.create_user(username="miembrosinpermiso", password=CLAVE_PRUEBA)
+        otro_miembro = Usuario.objects.create_user("miembrosinpermiso@pruebas.orbita")
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=otro_miembro, activo=True)
         self.assertFalse(puede_ver_en_cola(otro_miembro, self.ticket))
         self.assertFalse(puede_asignar(otro_miembro, self.ticket))
@@ -1422,6 +1423,27 @@ class ReasignarTicketTests(_EscenarioAtencionMixin, TestCase):
         with self.assertRaises(PermissionDenied):
             reasignar_ticket(self.ticket, self.ajeno, usuario=self.miembro_equipo)
 
+    def test_solo_se_reasigna_a_alguien_del_equipo_de_trabajo(self):
+        from apps.tickets.operaciones import candidatos_reasignacion
+
+        candidatos = set(candidatos_reasignacion(self.ticket).values_list("email", flat=True))
+        self.assertIn(self.miembro_equipo.email, candidatos)  # miembro del equipo responsable del servicio
+        self.assertIn(self.responsable_directo.email, candidatos)  # responsable configurado del servicio
+        self.assertNotIn(self.ajeno.email, candidatos)
+        with self.assertRaisesMessage(ValidationError, "equipo de trabajo"):
+            reasignar_ticket(self.ticket, self.gestor_area, usuario=self.ajeno)
+        self.ticket.refresh_from_db()
+        self.assertEqual(self.ticket.usuario_responsable_id, self.responsable_directo.id)
+
+    def test_el_menu_mas_del_espacio_ofrece_reasignar_solo_al_equipo(self):
+        from apps.tickets.espacio import acciones_generales, relacion
+
+        generales = acciones_generales(self.responsable_directo, self.ticket, relacion(self.responsable_directo, self.ticket))
+        nombres = {p["pk"] for p in generales["reasignar_a"]}
+        self.assertIn(self.miembro_equipo.pk, nombres)
+        self.assertNotIn(self.ajeno.pk, nombres)
+        self.assertNotIn(self.responsable_directo.pk, nombres)  # quien ya lo tiene no se ofrece
+
     def test_no_se_puede_reasignar_un_ticket_sin_tomar(self):
         otro_ticket = crear_borrador(self.solicitante, self.servicio)
         _completar_texto(otro_ticket, self.solicitante, self.campos)
@@ -1520,10 +1542,13 @@ class ConcurrenciaReasignarTicketTests(_EscenarioAtencionMixin, TransactionTestC
         self._preparar_escenario()
         tomar_ticket(self.ticket, self.responsable_directo)
         self.ticket.refresh_from_db()
-        self.candidato_a = Usuario.objects.create_user(username="candidatoa23", password=CLAVE_PRUEBA)
-        self.candidato_b = Usuario.objects.create_user(username="candidatob23", password=CLAVE_PRUEBA)
+        self.candidato_a = Usuario.objects.create_user("candidatoa23@pruebas.orbita")
+        self.candidato_b = Usuario.objects.create_user("candidatob23@pruebas.orbita")
         _otorgar_tickets_atender(self.candidato_a)
         _otorgar_tickets_atender(self.candidato_b)
+        # Solo se reasigna dentro del equipo de trabajo del ticket.
+        for candidato in (self.candidato_a, self.candidato_b):
+            MiembroEquipo.objects.create(equipo=self.equipo, usuario=candidato, activo=True)
 
     def test_reasignaciones_concurrentes_no_pierden_actualizaciones(self):
         barrera = threading.Barrier(2)
@@ -1566,14 +1591,14 @@ class ColaAtencionViewTests(_EscenarioAtencionMixin, TestCase):
         self._preparar_escenario()
 
     def test_responsable_configurado_ve_el_ticket_en_su_cola(self):
-        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable23@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:cola"))
         self.assertIn(self.ticket, respuesta.context["tickets"])
 
     def test_gestor_de_area_no_lo_ve_en_la_cola_pero_conserva_la_supervision(self):
         # La Cola es SOLO lo que se PUEDE tomar; la supervisión por alcance no se lista en ella, pero sus
         # capacidades (ver el ticket por alcance, `puede_ver_en_cola`, y su resumen) no cambian.
-        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("gestorarea23@pruebas.orbita"))
         for parametros in ({}, {"ver": "supervision"}):
             cola = self.client.get(reverse("tickets:cola"), parametros)
             self.assertNotIn(self.ticket, cola.context["tickets"])
@@ -1582,13 +1607,13 @@ class ColaAtencionViewTests(_EscenarioAtencionMixin, TestCase):
         self.assertEqual(self.client.get(reverse("tickets:resumen", args=[self.ticket.pk])).status_code, 200)
 
     def test_usuario_sin_autorizacion_no_ve_el_ticket(self):
-        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ajeno23@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:cola"))
         self.assertNotIn(self.ticket, respuesta.context["tickets"])
 
     def test_solicitante_no_ve_su_propio_ticket_solo_por_ser_solicitante(self):
         # Separación explícita: "Mis tickets" no se mezcla con la cola.
-        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solicitante23@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:cola"))
         self.assertNotIn(self.ticket, respuesta.context["tickets"])
 
@@ -1598,45 +1623,45 @@ class DetalleViewAtencionTests(_EscenarioAtencionMixin, TestCase):
         self._preparar_escenario()
 
     def test_gestor_de_area_puede_ver_el_detalle_de_un_ticket_ajeno(self):
-        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.client.force_login(persona("gestorarea23@pruebas.orbita"))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen")
         self.assertEqual(respuesta.status_code, 200)
         self.assertTrue(respuesta.context["puede_asignar"])
 
     def test_usuario_sin_autorizacion_recibe_403(self):
-        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.client.force_login(persona("ajeno23@pruebas.orbita"))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen")
         self.assertEqual(respuesta.status_code, 403)
 
     def test_tomar_view_exitoso_redirige_al_detalle_y_transiciona(self):
-        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable23@pruebas.orbita"))
         respuesta = self.client.post(reverse("tickets:tomar", args=[self.ticket.pk]))
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]))
         self.ticket.refresh_from_db()
         self.assertEqual(self.ticket.estado, Ticket.Estado.EN_ATENCION)
 
     def test_tomar_view_rechaza_get(self):
-        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable23@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:tomar", args=[self.ticket.pk]))
         self.assertEqual(respuesta.status_code, 405)
 
     def test_asignar_view_exitoso(self):
-        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("gestorarea23@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:asignar", args=[self.ticket.pk]), {"usuario_id": self.responsable_directo.id}
         )
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]))
         self.ticket.refresh_from_db()
         self.assertEqual(self.ticket.usuario_responsable_id, self.responsable_directo.id)
 
     def test_reasignar_view_exitoso(self):
         tomar_ticket(self.ticket, self.responsable_directo)
         self.ticket.refresh_from_db()
-        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("gestorarea23@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:reasignar", args=[self.ticket.pk]), {"usuario_id": self.miembro_equipo.id}
         )
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]))
         self.ticket.refresh_from_db()
         self.assertEqual(self.ticket.usuario_responsable_id, self.miembro_equipo.id)
 
@@ -1644,7 +1669,7 @@ class DetalleViewAtencionTests(_EscenarioAtencionMixin, TestCase):
         # El `ajeno` tampoco puede VER el detalle (403), así que solo se
         # verifica el redirect sin seguirlo (`assertRedirects` exigiría
         # 200 en el destino) y que el ticket quedó intacto.
-        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ajeno23@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:asignar", args=[self.ticket.pk]), {"usuario_id": self.responsable_directo.id}
         )
@@ -1816,7 +1841,7 @@ class AdjuntoModeloTests(TestCase):
     (4 ramas conocidas: TICKET/COMENTARIO/SOLICITUD/RESPUESTA_SOLICITUD)."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="autoradj24", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("autoradj24@pruebas.orbita")
         self.servicio, _, _ = _crear_servicio_con_formulario(self.usuario, [])
         self.ticket = crear_borrador(self.usuario, self.servicio)
 
@@ -2020,17 +2045,17 @@ class DescargarAdjuntoViewTests(_MediaAisladaMixin, _EscenarioAtencionMixin, Tes
         self.adjunto = adjuntar_archivo_ticket(self.ticket, self.solicitante, archivo)
 
     def test_solicitante_puede_descargar(self):
-        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solicitante23@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:descargar_adjunto", args=[self.adjunto.pk]))
         self.assertEqual(respuesta.status_code, 200)
 
     def test_gestor_con_alcance_puede_descargar(self):
-        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("gestorarea23@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:descargar_adjunto", args=[self.adjunto.pk]))
         self.assertEqual(respuesta.status_code, 200)
 
     def test_ajeno_no_puede_descargar(self):
-        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ajeno23@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:descargar_adjunto", args=[self.adjunto.pk]))
         self.assertEqual(respuesta.status_code, 403)
 
@@ -2047,9 +2072,9 @@ class DescargaArchivoRespuestaRegresionTests(_MediaAisladaMixin, TestCase):
     también puede — mismo criterio que ya aplicaba al detalle desde 2.3."""
 
     def setUp(self):
-        self.solicitante = Usuario.objects.create_user(username="solicitante24da", password=CLAVE_PRUEBA)
-        self.gestor = Usuario.objects.create_user(username="gestor24da", password=CLAVE_PRUEBA)
-        self.ajeno = Usuario.objects.create_user(username="ajeno24da", password=CLAVE_PRUEBA)
+        self.solicitante = Usuario.objects.create_user("solicitante24da@pruebas.orbita")
+        self.gestor = Usuario.objects.create_user("gestor24da@pruebas.orbita")
+        self.ajeno = Usuario.objects.create_user("ajeno24da@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.solicitante, [{"tipo": Campo.TipoCampo.ARCHIVO, "etiqueta": "Soporte"}]
         )
@@ -2064,17 +2089,17 @@ class DescargaArchivoRespuestaRegresionTests(_MediaAisladaMixin, TestCase):
         ).archivo.pk
 
     def test_solicitante_sigue_pudiendo_descargar(self):
-        self.client.login(username="solicitante24da", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solicitante24da@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:descargar_archivo", args=[self.archivo_id]))
         self.assertEqual(respuesta.status_code, 200)
 
     def test_gestor_autorizado_a_consultar_ahora_tambien_puede_descargar(self):
-        self.client.login(username="gestor24da", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("gestor24da@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:descargar_archivo", args=[self.archivo_id]))
         self.assertEqual(respuesta.status_code, 200)
 
     def test_ajeno_sigue_sin_poder_descargar(self):
-        self.client.login(username="ajeno24da", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ajeno24da@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:descargar_archivo", args=[self.archivo_id]))
         self.assertEqual(respuesta.status_code, 403)
 
@@ -2091,49 +2116,35 @@ class ComunicacionViewsTests(_EscenarioAtencionMixin, TestCase):
         tomar_ticket(self.ticket, self.responsable_directo)
         self.ticket.refresh_from_db()
 
-    def test_comentar_view_exitoso(self):
-        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
-        respuesta = self.client.post(
-            reverse("tickets:comentar", args=[self.ticket.pk]), {"contenido": "Ya lo reviso."}
-        )
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
-        self.assertEqual(self.ticket.comentarios.count(), 1)
+    def test_la_vista_completa_ya_no_comenta(self):
+        # La conversación del ticket vive solo en el chat en tiempo real (`tests_conversacion`).
+        from django.urls import NoReverseMatch
 
-    def test_comentar_view_rechaza_get(self):
-        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:comentar", args=[self.ticket.pk]))
-        self.assertEqual(respuesta.status_code, 405)
-
-    def test_comentar_view_sin_autorizacion_no_crea_comentario(self):
-        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
-        respuesta = self.client.post(
-            reverse("tickets:comentar", args=[self.ticket.pk]), {"contenido": "No autorizado."}
-        )
-        self.assertEqual(respuesta.status_code, 302)
-        self.assertEqual(self.ticket.comentarios.count(), 0)
+        with self.assertRaises(NoReverseMatch):
+            reverse("tickets:comentar", args=[self.ticket.pk])
 
     def test_solicitar_informacion_view_exitoso(self):
-        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable23@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:solicitar_informacion", args=[self.ticket.pk]), {"mensaje": "¿Confirmas?"}
         )
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]))
         self.assertEqual(self.ticket.solicitudes_informacion.count(), 1)
 
     def test_responder_solicitud_view_exitoso(self):
         solicitud = solicitar_informacion(self.ticket, self.responsable_directo, "¿Confirmas?")
-        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solicitante23@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:responder_solicitud", args=[self.ticket.pk, solicitud.pk]),
             {"contenido": "Confirmado."},
         )
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]))
         solicitud.refresh_from_db()
         self.assertEqual(solicitud.estado, SolicitudInformacion.Estado.RESPONDIDA)
 
     def test_responder_solicitud_view_no_destinatario_no_responde(self):
         solicitud = solicitar_informacion(self.ticket, self.responsable_directo, "¿Confirmas?")
-        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable23@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:responder_solicitud", args=[self.ticket.pk, solicitud.pk]),
             {"contenido": "Intento no autorizado."},
@@ -2143,9 +2154,10 @@ class ComunicacionViewsTests(_EscenarioAtencionMixin, TestCase):
         self.assertEqual(solicitud.estado, SolicitudInformacion.Estado.PENDIENTE)
 
     def test_detalle_view_expone_contexto_de_comunicacion(self):
-        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
-        self.assertIn("comentarios", respuesta.context)
+        self.client.force_login(persona("solicitante23@pruebas.orbita"))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen")
+        # Los comentarios del detalle se retiraron: la conversación vive en el panel del espacio del ticket.
+        self.assertNotIn("comentarios", respuesta.context)
         self.assertIn("solicitudes", respuesta.context)
         self.assertTrue(respuesta.context["puede_comentar"])
         self.assertFalse(respuesta.context["puede_solicitar_informacion"])
@@ -2802,21 +2814,21 @@ class FinalizacionViewsTests(_EscenarioAtencionMixin, TestCase):
         self.ticket.refresh_from_db()
 
     def test_resolver_view_exitoso(self):
-        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable23@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:resolver", args=[self.ticket.pk]), {"descripcion": "Resuelto vía vista."}
         )
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]))
         self.ticket.refresh_from_db()
         self.assertEqual(self.ticket.estado, Ticket.Estado.RESUELTO)
 
     def test_resolver_view_rechaza_get(self):
-        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable23@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:resolver", args=[self.ticket.pk]))
         self.assertEqual(respuesta.status_code, 405)
 
     def test_resolver_view_sin_autorizacion_no_cambia_estado(self):
-        self.client.login(username="gestorarea23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("gestorarea23@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:resolver", args=[self.ticket.pk]), {"descripcion": "Intento no autorizado."}
         )
@@ -2827,35 +2839,35 @@ class FinalizacionViewsTests(_EscenarioAtencionMixin, TestCase):
     def test_cerrar_view_exitoso(self):
         resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
         self.ticket.refresh_from_db()
-        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solicitante23@pruebas.orbita"))
         respuesta = self.client.post(reverse("tickets:cerrar", args=[self.ticket.pk]))
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]))
         self.ticket.refresh_from_db()
         self.assertEqual(self.ticket.estado, Ticket.Estado.CERRADO)
 
     def test_cancelar_view_exitoso(self):
-        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solicitante23@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:cancelar", args=[self.ticket.pk]), {"motivo": "Ya no se necesita."}
         )
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]))
         self.ticket.refresh_from_db()
         self.assertEqual(self.ticket.estado, Ticket.Estado.CANCELADO)
 
     def test_reabrir_view_exitoso(self):
         resolver_ticket(self.ticket, self.responsable_directo, "Resuelto.")
         self.ticket.refresh_from_db()
-        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable23@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("tickets:reabrir", args=[self.ticket.pk]), {"motivo": "Faltó un detalle."}
         )
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]))
         self.ticket.refresh_from_db()
         self.assertEqual(self.ticket.estado, Ticket.Estado.EN_ATENCION)
 
     def test_detalle_view_expone_contexto_de_finalizacion(self):
-        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.client.force_login(persona("responsable23@pruebas.orbita"))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen")
         self.assertTrue(respuesta.context["puede_resolver"])
         self.assertFalse(respuesta.context["puede_cerrar"])
         self.assertIn("resolucion_actual", respuesta.context)
@@ -2869,8 +2881,8 @@ class FinalizacionViewsTests(_EscenarioAtencionMixin, TestCase):
         resolver_ticket(self.ticket, self.responsable_directo, "Segunda resolución.")
         self.ticket.refresh_from_db()
 
-        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        self.client.force_login(persona("solicitante23@pruebas.orbita"))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen")
         self.assertEqual(respuesta.context["resolucion_actual"].descripcion, "Segunda resolución.")
         anteriores = respuesta.context["resoluciones_anteriores"]
         self.assertEqual(len(anteriores), 1)
@@ -2964,7 +2976,7 @@ class RadicacionProcesoTests(TestCase):
         from apps.workflows.models import ConfiguracionEtapaTarea, Etapa, TransicionEtapa, Workflow, WorkflowVersion
         from apps.workflows.versionamiento import activar_version as activar_workflow
 
-        self.usuario = Usuario.objects.create_user("proceso41")
+        self.usuario = Usuario.objects.create_user("proceso41@pruebas.orbita")
         self.servicio, self.formulario_version, _ = _crear_servicio_con_formulario(self.usuario, [])
         self.workflow = Workflow.objects.create(nombre="Ejecución compartida")
         self.version = WorkflowVersion.objects.create(workflow=self.workflow, numero=1)
@@ -3078,7 +3090,7 @@ class RadicacionProcesoTests(TestCase):
         from apps.workflows.models import InstanciaWorkflow
 
         ticket = crear_borrador(self.usuario, self.servicio)
-        otro = Usuario.objects.create_user("ajeno41")
+        otro = Usuario.objects.create_user("ajeno41@pruebas.orbita")
         with self.assertRaises(PermissionDenied):
             radicar_ticket(ticket, otro)
         self.assertFalse(InstanciaWorkflow.objects.exists())
@@ -3166,11 +3178,11 @@ class _EscenarioEntregablesMixin:
     def _preparar_entregables(self):
         from apps.catalogo.models import DefinicionEntregable
 
-        self.solicitante42 = Usuario.objects.create_user("solicitante42")
-        self.responsable42 = Usuario.objects.create_user("responsable42")
-        self.nuevo42 = Usuario.objects.create_user("nuevo42")
-        self.miembro42 = Usuario.objects.create_user("miembro42")
-        self.ajeno42 = Usuario.objects.create_user("ajeno42")
+        self.solicitante42 = Usuario.objects.create_user("solicitante42@pruebas.orbita")
+        self.responsable42 = Usuario.objects.create_user("responsable42@pruebas.orbita")
+        self.nuevo42 = Usuario.objects.create_user("nuevo42@pruebas.orbita")
+        self.miembro42 = Usuario.objects.create_user("miembro42@pruebas.orbita")
+        self.ajeno42 = Usuario.objects.create_user("ajeno42@pruebas.orbita")
         self.equipo42 = Equipo.objects.create(nombre="Equipo entregables")
         for usuario in (self.responsable42, self.nuevo42, self.miembro42):
             MiembroEquipo.objects.create(equipo=self.equipo42, usuario=usuario)
@@ -3708,10 +3720,10 @@ class _EscenarioEntregaFormalMixin:
     def _preparar_entrega_formal(self, politica=PERIODO, dias=3):
         from apps.catalogo.models import DefinicionEntregable
 
-        self.solicitante45 = Usuario.objects.create_user("solicitante45", password=CLAVE_PRUEBA)
-        self.responsable45 = Usuario.objects.create_user("responsable45", password=CLAVE_PRUEBA)
-        self.companero45 = Usuario.objects.create_user("companero45", password=CLAVE_PRUEBA)
-        self.ajeno45 = Usuario.objects.create_user("ajeno45", password=CLAVE_PRUEBA)
+        self.solicitante45 = Usuario.objects.create_user("solicitante45@pruebas.orbita")
+        self.responsable45 = Usuario.objects.create_user("responsable45@pruebas.orbita")
+        self.companero45 = Usuario.objects.create_user("companero45@pruebas.orbita")
+        self.ajeno45 = Usuario.objects.create_user("ajeno45@pruebas.orbita")
         self.equipo45 = Equipo.objects.create(nombre="Equipo 4.5")
         for usuario in (self.responsable45, self.companero45):
             MiembroEquipo.objects.create(equipo=self.equipo45, usuario=usuario)
@@ -4147,7 +4159,7 @@ class CierreAutomaticoEntregaTests(_EscenarioEntregaFormalMixin, TestCase):
         self._vencer(self.entrega)
         cerrar_entrega_vencida(self.entrega)
         self.client.force_login(self.solicitante45)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket45.pk]))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[self.ticket45.pk]) + "?vista=resumen")
         self.assertContains(respuesta, "Sistema")
         self.assertContains(respuesta, "plazo vencido sin respuesta")
 
@@ -4158,7 +4170,7 @@ class EntregaVistasTests(_MediaAisladaMixin, _EscenarioEntregaFormalMixin, TestC
 
     def _detalle(self, usuario):
         self.client.force_login(usuario)
-        return self.client.get(reverse("tickets:detalle", args=[self.ticket45.pk]))
+        return self.client.get(reverse("tickets:espacio", args=[self.ticket45.pk]) + "?vista=resumen")
 
     def test_el_responsable_ve_entregables_y_los_pendientes_bloquean_la_entrega(self):
         respuesta = self._detalle(self.responsable45)
@@ -4225,7 +4237,7 @@ class EntregaVistasTests(_MediaAisladaMixin, _EscenarioEntregaFormalMixin, TestC
         self.assertEqual(self._ticket().estado, Ticket.Estado.RESUELTO)
         self.client.post(reverse("tickets:observar_entrega", args=[self.ticket45.pk]), {"observaciones": "Ajustar color."})
         self.assertEqual(self._ticket().estado, Ticket.Estado.EN_ATENCION)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket45.pk]))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[self.ticket45.pk]) + "?vista=resumen")
         self.assertContains(respuesta, "Ajustar color.")
         self.assertContains(respuesta, "Entrega 1")
 
@@ -4242,7 +4254,7 @@ class EntregaVistasTests(_MediaAisladaMixin, _EscenarioEntregaFormalMixin, TestC
         radicar_ticket(ticket, self.solicitante45)
         ticket = tomar_ticket(ticket, self.responsable45)
         self.client.force_login(self.responsable45)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[ticket.pk]) + "?vista=resumen")
         self.assertNotContains(respuesta, "Entrega al solicitante")
         self.assertContains(respuesta, "Resolver")  # flujo anterior intacto
 
@@ -4356,13 +4368,13 @@ class _EscenarioSolicitudMixin:
     `_especificacion_solicitud` y un borrador listo."""
 
     def _preparar(self, especificacion=None, reglas_builder=None):
-        self.usuario = Usuario.objects.create_user(username="sol_ana", password=CLAVE_PRUEBA)
-        self.ajeno = Usuario.objects.create_user(username="sol_ajeno", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("sol_ana@pruebas.orbita")
+        self.ajeno = Usuario.objects.create_user("sol_ajeno@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario, especificacion or _especificacion_solicitud(), reglas_builder
         )
         self.ticket = crear_borrador(self.usuario, self.servicio)
-        self.client.login(username="sol_ana", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("sol_ana@pruebas.orbita"))
 
     def _nombre(self, etiqueta):
         return f"campo_{self.campos[etiqueta].id}"
@@ -4381,11 +4393,11 @@ class SolicitudEntradaTests(TestCase):
     pregunta Servicio/Proceso, y sin dejar basura al navegar."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="ent_ana", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("ent_ana@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto"}]
         )
-        self.client.login(username="ent_ana", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ent_ana@pruebas.orbita"))
 
     def _entrar(self, servicio=None):
         return self.client.get(reverse("tickets:solicitar", args=[(servicio or self.servicio).pk]))
@@ -4418,7 +4430,7 @@ class SolicitudEntradaTests(TestCase):
         self.assertEqual(Ticket.objects.filter(solicitante=self.usuario).count(), 2)
 
     def test_el_borrador_de_otro_usuario_no_se_reutiliza(self):
-        otro = Usuario.objects.create_user(username="ent_otro", password=CLAVE_PRUEBA)
+        otro = Usuario.objects.create_user("ent_otro@pruebas.orbita")
         crear_borrador(otro, self.servicio)
         self._entrar()
         self.assertEqual(Ticket.objects.filter(solicitante=self.usuario).count(), 1)
@@ -4568,13 +4580,13 @@ class SolicitudEspacioDeTrabajoTests(_EscenarioSolicitudMixin, TestCase):
 
     def test_solo_el_propietario_ve_su_borrador(self):
         self.client.logout()
-        self.client.login(username="sol_ajeno", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("sol_ajeno@pruebas.orbita"))
         self.assertEqual(self._abrir().status_code, 403)
 
     def test_un_ticket_ya_radicado_no_vuelve_al_workspace(self):
         guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Asunto"].id: "x"})
         radicar_ticket(self.ticket, self.usuario)
-        self.assertRedirects(self._abrir(), self._url("detalle"))
+        self.assertRedirects(self._abrir(), self._url("espacio"))
 
     def test_servicio_desactivado_se_avisa_en_el_borrador(self):
         self.servicio.activo = False
@@ -4647,7 +4659,7 @@ class SolicitudCamposCondicionalesTests(_EscenarioSolicitudMixin, TestCase):
     def test_el_endpoint_solo_acepta_post_del_propietario_sobre_un_borrador(self):
         self.assertEqual(self.client.get(self._url("solicitud_estado")).status_code, 405)
         self.client.logout()
-        self.client.login(username="sol_ajeno", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("sol_ajeno@pruebas.orbita"))
         self.assertEqual(self._estado().status_code, 403)
         self.client.logout()
         self.assertEqual(self._estado().status_code, 302)  # a login
@@ -4758,7 +4770,7 @@ class SolicitudGuardadoYErroresTests(_MediaAisladaMixin, _EscenarioSolicitudMixi
 
     def test_revisar_es_solo_del_propietario(self):
         self.client.logout()
-        self.client.login(username="sol_ajeno", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("sol_ajeno@pruebas.orbita"))
         self.assertEqual(self.client.get(self._url("revisar")).status_code, 403)
         self.assertEqual(self.client.post(self._url("revisar"), {}).status_code, 403)
 
@@ -4882,7 +4894,7 @@ class SolicitudEnvioTests(_EscenarioSolicitudMixin, TestCase):
     def test_un_ajeno_no_puede_enviar_ni_ver_la_confirmacion(self):
         self.client.post(self._url("enviar"))
         self.client.logout()
-        self.client.login(username="sol_ajeno", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("sol_ajeno@pruebas.orbita"))
         self.assertEqual(self.client.post(self._url("enviar")).status_code, 403)
         self.assertEqual(self.client.get(self._url("enviada")).status_code, 403)
 
@@ -4891,7 +4903,7 @@ class SolicitudEnvioTests(_EscenarioSolicitudMixin, TestCase):
 
     def test_el_endpoint_directo_de_radicar_conserva_su_contrato(self):
         respuesta = self.client.post(self._url("radicar"), {self._nombre("Asunto"): "Por el camino directo"})
-        self.assertRedirects(respuesta, self._url("detalle"))
+        self.assertRedirects(respuesta, self._url("espacio"))
         self.assertEqual(Ticket.objects.get(pk=self.ticket.pk).estado, Ticket.Estado.RADICADO)
 
     def test_el_detalle_de_un_borrador_sigue_llevando_al_formulario(self):
@@ -4899,7 +4911,7 @@ class SolicitudEnvioTests(_EscenarioSolicitudMixin, TestCase):
 
     def test_un_ticket_ya_solicitado_no_vuelve_a_editarse_como_borrador(self):
         self.client.post(self._url("enviar"))
-        self.assertRedirects(self.client.get(self._url("borrador")), self._url("detalle"))
+        self.assertRedirects(self.client.get(self._url("borrador")), self._url("espacio"))
         self.assertRedirects(self.client.get(self._url("revisar")), self._url("enviada"))
 
 
@@ -4915,8 +4927,8 @@ class SolicitudEnvioPlantillaFasesTests(TestCase):
         from apps.workflows import fases as fases_ops
         from apps.workflows.versionamiento import activar_version as activar_workflow
 
-        self.usuario = Usuario.objects.create_user(username="sol_fases", password=CLAVE_PRUEBA)
-        self.admin = Usuario.objects.create_user(username="admin_fases", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("sol_fases@pruebas.orbita")
+        self.admin = Usuario.objects.create_user("admin_fases@pruebas.orbita")
         _otorgar_permiso(self.admin, "catalogo.administrar")
         self.servicio, self.formulario_version, self.campos = _crear_servicio_con_formulario(
             self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Asunto", "obligatorio": True}]
@@ -4955,7 +4967,7 @@ class SolicitudEnvioPlantillaFasesTests(TestCase):
         activar_configuracion_ejecucion(self.servicio, self.configuracion, self.admin)
         self.ticket = crear_borrador(self.usuario, self.servicio)
         guardar_respuestas_borrador(self.ticket, self.usuario, {self.campos["Asunto"].id: "Diseño de piezas"})
-        self.client.login(username="sol_fases", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("sol_fases@pruebas.orbita"))
 
     def _url(self, nombre):
         return reverse(f"tickets:{nombre}", args=[self.ticket.pk])
@@ -5012,7 +5024,7 @@ class SolicitudControlesTests(_EscenarioSolicitudMixin, TestCase):
         self.area_zeta = Area.objects.create(nombre="Zeta", codigo="SOL-ZETA")
         self.area_alfa = Area.objects.create(nombre="Alfa", codigo="SOL-ALFA")
         self.area_inactiva = Area.objects.create(nombre="Inactiva", codigo="SOL-INACTIVA", activo=False)
-        self.inactivo = Usuario.objects.create_user(username="zz_inactivo", password=CLAVE_PRUEBA, is_active=False)
+        self.inactivo = Usuario.objects.create_user("zz_inactivo@pruebas.orbita", is_active=False)
         self._preparar(
             [
                 {"tipo": T.NUMERO, "etiqueta": "Monto", "obligatorio": True, "orden": 1,
@@ -5260,7 +5272,7 @@ class CompromisoTemporalTicketTests(TestCase):
     protección, para Servicio y Proceso."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user("tiempo41", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("tiempo41@pruebas.orbita")
         self.servicio, self.version, self.campos = _crear_servicio_con_formulario(
             self.usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Texto", "obligatorio": True}]
         )
@@ -5442,13 +5454,13 @@ class _EscenarioProrrogaMixin:
     solicitante y un ajeno."""
 
     def _preparar_prorroga(self, politica="SIN_APROBACION", aprobador="usuario", tiempo=True):
-        self.solicitante_p = Usuario.objects.create_user("solicitante_p", password=CLAVE_PRUEBA)
-        self.responsable_p = Usuario.objects.create_user("responsable_p", password=CLAVE_PRUEBA)
-        self.companero_p = Usuario.objects.create_user("companero_p", password=CLAVE_PRUEBA)
-        self.gestor_p = Usuario.objects.create_user("gestor_p", password=CLAVE_PRUEBA)
-        self.ajeno_p = Usuario.objects.create_user("ajeno_p", password=CLAVE_PRUEBA)
-        self.aprobador_p = Usuario.objects.create_user("aprobador_p", password=CLAVE_PRUEBA)
-        self.miembro_aprobador_p = Usuario.objects.create_user("miembro_aprobador_p", password=CLAVE_PRUEBA)
+        self.solicitante_p = Usuario.objects.create_user("solicitante_p@pruebas.orbita")
+        self.responsable_p = Usuario.objects.create_user("responsable_p@pruebas.orbita")
+        self.companero_p = Usuario.objects.create_user("companero_p@pruebas.orbita")
+        self.gestor_p = Usuario.objects.create_user("gestor_p@pruebas.orbita")
+        self.ajeno_p = Usuario.objects.create_user("ajeno_p@pruebas.orbita")
+        self.aprobador_p = Usuario.objects.create_user("aprobador_p@pruebas.orbita")
+        self.miembro_aprobador_p = Usuario.objects.create_user("miembro_aprobador_p@pruebas.orbita")
         self.equipo_p = Equipo.objects.create(nombre="Equipo prórroga")
         self.equipo_aprobador_p = Equipo.objects.create(nombre="Equipo aprobador prórroga")
         MiembroEquipo.objects.create(equipo=self.equipo_aprobador_p, usuario=self.miembro_aprobador_p)
@@ -5587,7 +5599,7 @@ class SolicitarProrrogaTests(_EscenarioProrrogaMixin, TestCase):
         from apps.tickets import prorrogas
 
         for usuario in (self.solicitante_p, self.ajeno_p, self.gestor_p):
-            with self.subTest(usuario=usuario.username), self.assertRaises(PermissionDenied):
+            with self.subTest(usuario=usuario.email), self.assertRaises(PermissionDenied):
                 prorrogas.solicitar_prorroga(
                     self._ticket(), usuario, nueva_fecha=self._nueva_fecha(), motivo="Quiero más tiempo"
                 )
@@ -5758,7 +5770,7 @@ class ProrrogaConAprobacionTests(_EscenarioProrrogaMixin, TestCase):
 
         prorroga = self._solicitar()
         for usuario in (self.responsable_p, self.solicitante_p, self.ajeno_p, self.gestor_p):
-            with self.subTest(usuario=usuario.username), self.assertRaises(PermissionDenied):
+            with self.subTest(usuario=usuario.email), self.assertRaises(PermissionDenied):
                 prorrogas.resolver_prorroga_por_aprobacion(
                     self._aprobacion(prorroga), usuario, decision="APROBADA", observacion=""
                 )
@@ -5805,11 +5817,12 @@ class ProrrogaConAprobacionTests(_EscenarioProrrogaMixin, TestCase):
         prorroga = self._solicitar(dias=3)
         antes = self._ticket()
         aprobacion = self._aprobacion(prorroga)
-        self.client.login(username="aprobador_p", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("aprobador_p@pruebas.orbita"))
+        # La aprobación se decide en el espacio del ticket: su antigua página lleva allí.
         respuesta = self.client.get(reverse("aprobaciones:detalle", args=[aprobacion.pk]))
-        self.assertContains(respuesta, "Prórroga #1")
-        self.assertContains(respuesta, "Necesito más tiempo para terminar")
-        self.assertNotContains(respuesta, "Devolver")
+        self.assertRedirects(
+            respuesta, reverse("tickets:espacio", args=[prorroga.ticket_id]), fetch_redirect_response=False
+        )
         respuesta = self.client.post(
             reverse("aprobaciones:decidir", args=[aprobacion.pk]), {"decision": "APROBADA", "observacion": ""}
         )
@@ -5820,14 +5833,14 @@ class ProrrogaConAprobacionTests(_EscenarioProrrogaMixin, TestCase):
     def test_devolver_por_la_pantalla_se_rechaza_sin_cambios(self):
         prorroga = self._solicitar()
         aprobacion = self._aprobacion(prorroga)
-        self.client.login(username="aprobador_p", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("aprobador_p@pruebas.orbita"))
         self.client.post(reverse("aprobaciones:decidir", args=[aprobacion.pk]), {"decision": "DEVUELTA", "observacion": "x"})
         self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "PENDIENTE")
 
     def test_rechazar_por_la_pantalla_deja_la_fecha_intacta(self):
         prorroga = self._solicitar()
         antes = self._ticket()
-        self.client.login(username="aprobador_p", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("aprobador_p@pruebas.orbita"))
         self.client.post(
             reverse("aprobaciones:decidir", args=[self._aprobacion(prorroga).pk]),
             {"decision": "RECHAZADA", "observacion": "Sin margen"},
@@ -5838,7 +5851,7 @@ class ProrrogaConAprobacionTests(_EscenarioProrrogaMixin, TestCase):
 
     def test_quien_no_es_el_aprobador_no_puede_decidir_por_la_pantalla(self):
         prorroga = self._solicitar()
-        self.client.login(username="ajeno_p", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ajeno_p@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("aprobaciones:decidir", args=[self._aprobacion(prorroga).pk]),
             {"decision": "APROBADA", "observacion": ""},
@@ -5852,10 +5865,6 @@ class ProrrogaConAprobacionTests(_EscenarioProrrogaMixin, TestCase):
 
         esquema = crear_esquema_aprobacion(modo="SECUENCIAL", participantes=[("USUARIO", self.aprobador_p)])
         aprobacion = esquema.participaciones.get()
-        self.client.login(username="aprobador_p", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("aprobaciones:detalle", args=[aprobacion.pk]))
-        self.assertContains(respuesta, "Devolver")
-        self.assertNotContains(respuesta, "Prórroga #")
         _, esquema = resolver_aprobacion(aprobacion, self.aprobador_p, decision="DEVUELTA", observacion="x")
         self.assertEqual(esquema.resultado, "DEVUELTA")
 
@@ -5904,7 +5913,7 @@ class CancelarProrrogaTests(_EscenarioProrrogaMixin, TestCase):
     def test_solo_quien_la_solicito_puede_cancelar(self):
         prorroga = self._solicitar()
         for usuario in (self.companero_p, self.aprobador_p, self.solicitante_p, self.gestor_p, self.ajeno_p):
-            with self.subTest(usuario=usuario.username), self.assertRaises(PermissionDenied):
+            with self.subTest(usuario=usuario.email), self.assertRaises(PermissionDenied):
                 self._cancelar(prorroga, actor=usuario)
         self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "PENDIENTE")
 
@@ -6035,8 +6044,8 @@ class ProrrogaHistorialAuditoriaTests(_EscenarioProrrogaMixin, TestCase):
     def test_los_eventos_aparecen_en_la_linea_de_tiempo_del_detalle(self):
         self._preparar_prorroga(politica="SIN_APROBACION")
         self._solicitar()
-        self.client.login(username="responsable_p", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[self.ticket_p.pk]))
+        self.client.force_login(persona("responsable_p@pruebas.orbita"))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[self.ticket_p.pk]) + "?vista=resumen")
         self.assertContains(respuesta, "Prórroga solicitada")
         self.assertContains(respuesta, "Prórroga aprobada")
         self.assertContains(respuesta, "automática, sin aprobación")
@@ -6176,8 +6185,8 @@ class ProrrogaConcurrenciaTests(_EscenarioProrrogaMixin, TransactionTestCase):
 
 class ProrrogaVistasTests(_EscenarioProrrogaMixin, TestCase):
     def _detalle(self, username):
-        self.client.login(username=username, password=CLAVE_PRUEBA)
-        return self.client.get(reverse("tickets:detalle", args=[self.ticket_p.pk]))
+        self.client.force_login(persona(username))
+        return self.client.get(reverse("tickets:espacio", args=[self.ticket_p.pk]) + "?vista=resumen")
 
     def _post(self, nombre, *args, **datos):
         return self.client.post(reverse(f"tickets:{nombre}", args=args), datos)
@@ -6265,14 +6274,14 @@ class ProrrogaVistasTests(_EscenarioProrrogaMixin, TestCase):
         prorroga = self._solicitar()
         respuesta = self._detalle("aprobador_p")
         self.assertContains(respuesta, "Resolver prórroga")
-        self.assertContains(respuesta, reverse("aprobaciones:detalle", args=[self._aprobacion(prorroga).pk]))
+        self.assertContains(respuesta, reverse("tickets:espacio", args=[prorroga.ticket_id]))
 
     def test_post_solicitar_sin_aprobacion_aplica_la_fecha(self):
         self._preparar_prorroga(politica="SIN_APROBACION")
         antes = self._ticket()
-        self.client.login(username="responsable_p", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable_p@pruebas.orbita"))
         respuesta = self._post("solicitar_prorroga", self.ticket_p.pk, **self._datos_solicitud(3))
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket_p.pk]))
+        self.assertRedirects(respuesta, reverse("tickets:espacio", args=[self.ticket_p.pk]))
         self.assertEqual(ProrrogaTicket.objects.get().estado, "APROBADA")
         self.assertEqual(self._ticket().fecha_objetivo_original, antes.fecha_objetivo_original)
         self.assertGreater(self._ticket().fecha_objetivo_vigente, antes.fecha_objetivo_vigente)
@@ -6280,20 +6289,20 @@ class ProrrogaVistasTests(_EscenarioProrrogaMixin, TestCase):
     def test_post_solicitar_con_aprobacion_queda_pendiente(self):
         self._preparar_prorroga(politica="CON_APROBACION")
         antes = self._ticket()
-        self.client.login(username="responsable_p", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable_p@pruebas.orbita"))
         self._post("solicitar_prorroga", self.ticket_p.pk, **self._datos_solicitud(3))
         self.assertEqual(ProrrogaTicket.objects.get().estado, "PENDIENTE")
         self.assertEqual(self._ticket().fecha_objetivo_vigente, antes.fecha_objetivo_vigente)
 
     def test_post_sin_permiso_o_con_datos_invalidos_no_crea_nada(self):
         self._preparar_prorroga(politica="SIN_APROBACION")
-        self.client.login(username="ajeno_p", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ajeno_p@pruebas.orbita"))
         self._post("solicitar_prorroga", self.ticket_p.pk, **self._datos_solicitud())
         self.client.logout()
-        self.client.login(username="solicitante_p", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solicitante_p@pruebas.orbita"))
         self._post("solicitar_prorroga", self.ticket_p.pk, **self._datos_solicitud())
         self.client.logout()
-        self.client.login(username="responsable_p", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable_p@pruebas.orbita"))
         self._post("solicitar_prorroga", self.ticket_p.pk, nueva_fecha="no es una fecha", motivo="x")
         self._post("solicitar_prorroga", self.ticket_p.pk, nueva_fecha=self._datos_solicitud()["nueva_fecha"], motivo="")
         pasada = timezone.localtime(self._ticket().fecha_objetivo_vigente - timedelta(days=1))
@@ -6303,7 +6312,7 @@ class ProrrogaVistasTests(_EscenarioProrrogaMixin, TestCase):
     def test_los_endpoints_son_solo_post_y_exigen_sesion(self):
         self._preparar_prorroga(politica="CON_APROBACION")
         prorroga = self._solicitar()
-        self.client.login(username="responsable_p", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable_p@pruebas.orbita"))
         self.assertEqual(self.client.get(reverse("tickets:solicitar_prorroga", args=[self.ticket_p.pk])).status_code, 405)
         self.assertEqual(
             self.client.get(reverse("tickets:cancelar_prorroga", args=[self.ticket_p.pk, prorroga.pk])).status_code, 405
@@ -6315,11 +6324,11 @@ class ProrrogaVistasTests(_EscenarioProrrogaMixin, TestCase):
     def test_post_cancelar_solo_por_quien_la_solicito(self):
         self._preparar_prorroga(politica="CON_APROBACION")
         prorroga = self._solicitar()
-        self.client.login(username="companero_p", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("companero_p@pruebas.orbita"))
         self._post("cancelar_prorroga", self.ticket_p.pk, prorroga.pk)
         self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "PENDIENTE")
         self.client.logout()
-        self.client.login(username="responsable_p", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable_p@pruebas.orbita"))
         self._post("cancelar_prorroga", self.ticket_p.pk, prorroga.pk, motivo="Desistí")
         self.assertEqual(ProrrogaTicket.objects.get(pk=prorroga.pk).estado, "CANCELADA")
         # Una prórroga de otro ticket no se alcanza por una URL cruzada.
@@ -6414,10 +6423,10 @@ class TareaATicketNavegacionTests(TestCase):
         from apps.workflows.models import ConfiguracionEtapaTarea, Etapa, TareaWorkflow, TransicionEtapa, Workflow, WorkflowVersion
         from apps.workflows.versionamiento import activar_version as activar_workflow
 
-        self.solicitante = Usuario.objects.create_user("nav_solicitante", password=CLAVE_PRUEBA)
-        self.sin_ticket = Usuario.objects.create_user("nav_sin_ticket", password=CLAVE_PRUEBA)
+        self.solicitante = Usuario.objects.create_user("nav_solicitante@pruebas.orbita")
+        self.sin_ticket = Usuario.objects.create_user("nav_sin_ticket@pruebas.orbita")
         for usuario in (self.solicitante, self.sin_ticket):
-            _otorgar_permiso(usuario, "tareas.consultar", nombre_rol=f"Rol tareas {usuario.username}")
+            _otorgar_permiso(usuario, "tareas.consultar", nombre_rol=f"Rol tareas {usuario.email}")
         self.servicio, _, _ = _crear_servicio_con_formulario(self.solicitante, [])
         workflow = Workflow.objects.create(nombre="Flujo navegación")
         version = WorkflowVersion.objects.create(workflow=workflow, numero=1)
@@ -6433,41 +6442,30 @@ class TareaATicketNavegacionTests(TestCase):
         radicar_ticket(self.ticket, self.solicitante)
         self.tarea = TareaWorkflow.objects.get(instancia_etapa__instancia_workflow=self.ticket.instancia_workflow).tarea
 
-    def _enlace(self):
-        return reverse("tickets:detalle", args=[self.ticket.pk])
+    def _espacio(self):
+        return reverse("tickets:espacio", args=[self.ticket.pk])
 
-    def test_el_detalle_de_la_tarea_enlaza_al_ticket_si_el_usuario_puede_verlo(self):
-        self.client.login(username="nav_solicitante", password=CLAVE_PRUEBA)
+    def test_el_detalle_de_la_tarea_lleva_al_espacio_de_su_ticket(self):
+        # Una sola vista de trabajo: la página de la tarea se retiró y su URL lleva al espacio del ticket.
+        self.client.force_login(persona("nav_solicitante@pruebas.orbita"))
         respuesta = self.client.get(reverse("tareas:detalle", args=[self.tarea.pk]))
-        self.assertContains(respuesta, "Parte del ticket")
-        self.assertContains(respuesta, self._enlace())
+        self.assertRedirects(respuesta, self._espacio(), fetch_redirect_response=False)
 
-    def test_la_vista_previa_de_mi_trabajo_tambien_enlaza_al_ticket(self):
-        self.client.login(username="nav_solicitante", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tareas:vista_previa", args=[self.tarea.pk]))
-        self.assertContains(respuesta, self._enlace())
-
-    def test_sin_acceso_al_ticket_no_se_ofrece_el_enlace(self):
-        self.client.login(username="nav_sin_ticket", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tareas:detalle", args=[self.tarea.pk]))
-        self.assertEqual(respuesta.status_code, 200)
-        self.assertNotContains(respuesta, self._enlace())
-
-    def test_una_subtarea_enlaza_al_ticket_de_su_tarea_principal(self):
+    def test_una_subtarea_lleva_al_ticket_de_su_tarea_principal(self):
         from apps.tareas.models import Tarea
 
         subtarea = Tarea.objects.create(titulo="Detalle", tarea_padre=self.tarea)
-        self.client.login(username="nav_solicitante", password=CLAVE_PRUEBA)
-        self.assertContains(self.client.get(reverse("tareas:detalle", args=[subtarea.pk])), self._enlace())
+        self.client.force_login(persona("nav_solicitante@pruebas.orbita"))
+        respuesta = self.client.get(reverse("tareas:detalle", args=[subtarea.pk]))
+        self.assertRedirects(respuesta, self._espacio(), fetch_redirect_response=False)
 
-    def test_una_tarea_independiente_no_tiene_ticket(self):
+    def test_una_tarea_independiente_lleva_a_mi_trabajo(self):
         from apps.tareas.models import Tarea
 
         suelta = Tarea.objects.create(titulo="Sin ticket")
-        self.client.login(username="nav_solicitante", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("nav_solicitante@pruebas.orbita"))
         respuesta = self.client.get(reverse("tareas:detalle", args=[suelta.pk]))
-        self.assertEqual(respuesta.status_code, 200)
-        self.assertNotContains(respuesta, "Parte del ticket")
+        self.assertRedirects(respuesta, reverse("core:mi_trabajo"), fetch_redirect_response=False)
 
 
 # --- 4.C1 — Ticket General y configuración base --------------------------------
@@ -6484,10 +6482,10 @@ class _EscenarioTicketGeneralMixin:
         from apps.catalogo import ticket_general as general
 
         self.general = general
-        self.admin_g = Usuario.objects.create_user("admin_g", password=CLAVE_PRUEBA)
+        self.admin_g = Usuario.objects.create_user("admin_g@pruebas.orbita")
         _otorgar_permiso(self.admin_g, "catalogo.administrar")
-        self.usuario_g = Usuario.objects.create_user("usuario_g", password=CLAVE_PRUEBA)
-        self.atiende_g = Usuario.objects.create_user("atiende_g", password=CLAVE_PRUEBA)
+        self.usuario_g = Usuario.objects.create_user("usuario_g@pruebas.orbita")
+        self.atiende_g = Usuario.objects.create_user("atiende_g@pruebas.orbita")
         _otorgar_tickets_atender(self.atiende_g)
         self.servicio_g, self.version_g, self.campos_g = _crear_servicio_con_formulario(
             self.admin_g,
@@ -6619,16 +6617,16 @@ class TicketGeneralConfiguracionTests(_EscenarioTicketGeneralMixin, TestCase):
                 llamada()
 
     def test_las_vistas_de_administracion_exigen_permiso_y_solo_post(self):
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         for nombre in ("ticket_general_habilitar", "ticket_general_crear", "ticket_general_designar"):
             self.assertEqual(self.client.post(reverse(f"catalogo:{nombre}"), {}).status_code, 403)
         self.client.logout()
-        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("admin_g@pruebas.orbita"))
         for nombre in ("ticket_general_habilitar", "ticket_general_crear", "ticket_general_designar"):
             self.assertEqual(self.client.get(reverse(f"catalogo:{nombre}")).status_code, 405)
 
     def test_habilitar_por_la_pantalla(self):
-        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("admin_g@pruebas.orbita"))
         respuesta = self.client.post(reverse("catalogo:ticket_general_habilitar"), {"habilitado": "1"})
         self.assertRedirects(respuesta, reverse("core:disenador_servicios"))
         self.assertTrue(self._config().actual().habilitado)
@@ -6636,7 +6634,7 @@ class TicketGeneralConfiguracionTests(_EscenarioTicketGeneralMixin, TestCase):
         self.assertFalse(self._config().actual().habilitado)
 
     def test_la_tarjeta_de_administracion_muestra_el_estado_y_enlaza_al_studio_del_servicio(self):
-        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("admin_g@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:disenador_servicios"))
         self.assertContains(respuesta, "Ticket general")
         self.assertContains(respuesta, self.NOMBRE_INTERNO)
@@ -6733,7 +6731,7 @@ class TicketGeneralServicioInternoTests(_EscenarioTicketGeneralMixin, TestCase):
     def test_crear_y_elegir_por_la_pantalla(self):
         Servicio.objects.filter(pk=self.servicio_g.pk).delete()
         categoria = Categoria.objects.create(nombre="Interna")
-        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("admin_g@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("catalogo:ticket_general_crear"), {"categoria": categoria.pk, "nombre": "Pedidos libres"}
         )
@@ -6746,7 +6744,7 @@ class TicketGeneralServicioInternoTests(_EscenarioTicketGeneralMixin, TestCase):
     def test_nada_se_crea_sin_una_accion_explicita(self):
         # Importar, migrar o abrir pantallas no crea el servicio interno ni la configuración.
         configuraciones = self.general.ConfiguracionTicketGeneral.objects.count()
-        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("admin_g@pruebas.orbita"))
         self.client.get(reverse("core:disenador_servicios"))
         self.client.get(reverse("core:inicio"))
         self.assertFalse(Servicio.objects.filter(es_ticket_general=True).exists())
@@ -6775,7 +6773,7 @@ class TicketGeneralVisibilidadTests(_EscenarioTicketGeneralMixin, TestCase):
         self.assertIn(self.proceso_n, visibles)
 
     def test_no_aparece_en_el_catalogo_ni_se_abre_por_su_url(self):
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:lista"))
         self.assertContains(respuesta, "Servicio ordinario visible")
         self.assertContains(respuesta, "Proceso ordinario visible")
@@ -6786,7 +6784,7 @@ class TicketGeneralVisibilidadTests(_EscenarioTicketGeneralMixin, TestCase):
     def test_no_aparece_en_el_explorador_ni_en_la_busqueda_ordinaria(self):
         from apps.core import inicio
 
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:explorar"), {"q": "interno"})
         self.assertNotContains(respuesta, self.NOMBRE_INTERNO)
         respuesta = self.client.get(reverse("core:explorar"))
@@ -6814,7 +6812,7 @@ class TicketGeneralVisibilidadTests(_EscenarioTicketGeneralMixin, TestCase):
             self._ticket_general()
         usados = inicio.servicios_usados(self.usuario_g)
         self.assertNotIn(self.servicio_g.pk, [s.pk for s in usados["frecuentes"] + usados["recientes"]])
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:inicio"))
         # Las tarjetas de servicios usados no lo ofrecen; sus tickets sí aparecen, como
         # cualquier ticket propio, en "Tus tickets recientes".
@@ -6826,12 +6824,12 @@ class TicketGeneralVisibilidadTests(_EscenarioTicketGeneralMixin, TestCase):
     def test_la_via_normal_de_crear_tickets_lo_rechaza(self):
         with self.assertRaises(PermissionDenied):
             crear_borrador(self.usuario_g, self.servicio_g)
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         self.client.get(reverse("tickets:iniciar", args=[self.servicio_g.pk]))
         self.assertEqual(Ticket.objects.count(), 0)
 
     def test_para_el_administrador_si_aparece_en_el_diseñador(self):
-        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("admin_g@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:disenador_servicios"))
         self.assertContains(respuesta, self.NOMBRE_INTERNO)
         self.assertContains(respuesta, "designer-status designer-status--neutral\">Ticket general")
@@ -6859,7 +6857,7 @@ class TicketGeneralFormularioTests(_EscenarioTicketGeneralMixin, TestCase):
         nueva = crear_nueva_version(self.servicio_g.formulario, actor=self.admin_g)
         Campo.objects.create(version=nueva, tipo=Campo.TipoCampo.TEXTO, etiqueta="Urgencia")
         activar_version(self.servicio_g.formulario, nueva, actor=self.admin_g)
-        otro_usuario = Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA)
+        otro_usuario = Usuario.objects.create_user("otro_g@pruebas.orbita")
         reciente = self._ticket_general(otro_usuario)
         self.assertEqual(reciente.detalle_servicio.formulario_version_id, nueva.pk)
         antiguo.refresh_from_db()
@@ -6935,7 +6933,7 @@ class TicketGeneralCreacionTests(_EscenarioTicketGeneralMixin, TestCase):
             servicio=self.servicio_g, tipo_alcance="USUARIO", usuario=self.usuario_g
         )
         self.assertEqual(self._ticket_general().detalle_servicio.servicio, self.servicio_g)
-        otro = Usuario.objects.create_user("sin_acceso_g", password=CLAVE_PRUEBA)
+        otro = Usuario.objects.create_user("sin_acceso_g@pruebas.orbita")
         with self.assertRaises(PermissionDenied):
             self._ticket_general(otro)
 
@@ -7014,7 +7012,7 @@ class TicketGeneralRadicacionTests(_EscenarioTicketGeneralMixin, TestCase):
     def test_entra_a_la_cola_normal_de_atencion(self):
         ticket = self._radicar_general()
         self.assertTrue(puede_ver_en_cola(self.atiende_g, ticket))
-        self.client.login(username="atiende_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("atiende_g@pruebas.orbita"))
         self.assertContains(self.client.get(reverse("tickets:cola")), self.NOMBRE_INTERNO)
 
     def test_radicar_no_exige_que_siga_habilitado(self):
@@ -7032,7 +7030,7 @@ class TicketGeneralVistasTests(_EscenarioTicketGeneralMixin, TestCase):
         self._preparar_general(habilitar=True)
 
     def _inicio(self, username="usuario_g"):
-        self.client.login(username=username, password=CLAVE_PRUEBA)
+        self.client.force_login(persona(username))
         return self.client.get(reverse("core:inicio"))
 
     def test_habilitado_se_ofrece_la_entrada_en_inicio(self):
@@ -7063,7 +7061,7 @@ class TicketGeneralVistasTests(_EscenarioTicketGeneralMixin, TestCase):
         self.assertIn("login", respuesta.url)
 
     def test_entrar_crea_el_borrador_y_muestra_el_formulario_generico(self):
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:ticket_general"))
         ticket = Ticket.objects.get()
         self.assertRedirects(respuesta, reverse("tickets:borrador", args=[ticket.pk]))
@@ -7073,13 +7071,13 @@ class TicketGeneralVistasTests(_EscenarioTicketGeneralMixin, TestCase):
         self.assertContains(pagina, "Adjuntos")
 
     def test_entrar_dos_veces_reutiliza_el_borrador_vacio(self):
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         self.client.get(reverse("tickets:ticket_general"))
         self.client.get(reverse("tickets:ticket_general"))
         self.assertEqual(Ticket.objects.count(), 1)
 
     def test_el_recorrido_completo_radica_por_la_via_normal(self):
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         self.client.get(reverse("tickets:ticket_general"))
         ticket = Ticket.objects.get()
         self.client.post(
@@ -7116,7 +7114,7 @@ class TicketGeneralRegresionTests(_EscenarioTicketGeneralMixin, TestCase):
             crear_borrador(self.usuario_g, Servicio.objects.get(pk=self.servicio_n.pk))
 
     def test_el_flujo_v2_de_un_servicio_normal_sigue_funcionando(self):
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:solicitar", args=[self.servicio_n.pk]))
         ticket = Ticket.objects.get()
         self.assertRedirects(respuesta, reverse("tickets:borrador", args=[ticket.pk]))
@@ -7241,12 +7239,12 @@ class _EscenarioDestinosMixin(_EscenarioTicketGeneralMixin):
         self.area_tic = Area.objects.create(nombre="Tecnología", codigo="TIC-G")
         self.equipo_tic = Equipo.objects.create(nombre="Soporte TIC")
         self.equipo_dis = Equipo.objects.create(nombre="Diseño")
-        self.miembro_tic = Usuario.objects.create_user("miembro_tic", password=CLAVE_PRUEBA)
-        self.miembro_dis = Usuario.objects.create_user("miembro_dis", password=CLAVE_PRUEBA)
+        self.miembro_tic = Usuario.objects.create_user("miembro_tic@pruebas.orbita")
+        self.miembro_dis = Usuario.objects.create_user("miembro_dis@pruebas.orbita")
         self.persona_g = Usuario.objects.create_user(
-            "persona_g", first_name="María", last_name="Pérez", password=CLAVE_PRUEBA
+            "persona_g@pruebas.orbita", first_name="María", last_name="Pérez",
         )
-        self.ajeno_g = Usuario.objects.create_user("ajeno_g", password=CLAVE_PRUEBA)
+        self.ajeno_g = Usuario.objects.create_user("ajeno_g@pruebas.orbita")
         MiembroEquipo.objects.create(equipo=self.equipo_tic, usuario=self.miembro_tic)
         MiembroEquipo.objects.create(equipo=self.equipo_dis, usuario=self.miembro_dis)
         for usuario in (self.miembro_tic, self.miembro_dis, self.persona_g, self.ajeno_g):
@@ -7272,7 +7270,7 @@ class _EscenarioDestinosMixin(_EscenarioTicketGeneralMixin):
         return ticket
 
     def _cola(self, usuario, **parametros):
-        self.client.login(username=usuario.username, password=CLAVE_PRUEBA)
+        self.client.force_login(usuario)
         return self.client.get(reverse("tickets:cola"), parametros)
 
 
@@ -7351,7 +7349,7 @@ class TicketGeneralDestinoModeloTests(_EscenarioDestinosMixin, TestCase):
     def test_no_se_crea_un_destino_con_objetos_inactivos_segun_el_dominio_real(self):
         area = Area.objects.create(nombre="Inactiva", codigo="INA-G", activo=False)
         equipo = Equipo.objects.create(nombre="Equipo inactivo", activo=False)
-        usuario = Usuario.objects.create_user("inactivo_g", password=CLAVE_PRUEBA, is_active=False)
+        usuario = Usuario.objects.create_user("inactivo_g@pruebas.orbita", is_active=False)
         for tipo, objeto, responsable in (
             ("AREA", area, self.equipo_tic), ("EQUIPO", equipo, None), ("USUARIO", usuario, None),
         ):
@@ -7363,7 +7361,7 @@ class TicketGeneralDestinoModeloTests(_EscenarioDestinosMixin, TestCase):
         vacio = Equipo.objects.create(nombre="Equipo vacío")
         inactivo = Equipo.objects.create(nombre="Equipo apagado", activo=False)
         MiembroEquipo.objects.create(equipo=inactivo, usuario=self.ajeno_g)
-        persona_inactiva = Usuario.objects.create_user("baja_g", password=CLAVE_PRUEBA, is_active=False)
+        persona_inactiva = Usuario.objects.create_user("baja_g@pruebas.orbita", is_active=False)
         for responsable in (vacio, inactivo, persona_inactiva):
             with self.subTest(str(responsable)), self.assertRaises(ValidationError):
                 self.destinos.crear_destino(self.admin_g, tipo="AREA", objeto=otra, responsable=responsable)
@@ -7451,7 +7449,7 @@ class TicketGeneralDestinoAdministracionTests(_EscenarioDestinosMixin, TestCase)
         self.assertEqual(self.d_area.responsable_equipo, self.equipo_dis)
         antes.refresh_from_db()
         self.assertEqual(antes.equipo_responsable, self.equipo_tic)
-        nuevo = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        nuevo = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g@pruebas.orbita"))
         self.assertEqual(nuevo.equipo_responsable, self.equipo_dis)
 
     def test_cambiar_a_una_persona_responsable_y_validar(self):
@@ -7512,12 +7510,12 @@ class TicketGeneralDestinoAdministracionTests(_EscenarioDestinosMixin, TestCase)
         for destino in (self.destino_g, self.d_area, self.d_equipo, self.d_persona):
             self.destinos.desactivar_destino(self.admin_g, destino)
         self.assertIsNone(self.general.servicio_disponible_para(self.usuario_g))
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         self.assertContains(self.client.get(reverse("tickets:ticket_general")), "aún no está disponible")
         self.assertEqual(Ticket.objects.count(), 0)
 
     def test_pantalla_lista_destinos_y_estado(self):
-        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("admin_g@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:disenador_servicios"))
         self.assertContains(respuesta, "Soporte TIC")
         self.assertContains(respuesta, "Área: Tecnología")
@@ -7525,7 +7523,7 @@ class TicketGeneralDestinoAdministracionTests(_EscenarioDestinosMixin, TestCase)
         self.assertContains(respuesta, "María Pérez")
 
     def test_acciones_de_la_pantalla(self):
-        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("admin_g@pruebas.orbita"))
         otra = Area.objects.create(nombre="Mercadeo", codigo="MER-G")
         self.client.post(reverse("catalogo:ticket_general_destino_crear"), {
             "tipo": "AREA", "objeto_area": otra.pk, "objeto_equipo": "", "objeto_usuario": "",
@@ -7549,7 +7547,7 @@ class TicketGeneralDestinoAdministracionTests(_EscenarioDestinosMixin, TestCase)
         self.assertIsNone(self.general.ConfiguracionTicketGeneral.actual().destino_predeterminado_id)
 
     def test_la_pantalla_muestra_el_motivo_si_algo_no_se_acepta(self):
-        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("admin_g@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("catalogo:ticket_general_destino_crear"),
             {"tipo": "AREA", "objeto_area": self.area_otra.pk, "responsable": ""}, follow=True,
@@ -7564,10 +7562,10 @@ class TicketGeneralDestinoAdministracionTests(_EscenarioDestinosMixin, TestCase)
             reverse("catalogo:ticket_general_destino_responsable", args=[self.d_area.pk]),
             reverse("catalogo:ticket_general_destino_estado", args=[self.d_area.pk]),
         ]
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         for url in urls:
             self.assertEqual(self.client.post(url, {}).status_code, 403)
-        self.client.login(username="admin_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("admin_g@pruebas.orbita"))
         for url in urls:
             self.assertEqual(self.client.get(url).status_code, 405)
 
@@ -7588,7 +7586,7 @@ class TicketGeneralSeleccionTests(_EscenarioDestinosMixin, TestCase):
         self.assertEqual(por_grupo["Equipos"], ["Equipo general"])
 
     def test_la_entrada_muestra_el_selector_agrupado(self):
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         ticket_url = self.client.get(reverse("tickets:ticket_general"))["Location"]
         respuesta = self.client.get(ticket_url)
         self.assertContains(respuesta, 'name="destino_general"')
@@ -7608,7 +7606,7 @@ class TicketGeneralSeleccionTests(_EscenarioDestinosMixin, TestCase):
         ticket.refresh_from_db()
         self.assertEqual(ticket.estado, Ticket.Estado.BORRADOR)
         self.assertEqual((ticket.usuario_responsable_id, ticket.equipo_responsable_id, ticket.radicado), (None, None, None))
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:borrador", args=[ticket.pk]))
         self.assertContains(respuesta, "Obligatorio")
         self.assertNotContains(respuesta, "No estoy seguro")
@@ -7647,7 +7645,7 @@ class TicketGeneralSeleccionTests(_EscenarioDestinosMixin, TestCase):
         normal = crear_borrador(self.usuario_g, self.servicio_n)
         with self.assertRaises(ValidationError):
             direccionamiento.seleccionar_destino_borrador(normal, self.usuario_g, self.d_area.pk)
-        radicado = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        radicado = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g@pruebas.orbita"))
         with self.assertRaises(ValidationError):
             direccionamiento.seleccionar_destino_borrador(radicado, radicado.solicitante, self.d_equipo.pk)
 
@@ -7671,13 +7669,13 @@ class TicketGeneralSeleccionTests(_EscenarioDestinosMixin, TestCase):
         nueva = crear_nueva_version(self.servicio_g.formulario, actor=self.admin_g)
         Campo.objects.create(version=nueva, tipo=Campo.TipoCampo.TEXTO, etiqueta="Urgencia")
         activar_version(self.servicio_g.formulario, nueva, actor=self.admin_g)
-        ticket = self._ticket_general(Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        ticket = self._ticket_general(Usuario.objects.create_user("otro_g@pruebas.orbita"))
         self.assertEqual(ticket.detalle_servicio.formulario_version_id, nueva.pk)
         direccionamiento.seleccionar_destino_borrador(ticket, ticket.solicitante, self.d_area.pk)
         self.assertIsNone(direccionamiento.error_de_destino(ticket))  # el enrutamiento no depende de la versión
 
     def test_recorrido_completo_por_la_interfaz(self):
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         self.client.get(reverse("tickets:ticket_general"))
         ticket = Ticket.objects.get(solicitante=self.usuario_g)
         campo = f"campo_{self.campos_g['Asunto'].id}"
@@ -7693,7 +7691,7 @@ class TicketGeneralSeleccionTests(_EscenarioDestinosMixin, TestCase):
 
     def test_la_revision_avisa_si_falta_el_destino_y_no_deja_avanzar(self):
         self._sin_reserva()
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         self.client.get(reverse("tickets:ticket_general"))
         ticket = Ticket.objects.get(solicitante=self.usuario_g)
         campo = f"campo_{self.campos_g['Asunto'].id}"
@@ -7705,7 +7703,7 @@ class TicketGeneralSeleccionTests(_EscenarioDestinosMixin, TestCase):
 
     def test_el_formulario_de_un_servicio_normal_no_muestra_selector(self):
         self._preparar_catalogo_normal()
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
         redireccion = self.client.get(reverse("tickets:solicitar", args=[self.servicio_n.pk]))
         self.assertNotContains(self.client.get(redireccion["Location"]), "destino_general")
 
@@ -7780,9 +7778,9 @@ class TicketGeneralRadicacionDestinoTests(_EscenarioDestinosMixin, TestCase):
 
     def test_el_detalle_explica_destino_y_responsable(self):
         ticket = self._radicar_a(self.d_area)
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
-        self.assertContains(respuesta, "Dirigido a:")
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[ticket.pk]) + "?vista=resumen")
+        self.assertContains(respuesta, "<dt>Dirigido a</dt>", html=False)
         self.assertContains(respuesta, "Destino: Tecnología · Responsable: Soporte TIC")
 
     def test_audita_el_direccionamiento(self):
@@ -7851,7 +7849,7 @@ class TicketGeneralEstadoTests(_EscenarioDestinosMixin, TestCase):
     def test_direccionar_no_cambia_a_en_atencion(self):
         for destino in (self.d_area, self.d_equipo, self.d_persona):
             ticket = self._radicar_a(
-                destino, usuario=Usuario.objects.create_user(f"sol_{destino.pk}", password=CLAVE_PRUEBA)
+                destino, usuario=Usuario.objects.create_user(f"sol_{destino.pk}@pruebas.orbita")
             )
             self.assertEqual(ticket.estado, Ticket.Estado.RADICADO, destino)
             tipos = set(ticket.historial.values_list("tipo_evento", flat=True))
@@ -7867,7 +7865,7 @@ class TicketGeneralEstadoTests(_EscenarioDestinosMixin, TestCase):
     def test_quien_no_es_del_equipo_dirigido_no_puede_tomar(self):
         ticket = self._radicar_a(self.d_area)
         for usuario in (self.ajeno_g, self.miembro_dis, self.persona_g, self.usuario_g):
-            with self.subTest(usuario.username):
+            with self.subTest(usuario.email):
                 self.assertFalse(puede_tomar(usuario, ticket))
                 with self.assertRaises(PermissionDenied):
                     tomar_ticket(ticket, usuario)
@@ -7882,7 +7880,7 @@ class TicketGeneralEstadoTests(_EscenarioDestinosMixin, TestCase):
         self.assertTrue(puede_iniciar_atencion(self.persona_g, ticket))
         self.assertTrue(puede_iniciar_atencion(self.atiende_g, ticket))  # alcance global de tickets.atender
         for usuario in (self.ajeno_g, self.miembro_tic, self.usuario_g):
-            self.assertFalse(puede_iniciar_atencion(usuario, ticket), usuario.username)
+            self.assertFalse(puede_iniciar_atencion(usuario, ticket), usuario.email)
             with self.assertRaises(PermissionDenied):
                 iniciar_atencion_ticket(ticket, usuario)
         self.assertEqual(Ticket.objects.get(pk=ticket.pk).estado, Ticket.Estado.RADICADO)
@@ -7905,7 +7903,7 @@ class TicketGeneralEstadoTests(_EscenarioDestinosMixin, TestCase):
         con_equipo = self._radicar_a(self.d_area)
         with self.assertRaises(ValidationError):
             iniciar_atencion_ticket(con_equipo, self.atiende_g)  # a un equipo se le TOMA
-        dirigido = self._radicar_a(self.d_persona, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        dirigido = self._radicar_a(self.d_persona, usuario=Usuario.objects.create_user("otro_g@pruebas.orbita"))
         iniciar_atencion_ticket(dirigido, self.persona_g)
         with self.assertRaises(ValidationError):
             iniciar_atencion_ticket(dirigido, self.persona_g)  # ya está en atención
@@ -7922,11 +7920,11 @@ class TicketGeneralEstadoTests(_EscenarioDestinosMixin, TestCase):
         ticket = asignar_ticket(ticket, self.atiende_g, usuario=self.miembro_tic)
         self.assertEqual((ticket.estado, ticket.usuario_responsable), (Ticket.Estado.EN_ATENCION, self.miembro_tic))
         # Solo equipo: no cambia el estado.
-        otro = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        otro = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g@pruebas.orbita"))
         otro = asignar_ticket(otro, self.atiende_g, equipo=self.equipo_dis)
         self.assertEqual((otro.estado, otro.equipo_responsable), (Ticket.Estado.RADICADO, self.equipo_dis))
         # Ya dirigido a una persona: no es un ticket "sin responsable" que asignar.
-        persona = self._radicar_a(self.d_persona, usuario=Usuario.objects.create_user("otro2_g", password=CLAVE_PRUEBA))
+        persona = self._radicar_a(self.d_persona, usuario=Usuario.objects.create_user("otro2_g@pruebas.orbita"))
         with self.assertRaises(PermissionDenied):
             asignar_ticket(persona, self.atiende_g, usuario=self.miembro_tic)
 
@@ -7940,25 +7938,25 @@ class TicketGeneralEstadoTests(_EscenarioDestinosMixin, TestCase):
             tomar_ticket(normal, self.miembro_tic)
 
     def test_las_vistas_de_tomar_e_iniciar_atencion(self):
-        persona = self._radicar_a(self.d_persona)
-        self.client.login(username="persona_g", password=CLAVE_PRUEBA)
-        detalle = self.client.get(reverse("tickets:detalle", args=[persona.pk]))
+        dirigido = self._radicar_a(self.d_persona)
+        self.client.force_login(persona("persona_g@pruebas.orbita"))
+        detalle = self.client.get(reverse("tickets:espacio", args=[dirigido.pk]) + "?vista=resumen")
         self.assertContains(detalle, "Iniciar atención")
         self.assertNotContains(detalle, ">Tomar<")
-        self.assertEqual(self.client.get(reverse("tickets:iniciar_atencion", args=[persona.pk])).status_code, 405)
-        self.client.post(reverse("tickets:iniciar_atencion", args=[persona.pk]))
-        persona.refresh_from_db()
-        self.assertEqual(persona.estado, Ticket.Estado.EN_ATENCION)
-        self.assertNotContains(self.client.get(reverse("tickets:detalle", args=[persona.pk])), "Iniciar atención")
-        equipo = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
-        self.client.login(username="miembro_tic", password=CLAVE_PRUEBA)
-        self.assertContains(self.client.get(reverse("tickets:detalle", args=[equipo.pk])), ">Tomar<")
+        self.assertEqual(self.client.get(reverse("tickets:iniciar_atencion", args=[dirigido.pk])).status_code, 405)
+        self.client.post(reverse("tickets:iniciar_atencion", args=[dirigido.pk]))
+        dirigido.refresh_from_db()
+        self.assertEqual(dirigido.estado, Ticket.Estado.EN_ATENCION)
+        self.assertNotContains(self.client.get(reverse("tickets:espacio", args=[dirigido.pk]) + "?vista=resumen"), "Iniciar atención")
+        equipo = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g@pruebas.orbita"))
+        self.client.force_login(persona("miembro_tic@pruebas.orbita"))
+        self.assertContains(self.client.get(reverse("tickets:espacio", args=[equipo.pk]) + "?vista=resumen"), ">Tomar<")
         self.client.post(reverse("tickets:tomar", args=[equipo.pk]))
         equipo.refresh_from_db()
         self.assertEqual((equipo.estado, equipo.usuario_responsable), (Ticket.Estado.EN_ATENCION, self.miembro_tic))
-        self.client.login(username="ajeno_g", password=CLAVE_PRUEBA)
-        self.assertEqual(self.client.post(reverse("tickets:iniciar_atencion", args=[persona.pk])).status_code, 302)
-        self.assertEqual(self.client.get(reverse("tickets:detalle", args=[persona.pk])).status_code, 403)
+        self.client.force_login(persona("ajeno_g@pruebas.orbita"))
+        self.assertEqual(self.client.post(reverse("tickets:iniciar_atencion", args=[dirigido.pk])).status_code, 302)
+        self.assertEqual(self.client.get(reverse("tickets:detalle", args=[dirigido.pk])).status_code, 403)
 
 
 class TicketGeneralColaDestinoTests(_EscenarioDestinosMixin, TestCase):
@@ -7973,13 +7971,13 @@ class TicketGeneralColaDestinoTests(_EscenarioDestinosMixin, TestCase):
         self.assertIn(ticket.pk, self._ids(self._cola(self.miembro_tic)))
         self.assertIn(ticket.pk, self._ids(self._cola(self.atiende_g)))
         for usuario in (self.ajeno_g, self.miembro_dis, self.persona_g, self.usuario_g):
-            self.assertNotIn(ticket.pk, self._ids(self._cola(usuario)), usuario.username)
+            self.assertNotIn(ticket.pk, self._ids(self._cola(usuario)), usuario.email)
 
     def test_la_persona_dirigida_lo_ve_y_los_ajenos_no(self):
         ticket = self._radicar_a(self.d_persona)
         self.assertIn(ticket.pk, self._ids(self._cola(self.persona_g)))
         for usuario in (self.ajeno_g, self.miembro_tic, self.miembro_dis):
-            self.assertNotIn(ticket.pk, self._ids(self._cola(usuario)), usuario.username)
+            self.assertNotIn(ticket.pk, self._ids(self._cola(usuario)), usuario.email)
 
     def test_un_ticket_dirigido_a_una_persona_aparece_sin_tomar_hasta_iniciar(self):
         from apps.tickets.trabajo import tickets_a_cargo
@@ -7994,7 +7992,7 @@ class TicketGeneralColaDestinoTests(_EscenarioDestinosMixin, TestCase):
 
     def test_la_cola_sigue_ordenada_por_llegada_con_los_tickets_generales(self):
         primero = self._radicar_a(self.d_area)
-        normal_usuario = Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA)
+        normal_usuario = Usuario.objects.create_user("otro_g@pruebas.orbita")
         segundo = self._radicar_a(self.d_area, usuario=normal_usuario)
         self.assertEqual(self._ids(self._cola(self.atiende_g)), [primero.pk, segundo.pk])
 
@@ -8008,10 +8006,10 @@ class TicketGeneralColaDestinoTests(_EscenarioDestinosMixin, TestCase):
 
     def test_los_ajenos_no_pueden_ver_el_detalle(self):
         ticket = self._radicar_a(self.d_area)
-        self.client.login(username="ajeno_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ajeno_g@pruebas.orbita"))
         self.assertEqual(self.client.get(reverse("tickets:detalle", args=[ticket.pk])).status_code, 403)
-        self.client.login(username="miembro_tic", password=CLAVE_PRUEBA)
-        self.assertContains(self.client.get(reverse("tickets:detalle", args=[ticket.pk])), "Dirigido a:")
+        self.client.force_login(persona("miembro_tic@pruebas.orbita"))
+        self.assertContains(self.client.get(reverse("tickets:espacio", args=[ticket.pk]) + "?vista=resumen"), "<dt>Dirigido a</dt>", html=False)
 
 
 class TicketGeneralDestinoHistoricoTests(_EscenarioDestinosMixin, TestCase):
@@ -8030,10 +8028,10 @@ class TicketGeneralDestinoHistoricoTests(_EscenarioDestinosMixin, TestCase):
         self.destinos.desactivar_destino(self.admin_g, self.d_area)
         ticket.refresh_from_db()
         self.assertEqual(ticket.estado, Ticket.Estado.RADICADO)
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
-        self.assertContains(self.client.get(reverse("tickets:detalle", args=[ticket.pk])), "Tecnología")
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
+        self.assertContains(self.client.get(reverse("tickets:espacio", args=[ticket.pk]) + "?vista=resumen"), "Tecnología")
         self.assertEqual(tomar_ticket(ticket, self.miembro_tic).estado, Ticket.Estado.EN_ATENCION)
-        otro = self._ticket_general(Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        otro = self._ticket_general(Usuario.objects.create_user("otro_g@pruebas.orbita"))
         from apps.tickets import direccionamiento
 
         with self.assertRaises(ValidationError):
@@ -8043,7 +8041,7 @@ class TicketGeneralDestinoHistoricoTests(_EscenarioDestinosMixin, TestCase):
         from apps.tickets.models import DireccionamientoTicket
 
         ticket = self._radicar_a(self.d_area)
-        persona = self._radicar_a(self.d_persona, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        persona = self._radicar_a(self.d_persona, usuario=Usuario.objects.create_user("otro_g@pruebas.orbita"))
         Area.objects.filter(pk=self.area_tic.pk).update(nombre="Nuevo nombre", activo=False)
         Usuario.objects.filter(pk=self.persona_g.pk).update(first_name="Otra", is_active=False)
         self.assertEqual(DireccionamientoTicket.objects.get(ticket=ticket).etiqueta, "Tecnología")
@@ -8066,7 +8064,7 @@ class TicketGeneralDestinoHistoricoTests(_EscenarioDestinosMixin, TestCase):
             self.d_area.delete()
 
     def _cola(self, usuario):
-        self.client.login(username=usuario.username, password=CLAVE_PRUEBA)
+        self.client.force_login(usuario)
         return self.client.get(reverse("tickets:cola"))
 
 
@@ -8085,7 +8083,7 @@ class TicketGeneralDestinoRegresionTests(_EscenarioDestinosMixin, TestCase):
         self.assertEqual(ticket.fecha_objetivo_original, ticket.fecha_objetivo_vigente)
         self.assertEqual(ticket.prorroga_politica, "SIN_APROBACION")
         # Mismo compromiso para cualquier destino.
-        otro = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g", password=CLAVE_PRUEBA))
+        otro = self._radicar_a(self.d_area, usuario=Usuario.objects.create_user("otro_g@pruebas.orbita"))
         self.assertEqual(otro.tiempo_objetivo_cantidad, ticket.tiempo_objetivo_cantidad)
         self.assertEqual(otro.entrega_politica, ticket.entrega_politica)
 
@@ -8140,7 +8138,7 @@ class TicketGeneralDestinoRegresionTests(_EscenarioDestinosMixin, TestCase):
         self.assertEqual(Servicio.objects.filter(es_ticket_general=True).count(), 1)
         for destino in (self.d_area, self.d_equipo, self.d_persona):
             ticket = self._radicar_a(
-                destino, usuario=Usuario.objects.create_user(f"sol_{destino.pk}", password=CLAVE_PRUEBA)
+                destino, usuario=Usuario.objects.create_user(f"sol_{destino.pk}@pruebas.orbita")
             )
             self.assertEqual(ticket.detalle_servicio.servicio, self.servicio_g)
 
@@ -8238,7 +8236,7 @@ class TicketGeneralBuscadorTests(_EscenarioTicketGeneralMixin, TestCase):
     def setUp(self):
         self._preparar_general(habilitar=True)
         self._preparar_catalogo_normal()
-        self.client.login(username="usuario_g", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("usuario_g@pruebas.orbita"))
 
     def _buscar(self, q, *, fragmento=False):
         extra = {"HTTP_X_REQUESTED_WITH": "fetch"} if fragmento else {}
@@ -8341,9 +8339,9 @@ class _EscenarioFlujoFasesMixin:
         from apps.workflows import fases as fases_ops
         from apps.workflows.versionamiento import activar_version as activar_workflow
 
-        self.solicitante = Usuario.objects.create_user(username="var_solicitante", password=CLAVE_PRUEBA)
-        self.aprobador = Usuario.objects.create_user(username="var_aprobador", password=CLAVE_PRUEBA)
-        self.admin = Usuario.objects.create_user(username="var_admin", password=CLAVE_PRUEBA)
+        self.solicitante = Usuario.objects.create_user("var_solicitante@pruebas.orbita")
+        self.aprobador = Usuario.objects.create_user("var_aprobador@pruebas.orbita")
+        self.admin = Usuario.objects.create_user("var_admin@pruebas.orbita")
         _otorgar_permiso(self.admin, "catalogo.administrar")
         self.workflow = fases_ops.crear_plantilla_fases(self.admin, nombre="Plantilla con variables")
         version = self.workflow.versiones.get(numero=1)
@@ -8736,7 +8734,7 @@ class VariablesWorkflowRegresionTests(TestCase):
     """4.B0 no altera la radicación de un Ticket sin Workflow."""
 
     def test_ticket_sin_workflow_se_radica_igual(self):
-        usuario = Usuario.objects.create_user(username="var_sin_flujo", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("var_sin_flujo@pruebas.orbita")
         servicio, _, _ = _crear_servicio_con_formulario(
             usuario, [{"tipo": Campo.TipoCampo.TEXTO, "etiqueta": "Asunto", "orden": 1}]
         )
@@ -8754,7 +8752,7 @@ class _EscenarioBloqueEntregableMixin(_EscenarioFlujoFasesMixin):
 
     def _preparar_entregables_flujo(self):
         self._preparar_flujo()
-        self.responsable = Usuario.objects.create_user(username="ent_responsable", password=CLAVE_PRUEBA)
+        self.responsable = Usuario.objects.create_user("ent_responsable@pruebas.orbita")
         self.equipo = Equipo.objects.create(nombre="Equipo de entregables 4B1")
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.responsable)
         _otorgar_tickets_atender(self.responsable)
@@ -9642,14 +9640,14 @@ class OperabilidadE2Tests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
 
     def setUp(self):
         self._preparar_e2()
-        self.ajeno = Usuario.objects.create_user(username="e2_ajeno", password=CLAVE_PRUEBA)
+        self.ajeno = Usuario.objects.create_user("e2_ajeno@pruebas.orbita")
 
     def _entrar(self, usuario):
         self.client.logout()
-        self.assertTrue(self.client.login(username=usuario.get_username(), password=CLAVE_PRUEBA))
+        self.client.force_login(usuario)
 
     def _detalle(self, ticket):
-        return self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        return self.client.get(reverse("tickets:espacio", args=[ticket.pk]) + "?vista=resumen")
 
     # --- quien atiende ------------------------------------------------------------------------------
 
@@ -9663,7 +9661,7 @@ class OperabilidadE2Tests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
         self.assertContains(pagina, "Trabajo actual")
         self.assertContains(pagina, "Analizar solicitud")
         self.assertContains(pagina, "Hay una actividad por completar.")
-        self.assertContains(pagina, "Abrir la actividad")
+        self.assertContains(pagina, "Ir a tu misión")  # la actividad se hace en la misión del espacio
 
         self._completar(ticket, "Analizar solicitud")
         self._completar(ticket, "Preparar presentación")
@@ -9701,7 +9699,7 @@ class OperabilidadE2Tests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
 
     # --- quien aprueba ---------------------------------------------------------------------------------
 
-    def test_el_aprobador_abre_la_bandeja_la_vista_previa_y_el_detalle_de_una_aprobacion_por_fases(self):
+    def test_el_aprobador_decide_en_el_espacio_lo_que_antes_veia_en_la_pagina_de_la_aprobacion(self):
         servicio, campos, definicion = self._servicio_e2()
         self._configurar_e2(servicio, definicion)
         ticket = self._atender(self._radicar_e2(servicio, campos))
@@ -9709,25 +9707,17 @@ class OperabilidadE2Tests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
         aprobacion = self._aprobacion_vigente(ticket)
         self._entrar(self.aprobador)
 
-        lista = self.client.get(reverse("aprobaciones:lista"))
-        self.assertEqual(lista.status_code, 200)
-        self.assertContains(lista, "Revisar presentación")
-        self.assertContains(lista, "Revisión")  # la fase
-
-        previa = self.client.get(reverse("aprobaciones:vista_previa", args=[aprobacion.pk]))
-        self.assertEqual(previa.status_code, 200)
-        self.assertContains(previa, "Revisar presentación")
-        self.assertContains(previa, self.ENTREGABLE)
-
-        detalle = self.client.get(reverse("aprobaciones:detalle", args=[aprobacion.pk]))
+        # Una sola vista de trabajo: la página de la aprobación lleva al espacio del ticket, donde se decide.
+        espacio = reverse("tickets:espacio", args=[ticket.pk])
+        self.assertRedirects(
+            self.client.get(reverse("aprobaciones:detalle", args=[aprobacion.pk])), espacio, fetch_redirect_response=False
+        )
+        detalle = self.client.get(espacio)
         self.assertEqual(detalle.status_code, 200)
-        self.assertContains(detalle, "Fase")
-        self.assertContains(detalle, "Bloque")
-        self.assertContains(detalle, "Entregable que se revisa")
+        self.assertContains(detalle, "Revisar presentación")
         self.assertContains(detalle, self.ENTREGABLE)
-        self.assertContains(detalle, "Entregado")
         self.assertContains(detalle, "Texto de la primera versión")
-        self.assertNotContains(detalle, "Revisión</dt><dd>N.º")  # primera pasada: sin número de ronda
+        self.assertNotContains(detalle, "Revisión 2")  # primera pasada: sin número de ronda
 
     def test_el_aprobador_decide_desde_la_interfaz_y_el_flujo_continua_solo(self):
         servicio, campos, definicion = self._servicio_e2()
@@ -9752,8 +9742,8 @@ class OperabilidadE2Tests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
         self._completar(ticket, "Corregir presentación")
         self._satisfacer(ticket, definicion, "Versión corregida")
         self._entrar(self.aprobador)
-        detalle = self.client.get(reverse("aprobaciones:detalle", args=[self._aprobacion_vigente(ticket).pk]))
-        self.assertContains(detalle, "N.º 2 de este entregable")
+        detalle = self.client.get(reverse("tickets:espacio", args=[ticket.pk]))
+        self.assertContains(detalle, "Revisión 2")
         self.assertContains(detalle, "Versión corregida")
         self.assertNotContains(detalle, "Versión 1")  # el contenido mostrado es la versión vigente
 
@@ -9764,11 +9754,11 @@ class OperabilidadE2Tests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
         self._completar(ticket, "Analizar solicitud")
         aprobacion = self._aprobacion_vigente(ticket, "Aprobar contratación")
         self._entrar(self.aprobador)
-        detalle = self.client.get(reverse("aprobaciones:detalle", args=[aprobacion.pk]))
+        self.assertTrue(aprobacion.pk)
+        detalle = self.client.get(reverse("tickets:espacio", args=[ticket.pk]))
         self.assertEqual(detalle.status_code, 200)
-        self.assertContains(detalle, "Bloque")
         self.assertContains(detalle, "Aprobar contratación")
-        self.assertNotContains(detalle, "Entregable que se revisa")
+        self.assertNotContains(detalle, "Lo que revisas")
 
     def test_el_aprobador_descarga_el_archivo_que_revisa_y_un_ajeno_no(self):
         servicio, campos, definicion = self._servicio_e2("ARCHIVO")
@@ -9782,7 +9772,7 @@ class OperabilidadE2Tests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
         url = reverse("tickets:descargar_adjunto", args=[archivo.pk])
 
         self._entrar(self.aprobador)
-        detalle = self.client.get(reverse("aprobaciones:detalle", args=[self._aprobacion_vigente(ticket).pk]))
+        detalle = self.client.get(reverse("tickets:espacio", args=[ticket.pk]))
         self.assertContains(detalle, "propuesta.txt")
         self.assertContains(detalle, url)
         self.assertEqual(self.client.get(url).status_code, 200)
@@ -9796,7 +9786,8 @@ class OperabilidadE2Tests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
         ticket = self._atender(self._radicar_e2(servicio, campos))
         self._hasta_la_primera_revision(ticket, definicion)
         self._entrar(self.aprobador)
-        self.assertEqual(self._detalle(ticket).status_code, 403)
+        self.assertEqual(self.client.get(reverse("tickets:detalle", args=[ticket.pk])).status_code, 403)
+        self.assertNotContains(self._detalle(ticket), "Resumen del ticket")  # solo ve su pieza, no la gestión
 
     def test_el_contexto_de_una_aprobacion_por_fases_trae_fase_y_bloque(self):
         from apps.aprobaciones.views import _contexto_workflow_por_esquema
@@ -9900,7 +9891,7 @@ class ConfirmacionYMisTicketsTests(_EscenarioAtencionMixin, TestCase):
 
     def setUp(self):
         self._preparar_escenario()
-        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solicitante23@pruebas.orbita"))
 
     def _borrador_completo(self):
         borrador = crear_borrador(self.solicitante, self.servicio)
@@ -9937,7 +9928,7 @@ class ConfirmacionYMisTicketsTests(_EscenarioAtencionMixin, TestCase):
 
     def test_mis_tickets_no_incluye_lo_que_debo_atender(self):
         self.client.logout()
-        self.client.login(username="responsable23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("responsable23@pruebas.orbita"))
         respuesta = self.client.get(reverse("tickets:mis_tickets"))
         self.assertEqual(list(respuesta.context["tickets"]), [])
         self.assertNotContains(respuesta, self.ticket.codigo)
@@ -9969,7 +9960,7 @@ class SeguimientoSolicitanteTests(_EscenarioAtencionMixin, TestCase):
 
     def _ver(self, usuario):
         self.client.logout()
-        self.assertTrue(self.client.login(username=usuario.get_username(), password=CLAVE_PRUEBA))
+        self.client.force_login(usuario)
         return self.client.get(self.url)
 
     def test_el_solicitante_ve_su_ticket_con_lo_esencial(self):
@@ -9994,7 +9985,7 @@ class SeguimientoSolicitanteTests(_EscenarioAtencionMixin, TestCase):
 
     def test_no_revela_usernames_ni_ids_internos_del_responsable(self):
         responsable = Usuario.objects.create_user(
-            username="ana.perez.interno", password=CLAVE_PRUEBA, first_name="Ana", last_name="Pérez"
+            "ana.perez.interno@pruebas.orbita", first_name="Ana", last_name="Pérez",
         )
         _otorgar_tickets_atender(responsable)
         Ticket.objects.filter(pk=self.ticket.pk).update(usuario_responsable=responsable)
@@ -10006,9 +9997,9 @@ class SeguimientoSolicitanteTests(_EscenarioAtencionMixin, TestCase):
     def test_un_usuario_ajeno_recibe_403_aunque_cambie_el_id(self):
         self.assertEqual(self._ver(self.ajeno).status_code, 403)
         self.assertEqual(self._ver(self.gestor_otra_area).status_code, 403)
-        otro = Usuario.objects.create_user(username="otro_solicitante23", password=CLAVE_PRUEBA)
+        otro = Usuario.objects.create_user("otro_solicitante23@pruebas.orbita")
         self.client.logout()
-        self.client.login(username="otro_solicitante23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("otro_solicitante23@pruebas.orbita"))
         self.assertEqual(self.client.get(self.url).status_code, 403)
         self.assertEqual(self.client.get(reverse("tickets:seguimiento", args=[99999999])).status_code, 404)
 
@@ -10023,10 +10014,10 @@ class SeguimientoSolicitanteTests(_EscenarioAtencionMixin, TestCase):
     def test_un_borrador_lleva_al_formulario_y_no_se_ve_si_es_ajeno(self):
         borrador = crear_borrador(self.solicitante, self.servicio)
         url = reverse("tickets:seguimiento", args=[borrador.pk])
-        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solicitante23@pruebas.orbita"))
         self.assertRedirects(self.client.get(url), reverse("tickets:borrador", args=[borrador.pk]))
         self.client.logout()
-        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ajeno23@pruebas.orbita"))
         self.assertEqual(self.client.get(url).status_code, 403)
 
     def test_sin_flujo_por_fases_no_hay_progreso(self):
@@ -10041,13 +10032,15 @@ class SeguimientoSolicitanteTests(_EscenarioAtencionMixin, TestCase):
         self.assertContains(respuesta, "te pidió más información")
         self.assertContains(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]))
 
-    def test_el_detalle_operativo_conserva_su_contenido_y_enlaza_al_seguimiento_del_solicitante(self):
-        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
-        detalle = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+    def test_la_gestion_del_espacio_reemplaza_al_detalle_operativo(self):
+        # El detalle aislado se retiró: su contenido operativo vive en la gestión del espacio; la solicitud original
+        # y el historial, en sus paneles.
+        self.client.force_login(persona("solicitante23@pruebas.orbita"))
+        detalle = self.client.get(reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen")
         self.assertContains(detalle, self.ticket.codigo)
-        self.assertContains(detalle, self.url)
-        self.assertContains(detalle, "Línea de tiempo")
-        self.assertContains(detalle, "Respuestas")
+        self.assertContains(detalle, "Resumen del ticket")
+        self.assertContains(detalle, "Solicitudes de información")
+        self.assertContains(detalle, "panel=solicitud")
 
 
 class SeguimientoPorFasesTests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
@@ -10058,7 +10051,7 @@ class SeguimientoPorFasesTests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
 
     def _progreso(self, ticket):
         self.client.logout()
-        self.client.login(username=self.solicitante.get_username(), password=CLAVE_PRUEBA)
+        self.client.force_login(self.solicitante)
         respuesta = self.client.get(reverse("tickets:seguimiento", args=[ticket.pk]))
         self.assertEqual(respuesta.status_code, 200)
         datos = respuesta.context["progreso"]
@@ -10122,7 +10115,7 @@ class SeguimientoPorFasesTests(_MediaAisladaMixin, _EscenarioE2Mixin, TestCase):
         self._configurar_e2(servicio, definicion)
         ticket = self._atender(self._radicar_e2(servicio, campos))
         self._hasta_la_primera_revision(ticket, definicion)
-        self.client.login(username=self.solicitante.get_username(), password=CLAVE_PRUEBA)
+        self.client.force_login(self.solicitante)
         respuesta = self.client.get(reverse("tickets:mis_tickets"))
         self.assertEqual(next(t for t in respuesta.context["tickets"] if t.pk == ticket.pk).fase_actual, "Revisión")
         self.assertContains(respuesta, '<span class="sr-only">Fase: </span>Revisión')
@@ -10135,7 +10128,7 @@ class SolicitanteNoTomaSuTicketTests(_EscenarioAtencionMixin, TestCase):
     def setUp(self):
         self._preparar_escenario()
         # Solicita Y pertenece al equipo responsable (y tiene `tickets.atender` global).
-        self.doble = Usuario.objects.create_user(username="doble_rol23", password=CLAVE_PRUEBA)
+        self.doble = Usuario.objects.create_user("doble_rol23@pruebas.orbita")
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.doble, activo=True)
         _otorgar_tickets_atender(self.doble)
         self.suyo = crear_borrador(self.doble, self.servicio)
@@ -10154,7 +10147,7 @@ class SolicitanteNoTomaSuTicketTests(_EscenarioAtencionMixin, TestCase):
         self.assertEqual((self.suyo.estado, self.suyo.usuario_responsable_id), (Ticket.Estado.RADICADO, None))
 
     def test_el_endpoint_directo_tambien_lo_rechaza(self):
-        self.client.login(username="doble_rol23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("doble_rol23@pruebas.orbita"))
         respuesta = self.client.post(reverse("tickets:tomar", args=[self.suyo.pk]))
         self.assertEqual(respuesta.status_code, 302)
         self.suyo.refresh_from_db()
@@ -10162,8 +10155,8 @@ class SolicitanteNoTomaSuTicketTests(_EscenarioAtencionMixin, TestCase):
         self.assertTrue(any("autorización" in str(m) for m in get_messages(respuesta.wsgi_request)))
 
     def test_el_detalle_no_ofrece_tomar_al_solicitante(self):
-        self.client.login(username="doble_rol23", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("tickets:detalle", args=[self.suyo.pk]))
+        self.client.force_login(persona("doble_rol23@pruebas.orbita"))
+        respuesta = self.client.get(reverse("tickets:espacio", args=[self.suyo.pk]) + "?vista=resumen")
         self.assertFalse(respuesta.context["puede_tomar"])
         self.assertNotContains(respuesta, reverse("tickets:tomar", args=[self.suyo.pk]))
 
@@ -10177,7 +10170,7 @@ class SolicitanteNoTomaSuTicketTests(_EscenarioAtencionMixin, TestCase):
         self.assertEqual(tomar_ticket(self.ticket, self.doble).usuario_responsable_id, self.doble.pk)
 
     def test_un_responsable_global_tampoco_toma_su_propio_ticket(self):
-        global_ = Usuario.objects.create_user(username="global_solicita23", password=CLAVE_PRUEBA)
+        global_ = Usuario.objects.create_user("global_solicita23@pruebas.orbita")
         _otorgar_tickets_atender(global_)
         propio = crear_borrador(global_, self.servicio)
         _completar_texto(propio, global_, self.campos)
@@ -10191,13 +10184,13 @@ class SolicitanteNoTomaSuTicketTests(_EscenarioAtencionMixin, TestCase):
         self.assertTrue(puede_asignar(self.gestor_area, self.suyo))
 
     def test_crear_un_ticket_no_lo_pone_en_la_cola_del_solicitante(self):
-        self.client.login(username="doble_rol23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("doble_rol23@pruebas.orbita"))
         cola = self.client.get(reverse("tickets:cola"))
         self.assertNotIn(self.suyo, cola.context["tickets"])
         self.assertIn(self.ticket, cola.context["tickets"])  # lo ajeno sí sigue siendo trabajo suyo
 
     def test_los_miembros_validos_siguen_viendolo_en_su_cola(self):
-        self.client.login(username="miembro23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("miembro23@pruebas.orbita"))
         cola = self.client.get(reverse("tickets:cola"))
         self.assertIn(self.suyo, cola.context["tickets"])
         self.assertTrue(puede_ver_en_cola(self.miembro_equipo, self.suyo))
@@ -10211,12 +10204,12 @@ class SolicitanteNoTomaSuTicketTests(_EscenarioAtencionMixin, TestCase):
     def test_el_escenario_a_b_del_equipo(self):
         # A solicita; B pertenece al equipo responsable.
         self.assertFalse(puede_ver_en_cola(self.ajeno, self.ticket))
-        self.client.login(username="solicitante23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solicitante23@pruebas.orbita"))
         self.assertIn(self.ticket, self.client.get(reverse("tickets:mis_tickets")).context["tickets"])
         self.assertNotIn(self.ticket, self.client.get(reverse("tickets:cola")).context["tickets"])
         self.assertFalse(puede_tomar(self.solicitante, self.ticket))
         self.client.logout()
-        self.client.login(username="miembro23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("miembro23@pruebas.orbita"))
         self.assertIn(self.ticket, self.client.get(reverse("tickets:cola")).context["tickets"])
         self.assertEqual(self.client.get(reverse("tickets:seguimiento", args=[self.ticket.pk])).status_code, 200)
         self.assertTrue(puede_tomar(self.miembro_equipo, self.ticket))
@@ -10226,8 +10219,8 @@ class FechaRequeridaPlazoTests(TestCase):
     """La fecha que pide el solicitante frente al tiempo objetivo del servicio: informa, no bloquea."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="plazo_solicitante", password=CLAVE_PRUEBA)
-        self.responsable = Usuario.objects.create_user(username="plazo_responsable", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("plazo_solicitante@pruebas.orbita")
+        self.responsable = Usuario.objects.create_user("plazo_responsable@pruebas.orbita")
         self.equipo = Equipo.objects.create(nombre="Equipo plazo")
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.responsable)
         _otorgar_tickets_atender(self.responsable)
@@ -10316,7 +10309,7 @@ class FechaRequeridaPlazoTests(TestCase):
         servicio = self._servicio()
         ayer = (timezone.localdate() - timedelta(days=1)).isoformat()
         ticket = self._borrador(servicio, ayer)
-        self.client.login(username="plazo_solicitante", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("plazo_solicitante@pruebas.orbita"))
 
         revision = self.client.get(reverse("tickets:revisar", args=[ticket.pk]))
         self.assertEqual(revision.status_code, 200)
@@ -10334,7 +10327,7 @@ class FechaRequeridaPlazoTests(TestCase):
         servicio = self._servicio()
         lejos = (timezone.localdate() + timedelta(days=60)).isoformat()
         ticket = self._borrador(servicio, lejos)
-        self.client.login(username="plazo_solicitante", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("plazo_solicitante@pruebas.orbita"))
         revision = self.client.get(reverse("tickets:revisar", args=[ticket.pk]))
         self.assertEqual(revision.status_code, 200)
         self.assertNotContains(revision, "La fecha solicitada es anterior")
@@ -10357,8 +10350,8 @@ class FechaRequeridaPlazoTests(TestCase):
         ticket.refresh_from_db()
         estado, vigente, politica = ticket.estado, ticket.fecha_objetivo_vigente, ticket.prorroga_politica
 
-        self.client.login(username="plazo_responsable", password=CLAVE_PRUEBA)
-        detalle = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        self.client.force_login(persona("plazo_responsable@pruebas.orbita"))
+        detalle = self.client.get(reverse("tickets:espacio", args=[ticket.pk]) + "?vista=resumen")
         self.assertContains(detalle, "Fecha solicitada anterior al tiempo objetivo")
         self.assertContains(detalle, "Objetivo del servicio")
         ticket.refresh_from_db()
@@ -10370,7 +10363,7 @@ class FechaRequeridaPlazoTests(TestCase):
         servicio = self._servicio()
         ticket = self._borrador(servicio, "2030-01-15")
         radicar_ticket(ticket, self.usuario)
-        self.client.login(username="plazo_solicitante", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("plazo_solicitante@pruebas.orbita"))
         seguimiento = self.client.get(reverse("tickets:seguimiento", args=[ticket.pk]))
         self.assertContains(seguimiento, "Fecha solicitada")
         self.assertContains(seguimiento, "15 Ene 2030")
@@ -10388,7 +10381,7 @@ class _EscenarioTrabajoMixin(_EscenarioE2Mixin):
 
     def _entrar(self, usuario):
         self.client.logout()
-        self.assertTrue(self.client.login(username=usuario.get_username(), password=CLAVE_PRUEBA))
+        self.client.force_login(usuario)
 
     def _trabajo(self, ticket):
         return self.client.get(reverse("tickets:trabajo", args=[ticket.pk]))
@@ -10441,7 +10434,7 @@ class ColaYTomarTests(_EscenarioTrabajoMixin, TestCase):
     def test_el_resumen_solo_lo_ve_quien_puede_verlo_en_la_cola(self):
         self._entrar(self.solicitante)
         self.assertEqual(self.client.get(reverse("tickets:resumen", args=[self.ticket.pk])).status_code, 403)
-        ajeno = Usuario.objects.create_user(username="trabajo_ajeno", password=CLAVE_PRUEBA)
+        ajeno = Usuario.objects.create_user("trabajo_ajeno@pruebas.orbita")
         self._entrar(ajeno)
         self.assertEqual(self.client.get(reverse("tickets:resumen", args=[self.ticket.pk])).status_code, 403)
 
@@ -10461,7 +10454,7 @@ class ColaYTomarTests(_EscenarioTrabajoMixin, TestCase):
     def test_un_destino_externo_en_next_se_ignora(self):
         self._entrar(self.responsable)
         respuesta = self.client.post(reverse("tickets:tomar", args=[self.ticket.pk]), {"next": "https://otro.example/x"})
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]), fetch_redirect_response=False)
+        self.assertRedirects(respuesta, reverse("tickets:espacio", args=[self.ticket.pk]), fetch_redirect_response=False)
 
     def test_el_solicitante_no_puede_tomarlo_ni_llamando_al_endpoint(self):
         self._entrar(self.solicitante)
@@ -10543,7 +10536,7 @@ class EspacioDeTrabajoPorFasesTests(_MediaAisladaMixin, _EscenarioTrabajoMixin, 
         self.assertEqual(entregable.archivos.count(), 0)
 
     def test_el_detalle_tampoco_ofrece_escribir_un_entregable_que_aun_no_es_su_turno(self):
-        detalle = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        detalle = self.client.get(reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen")
         entregable = self.ticket.entregables.get(definicion=self.definicion)
         self.assertContains(detalle, "Se podrá completar cuando el flujo llegue a este paso")
         self.assertNotContains(detalle, reverse("tickets:entregable_resultado", args=[self.ticket.pk, entregable.pk]))
@@ -10570,7 +10563,7 @@ class EspacioDeTrabajoPorFasesTests(_MediaAisladaMixin, _EscenarioTrabajoMixin, 
         self.assertRedirects(
             self._trabajo(self.ticket), reverse("tickets:seguimiento", args=[self.ticket.pk]), fetch_redirect_response=False
         )
-        ajeno = Usuario.objects.create_user(username="trabajo_ajeno2", password=CLAVE_PRUEBA)
+        ajeno = Usuario.objects.create_user("trabajo_ajeno2@pruebas.orbita")
         self._entrar(ajeno)
         self.assertEqual(self._trabajo(self.ticket).status_code, 403)
         tarea = self._trabajo_tarea()
@@ -10687,7 +10680,7 @@ class TareasDelFlujoSinDuenoTests(_EscenarioTrabajoMixin, TestCase):
     def test_asignar_el_ticket_a_una_persona_tambien_le_entrega_la_actividad(self):
         servicio, campos = self._servicio_con_actividad_del_responsable()
         ticket = self._radicar_e2(servicio, campos)
-        gestor = Usuario.objects.create_user(username="trabajo_gestor", password=CLAVE_PRUEBA)
+        gestor = Usuario.objects.create_user("trabajo_gestor@pruebas.orbita")
         _otorgar_tickets_atender(gestor)
         asignar_ticket(ticket, gestor, usuario=self.responsable)
         self.assertEqual(self._tarea_vigente(ticket).usuario_responsable_id, self.responsable.pk)
@@ -10696,7 +10689,7 @@ class TareasDelFlujoSinDuenoTests(_EscenarioTrabajoMixin, TestCase):
         servicio, campos, definicion = self._servicio_e2()
         self._configurar_e2(servicio, definicion)  # actividades con responsable fijo (USUARIO)
         ticket = self._radicar_e2(servicio, campos)
-        otro = Usuario.objects.create_user(username="trabajo_otro_miembro", password=CLAVE_PRUEBA)
+        otro = Usuario.objects.create_user("trabajo_otro_miembro@pruebas.orbita")
         _otorgar_tickets_atender(otro)
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=otro)
         antes = self._tarea_vigente(ticket).usuario_responsable_id
@@ -10750,7 +10743,7 @@ class TrabajoEnElHomeYCalendarioTests(_EscenarioTrabajoMixin, TestCase):
         Tarea.objects.filter(pk=tarea.pk).update(fecha_limite=timezone.now() + timedelta(days=3))
         eventos = inicio._eventos(self.responsable, hasta)
         con_fecha = [e for e in eventos if e["tipo"] == "tarea"]
-        self.assertEqual([e["url"] for e in con_fecha], [reverse("tareas:detalle", args=[tarea.pk])])
+        self.assertEqual([e["url"] for e in con_fecha], [reverse("tickets:espacio", args=[self.ticket.pk])])
 
     def test_la_fecha_objetivo_del_ticket_aparece_en_el_calendario_del_home(self):
         from apps.core import inicio
@@ -10847,7 +10840,7 @@ class _EscenarioProgramadoMixin(_EscenarioTrabajoMixin):
     def _preparar_programado(self):
         self._preparar_e2()
         self.analitica = Equipo.objects.create(nombre="Equipo Analítica")
-        self.analista = Usuario.objects.create_user(username="g1_analista", password=CLAVE_PRUEBA)
+        self.analista = Usuario.objects.create_user("g1_analista@pruebas.orbita")
         MiembroEquipo.objects.create(equipo=self.analitica, usuario=self.analista)
         _otorgar_tickets_atender(self.analista)
 
@@ -11226,11 +11219,11 @@ class GenerarEjecucionProgramadaTests(_EscenarioProgramadoMixin, TestCase):
         self.assertContains(cola, "Generado por programación")
 
         # Pantallas de lectura sin solicitante.
-        self.assertEqual(self.client.get(reverse("tickets:detalle", args=[ticket.pk])).status_code, 200)
+        self.assertEqual(self.client.get(reverse("tickets:espacio", args=[ticket.pk]) + "?vista=resumen").status_code, 200)
         self.assertEqual(self.client.get(reverse("tickets:resumen", args=[ticket.pk])).status_code, 200)
         self.assertRedirects(
             self.client.get(reverse("tickets:seguimiento", args=[ticket.pk])),
-            reverse("tickets:detalle", args=[ticket.pk]), fetch_redirect_response=False,
+            reverse("tickets:espacio", args=[ticket.pk]), fetch_redirect_response=False,
         )
 
         # Un miembro autorizado lo toma y pasa a Mi trabajo.
@@ -11388,7 +11381,7 @@ class GenerarEjecucionProgramadaTests(_EscenarioProgramadoMixin, TestCase):
         ticket = self._ejecucion(servicio).ticket
         self.assertEqual((ticket.equipo_responsable, ticket.usuario_responsable_id), (self.analitica, None))
         self.assertTrue(puede_tomar(self.analista, ticket))
-        ajeno = Usuario.objects.create_user(username="g1_ajeno", password=CLAVE_PRUEBA)
+        ajeno = Usuario.objects.create_user("g1_ajeno@pruebas.orbita")
         self.assertFalse(puede_tomar(ajeno, ticket))
         self.assertFalse(puede_tomar(self.admin, ticket))  # administrar el catálogo no es atender
 
@@ -11907,7 +11900,7 @@ class ParrillaTicketTests(_EscenarioParrillaMixin, TestCase):
         self.assertIsNone(parrilla_ops.parrilla_de(ticket))
         tomar_ticket(ticket, self.analista)
         self._entrar(self.analista)
-        pagina = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        pagina = self.client.get(reverse("tickets:espacio", args=[ticket.pk]) + "?vista=resumen")
         self.assertEqual(pagina.status_code, 200)
         self.assertIsNone(pagina.context["parrilla"])
         self.assertNotContains(pagina, 'id="elementos"')
@@ -12040,7 +12033,7 @@ class ElementosParrillaTests(_EscenarioParrillaMixin, TestCase):
     def test_ui_minima_en_el_ticket_y_editor_de_columnas_en_el_studio(self):
         # Ticket: ver columnas, agregar, editar y retirar.
         self._entrar(self.analista)
-        url_detalle = reverse("tickets:detalle", args=[self.ticket.pk])
+        url_detalle = reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen"
         self.assertContains(self.client.get(url_detalle), 'id="elementos"')
         respuesta = self.client.post(
             reverse("tickets:elemento_agregar", args=[self.ticket.pk]),
@@ -12104,7 +12097,7 @@ class OperacionElementosParrillaTests(_EscenarioParrillaMixin, TestCase):
         self._preparar_programado()
         _otorgar_permiso(self.admin, "formulario.administrar")
         self.servicio, self.resp, self.definicion, self.campos, self.ticket = self._ticket_con_parrilla()
-        self.persona = Usuario.objects.create_user(username="g2b2_persona", password=CLAVE_PRUEBA)
+        self.persona = Usuario.objects.create_user("g2b2_persona@pruebas.orbita")
 
     def _crear(self, **valores):
         return parrilla_ops.crear_elemento(
@@ -12258,7 +12251,7 @@ class OperacionElementosParrillaTests(_EscenarioParrillaMixin, TestCase):
 
     def test_la_vista_distingue_filas_incompletas_completas_y_retiradas(self):
         self._entrar(self.analista)
-        url = reverse("tickets:detalle", args=[self.ticket.pk])
+        url = reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen"
         self.client.post(
             reverse("tickets:elemento_agregar", args=[self.ticket.pk]), {f"campo_{self.campos['Tema'].pk}": "Campaña A"}
         )
@@ -12309,10 +12302,10 @@ class _EscenarioRevisionMixin(_EscenarioParrillaMixin):
 
     def _preparar_revision(self):
         self._preparar_programado()
-        self.revisor = Usuario.objects.create_user(username="g2c_revisor", password=CLAVE_PRUEBA)
-        self.otro = Usuario.objects.create_user(username="g2c_otro", password=CLAVE_PRUEBA)
-        self.persona = Usuario.objects.create_user(username="g2c_persona", password=CLAVE_PRUEBA)
-        self.miembro = Usuario.objects.create_user(username="g2c_miembro", password=CLAVE_PRUEBA)
+        self.revisor = Usuario.objects.create_user("g2c_revisor@pruebas.orbita")
+        self.otro = Usuario.objects.create_user("g2c_otro@pruebas.orbita")
+        self.persona = Usuario.objects.create_user("g2c_persona@pruebas.orbita")
+        self.miembro = Usuario.objects.create_user("g2c_miembro@pruebas.orbita")
         self.equipo_revision = Equipo.objects.create(nombre="Equipo de revisión")
         MiembroEquipo.objects.create(equipo=self.equipo_revision, usuario=self.miembro)
 
@@ -12455,7 +12448,7 @@ class EntregableDeConjuntoTests(_EscenarioRevisionMixin, TestCase):
         ticket, entregable = self._ticket_con_conjunto()
         elemento = self._completo(ticket)
         for quien in (self.analista, self.otro, self.solicitante):
-            with self.subTest(quien=quien.username):
+            with self.subTest(quien=quien.email):
                 with self.assertRaises(PermissionDenied):
                     revision_ops.aprobar_elemento(entregable, elemento, quien)
                 with self.assertRaises(PermissionDenied):
@@ -12619,7 +12612,7 @@ class EntregableDeConjuntoTests(_EscenarioRevisionMixin, TestCase):
         a, b = self._completo(ticket, "A"), self._completo(ticket, "B")
         url = reverse("tickets:revision_conjunto", args=[ticket.pk, entregable.pk])
         self._entrar(self.analista)
-        detalle = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        detalle = self.client.get(reverse("tickets:espacio", args=[ticket.pk]) + "?vista=resumen")
         self.assertContains(detalle, url)
         pagina = self.client.get(url)
         self.assertContains(pagina, "0/2")
@@ -12790,29 +12783,22 @@ class ConjuntoEnElFlujoTests(_EscenarioConjuntoEnFlujoMixin, TestCase):
         url = reverse("tickets:revision_conjunto", args=[ticket.pk, entregable.pk])
         espacio = reverse("tickets:espacio", args=[ticket.pk])
         self._entrar(self.revisor)
-        self.assertNotContains(self.client.get(reverse("core:mi_trabajo") + "?tab=revisiones"), url)  # aún no es su turno
-        self.assertEqual(revision_ops.revisiones_pendientes_para(self.revisor), [])
+        self.assertEqual(revision_ops.revisiones_pendientes_para(self.revisor), [])  # aún no es su turno
         self._completar_como(ticket, "Atender", self.analista)
-        # UX-2: la bandeja muestra el TICKET (una fila) con la revisión como siguiente acción; el detalle técnico
-        # de la revisión sigue en su bandeja (`?tab=revisiones`).
+        # Una sola bandeja: el TICKET (una fila) con la revisión como siguiente acción (sin pestañas técnicas).
         pagina = self.client.get(reverse("core:mi_trabajo"))
         self.assertContains(pagina, espacio)
-        self.assertContains(pagina, "Piezas aprobadas")
         self.assertContains(pagina, "Revisión de elementos")
-        tecnica = self.client.get(reverse("core:mi_trabajo") + "?tab=revisiones")
-        self.assertContains(tecnica, url)
-        self.assertContains(tecnica, "0/2 aprobados")
-        self.assertEqual(tecnica.context["total_revisiones"], 1)
+        self.assertEqual(len(revision_ops.revisiones_pendientes_para(self.revisor)), 1)
+        self.assertTrue(url)
         self._entrar(self.miembro)  # quien revisa por equipo la ve igual
         self.assertContains(self.client.get(reverse("core:mi_trabajo")), espacio)
-        self._entrar(self.analista)  # el responsable no revisa: no la ve como revisión suya
-        self.assertEqual(self.client.get(reverse("core:mi_trabajo")).context["total_revisiones"], 0)
-        self._entrar(self.otro)
-        self.assertEqual(self.client.get(reverse("core:mi_trabajo")).context["total_revisiones"], 0)
+        # El responsable no revisa (no es revisión suya), ni quien no tiene relación.
+        self.assertEqual(revision_ops.revisiones_pendientes_para(self.analista), [])
+        self.assertEqual(revision_ops.revisiones_pendientes_para(self.otro), [])
         revision_ops.aprobar_elemento(entregable, a, self.revisor)
         revision_ops.devolver_elemento(entregable, b, self.revisor, "Ajusta")
-        self._entrar(self.revisor)
-        self.assertContains(self.client.get(reverse("core:mi_trabajo")), url)  # una devuelta sigue a la vista
+        self.assertEqual(len(revision_ops.revisiones_pendientes_para(self.revisor)), 1)  # una devuelta sigue a la vista
         revision_ops.aprobar_elemento(entregable, b, self.revisor)  # completado
         self.assertEqual(revision_ops.revisiones_pendientes_para(self.revisor), [])
         self.assertNotContains(self.client.get(reverse("core:mi_trabajo")), url)
@@ -13086,22 +13072,25 @@ class CancelacionConWorkflowTests(_EscenarioConjuntoEnFlujoMixin, TestCase):
         self._entrar(self.analista)
         contexto = self.client.get(reverse("core:mi_trabajo")).context
         self.assertEqual({t["ticket"].pk for t in contexto["tarjetas"]}, {ticket.pk, otro.pk})
-        self.assertIn("Pendiente", [f["estado"] for f in contexto["filas"]])
+        self.assertTrue({g.ticket.pk for g in contexto["bandeja"]["filas"]} >= {ticket.pk, otro.pk})
         cancelar_ticket(ticket, self.analista, "Cancelado.")
         cancelar_ticket(otro, self.analista, "Cancelado.")
         self.assertEqual(revision_ops.revisiones_pendientes_para(self.revisor), [])
         contexto = self.client.get(reverse("core:mi_trabajo")).context
         self.assertEqual(contexto["tarjetas"], [])
-        self.assertNotIn("Cancelada", [f["estado"] for f in contexto["filas"]])
-        self.assertNotIn("Pendiente", [f["estado"] for f in contexto["filas"]])  # solo queda lo ya completado
+        # Lo cancelado sale de la bandeja (una fila por ticket): ninguno de los dos sigue como trabajo.
+        self.assertFalse({g.ticket.pk for g in contexto["bandeja"]["filas"]} & {ticket.pk, otro.pk})
         for ver in ("para_tomar", "supervision"):
             cola = self.client.get(reverse("tickets:cola") + f"?ver={ver}").context["tickets"]
             self.assertFalse({t.pk for t in cola} & {ticket.pk, otro.pk})
         self._entrar(self.revisor)
-        self.assertEqual(self.client.get(reverse("core:mi_trabajo")).context["total_revisiones"], 0)
+        self.assertFalse(
+            {g.ticket.pk for g in self.client.get(reverse("core:mi_trabajo")).context["bandeja"]["filas"]}
+            & {ticket.pk, otro.pk}
+        )
         # El Ticket cancelado se conserva visible para quien lo consulta, con su historial y valores.
         self._entrar(self.analista)
-        detalle = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        detalle = self.client.get(reverse("tickets:espacio", args=[ticket.pk]) + "?vista=resumen")
         self.assertEqual(detalle.status_code, 200)
         self.assertContains(detalle, "Cancelado")
         self.assertEqual(parrilla_ops.valores_de(a)["tema"], "A")
@@ -13290,7 +13279,7 @@ class MaterializacionDeTareasPorElementoTests(_EscenarioTareasElementoMixin, Tes
 
     def test_genera_una_tarea_por_elemento_vigente_con_sus_datos_responsable_y_fecha(self):
         ticket = self._ticket_tareas()
-        otra = Usuario.objects.create_user(username="g2d_otra", password=CLAVE_PRUEBA)
+        otra = Usuario.objects.create_user("g2d_otra@pruebas.orbita")
         a = self._el(ticket, "Reel", Detalle="Guion uno")
         b = self._el(ticket, "Carrusel", responsable=otra)
         c = self._el(ticket, "Historia", entrega=date(2026, 11, 2))
@@ -13347,7 +13336,7 @@ class MaterializacionDeTareasPorElementoTests(_EscenarioTareasElementoMixin, Tes
             tareas_ops.materializar_tareas(ticket, self.analista)
         # Responsable: debe ser una persona activa.
         Campo.objects.filter(pk=self.campos["Cierre"].pk).update(configuracion={})
-        inactiva = Usuario.objects.create_user(username="g2d_inactiva", password=CLAVE_PRUEBA)
+        inactiva = Usuario.objects.create_user("g2d_inactiva@pruebas.orbita")
         ticket2 = generar_ejecucion_programada(self.programacion, hoy=date(2026, 11, 7)).ticket
         tomar_ticket(ticket2, self.analista)
         self._el(ticket2, "Con baja", responsable=inactiva)
@@ -13954,7 +13943,7 @@ class EspacioDeTrabajoDeProcesoTests(_MediaAisladaMixin, _EscenarioBloqueTareasM
         # Un destino externo se ignora; y quien no atiende el ticket no corrige elementos.
         externo = self.client.post(guardar, {f"campo_{self.campos['Tema'].pk}": "A otra vez", "next": "https://otro.example/"})
         self.assertRedirects(
-            externo, reverse("tickets:detalle", args=[ticket.pk]) + "#elementos", fetch_redirect_response=False
+            externo, reverse("tickets:espacio", args=[ticket.pk]) + "?vista=resumen" + "#elementos", fetch_redirect_response=False
         )
         self.client.force_login(self.persona)
         self.client.post(guardar, {f"campo_{self.campos['Tema'].pk}": "Intruso", "next": destino})
@@ -14549,7 +14538,7 @@ class ColeccionesMultiplesTests(_EscenarioParrillaMixin, TestCase):
         segunda = self._segunda_coleccion(servicio)
         ticket = self._ticket(servicio, resp)
         self._entrar(self.analista)
-        pagina = self.client.get(reverse("tickets:detalle", args=[ticket.pk]))
+        pagina = self.client.get(reverse("tickets:espacio", args=[ticket.pk]) + "?vista=resumen")
         self.assertContains(pagina, 'id="elementos"')
         self.assertContains(pagina, 'id="elementos-insumo"')
         detalle = segunda.formulario.version_activa.campos.get()
@@ -14636,10 +14625,10 @@ class ArchivosVersionesYAlcanceTests(_MediaAisladaMixin, _EscenarioParrillaMixin
             {"archivo": self._pdf()},
         )
         adjunto = Adjunto.objects.get(elemento=self.elemento)
-        pagina = self.client.get(reverse("tickets:detalle", args=[self.ticket.pk]))
+        pagina = self.client.get(reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen")
         self.assertContains(pagina, reverse("tickets:descargar_adjunto", args=[adjunto.pk]))
         self.assertEqual(self.client.get(reverse("tickets:descargar_adjunto", args=[adjunto.pk])).status_code, 200)
-        ajeno = Usuario.objects.create_user("ajeno_archivo_elemento", password=CLAVE_PRUEBA)
+        ajeno = Usuario.objects.create_user("ajeno_archivo_elemento@pruebas.orbita")
         self.client.force_login(ajeno)
         self.assertEqual(self.client.get(reverse("tickets:descargar_adjunto", args=[adjunto.pk])).status_code, 403)
 
@@ -14725,7 +14714,7 @@ class ArchivosVersionesYAlcanceTests(_MediaAisladaMixin, _EscenarioParrillaMixin
 
     def test_la_vista_cierra_el_alcance_y_excluye_con_justificacion(self):
         self._entrar(self.analista)
-        url = reverse("tickets:detalle", args=[self.ticket.pk])
+        url = reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen"
         self.assertContains(self.client.get(url), "Cerrar alcance")
         self.client.post(reverse("tickets:alcance_cerrar", args=[self.ticket.pk]), {"coleccion": self.ticket.parrilla.clave})
         self.assertTrue(self.ticket.parrilla.alcance_cerrado)
@@ -14773,10 +14762,10 @@ class _EscenarioRecorridosMixin(_EscenarioParrillaMixin):
 
     def _preparar_recorridos(self):
         self._preparar_programado()
-        self.revisor = Usuario.objects.create_user(username="f2_revisor", password=CLAVE_PRUEBA)
-        self.disenadora = Usuario.objects.create_user(username="f2_disenadora", password=CLAVE_PRUEBA)
-        self.disenador = Usuario.objects.create_user(username="f2_disenador", password=CLAVE_PRUEBA)
-        self.ajeno = Usuario.objects.create_user(username="f2_ajeno", password=CLAVE_PRUEBA)
+        self.revisor = Usuario.objects.create_user("f2_revisor@pruebas.orbita")
+        self.disenadora = Usuario.objects.create_user("f2_disenadora@pruebas.orbita")
+        self.disenador = Usuario.objects.create_user("f2_disenador@pruebas.orbita")
+        self.ajeno = Usuario.objects.create_user("f2_ajeno@pruebas.orbita")
 
     def _proceso_recorrido(
         self, *, recorrido_cfg=None, actor_columna="Responsable", generales=(), contenedor="RECORRIDO_ITEMS",
@@ -14992,7 +14981,7 @@ class RecorridosPorItemTests(_EscenarioRecorridosMixin, TestCase):
 
     def test_el_espacio_de_trabajo_y_el_detalle_muestran_los_recorridos(self):
         self._entrar(self.analista)
-        for url in (reverse("tickets:trabajo", args=[self.ticket.pk]), reverse("tickets:detalle", args=[self.ticket.pk])):
+        for url in (reverse("tickets:trabajo", args=[self.ticket.pk]), reverse("tickets:espacio", args=[self.ticket.pk]) + "?vista=resumen"):
             respuesta = self.client.get(url)
             self.assertEqual(respuesta.status_code, 200)
             self.assertContains(respuesta, "Recorridos")
@@ -15005,12 +14994,15 @@ class RecorridosPorItemTests(_EscenarioRecorridosMixin, TestCase):
     def test_la_aprobacion_muestra_el_item_y_ofrece_excluir(self):
         self._producir(self.banner, self.disenadora)
         aprobacion = self._aprobacion_de(self._hija(self.banner))
+        from apps.aprobaciones.views import _contexto_item, _decision_form
+
         self._entrar(self.revisor)
-        respuesta = self.client.get(reverse("aprobaciones:detalle", args=[aprobacion.pk]))
+        # Se decide en el espacio del ticket (la página de la aprobación lleva allí), con el ítem y «Excluir».
+        respuesta = self.client.get(reverse("aprobaciones:detalle", args=[aprobacion.pk]), follow=True)
         self.assertEqual(respuesta.status_code, 200)
-        self.assertEqual(respuesta.context["item_aprobado"]["elemento"], self.banner)
         self.assertContains(respuesta, "Banner")
-        self.assertIn("EXCLUIDA", [valor for valor, _ in respuesta.context["decision_form"].fields["decision"].choices])
+        self.assertEqual(_contexto_item(aprobacion)["elemento"], self.banner)
+        self.assertIn("EXCLUIDA", [valor for valor, _ in _decision_form(aprobacion, es_prorroga=False).fields["decision"].choices])
 
 
 class RecorridoDetenidoYCondicionesTests(_EscenarioRecorridosMixin, TestCase):
@@ -15238,8 +15230,8 @@ class EstructuraDeContenedoresTests(_EscenarioRecorridosMixin, TestCase):
 
 class AprobacionesDecisionesPermitidasTests(TestCase):
     def setUp(self):
-        self.a = Usuario.objects.create_user(username="f2_apr_a", password=CLAVE_PRUEBA)
-        self.b = Usuario.objects.create_user(username="f2_apr_b", password=CLAVE_PRUEBA)
+        self.a = Usuario.objects.create_user("f2_apr_a@pruebas.orbita")
+        self.b = Usuario.objects.create_user("f2_apr_b@pruebas.orbita")
 
     def _esquema(self, **opciones):
         from apps.aprobaciones.operaciones import crear_esquema_aprobacion

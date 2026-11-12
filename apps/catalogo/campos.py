@@ -12,7 +12,7 @@ El mapping `TipoCampo -> EstrategiaCampo` (`ESTRATEGIAS_POR_TIPO`) es un
 diccionario plano: no se introduce una clase Factory porque un `dict` ya
 resuelve el único punto de variación real (qué tipo usa qué estrategia).
 
-Los 14 tipos de RQF-040 se agrupan en 7 estrategias por comportamiento
+Los 14 tipos de RQF-040 (más EQUIPO y CHECKLIST) se agrupan en 8 estrategias por comportamiento
 realmente equivalente, no una por tipo.
 """
 
@@ -287,6 +287,35 @@ class EstrategiaArchivo(EstrategiaCampo):
             raise ValidationError(f"El archivo excede el tamaño máximo de {tamano_maximo} MB.")
 
 
+class EstrategiaChecklist(EstrategiaArchivo):
+    """CHECKLIST («Lista de evidencias»): los PUNTOS son `OpcionCampo` (como una lista) y cada uno se marca con su
+    prueba —un archivo o un enlace— en `tickets.MarcaEvidencia` (nunca como valor de celda o de respuesta). La
+    configuración solo limita las pruebas en archivo (extensiones y tamaño, igual que ARCHIVO). El «valor» que se
+    valida es el conjunto de puntos marcados: está completo cuando todos los puntos tienen su prueba."""
+
+    widget = "checklist"
+
+    def normalizar(self, valor):
+        return sorted({str(v) for v in (valor or [])})
+
+    def validar_valor(self, campo, valor):
+        puntos = set(campo.opciones.values_list("valor", flat=True))
+        if not puntos:
+            raise ValidationError("La lista de evidencias no tiene puntos configurados.")
+        faltan = puntos - set(self.normalizar(valor))
+        if faltan:
+            raise ValidationError(f"Faltan {len(faltan)} evidencia(s) por subir.")
+
+    def validar_prueba(self, campo, *, archivo=None, enlace=""):
+        """La prueba de UN punto: exactamente un archivo (extensión y tamaño de la configuración) o un enlace."""
+        if bool(archivo) == bool((enlace or "").strip()):
+            raise ValidationError("Cada evidencia es un archivo o un enlace (uno de los dos).")
+        if archivo:
+            super().validar_valor(campo, {"nombre": archivo.name, "tamano_mb": archivo.size / (1024 * 1024)})
+        else:
+            URLValidator()(enlace.strip())
+
+
 class EstrategiaReferenciaOrganizacional(EstrategiaCampo):
     """USUARIO, AREA, UNIDAD — reutilizan los modelos reales de `apps.core`,
     sin duplicar datos organizacionales (mismo principio que `apps.catalogo`
@@ -339,6 +368,7 @@ ESTRATEGIAS_POR_TIPO = {
     "MULTILISTA": EstrategiaSeleccion(multiple=True),
     "BOOLEANO": EstrategiaBooleano(),
     "ARCHIVO": EstrategiaArchivo(),
+    "CHECKLIST": EstrategiaChecklist(),
     "USUARIO": EstrategiaReferenciaOrganizacional(modelo=Usuario),
     "AREA": EstrategiaReferenciaOrganizacional(modelo=Area),
     "UNIDAD": EstrategiaReferenciaOrganizacional(modelo=UnidadNegocio),

@@ -36,6 +36,10 @@ urlpatterns = [
         "<int:pk>/studio/general/prorroga/",
         studio.studio_prorroga_guardar_view, name="studio_prorroga_guardar",
     ),
+    path(
+        "<int:pk>/studio/general/cancelacion/",
+        studio.studio_cancelacion_guardar_view, name="studio_cancelacion_guardar",
+    ),
     # Estructura de elementos de un Proceso (4.G2B1): mismo editor de campos, formulario propio
     path(
         "<int:pk>/studio/parrilla/configurar/",

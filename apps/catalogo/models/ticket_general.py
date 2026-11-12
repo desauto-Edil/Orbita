@@ -81,7 +81,7 @@ class DestinoTicketGeneral(RegistroBase):
         copiado: el que se congela al radicar vive en el direccionamiento del ticket."""
         objeto = self.objeto
         if self.tipo == self.Tipo.USUARIO:
-            return objeto.get_full_name() or objeto.get_username()
+            return objeto.nombre_visible
         return objeto.nombre
 
     @property
@@ -92,7 +92,7 @@ class DestinoTicketGeneral(RegistroBase):
     def responsable_etiqueta(self):
         if self.responsable_usuario_id is not None:
             usuario = self.responsable_usuario
-            return usuario.get_full_name() or usuario.get_username()
+            return usuario.nombre_visible
         return self.responsable_equipo.nombre
 
 

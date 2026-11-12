@@ -4,6 +4,6 @@
     {% for equipo in candidatos.responsables_equipos %}<option value="EQUIPO:{{ equipo.pk }}">{{ equipo.nombre }}</option>{% endfor %}
   </optgroup>
   <optgroup label="Personas">
-    {% for persona in candidatos.responsables_usuarios %}<option value="USUARIO:{{ persona.pk }}">{{ persona.get_full_name|default:persona.username }}</option>{% endfor %}
+    {% for persona in candidatos.responsables_usuarios %}<option value="USUARIO:{{ persona.pk }}">{{ persona.nombre_visible }}</option>{% endfor %}
   </optgroup>
 </select>

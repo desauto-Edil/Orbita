@@ -40,7 +40,7 @@ def columnas_disponibles(servicio):
     version = version_de_columnas(servicio)
     if version is None:
         return []
-    return list(version.campos.exclude(tipo="ARCHIVO").order_by("orden", "id"))
+    return list(version.campos.exclude(tipo__in=("ARCHIVO", "CHECKLIST")).order_by("orden", "id"))
 
 
 def configuracion_de(definicion):

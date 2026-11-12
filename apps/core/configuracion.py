@@ -17,11 +17,9 @@ Secciones y la capacidad real que abre cada una (nunca un nombre de rol):
                      (los equipos de trabajo se administran dentro de Áreas)
   Categorías         `catalogo.administrar`      categorías del catálogo
 
-Todas en alcance GLOBAL. `is_superuser` abre las cuatro secciones de
-`apps.core`: esa cuenta ya administra esos mismos modelos desde Django Admin,
-así que no se le concede nada nuevo y evita que nadie pueda otorgar el primer
-permiso. Categorías no entra en esa regla: `catalogo.administrar` ya se exige
-sin excepción en Django Admin y en Studio.
+Todas en alcance GLOBAL y SOLO por permiso (Versión 1): `is_superuser` ya no
+abre nada. El primer permiso lo otorga `manage.py otorgar_administrador`
+(`apps.core.plataforma`), que solo corre quien tiene acceso al servidor.
 
 Este módulo importa el dominio de catálogo de forma perezosa (mismo criterio
 que `navegacion.py` y `disenador.py`).
@@ -43,7 +41,6 @@ _PERMISOS = {
     "organizacion": PERMISO_ORGANIZACION,
     "categorias": PERMISO_CATEGORIAS,
 }
-_SOLO_POR_PERMISO = {"categorias"}
 
 # Secciones locales, en el orden en que se muestran.
 SECCIONES = (
@@ -113,10 +110,7 @@ def capacidades(usuario):
     if not getattr(usuario, "is_authenticated", False) or not usuario.is_active:
         return dict.fromkeys(_PERMISOS, False) | {"ve_usuarios": False, "accede": False}
     otorgados = permisos_globales(usuario, _PERMISOS.values())
-    caps = {
-        clave: codigo in otorgados or (usuario.is_superuser and clave not in _SOLO_POR_PERMISO)
-        for clave, codigo in _PERMISOS.items()
-    }
+    caps = {clave: codigo in otorgados for clave, codigo in _PERMISOS.items()}
     caps["accede"] = any(caps.values())
     # Quien asigna roles necesita encontrar a la persona, aunque no pueda
     # modificar su cuenta: la ficha le muestra solo la parte de roles.

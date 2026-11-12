@@ -2,33 +2,55 @@
 {% with tarea=accion.tarea %}
   <p class="ws-ahora__dato">Responsable: <strong>{{ accion.responsable|default:"sin asignar" }}</strong></p>
 
+  {% if mision_solicitud %}
+    {# El trabajo parte de lo que se pidió: en el primer paso del flujo, la solicitud abierta como lo primero que hay que hacer. #}
+    <details class="esp-solicitud"{% if mision_solicitud.primera %} open{% endif %}>
+      <summary>{% if mision_solicitud.primera %}<span class="esp-solicitud__paso">Paso 1</span> Revisa la solicitud{% else %}Ver la solicitud{% endif %}</summary>
+      {% if mision_solicitud.primera %}<p class="esp-solicitud__nota">Esto es lo que pidió {{ ticket.solicitante.get_full_name|default:ticket.solicitante|default:"quien inició el ticket" }}. Léelo antes de concluir cada punto de la lista.</p>{% endif %}
+      {% include "tickets/_respuestas.html" with campos_formulario=mision_solicitud.campos %}
+    </details>
+  {% endif %}
+
   {% if accion.verificaciones %}
-    <h4 class="esp-guia__titulo">Lista de verificación</h4>
-    <ul class="esp-verificacion">
+    {# Cada punto es un criterio que se revisa y se CONCLUYE: la conclusión queda a la vista de quienes siguen. #}
+    <h4 class="esp-guia__titulo">{% if mision_solicitud.primera %}Paso 2 · {% endif %}Concluye cada punto</h4>
+    <ol class="esp-criterios">
       {% for item in accion.verificaciones %}
-        <li>
-          {% if accion.puede_marcar %}
-            <form method="post" action="{% url 'tareas:verificar' tarea.pk item.pk %}">
-              {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
-              <input type="hidden" name="marcado" value="{% if item.marcado %}0{% else %}1{% endif %}">
-              <button type="submit" class="esp-check{% if item.marcado %} is-on{% endif %}" aria-pressed="{% if item.marcado %}true{% else %}false{% endif %}">
-                <span aria-hidden="true">{% if item.marcado %}✓{% endif %}</span><span class="sr-only">{% if item.marcado %}Desmarcar{% else %}Marcar{% endif %}</span>
-              </button>
-            </form>
-          {% else %}
+        <li class="esp-criterio{% if item.marcado %} is-hecho{% endif %}">
+          <div class="esp-criterio__cabeza">
             <span class="esp-check{% if item.marcado %} is-on{% endif %}" aria-hidden="true">{% if item.marcado %}✓{% endif %}</span>
+            <span class="esp-criterio__texto">{{ item.texto }}{% if item.obligatorio %} <span class="badge badge--warning">Obligatorio</span>{% endif %}</span>
+          </div>
+          {% if accion.puede_marcar %}
+            <form method="post" action="{% url 'tareas:verificar' tarea.pk item.pk %}" class="esp-criterio__form">
+              {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
+              <label class="sr-only" for="vc-{{ item.pk }}">Tu conclusión sobre «{{ item.texto }}»</label>
+              <textarea id="vc-{{ item.pk }}" name="conclusion" rows="2" maxlength="1000"
+                        placeholder="{{ item.pregunta|default:'Tu conclusión (opcional)' }}"{% if item.pregunta and not item.marcado %} required{% endif %}>{{ item.conclusion }}</textarea>
+              <div class="esp-criterio__botones">
+                {% if item.marcado %}
+                  <button type="submit" name="marcado" value="1" class="btn btn--ghost btn--sm">Guardar la conclusión</button>
+                  <button type="submit" name="marcado" value="0" class="btn btn--ghost btn--sm" formnovalidate>Desmarcar</button>
+                {% else %}
+                  <button type="submit" name="marcado" value="1" class="btn btn--secondary btn--sm">Marcar como revisado</button>
+                {% endif %}
+              </div>
+            </form>
+          {% elif item.conclusion %}
+            <p class="esp-criterio__conclusion">{{ item.conclusion|linebreaksbr }}</p>
           {% endif %}
-          <span>{{ item.texto }}{% if item.obligatorio %} <span class="badge badge--warning">Obligatorio</span>{% endif %}</span>
+          {% if item.marcado and item.marcado_por %}<p class="esp-criterio__quien text-muted">{{ item.marcado_por.nombre_visible }} · {{ item.marcado_en|date:"j M, H:i" }}</p>{% endif %}
         </li>
       {% endfor %}
-    </ul>
+    </ol>
   {% endif %}
 
   {% if accion.ficha %}
     {% include "tickets/espacio/_ficha_edicion.html" with ficha_edicion=accion.ficha elemento=accion.elemento en_accion=True %}
   {% endif %}
 
-  {% if tarea.requiere_evidencia or accion.evidencias or accion.puede_comentar %}
+  {# Si el ítem tiene una «Lista de evidencias», la evidencia ES ese checklist (en la ficha de arriba): no hay adjunto suelto. #}
+  {% if not accion.evidencia_checklist %}{% if tarea.requiere_evidencia or accion.evidencias or accion.puede_comentar %}
     <h4 class="esp-guia__titulo">Evidencias</h4>
     <ul class="plain-list">
       {% for evidencia in accion.evidencias %}
@@ -44,38 +66,47 @@
         <button type="submit" class="btn btn--secondary btn--sm">Adjuntar evidencia</button>
       </form>
     {% endif %}
-  {% endif %}
+  {% endif %}{% endif %}
 
   {% if accion.subtareas or accion.puede_crear_subtarea %}
     <h4 class="esp-guia__titulo">Subtareas</h4>
     <ul class="plain-list">
       {% for subtarea in accion.subtareas %}
-        <li>{{ subtarea.titulo }} <span class="badge{% if subtarea.estado == 'COMPLETADA' %} badge--success{% endif %}">{{ subtarea.get_estado_display }}</span> <span class="text-muted">{% if subtarea.usuario_responsable %}{{ subtarea.usuario_responsable.get_full_name|default:subtarea.usuario_responsable.get_username }}{% elif subtarea.equipo_responsable %}{{ subtarea.equipo_responsable }}{% endif %}</span></li>
+        <li>{{ subtarea.titulo }} <span class="badge{% if subtarea.estado == 'COMPLETADA' %} badge--success{% endif %}">{{ subtarea.get_estado_display }}</span> <span class="text-muted">{% if subtarea.usuario_responsable %}{{ subtarea.usuario_responsable.nombre_visible }}{% elif subtarea.equipo_responsable %}{{ subtarea.equipo_responsable }}{% endif %}</span></li>
       {% empty %}
         <li class="text-muted">Sin subtareas.</li>
       {% endfor %}
     </ul>
-    {% if accion.puede_crear_subtarea %}
+    {% if accion.subtarea_form %}
       <details class="esp-plegable">
         <summary>Crear una subtarea</summary>
         <form method="post" action="{% url 'tareas:crear_subtarea' tarea.pk %}" class="form">
           {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
-          <div class="field"><label for="st-titulo">Título</label><input id="st-titulo" type="text" name="titulo" maxlength="200" required></div>
-          <div class="field"><label for="st-desc">Descripción</label><textarea id="st-desc" name="descripcion" rows="2"></textarea></div>
-          <p class="text-muted">Asigna la persona o el equipo y la fecha desde el <a href="{% url 'tareas:detalle' tarea.pk %}">detalle de la tarea</a> si los necesitas.</p>
+          {% with f=accion.subtarea_form %}
+            <div class="field"><label for="{{ f.titulo.id_for_label }}">Título</label>{{ f.titulo }}</div>
+            <div class="field"><label for="{{ f.descripcion.id_for_label }}">Descripción (opcional)</label>{{ f.descripcion }}</div>
+            <div class="field"><label for="{{ f.usuario_responsable.id_for_label }}">Persona responsable (opcional)</label>{{ f.usuario_responsable }}</div>
+            <div class="field"><label for="{{ f.equipo_responsable.id_for_label }}">Equipo responsable (opcional)</label>{{ f.equipo_responsable }}</div>
+            <div class="field"><label for="{{ f.fecha_limite.id_for_label }}">Fecha límite (opcional)</label>{{ f.fecha_limite }}</div>
+          {% endwith %}
           <button type="submit" class="btn btn--secondary btn--sm">Crear subtarea</button>
         </form>
       </details>
     {% endif %}
   {% endif %}
 
-  {% if accion.puede_comentar %}
+  {# Solo se ofrece ASIGNAR una actividad que aún no tiene responsable. Reasignar el trabajo es «Más» › Reasignar el #}
+  {# ticket (lo pendiente del responsable pasa con él); la delegación se retiró y los comentarios van en la Conversación. #}
+  {% if accion.asignacion_form %}
     <details class="esp-plegable">
-      <summary>Comentar la tarea</summary>
-      <form method="post" action="{% url 'tareas:comentar' tarea.pk %}" class="form">
+      <summary>Asignar la actividad</summary>
+      <form method="post" action="{% url 'tareas:asignar' tarea.pk %}" class="form">
         {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
-        <div class="field"><label for="tc-{{ tarea.pk }}">Comentario</label><textarea id="tc-{{ tarea.pk }}" name="contenido" rows="2" required></textarea></div>
-        <button type="submit" class="btn btn--secondary btn--sm">Comentar</button>
+        {% with f=accion.asignacion_form %}
+          <div class="field"><label for="{{ f.usuario.id_for_label }}">Persona</label>{{ f.usuario }}</div>
+          <div class="field"><label for="{{ f.equipo.id_for_label }}">Equipo</label>{{ f.equipo }}</div>
+        {% endwith %}
+        <button type="submit" class="btn btn--secondary btn--sm">Asignar</button>
       </form>
     </details>
   {% endif %}
@@ -84,9 +115,6 @@
   {# UX-4 — Guardar borrador ≠ avanzar. El botón principal guarda lo escrito y completa la actividad en UNA operación #}
   {# (`tickets:tarea_avanzar` → `avance.guardar_y_avanzar`); su texto dice qué sigue según el flujo real. #}
   <div class="ws-acciones esp-panel__pie">
-    {% if accion.puede_tomar %}
-      <form method="post" action="{% url 'tareas:tomar' tarea.pk %}">{% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}"><button type="submit" class="btn btn--primary">Tomar la actividad</button></form>
-    {% endif %}
     {% if accion.puede_completar %}
       {% if accion.ficha and accion.ficha.celdas_valor %}
         <button type="submit" class="btn btn--secondary" form="ficha-form-{{ accion.elemento.pk }}">Guardar borrador</button>
@@ -98,7 +126,6 @@
         </form>
       {% endif %}
     {% endif %}
-    <a class="btn btn--ghost esp-panel__pie-secundario" href="{% url 'tareas:detalle' tarea.pk %}">Detalle de la actividad</a>
     {% if accion.puede_completar and accion.ficha and accion.ficha.celdas_valor %}<p class="esp-panel__nota">«Guardar borrador» conserva lo escrito sin avanzar; «{{ accion.etiqueta_avance }}» lo guarda y avanza.</p>{% endif %}
   </div>
 {% endwith %}

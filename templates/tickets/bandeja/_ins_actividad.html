@@ -6,7 +6,7 @@
       {% for evento in historial %}
         <li>
           <span class="bt-ins__evento">{{ evento.get_tipo_evento_display }}</span>
-          <span class="bt-ins__evento-meta"><span>{% if evento.actor %}{{ evento.actor.get_full_name|default:evento.actor.get_username }}{% else %}Sistema{% endif %}</span><time class="tabular" datetime="{{ evento.creado_en|date:'c' }}">{{ evento.creado_en|date:"j M Y, H:i" }}</time></span>
+          <span class="bt-ins__evento-meta"><span>{% if evento.actor %}{{ evento.actor.nombre_visible }}{% else %}Sistema{% endif %}</span><time class="tabular" datetime="{{ evento.creado_en|date:'c' }}">{{ evento.creado_en|date:"j M Y, H:i" }}</time></span>
         </li>
       {% endfor %}
     </ol>

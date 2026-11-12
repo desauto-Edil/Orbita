@@ -47,7 +47,7 @@
           {% for fila in parrilla.filas %}
             <tr{% if not fila.completitud.completo %} data-incompleta{% endif %}>
               <td>{{ fila.elemento.numero }}{% if fila.salida %} <span class="badge badge--warning" title="{{ fila.salida.justificacion }}">{{ fila.salida.get_tipo_display }}</span>{% endif %}{% if fila.n_versiones %} <a class="text-muted" href="{% url 'tickets:elemento_versiones' ticket.pk fila.elemento.pk %}" title="Ver historial de versiones"><small>v{{ fila.n_versiones }}</small></a>{% endif %}</td>
-              {% for celda in fila.celdas %}<td>{% if celda.es_archivo %}{% for archivo in celda.archivos %}<a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a>{% if not forloop.last %}, {% endif %}{% empty %}<span class="text-muted">Sin archivos</span>{% endfor %}{% else %}{{ celda.texto }}{% endif %}{% if celda.faltante %} <span class="badge badge--warning">Falta</span>{% endif %}</td>{% endfor %}
+              {% for celda in fila.celdas %}<td>{% if celda.es_checklist %}{{ celda.texto }}{% elif celda.es_archivo %}{% for archivo in celda.archivos %}<a href="{% url 'tickets:descargar_adjunto' archivo.pk %}">{{ archivo.nombre_original }}</a>{% if not forloop.last %}, {% endif %}{% empty %}<span class="text-muted">Sin archivos</span>{% endfor %}{% else %}{{ celda.texto }}{% endif %}{% if celda.faltante %} <span class="badge badge--warning">Falta</span>{% endif %}</td>{% endfor %}
               <td>
                 {% if fila.completitud.completo %}
                   <span class="badge badge--success">Completa</span>
@@ -71,6 +71,11 @@
                 <td>
                   {% if fila.salida %}
                     <small class="text-muted">{{ fila.salida.get_tipo_display }}: {{ fila.salida.justificacion }}</small>
+                  {% elif fila.en_revision %}
+                    {# Enviado a revisión: solo lectura para todos hasta que lo devuelvan (`apps.tickets.en_revision`). #}
+                    <span class="estado-etiqueta estado-etiqueta--en_atencion" title="Se podrá editar si lo devuelven con correcciones">En revisión · solo lectura</span>
+                  {% elif fila.aprobado %}
+                    <span class="estado-etiqueta estado-etiqueta--resuelto" title="Solo lo cambia un paso posterior del flujo que lo pida">Aprobado · solo lectura</span>
                   {% else %}
                   <details>
                     <summary>Editar</summary>
@@ -79,7 +84,9 @@
                       {% include "tickets/_parrilla_campos.html" with celdas=fila.celdas %}
                       <button type="submit" class="btn btn--primary btn--sm">Guardar</button>
                     </form>
-                    {% for celda in fila.celdas %}{% if celda.es_archivo %}
+                    {% for celda in fila.celdas %}{% if celda.es_checklist %}
+                      {% include "tickets/evidencias/_editar.html" with lista=celda.checklist elemento=fila.elemento volver=ws_next|default:request.get_full_path %}
+                    {% elif celda.es_archivo %}
                       <div class="field">
                         <span>{{ celda.campo.etiqueta }}{% if celda.obligatorio %} <abbr title="Obligatorio">*</abbr>{% endif %}</span>
                         {% for archivo in celda.archivos %}

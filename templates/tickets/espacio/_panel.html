@@ -32,7 +32,7 @@
             <h3 class="esp-derecho__sub">Observaciones · {{ g.participacion.gaceta.nombre }}</h3>
             <ul class="esp-observaciones">
               {% for obs in g.observaciones %}
-                <li><strong>{{ obs.autor.get_full_name|default:obs.autor.get_username }}</strong> <span class="text-muted">{{ obs.creada_en|date:"j M, H:i" }} · ronda {{ obs.ronda.numero }}</span><br>{{ obs.texto }}{% if obs.respuesta %}<br><span class="text-muted">Respuesta: {{ obs.respuesta }}</span>{% endif %}</li>
+                <li><strong>{{ obs.autor.nombre_visible }}</strong> <span class="text-muted">{{ obs.creada_en|date:"j M, H:i" }} · ronda {{ obs.ronda.numero }}</span><br>{{ obs.texto }}{% if obs.respuesta %}<br><span class="text-muted">Respuesta: {{ obs.respuesta }}</span>{% endif %}</li>
               {% endfor %}
             </ul>
           {% endif %}
@@ -42,7 +42,7 @@
           <h3 class="esp-derecho__sub">Versiones <span class="work-count">{{ f.versiones|length }}</span></h3>
           <ul class="esp-lista-simple">
             {% for version in f.versiones %}
-              <li>Versión {{ version.numero }} · {% if version.creada_por %}{{ version.creada_por.get_full_name|default:version.creada_por.get_username }}{% else %}Sistema{% endif %} <span class="text-muted">{{ version.creada_en|date:"j M Y, H:i" }}</span>{% if version.motivo %} — {{ version.motivo }}{% endif %}</li>
+              <li>Versión {{ version.numero }} · {% if version.creada_por %}{{ version.creada_por.nombre_visible }}{% else %}Sistema{% endif %} <span class="text-muted">{{ version.creada_en|date:"j M Y, H:i" }}</span>{% if version.motivo %} — {{ version.motivo }}{% endif %}</li>
             {% endfor %}
           </ul>
         {% endif %}

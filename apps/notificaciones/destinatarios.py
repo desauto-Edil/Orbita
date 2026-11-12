@@ -70,12 +70,29 @@ def equipo_responsable(ticket):
     return miembros_de(ticket.equipo_responsable_id) if ticket is not None else []
 
 
+def responsables_configurados(ticket):
+    """Las personas y los miembros vigentes de los equipos configurados como responsables (`ServicioResponsable`
+    activos) del Servicio/Proceso del ticket."""
+    from apps.catalogo.models import ServicioResponsable
+
+    if ticket is None:
+        return []
+    filas = ServicioResponsable.objects.filter(
+        servicio_id=ticket.detalle_servicio.servicio_id, activo=True
+    ).values_list("tipo_responsable", "usuario_id", "equipo_id")
+    usuarios = [u for t, u, _ in filas if t == ServicioResponsable.TipoResponsable.USUARIO]
+    equipos = [e for t, _, e in filas if t == ServicioResponsable.TipoResponsable.EQUIPO]
+    return unir(personas(usuarios), miembros_de(equipos))
+
+
 def pueden_tomar(ticket):
-    """Miembros del equipo responsable que pueden TOMAR el ticket ahora (la regla de la Cola, `puede_tomar`:
-    excluye al solicitante)."""
+    """Quien puede TOMAR el ticket ahora (la regla de la Cola, `puede_tomar`, que excluye al solicitante): los
+    miembros del equipo al que se dirigió y, sobre todo, los responsables configurados del Servicio/Proceso (un
+    ticket normal nace sin equipo puesto: su Cola la forman esos responsables)."""
     from apps.tickets.autorizacion import puede_tomar
 
-    return [u for u in equipo_responsable(ticket) if puede_tomar(u, ticket)]
+    candidatos = unir(equipo_responsable(ticket), responsables_configurados(ticket))
+    return [u for u in candidatos if puede_tomar(u, ticket)]
 
 
 def supervisores(ticket):
@@ -135,16 +152,14 @@ def de_columna_item(elemento_id, clave):
 
 
 def de_tarea(tarea):
-    """Quien debe atender la Tarea: el delegado vigente, o el responsable (persona o miembros de su equipo)."""
-    from apps.tareas.autorizacion import delegado_actual
-
+    """Quien debe atender la Tarea: el responsable (persona o miembros de su equipo)."""
     if tarea is None:
         return []
-    delegado = delegado_actual(tarea)
-    if delegado is not None:
-        return personas([delegado.pk])
     if tarea.usuario_responsable_id:
         return personas([tarea.usuario_responsable_id])
+    if getattr(tarea, "responde_por_id", None):
+        # Actividad del equipo con una persona que RESPONDE: los avisos son para ella, no para todo el equipo.
+        return personas([tarea.responde_por_id])
     return miembros_de(tarea.equipo_responsable_id)
 
 
@@ -171,8 +186,10 @@ def aprobaciones_en_turno(esquema):
 
 
 def revisores_gaceta(gaceta):
-    configuracion = gaceta.configuracion or {}
-    return unir(de_actores(configuracion.get("revisores")), de_actores(configuracion.get("aprobadores")))
+    """Quienes comentan en la gaceta (los antiguos «aprobadores» de una configuración congelada incluidos)."""
+    from apps.gacetas.autorizacion import revisores_de
+
+    return de_actores(revisores_de(gaceta))
 
 
 def coordinadores_gaceta(gaceta):

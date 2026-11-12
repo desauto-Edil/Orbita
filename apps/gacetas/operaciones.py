@@ -1,23 +1,27 @@
 """Operaciones de dominio de las gacetas — Fase 3 del modelo configurable de procesos.
 
+REGLA DE ORO: en una gaceta NADIE APRUEBA (cualquier tipo de ticket). Es un espacio de comentarios: no hay
+aprobadores, ni esquemas de `apps.aprobaciones` por ronda, ni decisiones de aprobar / devolver / rechazar. Las rondas
+anteriores a esta regla conservan su esquema (historia); `resolver_aprobacion_gaceta` ya no admite decisiones.
+
 Reutiliza, sin duplicar: los ítems y sus versiones (`apps.tickets.parrilla`: `VersionElemento` con huella), el
-alcance (`DecisionAlcanceElemento`, origen GACETA), las aprobaciones (`apps.aprobaciones`: un esquema por ronda,
-modalidad TODOS / CUALQUIERA, decisión EXCLUIDA cuando la gaceta la permite), las tareas (`apps.tareas`: la
-corrección es una Tarea del responsable), los cálculos de fechas (`apps.tickets.tiempos`) y la auditoría. La
-lógica PROPIA de la gaceta es la de observaciones, correcciones, rondas, periodo y resolución.
+alcance (`DecisionAlcanceElemento`, origen GACETA), las tareas (`apps.tareas`: la corrección es una Tarea del
+responsable), los cálculos de fechas (`apps.tickets.tiempos`) y la auditoría. La lógica PROPIA de la gaceta es la de
+comentarios (observaciones), correcciones, rondas, periodo y resolución.
 
 Ciclo de un ítem en una gaceta (ESTADO DE GACETA, independiente de su recorrido operativo):
 
-    presentar → EN_REVISION (ronda 1: versión + esquema)
-        observación de un revisor/aprobador, o DEVOLVER → EN_CORRECCION (tarea al responsable, plazo)
-            reenviar (nueva versión) → EN_REVISION (ronda n+1, nuevo esquema; las observaciones quedan atendidas)
-        APROBAR → APROBADA · RECHAZAR → RECHAZADA · EXCLUIR → EXCLUIDA (las dos últimas sacan al ítem del alcance)
-    al cerrar el periodo (vencido) con aceptación automática: EN_REVISION sin observaciones pendientes → APROBADA
+    presentar → EN_REVISION (ronda 1: versión presentada)
+        comentario de un revisor → EN_CORRECCION (tarea al responsable, plazo)
+            reenviar (nueva versión) → EN_REVISION (ronda n+1; los comentarios quedan atendidos)
+                                       o, con el periodo ya cerrado, → APROBADA (aceptada al reenviar la corrección)
+        EXCLUIR (solo quien coordina, justificado) → EXCLUIDA (saca al ítem del alcance)
+    al cerrar el periodo (vencido o a mano): EN_REVISION sin comentarios pendientes → APROBADA (aceptada)
     al resolver la gaceta: lo pendiente se resuelve según la regla (IMPEDIR / EXCLUIR / RECHAZAR); nunca se
-    aprueba automáticamente un ítem en corrección.
+    acepta un ítem en corrección sin que se reenvíe.
 
 Orden de locks (el del proyecto): instancia principal del flujo → Ticket → (colección) → gaceta → participación →
-aprobaciones → tareas. Todas las operaciones públicas empiezan por `_bloquear`. Idempotencia: presentar dos
+tareas. Todas las operaciones públicas empiezan por `_bloquear`. Idempotencia: presentar dos
 veces no duplica (única por gaceta+ítem); cerrar, resolver, cancelar y los avisos revalidan el estado bajo lock.
 """
 
@@ -28,7 +32,13 @@ from django.utils import timezone
 from apps.core.auditoria import registrar_evento
 from apps.core.models import Equipo, RegistroAuditoria, Usuario
 from apps.gacetas import autorizacion
-from apps.gacetas.models import GacetaTicket, ObservacionGaceta, ParticipacionItemGaceta, RondaRevisionGaceta
+from apps.gacetas.models import (
+    ConformidadGaceta,
+    GacetaTicket,
+    ObservacionGaceta,
+    ParticipacionItemGaceta,
+    RondaRevisionGaceta,
+)
 from apps.tickets.models import ElementoParrilla, Ticket
 from apps.workflows.models import InstanciaWorkflow
 
@@ -52,6 +62,9 @@ def _bloquear(gaceta_id):
         InstanciaWorkflow.objects.select_for_update().get(pk=instancia_id)
     ticket = Ticket.objects.select_for_update().get(pk=ticket_id)
     gaceta = GacetaTicket.objects.select_for_update().get(pk=gaceta_id)
+    from apps.tickets.cancelaciones import exigir_sin_cancelacion_pendiente
+
+    exigir_sin_cancelacion_pendiente(ticket)  # una cancelación por aprobar congela el ticket
     return ticket, gaceta
 
 
@@ -147,40 +160,12 @@ def _motivo_para_no_ingresar(gaceta, elemento):
     return None
 
 
-def _esquema_de(gaceta, actor):
-    """Esquema de aprobación de una ronda (uno por ronda, `apps.aprobaciones`)."""
-    from apps.aprobaciones.models import Aprobacion
-    from apps.aprobaciones.operaciones import crear_esquema_aprobacion
-
-    cfg = gaceta.configuracion or {}
-    participantes = []
-    for dato in cfg.get("aprobadores") or []:
-        if dato["tipo"] == "USUARIO":
-            usuario = Usuario.objects.filter(pk=dato["usuario_id"], is_active=True).first()
-            if usuario is not None:
-                participantes.append((Aprobacion.TipoAprobador.USUARIO, usuario))
-        else:
-            equipo = Equipo.objects.filter(pk=dato["equipo_id"], activo=True).first()
-            if equipo is not None:
-                participantes.append((Aprobacion.TipoAprobador.EQUIPO, equipo))
-    if not participantes:
-        raise ValidationError(f"La gaceta «{gaceta.nombre}» no tiene aprobadores activos.")
-    varios = len(participantes) > 1
-    return crear_esquema_aprobacion(
-        modo="PARALELA" if varios else "SECUENCIAL", politica=cfg.get("politica", "TODOS") if varios else None,
-        participantes=participantes, actor=actor, permite_exclusion=bool(cfg.get("permite_exclusion")),
-        justificacion_al_aprobar=bool(cfg.get("justificacion_al_aprobar")),
-    )
-
-
 def _abrir_ronda(participacion, actor, motivo):
     from apps.tickets.parrilla import _registrar_version
 
     version = _registrar_version(participacion.elemento, actor, motivo)
-    return RondaRevisionGaceta.objects.create(
-        participacion=participacion, numero=participacion.ronda, version=version,
-        esquema=_esquema_de(participacion.gaceta, actor),
-    )
+    # Sin esquema de aprobación: en una gaceta nadie aprueba (regla de oro).
+    return RondaRevisionGaceta.objects.create(participacion=participacion, numero=participacion.ronda, version=version)
 
 
 def _presentar_bloqueado(gaceta, elemento, actor, *, origen, silencioso):
@@ -210,6 +195,12 @@ def presentar(gaceta, elemento, actor):
     _ticket, gaceta = _bloquear(gaceta.pk)
     if not autorizacion.puede_coordinar(actor, gaceta):
         raise PermissionDenied("Solo quien coordina la gaceta presenta ítems.")
+    from apps.gacetas.consultas import se_llena_por_el_flujo
+
+    if se_llena_por_el_flujo(gaceta):
+        raise ValidationError(
+            f"A «{gaceta.nombre}» solo entra cada ítem por su recorrido (lo que su aprobador publica): no se presenta a mano."
+        )
     elemento = ElementoParrilla.objects.select_related("parrilla").get(pk=elemento.pk)
     return _presentar_bloqueado(gaceta, elemento, actor, origen=ParticipacionItemGaceta.Origen.MANUAL, silencioso=False)
 
@@ -339,8 +330,8 @@ def _enviar_a_correccion(participacion, ronda, actor, *, resultado_ronda):
 
 @transaction.atomic
 def observar(participacion, actor, texto):
-    """Un revisor o aprobador registra una observación (solo con el periodo abierto). Si el ítem estaba en
-    revisión, pasa a corrección y vuelve a su responsable; si ya estaba en corrección, la observación se suma."""
+    """Un revisor comenta (solo con el periodo abierto). Si el ítem estaba en revisión, pasa a corrección y vuelve
+    a su responsable; si ya estaba en corrección, el comentario se suma."""
     texto = (texto or "").strip()
     if not texto:
         raise ValidationError("La observación necesita un texto.")
@@ -395,8 +386,9 @@ def _cerrar_tarea_de_correccion(ronda, actor, motivo):
 @transaction.atomic
 def reenviar(participacion, actor, comentario=""):
     """El responsable reenvía la corrección: se registra una NUEVA VERSIÓN del ítem (las anteriores se conservan),
-    las observaciones quedan atendidas, la tarea de corrección se cierra y se abre una nueva ronda de revisión
-    en la MISMA gaceta (no se crea otra)."""
+    los comentarios quedan atendidos, la tarea de corrección se cierra y se abre una nueva ronda de revisión en la
+    MISMA gaceta (no se crea otra). Si el periodo ya se cerró nadie puede volver a comentar: la versión corregida
+    queda ACEPTADA al reenviarse (nadie aprueba en una gaceta)."""
     _ticket, gaceta, participacion = _bloquear_participacion(participacion.pk)
     if gaceta.estado in GacetaTicket.ESTADOS_FINALES:
         raise ValidationError("La gaceta ya está resuelta.")
@@ -419,6 +411,14 @@ def reenviar(participacion, actor, comentario=""):
     ronda = _abrir_ronda(participacion, actor, motivo)
     _auditar(participacion, actor, RegistroAuditoria.Accion.ACTUALIZAR, {"estado": "EN_CORRECCION"},
              {"estado": participacion.estado, "ronda": ronda.numero, "version": ronda.version.numero})
+    participacion.gaceta = gaceta
+    if not participacion.ventana_abierta:
+        ronda.resultado = RondaRevisionGaceta.Resultado.ACEPTADA_CORRECCION
+        ronda.cerrada_en = timezone.now()
+        ronda.save(update_fields=["resultado", "cerrada_en"])
+        _finalizar(participacion, actor, Estado.APROBADA, "Aceptado al reenviar la corrección con el periodo de revisión cerrado.")
+        _resolver_si_corresponde(gaceta)
+        return participacion
     from apps.notificaciones.eventos import publicar
 
     publicar("GACETA:NUEVA_RONDA", actor=actor, ticket_id=gaceta.ticket_id, gaceta=gaceta, participacion=participacion)
@@ -463,41 +463,11 @@ def _finalizar(participacion, actor, estado, justificacion=""):
         continuar_por_item(participacion)
 
 
-def _decision_que_cerro(esquema):
-    return esquema.participaciones.filter(estado=esquema.resultado).order_by("decidida_en", "pk").first()
-
-
-@transaction.atomic
 def resolver_aprobacion_gaceta(aprobacion, actor, *, decision, observacion=""):
-    """Única forma de decidir la aprobación de una ronda de gaceta: bloquea la gaceta y la participación ANTES
-    del esquema (orden del proyecto), decide con `apps.aprobaciones` (TODOS/CUALQUIERA, precedencia RECHAZADA >
-    EXCLUIDA > DEVUELTA > APROBADA) y, si el esquema cerró, aplica el resultado SOLO a este ítem."""
-    from apps.aprobaciones.operaciones import resolver_aprobacion
-
-    ronda = RondaRevisionGaceta.objects.select_related("participacion").get(esquema_id=aprobacion.esquema_id)
-    _ticket, gaceta, participacion = _bloquear_participacion(ronda.participacion_id)
-    aprobacion, esquema = resolver_aprobacion(aprobacion, actor, decision=decision, observacion=observacion)
-    if esquema.resultado is None:
-        return aprobacion, esquema
-    ronda = RondaRevisionGaceta.objects.select_for_update().get(pk=ronda.pk)
-    if ronda.numero != participacion.ronda or participacion.estado != Estado.EN_REVISION:
-        return aprobacion, esquema  # ronda vieja: el ítem ya cambió de estado por otra vía
-    decisiva = _decision_que_cerro(esquema)
-    autor = decisiva.decidido_por if decisiva is not None else actor
-    texto = (decisiva.observacion if decisiva is not None else observacion) or ""
-    if esquema.resultado == "DEVUELTA":
-        ObservacionGaceta.objects.create(
-            participacion=participacion, ronda=ronda, autor=autor, texto=texto or "Devuelto para corrección.",
-            origen=ObservacionGaceta.Origen.DECISION,
-        )
-        _enviar_a_correccion(participacion, ronda, autor, resultado_ronda=RondaRevisionGaceta.Resultado.DEVUELTA)
-    else:
-        ronda.resultado = esquema.resultado
-        ronda.cerrada_en = timezone.now()
-        ronda.save(update_fields=["resultado", "cerrada_en"])
-        _finalizar(participacion, autor, esquema.resultado, texto)
-    _resolver_si_corresponde(gaceta)
-    return aprobacion, esquema
+    """Regla de oro: en una gaceta nadie aprueba. Las rondas de antes de esta regla conservan su esquema como
+    historia (sus aprobaciones pendientes se retiraron en la migración `gacetas.0003`), pero ya no admiten
+    decisiones: se comenta en la gaceta y, al cerrar el periodo, queda aceptado lo que no tenga comentarios."""
+    raise ValidationError("En una gaceta nadie aprueba: comenta la pieza; al cerrar el periodo queda aceptado lo que no tenga comentarios pendientes.")
 
 
 @transaction.atomic
@@ -549,12 +519,8 @@ def al_salir_del_alcance(elemento, actor, *, tipo, justificacion):
 
 
 def _aceptar_automaticamente(gaceta):
-    """Al vencer el periodo con aceptación automática: cada ítem EN_REVISION sin observaciones pendientes se
-    acepta. Uno en corrección NUNCA se acepta automáticamente."""
-    if not gaceta.configuracion.get("aceptacion_automatica"):
-        return 0
-    if gaceta.vence_revision_en is None or gaceta.vence_revision_en > timezone.now():
-        return 0
+    """Al cerrar el periodo (vencido o a mano): cada ítem EN_REVISION sin comentarios pendientes queda aceptado
+    (nadie aprueba en una gaceta). Uno en corrección no: queda aceptado cuando se reenvíe."""
     aceptadas = 0
     for participacion in ParticipacionItemGaceta.objects.select_for_update().select_related("elemento").filter(
         gaceta=gaceta, estado=Estado.EN_REVISION
@@ -569,32 +535,151 @@ def _aceptar_automaticamente(gaceta):
         ronda.save(update_fields=["resultado", "cerrada_en"])
         participacion.aceptada_automaticamente = True
         participacion.save(update_fields=["aceptada_automaticamente", "actualizado_en"])
-        _finalizar(participacion, None, Estado.APROBADA, "Aceptado automáticamente al vencer el periodo de revisión.")
+        _finalizar(participacion, None, Estado.APROBADA, "Aceptado al cerrar el periodo de revisión sin comentarios pendientes.")
         aceptadas += 1
     return aceptadas
 
 
+def _aceptar_participacion(participacion, motivo):
+    """Silencio positivo de UN ítem: EN_REVISION y sin comentarios pendientes → aceptado. Devuelve si lo aceptó."""
+    if participacion.estado != Estado.EN_REVISION or participacion.observaciones.filter(atendida_en__isnull=True).exists():
+        return False
+    ronda = _ronda_actual(participacion)
+    _cerrar_esquema(ronda, None)
+    ronda.resultado = RondaRevisionGaceta.Resultado.ACEPTADA_AUTOMATICA
+    ronda.cerrada_en = timezone.now()
+    ronda.save(update_fields=["resultado", "cerrada_en"])
+    participacion.aceptada_automaticamente = True
+    participacion.save(update_fields=["aceptada_automaticamente", "actualizado_en"])
+    _finalizar(participacion, None, Estado.APROBADA, motivo)
+    return True
+
+
+@transaction.atomic
+def cerrar_ventana_de_item(participacion):
+    """Vence la ventana PROPIA de un ítem (la que eligió su aprobador): si sigue en revisión sin comentarios
+    pendientes queda aceptado y su recorrido continúa (`_finalizar` → `continuar_por_item`); con comentarios, sigue
+    en corrección y quedará aceptado al reenviarse. La gaceta sigue abierta para los demás ítems. Idempotente."""
+    _ticket, gaceta, participacion = _bloquear_participacion(participacion.pk)
+    if participacion.vence_revision_en is None or timezone.now() < participacion.vence_revision_en:
+        return False
+    participacion.gaceta = gaceta
+    aceptada = _aceptar_participacion(
+        participacion, "Aceptado al vencer su ventana de revisión sin comentarios pendientes."
+    )
+    if aceptada:
+        _auditar(participacion, None, RegistroAuditoria.Accion.ACTUALIZAR, {"estado": "EN_REVISION"},
+                 {"estado": participacion.estado, "motivo": "ventana del ítem vencida"})
+    return aceptada
+
+
 @transaction.atomic
 def cerrar_periodo(gaceta, actor=None):
-    """Cierra la ventana de observaciones ordinarias (manual por el coordinador, o el Sistema al vencer). NO
-    implica que todo esté aprobado: lo pendiente sigue hasta la resolución. Idempotente."""
+    """Cierra la ventana de comentarios (manual por el coordinador, o el Sistema al vencer) y acepta lo que esté en
+    revisión sin comentarios pendientes. Lo que está en corrección sigue hasta que se reenvíe o se resuelva la
+    gaceta. Idempotente."""
     _ticket, gaceta = _bloquear(gaceta.pk)
     if actor is not None and not autorizacion.puede_coordinar(actor, gaceta):
         raise PermissionDenied("Solo quien coordina la gaceta cierra el periodo de revisión.")
     if gaceta.estado != GacetaTicket.Estado.ABIERTA:
         return gaceta
     _exigir_cierre_permitido(gaceta, resolver=False)
+    return _cerrar_periodo_bloqueada(gaceta, actor)
+
+
+def _cerrar_periodo_bloqueada(gaceta, actor, *, motivo=""):
     gaceta.estado = GacetaTicket.Estado.PERIODO_CERRADO
     gaceta.periodo_cerrado_en = timezone.now()
     gaceta.save(update_fields=["estado", "periodo_cerrado_en", "actualizado_en"])
     aceptadas = _aceptar_automaticamente(gaceta)
     _auditar(gaceta, actor, RegistroAuditoria.Accion.ACTUALIZAR, {"estado": "ABIERTA"},
-             {"estado": gaceta.estado, "aceptadas_automaticamente": aceptadas})
+             {"estado": gaceta.estado, "aceptadas_automaticamente": aceptadas, **({"motivo": motivo} if motivo else {})})
     from apps.notificaciones.eventos import publicar
 
     publicar("GACETA:PERIODO_CERRADO", actor=actor, ticket_id=gaceta.ticket_id, gaceta=gaceta)
     _resolver_si_corresponde(gaceta)
     return gaceta
+
+
+# --- «Estoy conforme» (2026-11-12) ---------------------------------------------------------------------------
+
+
+def _ultima_presentacion(gaceta):
+    """Cuándo se presentó por última vez algo en la gaceta (una pieza nueva o una versión corregida)."""
+    from django.db.models import Max
+
+    return RondaRevisionGaceta.objects.filter(participacion__gaceta=gaceta).aggregate(m=Max("abierta_en"))["m"]
+
+
+def conformes_vigentes(gaceta):
+    """Ids de quienes están conformes con LO QUE HOY está presentado (su conformidad es posterior a la última
+    presentación)."""
+    desde = _ultima_presentacion(gaceta)
+    consulta = ConformidadGaceta.objects.filter(gaceta=gaceta)
+    if desde is not None:
+        consulta = consulta.filter(creada_en__gte=desde)
+    return set(consulta.values_list("usuario_id", flat=True))
+
+
+def estado_conformidad(gaceta, usuario=None):
+    """Lo que pinta el botón: interesados, cuántos están conformes y si `usuario` puede (o ya) darla."""
+    interesados = autorizacion.interesados_de(gaceta)
+    conformes = conformes_vigentes(gaceta)
+    en_revision = ParticipacionItemGaceta.objects.filter(gaceta=gaceta, estado=Estado.EN_REVISION).exists()
+    ids = {u.pk for u in interesados}
+    es_interesado = usuario is not None and usuario.pk in ids
+    return {
+        # Todas las gacetas abiertas lo muestran (2026-11-12), aunque en este momento no haya nada en revisión.
+        "aplica": gaceta.estado == GacetaTicket.Estado.ABIERTA,
+        "es_interesado": es_interesado,
+        "hay_en_revision": en_revision,
+        "total": len(ids),
+        "conformes": len(ids & conformes),
+        "pendientes": [u for u in interesados if u.pk not in conformes],
+        "ya_conforme": es_interesado and usuario.pk in conformes,
+        "puede": es_interesado and usuario.pk not in conformes and en_revision
+                 and gaceta.estado == GacetaTicket.Estado.ABIERTA,
+    }
+
+
+@transaction.atomic
+def estar_conforme(gaceta, actor):
+    """«Estoy conforme»: `actor` (un interesado de la gaceta) declara que no tiene nada que comentar sobre lo que
+    hoy está presentado. Cuando TODOS los interesados lo están, la gaceta termina antes: cierra su periodo (acepta lo
+    que está en revisión sin comentarios pendientes y, si se resuelve sola, se resuelve). Si la gaceta revisa cada
+    ítem en su recorrido y aún pueden llegar ítems (Bloque 5.3), no cierra: acepta lo ya presentado y cada recorrido
+    continúa. Idempotente para quien ya está conforme. Devuelve `True` si con esto la gaceta terminó o aceptó."""
+    _ticket, gaceta = _bloquear(gaceta.pk)
+    if gaceta.estado != GacetaTicket.Estado.ABIERTA:
+        raise ValidationError("La gaceta ya no está abierta a revisión.")
+    if not autorizacion.es_interesado(actor, gaceta):
+        raise PermissionDenied(
+            "Solo los interesados de la gaceta (quienes la revisan sin haber trabajado el ticket) pueden estar conformes."
+        )
+    if not ParticipacionItemGaceta.objects.filter(gaceta=gaceta, estado=Estado.EN_REVISION).exists():
+        raise ValidationError("No hay nada en revisión en este momento.")
+    if actor.pk not in conformes_vigentes(gaceta):
+        conformidad = ConformidadGaceta.objects.create(gaceta=gaceta, usuario=actor)
+        _auditar(conformidad, actor, RegistroAuditoria.Accion.CREAR, None, {"gaceta_id": gaceta.pk})
+    interesados = {u.pk for u in autorizacion.interesados_de(gaceta)}
+    if not interesados or not interesados <= conformes_vigentes(gaceta):
+        return False
+    motivo = "Todos los interesados están conformes."
+    from apps.gacetas.integracion import bloqueos_de_cierre
+
+    if not bloqueos_de_cierre(gaceta, resolver=False):
+        _cerrar_periodo_bloqueada(gaceta, None, motivo=motivo)
+        return True
+    aceptadas = 0
+    for participacion in ParticipacionItemGaceta.objects.select_for_update().select_related("elemento").filter(
+        gaceta=gaceta, estado=Estado.EN_REVISION
+    ):
+        participacion.gaceta = gaceta
+        if _aceptar_participacion(participacion, f"Aceptado: {motivo.lower()}"):
+            aceptadas += 1
+            _auditar(participacion, None, RegistroAuditoria.Accion.ACTUALIZAR, {"estado": "EN_REVISION"},
+                     {"estado": participacion.estado, "motivo": motivo})
+    return bool(aceptadas)
 
 
 def _exigir_cierre_permitido(gaceta, *, resolver):
@@ -666,7 +751,8 @@ def _resolver_bloqueada(gaceta, actor, justificacion, *, automatica):
 @transaction.atomic
 def resolver(gaceta, actor, justificacion=""):
     """RESOLUCIÓN manual por el coordinador: fija el resultado definitivo de lo pendiente según la regla de la
-    gaceta (IMPEDIR rechaza resolver con pendientes). Si el periodo seguía abierto, primero se cierra."""
+    gaceta (IMPEDIR rechaza resolver con pendientes). Si el periodo seguía abierto, primero se cierra, y cerrarlo
+    acepta lo que esté en revisión sin comentarios pendientes, como siempre."""
     _ticket, gaceta = _bloquear(gaceta.pk)
     if not autorizacion.puede_coordinar(actor, gaceta):
         raise PermissionDenied("Solo quien coordina la gaceta la resuelve.")
@@ -679,13 +765,13 @@ def resolver(gaceta, actor, justificacion=""):
         gaceta.estado = GacetaTicket.Estado.PERIODO_CERRADO
         gaceta.periodo_cerrado_en = timezone.now()
         gaceta.save(update_fields=["estado", "periodo_cerrado_en", "actualizado_en"])
+        _aceptar_automaticamente(gaceta)
     return _resolver_bloqueada(gaceta, actor, (justificacion or "").strip(), automatica=False)
 
 
 def _resolver_si_corresponde(gaceta):
     """Resolución AUTOMÁTICA (si la gaceta la permite) cuando el periodo ya cerró y: no queda nada pendiente, o
-    lo único pendiente son correcciones vencidas y la regla dice qué hacer con ellas. Nunca con ítems esperando
-    a sus aprobadores."""
+    lo único pendiente son correcciones vencidas y la regla dice qué hacer con ellas."""
     if gaceta.estado != GacetaTicket.Estado.PERIODO_CERRADO or not gaceta.configuracion.get("resolucion_automatica"):
         return None
     from apps.gacetas.integracion import bloqueos_de_cierre

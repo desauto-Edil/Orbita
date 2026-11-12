@@ -89,7 +89,8 @@
   min-height: 64px;
   padding-block: var(--space-3);
   color: var(--text-primary);
-  font-size: var(--font-size-small);
+  /* Toda línea principal a tamaño de cuerpo (código, fase, situación, fecha); las secundarias fijan la suya. */
+  font-size: var(--font-size-body);
   text-decoration: none;
 }
 
@@ -123,6 +124,17 @@
 
 .bt-fila.is-atencion .bt-fila__nombre { font-weight: var(--font-weight-semibold); }
 
+/* Línea principal: número del ticket + quién lo pidió (el servicio, repetido entre filas, va en la secundaria). */
+.bt-fila__codigo { font-weight: var(--font-weight-semibold); color: var(--text-primary); }
+.bt-fila__sep { margin: 0 var(--space-2); color: var(--text-muted); font-weight: var(--font-weight-regular); }
+.bt-fila__quien { font-weight: var(--font-weight-medium); color: var(--text-primary); }
+
+/* Una sola jerarquía por celda: línea principal (cuerpo) + secundaria (pequeña, gris). La única etiqueta de color
+   de la fila es el estado del ticket; «Tu situación» es texto (sin puntos: UX-5), en negrita si requiere atención. */
+.bt-tu-situacion { font-weight: var(--font-weight-regular); color: var(--text-secondary); }
+.bt-tu-situacion.is-atencion { font-weight: var(--font-weight-semibold); color: var(--text-primary); }
+.bt-vacio { color: var(--text-muted); }
+
 .bt-fila__meta,
 .bt-fila__compacto {
   display: flex;
@@ -147,12 +159,13 @@
   white-space: nowrap;
 }
 
-.bt-celda--situacion { display: grid; gap: var(--space-1); justify-items: start; }
+.bt-celda--situacion { display: grid; gap: 3px; justify-items: start; }
 
 .bt-fila__siguiente {
   max-width: 100%;
   overflow: hidden;
-  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  color: var(--text-muted);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -560,4 +573,68 @@
     from { opacity: 0; transform: translateX(var(--space-3)); }
     to { opacity: 1; transform: none; }
   }
+}
+
+/* --- Histórico (Mi trabajo › Histórico, Mis tickets › Histórico; `tickets/bandeja/_historico.html`) -------------
+   Filtros en una fila que se ajusta al ancho y una tabla compacta con solo separadores horizontales. */
+.hs-filtros {
+  display: grid;
+  grid-template-columns: minmax(12rem, 2fr) repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: var(--space-2) var(--space-3);
+  align-items: end;
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+}
+.hs-campo { display: grid; gap: 4px; min-width: 0; }
+.hs-campo > span { color: var(--text-muted); font-size: var(--font-size-caption); }
+.hs-campo input,
+.hs-campo select {
+  width: 100%;
+  min-height: 2.25rem;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-control);
+  border-radius: var(--radius-control);
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+}
+.hs-acciones { display: flex; gap: var(--space-2); align-items: center; }
+
+.hs-tabla-marco {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  overflow-x: auto;
+}
+.hs-tabla { width: 100%; border-collapse: collapse; font-size: var(--font-size-small); }
+.hs-tabla th {
+  padding: var(--space-2) var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  text-align: left;
+  border-bottom: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+.hs-tabla td { padding: var(--space-2) var(--space-4); border-bottom: 1px solid var(--border-subtle); vertical-align: top; }
+.hs-tabla tbody tr:last-child td { border-bottom: 0; }
+.hs-tabla tbody tr:hover { background: var(--surface-hover); }
+.hs-num { text-align: right; white-space: nowrap; }
+.hs-ticket { display: block; color: var(--text-primary); font-weight: var(--font-weight-semibold); text-decoration: none; }
+.hs-ticket:hover { text-decoration: underline; }
+.hs-meta { color: var(--text-muted); font-size: var(--font-size-caption); }
+.hs-paginas { display: flex; align-items: center; justify-content: center; gap: var(--space-3); margin-top: var(--space-3); color: var(--text-secondary); font-size: var(--font-size-small); }
+
+@media (max-width: 720px) {
+  .hs-filtros { grid-template-columns: 1fr 1fr; }
+  .hs-campo--buscar, .hs-acciones { grid-column: 1 / -1; }
+  .hs-tabla thead { display: none; }
+  .hs-tabla, .hs-tabla tbody, .hs-tabla tr, .hs-tabla td { display: block; }
+  .hs-tabla tr { padding: var(--space-2) 0; border-bottom: 1px solid var(--border-subtle); }
+  .hs-tabla td { padding: 2px var(--space-4); border: 0; text-align: left; }
+  .hs-tabla td::before { content: attr(data-rotulo) ": "; color: var(--text-muted); font-size: var(--font-size-caption); }
+  .hs-tabla td[data-rotulo="Ticket"]::before { content: none; }
 }

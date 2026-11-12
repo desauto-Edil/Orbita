@@ -40,10 +40,10 @@
             <tr>
               <td>
                 <a class="config-person" href="{% url 'core:configuracion_usuario' persona.pk %}">
-                  <span class="avatar avatar--neutral" aria-hidden="true">{{ persona.get_username|slice:":1"|upper }}</span>
+                  <span class="avatar avatar--neutral" aria-hidden="true">{{ persona.nombre_visible|slice:":1"|upper }}</span>
                   <span>
-                    <strong>{{ persona.get_full_name|default:persona.get_username }}</strong>
-                    <span class="config-person__meta">{{ persona.get_username }}</span>
+                    <strong>{{ persona.nombre_visible }}</strong>
+                    <span class="config-person__meta">{{ persona.email }}</span>
                   </span>
                 </a>
               </td>

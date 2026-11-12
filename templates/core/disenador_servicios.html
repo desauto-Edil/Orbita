@@ -188,7 +188,7 @@
           </div>
           <div class="field">
             <label for="tg-dest-usuario">Persona</label>
-            <select name="objeto_usuario" id="tg-dest-usuario"><option value="">—</option>{% for persona in ticket_general.destino_candidatos.usuarios %}<option value="{{ persona.pk }}">{{ persona.get_full_name|default:persona.username }}</option>{% endfor %}</select>
+            <select name="objeto_usuario" id="tg-dest-usuario"><option value="">—</option>{% for persona in ticket_general.destino_candidatos.usuarios %}<option value="{{ persona.pk }}">{{ persona.nombre_visible }}</option>{% endfor %}</select>
           </div>
           <div class="field">
             <label for="tg-dest-resp">Responsable</label>

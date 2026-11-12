@@ -116,6 +116,9 @@ def validar_configuracion_ejecucion(version, *, exigir_plantilla_vigente=True):
             errores.extend(_errores_rutas_aprobacion(bloque))
             if cfg.get("permite_exclusion") and bloque.rama != BloqueOperativo.Rama.ITEM:
                 errores.append(f"La aprobacion {bloque.nombre}: solo la aprobación de un ítem puede excluir.")
+            from apps.catalogo.gacetas import errores_de_publicacion
+
+            errores.extend(errores_de_publicacion(version.servicio, bloque))
             errores.extend(_errores_entregable_revisado(bloque, version))
         elif bloque.tipo == BloqueOperativo.Tipo.ENTREGABLE:
             definicion = bloque.definicion_entregable

@@ -36,7 +36,7 @@ class _BaseProgramado(_BaseCoherencia):
     def _preparar_programado(self):
         self._preparar()
         self.proceso = self._proceso("Programado 4.1")
-        self.miembro = Usuario.objects.create_user("b41_miembro", password=CLAVE)
+        self.miembro = Usuario.objects.create_user("b41_miembro@pruebas.orbita")
         self.equipo = Equipo.objects.create(nombre="Equipo 4.1")
         self.membresia = MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.miembro)
 
@@ -44,9 +44,9 @@ class _BaseProgramado(_BaseCoherencia):
         AsignacionRol.objects.filter(usuario=self.atencion_global).update(activo=False)
 
     def _dar_atender_en_area(self, usuario):
-        area = Area.objects.create(nombre=f"Área {usuario.username}")
+        area = Area.objects.create(nombre=f"Área {usuario.email}")
         permiso, _ = Permiso.objects.get_or_create(codigo="tickets.atender", defaults={"nombre": "Atender"})
-        rol = RolFuncional.objects.create(nombre=f"Rol {usuario.username}")
+        rol = RolFuncional.objects.create(nombre=f"Rol {usuario.email}")
         RolPermiso.objects.create(rol=rol, permiso=permiso)
         AsignacionRol.objects.create(usuario=usuario, rol=rol, tipo_alcance=AsignacionRol.TipoAlcance.AREA, area=area)
 

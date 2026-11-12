@@ -277,7 +277,7 @@ class ConfiguracionEtapaTarea(RegistroBase):
         constraints = [
             UniqueConstraint(fields=["etapa"], name="uq_configuracionetapatarea_etapa"),
             models.CheckConstraint(
-                check=(
+                condition=(
                     Q(tipo_responsable__in=["", "RESPONSABLE_TICKET", "SOLICITANTE"], usuario_responsable__isnull=True, equipo_responsable__isnull=True)
                     | Q(tipo_responsable="USUARIO", usuario_responsable__isnull=False, equipo_responsable__isnull=True)
                     | Q(tipo_responsable="EQUIPO", equipo_responsable__isnull=False, usuario_responsable__isnull=True)
@@ -631,7 +631,7 @@ class ConfiguracionEtapaAprobacion(RegistroBase):
         constraints = [
             UniqueConstraint(fields=["etapa"], name="uq_configuracionetapaaprobacion_etapa"),
             models.CheckConstraint(
-                check=(
+                condition=(
                     Q(modo="PARALELA", politica__in=["TODOS", "CUALQUIERA"]) | Q(modo="SECUENCIAL", politica="")
                 ),
                 name="ck_configuracionetapaaprobacion_politica_coherente",
@@ -679,7 +679,7 @@ class ParticipanteEtapaAprobacion(RegistroBase):
         constraints = [
             UniqueConstraint(fields=["configuracion", "orden"], name="uq_participanteetapaaprobacion_orden"),
             models.CheckConstraint(
-                check=(
+                condition=(
                     Q(tipo_aprobador="USUARIO", usuario__isnull=False, equipo__isnull=True)
                     | Q(tipo_aprobador="EQUIPO", equipo__isnull=False, usuario__isnull=True)
                     | Q(tipo_aprobador__in=["RESPONSABLE_TICKET", "SOLICITANTE"], usuario__isnull=True, equipo__isnull=True)

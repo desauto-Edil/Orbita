@@ -1,5 +1,8 @@
 """Pruebas de la Fase 3 del modelo configurable — gacetas y finalización.
 
+REGLA DE ORO: en una gaceta nadie aprueba. Se comenta (un comentario manda el ítem a corrección), al cerrar el
+periodo queda aceptado lo que no tenga comentarios pendientes y solo quien coordina excluye.
+
 Reutilizan el escenario de la Fase 2 (`apps.tickets.tests._EscenarioRecorridosMixin`: Proceso programado con una
 colección de ítems «Publicación» con columnas Pieza, Responsable, Equipo y Entrega)."""
 
@@ -15,7 +18,7 @@ from django.utils import timezone
 from apps.aprobaciones.models import Aprobacion
 from apps.catalogo.gacetas import configurar_gaceta, configurar_reglas_finalizacion
 from apps.catalogo.models import BloqueOperativo, Servicio, ServicioResponsable
-from apps.gacetas import operaciones, tasks
+from apps.gacetas import autorizacion, operaciones, tasks
 from apps.gacetas.models import GacetaTicket, ObservacionGaceta, ParticipacionItemGaceta, RondaRevisionGaceta
 from apps.tareas.models import Tarea
 from apps.tickets import parrilla as parrilla_ops
@@ -31,7 +34,7 @@ Estado = ParticipacionItemGaceta.Estado
 class _EscenarioGacetasMixin(_EscenarioRecorridosMixin):
     def _preparar_gacetas(self):
         self._preparar_recorridos()
-        self.observador = Usuario.objects.create_user(username="f3_observador", password=CLAVE_PRUEBA)
+        self.observador = Usuario.objects.create_user("f3_observador@pruebas.orbita")
 
     def _proceso_simple(self, *, bloque_gaceta=None):
         """Proceso: Planear → (bloque GACETA opcional) → Cierre, con la colección de la Fase 2. Las gacetas se
@@ -66,7 +69,6 @@ class _EscenarioGacetasMixin(_EscenarioRecorridosMixin):
     def _gaceta(self, servicio, definicion, nombre="Gaceta de piezas", **cfg):
         configuracion = {
             "colecciones": [definicion.clave],
-            "aprobadores": [{"tipo": "USUARIO", "usuario_id": self.revisor.pk}],
             "revisores": [{"tipo": "USUARIO", "usuario_id": self.observador.pk}],
             "responsable_correccion_columna": "responsable",
             "plazo_correccion": {"cantidad": 2, "unidad": "DIAS", "habiles": False},
@@ -80,15 +82,11 @@ class _EscenarioGacetasMixin(_EscenarioRecorridosMixin):
     def _participacion(self, gaceta, elemento):
         return ParticipacionItemGaceta.objects.get(gaceta=gaceta, elemento=elemento)
 
-    def _aprobacion(self, participacion):
-        ronda = RondaRevisionGaceta.objects.get(participacion=participacion, numero=participacion.ronda)
-        return ronda.esquema.participaciones.get()
-
-    def _decidir(self, participacion, decision, observacion=""):
-        operaciones.resolver_aprobacion_gaceta(
-            self._aprobacion(participacion), self.revisor, decision=decision, observacion=observacion
-        )
-        participacion.refresh_from_db()
+    def _cerrar(self, gaceta, *participaciones):
+        """Quien coordina cierra el periodo: queda aceptado lo que no tenga comentarios pendientes."""
+        operaciones.cerrar_periodo(GacetaTicket.objects.get(pk=gaceta.pk), self.analista)
+        for participacion in participaciones:
+            participacion.refresh_from_db()
 
 
 class IngresoYMultiplesGacetasTests(_EscenarioGacetasMixin, TestCase):
@@ -108,14 +106,15 @@ class IngresoYMultiplesGacetasTests(_EscenarioGacetasMixin, TestCase):
         # Cambiar la definición después no altera el ticket.
         configurar_gaceta(
             self.servicio, self.admin, nombre="Gaceta comercial renombrada", definicion=self.def_a,
-            configuracion={**self.def_a.configuracion, "permite_exclusion": True},
+            configuracion={**self.def_a.configuracion, "exige_item_completo": False},
         )
         gaceta = self._de(self.ticket, self.def_a.clave)
         self.assertEqual(gaceta.nombre, "Gaceta comercial")
-        self.assertFalse(gaceta.configuracion["permite_exclusion"])
+        self.assertTrue(gaceta.configuracion["exige_item_completo"])
+        self.assertNotIn("aprobadores", gaceta.configuracion)
         self.assertEqual(gaceta.version_definicion, 1)
 
-    def test_presentar_es_idempotente_y_registra_version_y_esquema(self):
+    def test_presentar_es_idempotente_y_registra_version_sin_aprobacion(self):
         gaceta = self._de(self.ticket, self.def_a.clave)
         primera = operaciones.presentar(gaceta, self.banner, self.analista)
         segunda = operaciones.presentar(gaceta, self.banner, self.analista)
@@ -123,13 +122,14 @@ class IngresoYMultiplesGacetasTests(_EscenarioGacetasMixin, TestCase):
         self.assertEqual(ParticipacionItemGaceta.objects.filter(gaceta=gaceta).count(), 1)
         ronda = primera.rondas.get()
         self.assertEqual((ronda.numero, ronda.version.numero), (1, 1))
-        self.assertEqual(ronda.esquema.participaciones.get().aprobador_usuario, self.revisor)
+        self.assertIsNone(ronda.esquema)  # regla de oro: nadie aprueba en una gaceta
+        self.assertFalse(Aprobacion.objects.exists())
         self.assertEqual(primera.estado, Estado.EN_REVISION)
 
     def test_cada_gaceta_decide_por_su_cuenta(self):
         a = operaciones.presentar(self._de(self.ticket, self.def_a.clave), self.banner, self.analista)
         b = operaciones.presentar(self._de(self.ticket, self.def_b.clave), self.banner, self.analista)
-        self._decidir(a, "APROBADA")
+        self._cerrar(a.gaceta, a)
         b.refresh_from_db()
         self.assertEqual((a.estado, b.estado), (Estado.APROBADA, Estado.EN_REVISION))
 
@@ -159,7 +159,10 @@ class IngresoAutomaticoTests(_EscenarioGacetasMixin, TestCase):
         self.assertFalse(ParticipacionItemGaceta.objects.filter(gaceta=gaceta).exists())
         parrilla_ops.actualizar_valores(video, self.analista, {columnas["Pieza"].pk: "Banner"})
         self.assertEqual(self._participacion(gaceta, video).origen, ParticipacionItemGaceta.Origen.AUTOMATICO)
-        parrilla_ops.actualizar_valores(video, self.analista, {columnas["Entrega"].pk: "2026-12-01"})
+        # Ya presentado está EN REVISIÓN: nadie lo edita (2026-11-12); el reingreso sigue siendo idempotente.
+        with self.assertRaisesMessage(ValidationError, "en revisión"):
+            parrilla_ops.actualizar_valores(video, self.analista, {columnas["Entrega"].pk: "2026-12-01"})
+        operaciones.ingresar_automaticamente(video, self.analista, ingreso="AL_CUMPLIR_CONDICION")
         self.assertEqual(ParticipacionItemGaceta.objects.filter(gaceta=gaceta).count(), 1)  # no se duplica
 
     def test_un_item_que_termina_su_recorrido_ingresa_y_sigue_en_revision(self):
@@ -195,7 +198,6 @@ class ObservacionesYCorreccionesTests(_EscenarioGacetasMixin, TestCase):
         self.p_video = operaciones.presentar(self.gaceta, self.video, self.analista)
 
     def test_una_observacion_devuelve_el_item_a_su_responsable(self):
-        esquema = self.p_banner.rondas.get().esquema
         operaciones.observar(self.p_banner, self.observador, "Falta el logo")
         self.p_banner.refresh_from_db()
         self.assertEqual(self.p_banner.estado, Estado.EN_CORRECCION)
@@ -204,7 +206,6 @@ class ObservacionesYCorreccionesTests(_EscenarioGacetasMixin, TestCase):
         self.assertEqual(ronda.resultado, RondaRevisionGaceta.Resultado.OBSERVADA)
         self.assertEqual(ronda.tarea_correccion.usuario_responsable, self.disenadora)
         self.assertIn("Falta el logo", ronda.tarea_correccion.descripcion)
-        self.assertEqual(esquema.participaciones.get().estado, Aprobacion.Estado.NO_REQUERIDA)
         self.p_video.refresh_from_db()
         self.assertEqual(self.p_video.estado, Estado.EN_REVISION)  # los demás no cambian
 
@@ -237,11 +238,16 @@ class ObservacionesYCorreccionesTests(_EscenarioGacetasMixin, TestCase):
         with self.assertRaises(PermissionDenied):
             operaciones.reenviar(self.p_banner, self.disenador)
 
-    def test_devolver_por_aprobacion_registra_la_observacion_del_aprobador(self):
-        self._decidir(self.p_banner, "DEVUELTA", "Cambiar el copy")
-        self.assertEqual(self.p_banner.estado, Estado.EN_CORRECCION)
-        observacion = ObservacionGaceta.objects.get(participacion=self.p_banner)
-        self.assertEqual((observacion.origen, observacion.autor, observacion.texto), ("DECISION", self.revisor, "Cambiar el copy"))
+    def test_con_el_periodo_cerrado_la_correccion_queda_aceptada_al_reenviarse(self):
+        operaciones.observar(self.p_banner, self.observador, "Cambiar el copy")
+        self._cerrar(self.gaceta, self.p_banner, self.p_video)
+        self.assertEqual((self.p_banner.estado, self.p_video.estado), (Estado.EN_CORRECCION, Estado.APROBADA))
+        operaciones.reenviar(self.p_banner, self.disenadora, "Copy nuevo")
+        self.p_banner.refresh_from_db()
+        self.assertEqual((self.p_banner.estado, self.p_banner.ronda), (Estado.APROBADA, 2))
+        ronda = self.p_banner.rondas.get(numero=2)
+        self.assertEqual(ronda.resultado, RondaRevisionGaceta.Resultado.ACEPTADA_CORRECCION)
+        self.assertIsNotNone(ronda.version)  # la versión corregida queda registrada
 
     def test_quien_no_participa_no_observa_ni_despues_del_cierre(self):
         with self.assertRaises(PermissionDenied):
@@ -255,7 +261,7 @@ class DecisionesTests(_EscenarioGacetasMixin, TestCase):
     def setUp(self):
         self._preparar_gacetas()
         self.servicio, self.resp, self.definicion, self.columnas = self._proceso_simple()
-        self.regla = self._gaceta(self.servicio, self.definicion, permite_exclusion=True)
+        self.regla = self._gaceta(self.servicio, self.definicion)
         self.otra = self._gaceta(self.servicio, self.definicion, "Gaceta legal")
         self._activar_flujo(self.servicio)
         self.ticket = self._ticket(self.servicio, self.resp)
@@ -264,49 +270,43 @@ class DecisionesTests(_EscenarioGacetasMixin, TestCase):
         self.p = operaciones.presentar(self.gaceta, self.banner, self.analista)
         self.p_otra = operaciones.presentar(self._de(self.ticket, self.otra.clave), self.banner, self.analista)
 
-    def test_rechazar_saca_el_item_del_alcance_y_cierra_sus_otras_gacetas(self):
-        self._decidir(self.p, "RECHAZADA", "No cumple la marca")
-        self.assertEqual(self.p.estado, Estado.RECHAZADA)
+    def test_excluir_saca_el_item_del_alcance_y_cierra_sus_otras_gacetas(self):
+        operaciones.excluir_directo(self.p, self.analista, "No cumple la marca")
+        self.p.refresh_from_db()
+        self.assertEqual(self.p.estado, Estado.EXCLUIDA)
         decision = parrilla_ops.decision_de_salida(self.banner)
-        self.assertEqual((decision.tipo, decision.origen), ("RECHAZADO", DecisionAlcanceElemento.Origen.GACETA))
+        self.assertEqual((decision.tipo, decision.origen), ("EXCLUIDO", DecisionAlcanceElemento.Origen.GACETA))
         self.p_otra.refresh_from_db()
-        self.assertEqual(self.p_otra.estado, Estado.RECHAZADA)
+        self.assertEqual(self.p_otra.estado, Estado.EXCLUIDA)
         self.assertTrue(self.banner.__class__.objects.filter(pk=self.banner.pk).exists())  # nunca se borra
 
-    def test_excluir_es_distinto_de_rechazar_y_exige_justificacion(self):
+    def test_excluir_exige_justificacion(self):
         with self.assertRaises(ValidationError):
-            self._decidir(self.p, "EXCLUIDA", "")
-        self._decidir(self.p, "EXCLUIDA", "Se cayó la pauta")
-        self.assertEqual(self.p.estado, Estado.EXCLUIDA)
-        self.assertEqual(parrilla_ops.decision_de_salida(self.banner).tipo, "EXCLUIDO")
+            operaciones.excluir_directo(self.p, self.analista, "")
+        self.p.refresh_from_db()
+        self.assertEqual(self.p.estado, Estado.EN_REVISION)
 
-    def test_una_gaceta_sin_exclusion_no_la_ofrece(self):
+    def test_nadie_aprueba_en_una_gaceta(self):
+        self.assertIsNone(self.p.rondas.get().esquema)
+        self.assertFalse(Aprobacion.objects.exists())
         with self.assertRaises(ValidationError):
-            operaciones.resolver_aprobacion_gaceta(
-                self._aprobacion(self.p_otra), self.revisor, decision="EXCLUIDA", observacion="x"
-            )
+            operaciones.resolver_aprobacion_gaceta(Aprobacion(), self.revisor, decision="APROBADA")
 
-    def test_el_coordinador_excluye_sin_otra_aprobacion(self):
+    def test_solo_el_coordinador_excluye(self):
         with self.assertRaises(PermissionDenied):
             operaciones.excluir_directo(self.p, self.observador, "No va")
         operaciones.excluir_directo(self.p, self.analista, "No va")
         self.p.refresh_from_db()
         self.assertEqual(self.p.estado, Estado.EXCLUIDA)
-        self.assertEqual(self._aprobacion(self.p).estado, Aprobacion.Estado.NO_REQUERIDA)
 
-    def test_una_decision_repetida_no_cambia_el_resultado(self):
-        self._decidir(self.p, "APROBADA")
+    def test_un_item_aceptado_no_cambia_de_resultado(self):
+        self._cerrar(self.gaceta, self.p)
+        self.assertEqual(self.p.estado, Estado.APROBADA)
         with self.assertRaises(ValidationError):
-            self._decidir(self.p, "RECHAZADA", "Tarde")
+            operaciones.excluir_directo(self.p, self.analista, "Tarde")
+        self.p.refresh_from_db()
         self.assertEqual(self.p.estado, Estado.APROBADA)
         self.assertIsNone(parrilla_ops.decision_de_salida(self.banner))
-
-    def test_la_aprobacion_muestra_el_item_y_su_gaceta(self):
-        self._entrar(self.revisor)
-        respuesta = self.client.get(reverse("aprobaciones:detalle", args=[self._aprobacion(self.p).pk]))
-        self.assertEqual(respuesta.status_code, 200)
-        self.assertEqual(respuesta.context["item_aprobado"]["gaceta"], self.gaceta)
-        self.assertContains(respuesta, "Banner")
 
 
 class VencimientosYResolucionTests(_EscenarioGacetasMixin, TestCase):
@@ -331,7 +331,7 @@ class VencimientosYResolucionTests(_EscenarioGacetasMixin, TestCase):
         GacetaTicket.objects.filter(pk=gaceta.pk).update(vence_revision_en=timezone.now() - timedelta(minutes=1))
 
     def test_aceptacion_automatica_solo_sin_observaciones_ni_correcciones(self):
-        ticket, gaceta, p_banner, p_video = self._escenario(aceptacion_automatica=True)
+        ticket, gaceta, p_banner, p_video = self._escenario()
         operaciones.observar(p_video, self.observador, "Corregir")
         self._vencer(gaceta)
         self.assertGreater(tasks.reconciliar(), 0)
@@ -343,20 +343,20 @@ class VencimientosYResolucionTests(_EscenarioGacetasMixin, TestCase):
         self.assertEqual(p_video.estado, Estado.EN_CORRECCION)  # nunca se acepta un ítem en corrección
         self.assertEqual(tasks.reconciliar(), 0)  # idempotente
 
-    def test_cerrar_el_periodo_no_aprueba_lo_pendiente(self):
+    def test_cerrar_el_periodo_a_mano_acepta_lo_que_no_tiene_comentarios(self):
         ticket, gaceta, p_banner, p_video = self._escenario()
-        operaciones.cerrar_periodo(gaceta, self.analista)
-        p_banner.refresh_from_db()
-        self.assertEqual(p_banner.estado, Estado.EN_REVISION)
-        # Los aprobadores pueden seguir decidiendo con el periodo cerrado.
-        self._decidir(p_banner, "APROBADA")
-        self.assertEqual(p_banner.estado, Estado.APROBADA)
+        operaciones.observar(p_video, self.observador, "Corregir")
+        self._cerrar(gaceta, p_banner, p_video)  # antes de vencer
+        self.assertEqual((p_banner.estado, p_video.estado), (Estado.APROBADA, Estado.EN_CORRECCION))
+        self.assertEqual(p_banner.rondas.get().resultado, RondaRevisionGaceta.Resultado.ACEPTADA_AUTOMATICA)
 
     def test_resolver_con_pendientes_segun_la_regla(self):
         ticket, gaceta, p_banner, p_video = self._escenario()
-        self._decidir(p_banner, "APROBADA")
+        operaciones.observar(p_video, self.observador, "Corregir")
         with self.assertRaises(ValidationError):
             operaciones.resolver(gaceta, self.analista)  # IMPEDIR por defecto
+        gaceta.refresh_from_db()
+        self.assertEqual(gaceta.estado, GacetaTicket.Estado.ABIERTA)  # el intento fallido no cerró nada
         GacetaTicket.objects.filter(pk=gaceta.pk).update(
             configuracion={**gaceta.configuracion, "al_resolver_pendientes": "EXCLUIR"}
         )
@@ -370,13 +370,13 @@ class VencimientosYResolucionTests(_EscenarioGacetasMixin, TestCase):
 
     def test_resolucion_automatica_al_cerrar_sin_pendientes(self):
         ticket, gaceta, p_banner, p_video = self._escenario(resolucion_automatica=True)
-        self._decidir(p_banner, "APROBADA")
-        self._decidir(p_video, "RECHAZADA", "No aplica")
+        operaciones.excluir_directo(p_video, self.analista, "No aplica")
         self._vencer(gaceta)
         tasks.reconciliar()
         gaceta.refresh_from_db()
         self.assertEqual(gaceta.estado, GacetaTicket.Estado.RESUELTA)
         self.assertTrue(gaceta.resolucion["automatica"])
+        self.assertEqual((gaceta.resolucion["aprobados"], gaceta.resolucion["excluidos"]), (1, 1))
 
     def test_la_correccion_vencida_se_registra(self):
         ticket, gaceta, p_banner, _ = self._escenario()
@@ -407,7 +407,6 @@ class GacetaEnElFlujoTests(_EscenarioGacetasMixin, TestCase):
         self.assertEqual(self._bloque_actual(principal), "Revisión en gaceta")
         p = self._participacion(gaceta, banner)
         self.assertEqual(p.origen, ParticipacionItemGaceta.Origen.FLUJO)
-        self._decidir(p, "APROBADA")
         self.assertEqual(self._bloque_actual(principal), "Revisión en gaceta")  # aún sin resolver
         operaciones.resolver(gaceta, self.analista)
         self.assertEqual(self._bloque_actual(principal), "Cierre")
@@ -464,9 +463,11 @@ class FinalizacionTests(_EscenarioGacetasMixin, TestCase):
         with self.assertRaises(ValidationError) as contexto:
             resolver_ticket(ticket, self.analista, "Listo")
         self.assertIn("gacetas", " ".join(contexto.exception.messages).lower())
-        self._decidir(p_banner, "APROBADA")
-        self._decidir(p_video, "RECHAZADA", "No aplica")
-        operaciones.resolver(gaceta, self.analista)
+        operaciones.observar(p_video, self.observador, "No aplica")
+        GacetaTicket.objects.filter(pk=gaceta.pk).update(
+            configuracion={**gaceta.configuracion, "al_resolver_pendientes": "RECHAZAR"}
+        )
+        operaciones.resolver(GacetaTicket.objects.get(pk=gaceta.pk), self.analista)
         resolucion = resolver_ticket(ticket, self.analista, "Listo")
         self.assertEqual(resolucion.resumen_resultados["items"], {"APROBADO": [1], "RECHAZADO": [2]})
         self.assertEqual(resolucion.resumen_resultados["gacetas"][0]["estado"], "RESUELTA")
@@ -483,8 +484,7 @@ class FinalizacionTests(_EscenarioGacetasMixin, TestCase):
         pendientes = [r.codigo for r in finalizacion.evaluar(ticket) if not r.cumple]
         self.assertIn("items_con_resultado", pendientes)
         self.assertIn("minimo_aprobados", pendientes)
-        p_banner = operaciones.presentar(gaceta, banner, self.analista)
-        self._decidir(p_banner, "APROBADA")
+        operaciones.presentar(gaceta, banner, self.analista)
         parrilla_ops.excluir_elemento(video, self.analista, "Fuera de la campaña")
         operaciones.resolver(gaceta, self.analista)
         self.assertTrue(all(r.cumple for r in finalizacion.evaluar(ticket)))
@@ -520,8 +520,8 @@ class CancelacionTests(_EscenarioGacetasMixin, TestCase):
         video = self._item(ticket, columnas, "Video", responsable=self.disenador)
         p_banner = operaciones.presentar(gaceta, banner, self.analista)
         p_video = operaciones.presentar(gaceta, video, self.analista)
-        self._decidir(p_banner, "APROBADA")
         operaciones.observar(p_video, self.observador, "Corregir")
+        self._cerrar(gaceta, p_banner)
         tarea = p_video.rondas.get(numero=1).tarea_correccion
         cancelar_ticket(ticket, self.analista, "Suspendido")
         gaceta.refresh_from_db()
@@ -547,7 +547,7 @@ class VistasYStudioTests(_EscenarioGacetasMixin, TestCase):
         self._entrar(self.observador)
         # La página propia de la gaceta se retiró: su URL lleva a la gaceta dentro del espacio del ticket.
         respuesta = self.client.get(reverse("gacetas:detalle", args=[self.gaceta.pk]))
-        destino = reverse("tickets:espacio", args=[self.ticket.pk]) + f"#gaceta-{self.gaceta.pk}"
+        destino = reverse("tickets:espacio", args=[self.ticket.pk]) + f"?gaceta={self.gaceta.pk}#gaceta-{self.gaceta.pk}"
         self.assertRedirects(respuesta, destino, fetch_redirect_response=False)
         espacio = self.client.get(reverse("tickets:espacio", args=[self.ticket.pk]))
         self.assertEqual(espacio.status_code, 200)
@@ -582,14 +582,15 @@ class VistasYStudioTests(_EscenarioGacetasMixin, TestCase):
             {
                 "gaceta-nueva-nombre": "Gaceta de cierre", "gaceta-nueva-colecciones": [self.definicion.clave],
                 "gaceta-nueva-ingreso": "MANUAL", "gaceta-nueva-apertura": "AL_INICIAR",
-                "gaceta-nueva-aprobadores_usuarios": [self.revisor.pk], "gaceta-nueva-politica": "TODOS",
+                "gaceta-nueva-revisores_usuarios": [self.revisor.pk],
                 "gaceta-nueva-al_resolver_pendientes": "IMPEDIR", "gaceta-nueva-plazo_revision_unidad": "DIAS",
                 "gaceta-nueva-plazo_correccion_unidad": "DIAS",
             },
         )
         self.assertEqual(respuesta.status_code, 302)
         nueva = self.servicio.definiciones_gaceta.get(nombre="Gaceta de cierre")
-        self.assertEqual(nueva.configuracion["aprobadores"], [{"tipo": "USUARIO", "usuario_id": self.revisor.pk}])
+        self.assertEqual(nueva.configuracion["revisores"], [{"tipo": "USUARIO", "usuario_id": self.revisor.pk}])
+        self.assertNotIn("aprobadores", nueva.configuracion)
         self.client.post(
             reverse("catalogo:studio_reglas_finalizacion", args=[self.servicio.pk]),
             {"gacetas_resueltas": "on", "items_con_resultado": "on", "resultados_admitidos": ["APROBADO", "EXCLUIDO"],
@@ -609,7 +610,7 @@ class VistasYStudioTests(_EscenarioGacetasMixin, TestCase):
         with self.assertRaises(ValidationError):
             configurar_gaceta(
                 servicio, self.admin, nombre="X",
-                configuracion={"colecciones": ["x"], "aprobadores": [{"tipo": "USUARIO", "usuario_id": self.revisor.pk}]},
+                configuracion={"colecciones": ["x"], "revisores": [{"tipo": "USUARIO", "usuario_id": self.revisor.pk}]},
             )
         self.assertEqual(Servicio.objects.get(pk=servicio.pk).tipo, "SERVICIO")
         self.assertFalse(BloqueOperativo.objects.filter(tipo="GACETA").exists())
@@ -619,16 +620,12 @@ class VistasYStudioTests(_EscenarioGacetasMixin, TestCase):
 
 class ConcurrenciaGacetaTests(_EscenarioGacetasMixin, TransactionTestCase):
     """Hilos reales contra PostgreSQL (`TransactionTestCase`): el orden de locks instancia → ticket → gaceta →
-    participación serializa las operaciones; ni la presentación ni la decisión se duplican."""
+    participación serializa las operaciones; ni la presentación ni la aceptación al cerrar se duplican."""
 
     def setUp(self):
         self._preparar_gacetas()
         self.servicio, self.resp, self.definicion, self.columnas = self._proceso_simple()
-        self.segundo = Usuario.objects.create_user(username="f3_segundo", password=CLAVE_PRUEBA)
-        self.regla = self._gaceta(
-            self.servicio, self.definicion, politica="CUALQUIERA",
-            aprobadores=[{"tipo": "USUARIO", "usuario_id": self.revisor.pk}, {"tipo": "USUARIO", "usuario_id": self.segundo.pk}],
-        )
+        self.regla = self._gaceta(self.servicio, self.definicion)
         self._activar_flujo(self.servicio)
         self.ticket = self._ticket(self.servicio, self.resp)
         self.gaceta = self._de(self.ticket, self.regla.clave)
@@ -663,17 +660,83 @@ class ConcurrenciaGacetaTests(_EscenarioGacetasMixin, TransactionTestCase):
         self.assertEqual(ParticipacionItemGaceta.objects.filter(gaceta=self.gaceta, elemento=self.banner).count(), 1)
         self.assertEqual(RondaRevisionGaceta.objects.filter(participacion__gaceta=self.gaceta).count(), 1)
 
-    def test_dos_decisiones_simultaneas_cierran_una_sola_vez(self):
+    def test_dos_cierres_simultaneos_aceptan_una_sola_vez(self):
         participacion = operaciones.presentar(self.gaceta, self.banner, self.analista)
-        esquema = participacion.rondas.get().esquema
-        a = esquema.participaciones.get(aprobador_usuario=self.revisor)
-        b = esquema.participaciones.get(aprobador_usuario=self.segundo)
         resultados = self._en_paralelo(
-            lambda: operaciones.resolver_aprobacion_gaceta(a, self.revisor, decision="APROBADA"),
-            lambda: operaciones.resolver_aprobacion_gaceta(b, self.segundo, decision="RECHAZADA", observacion="No"),
+            lambda: operaciones.cerrar_periodo(GacetaTicket.objects.get(pk=self.gaceta.pk), self.analista),
+            lambda: operaciones.cerrar_periodo(GacetaTicket.objects.get(pk=self.gaceta.pk), self.analista),
         )
         participacion.refresh_from_db()
-        self.assertIn(participacion.estado, (Estado.APROBADA, Estado.RECHAZADA))
-        self.assertEqual(resultados.count("ok") + resultados.count("rechazado"), 2)
-        salidas = DecisionAlcanceElemento.objects.filter(elemento=self.banner, tipo__in=("EXCLUIDO", "RECHAZADO")).count()
-        self.assertEqual(salidas, 1 if participacion.estado == Estado.RECHAZADA else 0)
+        self.assertEqual(resultados, ["ok", "ok"])  # el segundo encuentra el periodo ya cerrado (idempotente)
+        self.assertEqual(participacion.estado, Estado.APROBADA)
+        self.assertEqual(RondaRevisionGaceta.objects.filter(participacion=participacion).count(), 1)
+
+
+class ConformidadTests(_EscenarioGacetasMixin, TestCase):
+    """«Estoy conforme» (2026-11-12): con todos los INTERESADOS conformes (revisores que no trabajaron el ticket),
+    la gaceta termina antes. La conformidad vale para lo presentado: una versión nueva la deja sin efecto."""
+
+    def setUp(self):
+        self._preparar_gacetas()
+        self.otro = Usuario.objects.create_user("f3_interesado@pruebas.orbita")
+        self.servicio, self.resp, self.definicion, self.columnas = self._proceso_simple()
+        self.regla = self._gaceta(self.servicio, self.definicion, revisores=[
+            {"tipo": "USUARIO", "usuario_id": self.observador.pk},
+            {"tipo": "USUARIO", "usuario_id": self.otro.pk},
+            {"tipo": "USUARIO", "usuario_id": self.analista.pk},  # trabaja el ticket: no es interesado
+        ])
+        self._activar_flujo(self.servicio)
+        self.ticket = self._ticket(self.servicio, self.resp)
+        self.gaceta = self._de(self.ticket, self.regla.clave)
+        self.banner = self._item(self.ticket, self.columnas, "Banner", responsable=self.disenadora)
+        self.p_banner = operaciones.presentar(self.gaceta, self.banner, self.analista)
+
+    def test_quien_trabajo_el_ticket_no_es_interesado(self):
+        interesados = {u.pk for u in autorizacion.interesados_de(self.gaceta)}
+        self.assertEqual(interesados, {self.observador.pk, self.otro.pk})
+        with self.assertRaises(PermissionDenied):
+            operaciones.estar_conforme(self.gaceta, self.analista)
+
+    def test_con_todos_conformes_la_gaceta_termina_antes(self):
+        self.assertFalse(operaciones.estar_conforme(self.gaceta, self.observador))
+        self.gaceta.refresh_from_db()
+        self.assertEqual(self.gaceta.estado, GacetaTicket.Estado.ABIERTA)
+        estado = operaciones.estado_conformidad(self.gaceta, self.otro)
+        self.assertEqual((estado["conformes"], estado["total"], estado["puede"]), (1, 2, True))
+        self.assertTrue(operaciones.estar_conforme(self.gaceta, self.otro))
+        self.gaceta.refresh_from_db()
+        self.p_banner.refresh_from_db()
+        self.assertNotEqual(self.gaceta.estado, GacetaTicket.Estado.ABIERTA)
+        self.assertEqual(self.p_banner.estado, Estado.APROBADA)
+
+    def test_una_version_nueva_deja_sin_efecto_la_conformidad(self):
+        operaciones.estar_conforme(self.gaceta, self.otro)
+        operaciones.observar(self.p_banner, self.observador, "Falta el logo")
+        operaciones.reenviar(self.p_banner, self.disenadora, "Listo")
+        self.assertNotIn(self.otro.pk, operaciones.conformes_vigentes(self.gaceta))
+        self.assertFalse(operaciones.estar_conforme(self.gaceta, self.observador))
+        self.gaceta.refresh_from_db()
+        self.assertEqual(self.gaceta.estado, GacetaTicket.Estado.ABIERTA)  # falta que «otro» confirme de nuevo
+
+    def test_toda_gaceta_lo_trae_aunque_sus_revisores_trabajaron_el_ticket(self):
+        regla = self._gaceta(self.servicio, self.definicion, nombre="Gaceta interna", revisores=[
+            {"tipo": "USUARIO", "usuario_id": self.analista.pk},
+        ])
+        self._activar_flujo(self.servicio)
+        # El periodo de octubre ya tiene su ejecución (setUp): la nueva gaceta llega con la de noviembre.
+        from datetime import date
+
+        from apps.tickets.operaciones import tomar_ticket
+        from apps.tickets.programadas import generar_ejecucion_programada
+
+        programacion = self._programar(self.servicio, self.resp, dia=1, periodo="MES_ACTUAL", desde=date(2020, 1, 1))
+        ticket = generar_ejecucion_programada(programacion, hoy=date(2026, 11, 7)).ticket
+        tomar_ticket(ticket, self.analista)
+        gaceta = self._de(ticket, regla.clave)
+        self.assertEqual([u.pk for u in autorizacion.interesados_de(gaceta)], [self.analista.pk])
+
+    def test_el_boton_aparece_al_interesado_y_registra_la_conformidad(self):
+        self.client.force_login(self.observador)
+        respuesta = self.client.post(reverse("gacetas:conforme", args=[self.gaceta.pk]))
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertIn(self.observador.pk, operaciones.conformes_vigentes(self.gaceta))

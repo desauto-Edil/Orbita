@@ -88,7 +88,7 @@ class ConfiguracionTareaForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["usuario_responsable"].queryset = Usuario.objects.filter(is_active=True).order_by("username")
+        self.fields["usuario_responsable"].queryset = Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email")
         self.fields["equipo_responsable"].queryset = Equipo.objects.filter(activo=True).order_by("nombre")
 
     def clean(self):
@@ -134,7 +134,7 @@ class ParticipanteAprobacionForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["usuario"].queryset = Usuario.objects.filter(is_active=True).order_by("username")
+        self.fields["usuario"].queryset = Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email")
         self.fields["equipo"].queryset = Equipo.objects.filter(activo=True).order_by("nombre")
 
     def clean(self):

@@ -3,7 +3,8 @@
 Quien es responsable de una Tarea abierta asociada a un ítem puede editar SOLO las columnas que la configuración
 de esa Tarea autoriza (`columnas_editables`), y solo en ESE ítem, sin convertirse en responsable del ticket ni
 en participante de la colección. Hay tres modalidades, y en las tres el ítem y la configuración se identifican
-sin ambigüedad y desde datos CONGELADOS:
+sin ambigüedad y desde datos CONGELADOS (una tarea que EXIGE evidencia concede además las «Listas de evidencias»
+de la colección de su ítem: la evidencia es ese checklist):
 
 - ACTIVIDAD de un recorrido por ítem: `TareaWorkflow` → ejecución (`InstanciaEtapa`) → subinstancia
   (`InstanciaWorkflow.elemento`); la configuración es la del `BloqueOperativo` (rama ITEM) de una versión de la
@@ -43,6 +44,24 @@ class Concesion:
     origen: str
 
 
+def _claves_de_evidencia(tarea, elemento_id):
+    """LA EVIDENCIA ES EL CHECKLIST: una tarea que EXIGE evidencia concede, además de sus columnas editables, las
+    «Listas de evidencias» (CHECKLIST) de la colección de su ítem: subir esas pruebas es hacer la actividad."""
+    if not getattr(tarea, "requiere_evidencia", False):
+        return ()
+    version_id = ElementoParrilla.objects.filter(pk=elemento_id).values_list("parrilla__formulario_version_id", flat=True).first()
+    if version_id is None:
+        return ()
+    return tuple(
+        Campo.objects.filter(version_id=version_id, tipo=Campo.TipoCampo.CHECKLIST).values_list("clave", flat=True)
+    )
+
+
+def _con_evidencia(claves, tarea, elemento_id):
+    extra = tuple(c for c in _claves_de_evidencia(tarea, elemento_id) if c not in claves)
+    return tuple(claves) + extra
+
+
 def _de_actividad(vinculo):
     ejecucion = vinculo.instancia_etapa
     bloque, instancia = ejecucion.bloque_operativo, ejecucion.instancia_workflow
@@ -50,12 +69,13 @@ def _de_actividad(vinculo):
         return None
     from apps.catalogo import actividades
 
-    claves = tuple(actividades.normalizar(bloque.configuracion)[0]["columnas_editables"])
+    claves = _con_evidencia(actividades.normalizar(bloque.configuracion)[0]["columnas_editables"], vinculo.tarea, instancia.elemento_id)
     return Concesion(vinculo.tarea, instancia.elemento_id, claves, ACTIVIDAD)
 
 
 def _de_tarea_elemento(vinculo):
-    return Concesion(vinculo.tarea, vinculo.elemento_id, tuple(vinculo.configuracion.columnas_editables or ()), TAREA_ELEMENTO)
+    claves = _con_evidencia(vinculo.configuracion.columnas_editables or (), vinculo.tarea, vinculo.elemento_id)
+    return Concesion(vinculo.tarea, vinculo.elemento_id, claves, TAREA_ELEMENTO)
 
 
 def _de_correccion(ronda):

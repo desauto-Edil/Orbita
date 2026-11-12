@@ -34,7 +34,7 @@
     </div>
 
   {% else %}
-    {% if item.control == "tarjetas" or item.control == "chips" or item.control == "archivo" %}
+    {% if item.control == "tarjetas" or item.control == "chips" or item.control == "archivo" or item.control == "checklist" %}
       <span class="sol-label" id="lbl_{{ cid }}">{{ campo.etiqueta }}{% include "tickets/_solicitud_marcas.html" %}</span>
     {% else %}
       <label class="sol-label" id="lbl_{{ cid }}" for="campo_{{ cid }}">{{ campo.etiqueta }}{% include "tickets/_solicitud_marcas.html" %}</label>
@@ -91,6 +91,28 @@
       {% if item.control == "tarjetas" %}
         <button type="button" class="btn btn--ghost btn--sm sol-clear" data-sol-clear hidden>Quitar selección</button>
       {% endif %}
+
+    {% elif item.control == "checklist" %}
+      {# Lista de evidencias: cada punto con su prueba (un archivo O un enlace). Se guarda con el formulario. #}
+      <ul class="evd__puntos sol-checklist" aria-labelledby="lbl_{{ cid }}">
+        {% for punto in item.checklist.puntos %}
+          <li class="evd__punto{% if punto.marca %} is-hecho{% endif %}">
+            <span class="evd__check" aria-hidden="true">{% if punto.marca %}✓{% endif %}</span>
+            <span class="evd__texto">{{ punto.etiqueta }}</span>
+            {% if punto.marca %}
+              {% if punto.marca.es_archivo %}<a class="evd__prueba" href="{% url 'tickets:evidencia' punto.marca.pk %}">{{ punto.marca.nombre_original|truncatechars:40 }}</a>
+              {% else %}<a class="evd__prueba" href="{{ punto.marca.enlace }}" target="_blank" rel="noopener noreferrer">{{ punto.marca.enlace|truncatechars:48 }}</a>{% endif %}
+              <label class="choice"><input type="checkbox" name="campo_{{ cid }}__{{ punto.valor }}__quitar" value="1"{% if not item.visible %} disabled{% endif %}> Quitar al guardar</label>
+            {% else %}
+              <span class="evd__subir">
+                <input type="file" name="campo_{{ cid }}__{{ punto.valor }}__archivo" aria-label="Archivo de la prueba: {{ punto.etiqueta }}"{% if item.atributos.accept %} accept="{{ item.atributos.accept }}"{% endif %}{% if not item.visible %} disabled{% endif %}>
+                <span class="evd__o">o</span>
+                <input type="url" name="campo_{{ cid }}__{{ punto.valor }}__enlace" placeholder="https://…" aria-label="Enlace de la prueba: {{ punto.etiqueta }}"{% if not item.visible %} disabled{% endif %}>
+              </span>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
 
     {% elif item.control == "archivo" %}
       <div class="sol-upload" data-sol-upload>

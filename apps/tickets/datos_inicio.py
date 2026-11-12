@@ -91,6 +91,9 @@ def _bloquear(ticket, actor):
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
     if not ticket.datos_inicio_en_ejecucion:
         raise ValidationError("Los datos de inicio de este ticket se completaron al iniciarlo.")
+    from apps.tickets.cancelaciones import exigir_sin_cancelacion_pendiente
+
+    exigir_sin_cancelacion_pendiente(ticket)  # una cancelación por aprobar congela el ticket
     if datos_completos(ticket):
         raise ValidationError("Los datos de inicio ya se completaron.")
     if ticket.estado not in (Ticket.Estado.RADICADO, Ticket.Estado.EN_ATENCION):

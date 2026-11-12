@@ -258,7 +258,7 @@
         <div class="field">
           <label for="participantes-usuarios">Personas</label>
           <select id="participantes-usuarios" name="usuarios" multiple data-multiselect>
-            {% for persona in participantes_opciones_usuarios %}<option value="{{ persona.pk }}"{% if persona.pk in participantes_usuarios %} selected{% endif %}>{{ persona.get_full_name|default:persona.get_username }}</option>{% endfor %}
+            {% for persona in participantes_opciones_usuarios %}<option value="{{ persona.pk }}"{% if persona.pk in participantes_usuarios %} selected{% endif %}>{{ persona.nombre_visible }}</option>{% endfor %}
           </select>
         </div>
         <div class="field">
@@ -405,9 +405,9 @@
                 <div class="form-actions propiedad__acciones"><button type="submit" class="btn btn--primary">{% if es_parrilla %}Guardar columna{% else %}Guardar campo{% endif %}</button></div>
               </form>
 
-                    {% if campo.tipo == "LISTA" or campo.tipo == "MULTILISTA" %}
+                    {% if campo.tipo == "LISTA" or campo.tipo == "MULTILISTA" or campo.tipo == "CHECKLIST" %}
                       <div class="svc-options propiedad-grupo propiedad-grupo--ancho">
-                        <h4 class="propiedad-grupo__titulo">Valores de la lista</h4>
+                        <h4 class="propiedad-grupo__titulo">{% if campo.tipo == "CHECKLIST" %}Puntos de la lista de evidencias{% else %}Valores de la lista{% endif %}</h4>
                         <ul class="plain-list">
                           {% for opcion in campo.opciones.all %}
                             <li>

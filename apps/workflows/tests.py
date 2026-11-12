@@ -93,6 +93,7 @@ from apps.workflows.motor import (
 from apps.workflows.tasks import _candidatos_esperas_vencidas, reanudar_esperas_vencidas
 from apps.workflows.validacion import validar_estructura
 from apps.workflows.versionamiento import activar_version, crear_nueva_version, crear_workflow, editar_workflow
+from apps.core.pruebas import persona
 
 Usuario = get_user_model()
 CLAVE_PRUEBA = "Clave-Segura-123"
@@ -103,7 +104,7 @@ def _otorgar_workflows_administrar(usuario):
     permiso, _ = Permiso.objects.get_or_create(
         codigo="workflows.administrar", defaults={"nombre": "Administrar workflows"}
     )
-    rol = RolFuncional.objects.create(nombre=f"Rol workflows {usuario.username}")
+    rol = RolFuncional.objects.create(nombre=f"Rol workflows {usuario.email}")
     RolPermiso.objects.create(rol=rol, permiso=permiso)
     return AsignacionRol.objects.create(
         usuario=usuario, rol=rol, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL
@@ -117,7 +118,7 @@ def _otorgar_workflows_consultar(usuario):
     permiso, _ = Permiso.objects.get_or_create(
         codigo="workflows.consultar", defaults={"nombre": "Consultar workflows"}
     )
-    rol = RolFuncional.objects.create(nombre=f"Rol lector workflows {usuario.username}")
+    rol = RolFuncional.objects.create(nombre=f"Rol lector workflows {usuario.email}")
     RolPermiso.objects.create(rol=rol, permiso=permiso)
     return AsignacionRol.objects.create(
         usuario=usuario, rol=rol, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL
@@ -149,7 +150,7 @@ def _crear_workflow_lineal(nombre="Workflow válido"):
 
 class PlantillaFasesR1Tests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="gestor_fases", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("gestor_fases@pruebas.orbita")
 
     def _plantilla_lineal(self):
         workflow = fases_ops.crear_plantilla_fases(self.actor, nombre="Gestion estandar")
@@ -229,7 +230,7 @@ class PlantillaFasesR1Tests(TestCase):
 
 class VersionamientoTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="gestor31", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("gestor31@pruebas.orbita")
 
     def test_crear_workflow(self):
         workflow = Workflow.objects.create(nombre="Aprobación de compras")
@@ -319,7 +320,7 @@ class VersionamientoTests(TestCase):
 
 class InmutabilidadTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="gestor31b", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("gestor31b@pruebas.orbita")
 
     def test_editar_etapa_en_version_activa_falla(self):
         workflow, version, etapas = _crear_workflow_lineal()
@@ -392,7 +393,7 @@ class EstructuraValidacionTests(TestCase):
         self.assertTrue(any("al menos una etapa FIN" in e for e in errores))
         with self.assertRaises(ValidationError):
             activar_version(
-                version.workflow, version, actor=Usuario.objects.create_user("x1", password=CLAVE_PRUEBA)
+                version.workflow, version, actor=Usuario.objects.create_user("x1@pruebas.orbita")
             )
 
     def test_inicio_sin_entradas_bloqueado_al_guardar(self):
@@ -430,7 +431,7 @@ class EstructuraValidacionTests(TestCase):
         transiciones nombradas por `resultado_aprobacion` — nunca
         `variable`/`operador`/`valor`/`es_fallback` (eso sigue siendo
         exclusivo de CONDICION)."""
-        actor = Usuario.objects.create_user("x2", password=CLAVE_PRUEBA)
+        actor = Usuario.objects.create_user("x2@pruebas.orbita")
         workflow, _ = _crear_workflow_activo_con_aprobacion(
             actor,
             modo=EsquemaAprobacion.Modo.PARALELA,
@@ -556,7 +557,7 @@ class EstructuraValidacionTests(TestCase):
         TransicionEtapa.objects.create(etapa_origen=tarea, etapa_destino=fin)
         errores = validar_estructura(version)
         self.assertEqual(errores, [])
-        actor = Usuario.objects.create_user("x3", password=CLAVE_PRUEBA)
+        actor = Usuario.objects.create_user("x3@pruebas.orbita")
         activar_version(workflow, version, actor=actor)
         version.refresh_from_db()
         self.assertEqual(version.estado, WorkflowVersion.Estado.ACTIVA)
@@ -571,7 +572,7 @@ class EstructuraValidacionTests(TestCase):
         TransicionEtapa.objects.create(etapa_origen=ticket, etapa_destino=fin)
         errores = validar_estructura(version)
         self.assertTrue(any("TICKET" in e and "no está disponible" in e for e in errores))
-        actor = Usuario.objects.create_user("x4", password=CLAVE_PRUEBA)
+        actor = Usuario.objects.create_user("x4@pruebas.orbita")
         with self.assertRaises(ValidationError):
             activar_version(workflow, version, actor=actor)
 
@@ -643,7 +644,7 @@ class CondicionYTransicionesTests(TestCase):
         )
         errores = validar_estructura(version)
         self.assertEqual(errores, [])
-        actor = Usuario.objects.create_user("cond1", password=CLAVE_PRUEBA)
+        actor = Usuario.objects.create_user("cond1@pruebas.orbita")
         activar_version(workflow, version, actor=actor)
         version.refresh_from_db()
         self.assertEqual(version.estado, WorkflowVersion.Estado.ACTIVA)
@@ -923,7 +924,7 @@ class CicloYAlcanzabilidadTests(TestCase):
         workflow, version, _ = _crear_workflow_con_ciclo()
         errores = validar_estructura(version)
         self.assertEqual(errores, [])
-        actor = Usuario.objects.create_user("ciclo1", password=CLAVE_PRUEBA)
+        actor = Usuario.objects.create_user("ciclo1@pruebas.orbita")
         activar_version(workflow, version, actor=actor)
         version.refresh_from_db()
         self.assertEqual(version.estado, WorkflowVersion.Estado.ACTIVA)
@@ -931,7 +932,7 @@ class CicloYAlcanzabilidadTests(TestCase):
 
 class ClonacionTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="clon1", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("clon1@pruebas.orbita")
 
     def test_clonacion_preserva_topologia(self):
         workflow, version1, etapas = _crear_workflow_lineal()
@@ -1131,7 +1132,7 @@ class ClonacionTests(TestCase):
         config_v2.modo = ConfiguracionEtapaAprobacion.Modo.PARALELA
         config_v2.politica = ConfiguracionEtapaAprobacion.Politica.CUALQUIERA
         config_v2.save()
-        otro_usuario = Usuario.objects.create_user(username="clon2", password=CLAVE_PRUEBA)
+        otro_usuario = Usuario.objects.create_user("clon2@pruebas.orbita")
         participante_v2.usuario = otro_usuario
         participante_v2.orden = 99
         participante_v2.save()
@@ -1228,7 +1229,7 @@ class ClonacionTests(TestCase):
 
 class AuditoriaTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="auditor31", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("auditor31@pruebas.orbita")
 
     def test_crear_version_queda_auditada(self):
         workflow = Workflow.objects.create(nombre="Auditado")
@@ -1270,7 +1271,7 @@ class AuditoriaInlinesWorkflowTests(TestCase):
         from django.test import RequestFactory
 
         self.site = admin.site
-        self.actor = Usuario.objects.create_superuser("admin_inlines", "admin@example.com", CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("admin@example.com")
         _otorgar_workflows_administrar(self.actor)
         self.request = RequestFactory().post("/admin/")
         self.request.user = self.actor
@@ -1359,18 +1360,18 @@ class AuditoriaInlinesWorkflowTests(TestCase):
 
 class AutorizacionTests(TestCase):
     def test_sin_permiso_no_puede_administrar_ni_consultar(self):
-        usuario = Usuario.objects.create_user(username="sinpermiso31", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("sinpermiso31@pruebas.orbita")
         self.assertFalse(puede_administrar_workflows(usuario))
         self.assertFalse(puede_consultar_workflows(usuario))
 
     def test_con_permiso_administrar_tambien_puede_consultar(self):
-        usuario = Usuario.objects.create_user(username="admin31", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("admin31@pruebas.orbita")
         _otorgar_workflows_administrar(usuario)
         self.assertTrue(puede_administrar_workflows(usuario))
         self.assertTrue(puede_consultar_workflows(usuario))
 
     def test_con_permiso_solo_consultar(self):
-        usuario = Usuario.objects.create_user(username="lector31", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("lector31@pruebas.orbita")
         permiso, _ = Permiso.objects.get_or_create(
             codigo="workflows.consultar", defaults={"nombre": "Consultar workflows"}
         )
@@ -1438,7 +1439,7 @@ class EstrategiaEsperaTests(TestCase):
 
 class MotorFlujoBasicoTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="motorflujo1", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("motorflujo1@pruebas.orbita")
 
     def test_flujo_inicio_hito_fin_se_completa_automaticamente(self):
         workflow, etapas = _crear_workflow_lineal_activo(self.actor)
@@ -1486,7 +1487,7 @@ class MotorCondicionTests(TestCase):
     """RQF-066/RN-021: la CONDICION —no el motor— decide la transición."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="motorcond1", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("motorcond1@pruebas.orbita")
 
     def test_condicion_toma_primera_coincidencia(self):
         workflow, etapas = _crear_workflow_activo_con_condicion(self.actor)
@@ -1553,7 +1554,7 @@ class MotorCicloTests(TestCase):
     EJECUCIÓN, no "la etapa"."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="motorciclo1", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("motorciclo1@pruebas.orbita")
 
     def _iniciar_con_ciclo_activo_hasta_el_limite(self, limite):
         workflow, version, etapas = _crear_workflow_con_ciclo()
@@ -1616,7 +1617,7 @@ class MotorCicloTests(TestCase):
 
 class MotorEsperaTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="motoresp1", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("motoresp1@pruebas.orbita")
 
     def test_espera_deja_la_instancia_en_espera_con_reanudar_en(self):
         workflow, etapas = _crear_workflow_activo_con_espera(
@@ -1686,7 +1687,7 @@ class _EstrategiaFalloTecnico(EstrategiaSinConfiguracion):
 
 class MotorErroresTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="motorerr1", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("motorerr1@pruebas.orbita")
 
     def test_error_funcional_no_marca_finalizada_en(self):
         workflow, etapas = _crear_workflow_lineal_activo(self.actor)
@@ -1731,11 +1732,11 @@ class MotorErroresTests(TestCase):
 
 class MotorAutorizacionTests(TestCase):
     def test_sin_permiso_no_puede_ejecutar(self):
-        usuario = Usuario.objects.create_user(username="sinpermisoexec32", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("sinpermisoexec32@pruebas.orbita")
         self.assertFalse(puede_ejecutar_workflows(usuario))
 
     def test_permiso_ejecutar_es_independiente_de_consultar_y_administrar(self):
-        usuario = Usuario.objects.create_user(username="soloejecutar32", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("soloejecutar32@pruebas.orbita")
         permiso, _ = Permiso.objects.get_or_create(
             codigo="workflows.ejecutar", defaults={"nombre": "Ejecutar workflows"}
         )
@@ -1751,7 +1752,7 @@ class MotorAutorizacionTests(TestCase):
         """W.8, corrección aprobada: a diferencia de administrar→consultar
         (relación ya aprobada en 3.1), administrar y ejecutar son
         capacidades completamente independientes."""
-        usuario = Usuario.objects.create_user(username="soloadmin32", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("soloadmin32@pruebas.orbita")
         _otorgar_workflows_administrar(usuario)
         self.assertTrue(puede_administrar_workflows(usuario))
         self.assertFalse(puede_ejecutar_workflows(usuario))
@@ -1765,7 +1766,7 @@ class MotorConcurrenciaSecuencialTests(TestCase):
     mismo patrón que `apps/tickets/tests.py`)."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="motorconc1", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("motorconc1@pruebas.orbita")
 
     def test_doble_avance_tras_completarse_falla_limpio(self):
         workflow, _etapas = _crear_workflow_lineal_activo(self.actor)
@@ -1785,7 +1786,7 @@ class ConcurrenciaReanudarInstanciaTests(TransactionTestCase):
     `apps/tickets/tests.py::ConcurrenciaTomarTicketTests`."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="concurrencia32", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("concurrencia32@pruebas.orbita")
         workflow, etapas = _crear_workflow_activo_con_espera(
             self.actor, {"modo": "DURACION", "duracion_valor": 1, "duracion_unidad": "DIAS"}
         )
@@ -1831,7 +1832,7 @@ class TareaReanudarEsperasVencidasTests(TestCase):
     real solo se usa para llegar a estados EN_ESPERA/ERROR realistas."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="celery32x", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("celery32x@pruebas.orbita")
 
     def _crear_instancia_en_espera(self, *, dias_duracion=1, vencida=False):
         workflow, etapas = _crear_workflow_activo_con_espera(
@@ -2007,8 +2008,8 @@ class MotorTareaTests(TestCase):
     que reanuda el Workflow correspondiente (W.6/W.7)."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user("motortarea1", password=CLAVE_PRUEBA)
-        self.ejecutor = Usuario.objects.create_user("motortarea1_ejecutor", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("motortarea1@pruebas.orbita")
+        self.ejecutor = Usuario.objects.create_user("motortarea1_ejecutor@pruebas.orbita")
 
     def test_strategy_crea_exactamente_una_tarea(self):
         workflow, etapas = _crear_workflow_activo_con_tarea(self.actor, usuario_responsable=self.ejecutor)
@@ -2131,8 +2132,8 @@ class RegresionTransicionSeleccionadaTests(TestCase):
     (instrucción explícita: pruebas de regresión obligatorias)."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user("regresion_ts", password=CLAVE_PRUEBA)
-        self.ejecutor = Usuario.objects.create_user("regresion_ts_ej", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("regresion_ts@pruebas.orbita")
+        self.ejecutor = Usuario.objects.create_user("regresion_ts_ej@pruebas.orbita")
 
     def test_tarea_continua_con_transicion_seleccionada_none_explicito(self):
         workflow, etapas = _crear_workflow_activo_con_tarea(self.actor, usuario_responsable=self.ejecutor)
@@ -2196,8 +2197,8 @@ class MotorAprobacionTests(TestCase):
     prueba la INTEGRACIÓN entre ambos dominios."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user("motoraprob1", password=CLAVE_PRUEBA)
-        self.aprobador = Usuario.objects.create_user("motoraprob1_aprobador", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("motoraprob1@pruebas.orbita")
+        self.aprobador = Usuario.objects.create_user("motoraprob1_aprobador@pruebas.orbita")
 
     def test_strategy_crea_esquema_con_participantes_y_vinculo(self):
         workflow, etapas = _crear_workflow_activo_con_aprobacion(
@@ -2287,7 +2288,7 @@ class MotorAprobacionTests(TestCase):
         self.assertEqual(instancia.ejecuciones_etapa.get(etapa=etapas["fin_devuelta"]).estado, InstanciaEtapa.Estado.COMPLETADA)
 
     def test_secuencial_no_continua_workflow_hasta_que_cierra(self):
-        otro_aprobador = Usuario.objects.create_user("motoraprob1_otro", password=CLAVE_PRUEBA)
+        otro_aprobador = Usuario.objects.create_user("motoraprob1_otro@pruebas.orbita")
         workflow, etapas = _crear_workflow_activo_con_aprobacion(
             self.actor,
             modo=EsquemaAprobacion.Modo.SECUENCIAL,
@@ -2366,9 +2367,9 @@ class ConcurrenciaResolverAprobacionWorkflowTests(TransactionTestCase):
     Workflow, mismo patrón que `ConcurrenciaCompletarTareaWorkflowTests`."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user("concurrencia_aprob_wf", password=CLAVE_PRUEBA)
-        self.a = Usuario.objects.create_user("concurrencia_aprob_wf_a", password=CLAVE_PRUEBA)
-        self.b = Usuario.objects.create_user("concurrencia_aprob_wf_b", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("concurrencia_aprob_wf@pruebas.orbita")
+        self.a = Usuario.objects.create_user("concurrencia_aprob_wf_a@pruebas.orbita")
+        self.b = Usuario.objects.create_user("concurrencia_aprob_wf_b@pruebas.orbita")
         workflow, self.etapas = _crear_workflow_activo_con_aprobacion(
             self.actor,
             modo=EsquemaAprobacion.Modo.PARALELA,
@@ -2418,8 +2419,8 @@ class ConcurrenciaCompletarTareaWorkflowTests(TransactionTestCase):
     `ConcurrenciaReanudarInstanciaTests`."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user("concurrencia_tarea_wf", password=CLAVE_PRUEBA)
-        self.ejecutor = Usuario.objects.create_user("concurrencia_tarea_wf_ej", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("concurrencia_tarea_wf@pruebas.orbita")
+        self.ejecutor = Usuario.objects.create_user("concurrencia_tarea_wf_ej@pruebas.orbita")
         workflow, etapas = _crear_workflow_activo_con_tarea(self.actor, usuario_responsable=self.ejecutor)
         self.instancia = iniciar_workflow(workflow, actor=self.actor)
         self.tarea = TareaWorkflow.objects.get(instancia_etapa__instancia_workflow=self.instancia).tarea
@@ -2480,9 +2481,9 @@ class DefinitionOfDoneTests(TestCase):
     de cierre del Definition of Done)."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user("dod_actor", password=CLAVE_PRUEBA)
-        self.ejecutor = Usuario.objects.create_user("dod_ejecutor", password=CLAVE_PRUEBA)
-        self.aprobador = Usuario.objects.create_user("dod_aprobador", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("dod_actor@pruebas.orbita")
+        self.ejecutor = Usuario.objects.create_user("dod_ejecutor@pruebas.orbita")
+        self.aprobador = Usuario.objects.create_user("dod_aprobador@pruebas.orbita")
 
         self.workflow = Workflow.objects.create(nombre="DoD: Condición-Tarea-Aprobación-Espera")
         version = WorkflowVersion.objects.create(workflow=self.workflow, numero=1)
@@ -2655,7 +2656,7 @@ class DefinitionOfDoneTests(TestCase):
 
 class EditorEtapaTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="editor_etapa_actor", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("editor_etapa_actor@pruebas.orbita")
         self.workflow = crear_workflow(self.actor, nombre="Editor etapas")
         self.version = self.workflow.versiones.get()
 
@@ -2728,7 +2729,7 @@ class EditorEtapaTests(TestCase):
 
 class CambiarTipoEtapaTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="cambiartipo_actor", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("cambiartipo_actor@pruebas.orbita")
         self.workflow = crear_workflow(self.actor, nombre="Cambio de tipo")
         self.version = self.workflow.versiones.get()
 
@@ -2751,7 +2752,7 @@ class CambiarTipoEtapaTests(TestCase):
 
     def test_tarea_a_hito_limpia_configuracion_tarea(self):
         etapa = editor.crear_etapa(self.version, self.actor, tipo=Etapa.Tipo.TAREA, nombre="Tarea")
-        usuario = Usuario.objects.create_user(username="cambiartipo_resp", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("cambiartipo_resp@pruebas.orbita")
         editor.configurar_etapa_tarea(
             etapa,
             self.actor,
@@ -2763,7 +2764,7 @@ class CambiarTipoEtapaTests(TestCase):
 
     def test_aprobacion_a_hito_limpia_configuracion_y_participantes(self):
         etapa = editor.crear_etapa(self.version, self.actor, tipo=Etapa.Tipo.APROBACION, nombre="Aprobar")
-        aprobador = Usuario.objects.create_user(username="cambiartipo_aprobador", password=CLAVE_PRUEBA)
+        aprobador = Usuario.objects.create_user("cambiartipo_aprobador@pruebas.orbita")
         editor.configurar_etapa_aprobacion(
             etapa,
             self.actor,
@@ -2796,7 +2797,7 @@ class CambiarTipoEtapaTests(TestCase):
 
 class ConfigurarEtapaTareaTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="conftarea_actor", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("conftarea_actor@pruebas.orbita")
         self.workflow = crear_workflow(self.actor, nombre="Config tarea")
         self.version = self.workflow.versiones.get()
         self.etapa = editor.crear_etapa(self.version, self.actor, tipo=Etapa.Tipo.TAREA, nombre="Tarea")
@@ -2817,7 +2818,7 @@ class ConfigurarEtapaTareaTests(TestCase):
         self.assertEqual(RegistroAuditoria.objects.count(), eventos)
 
     def test_configurar_con_usuario_responsable(self):
-        usuario = Usuario.objects.create_user(username="conftarea_resp", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("conftarea_resp@pruebas.orbita")
         editor.configurar_etapa_tarea(
             self.etapa,
             self.actor,
@@ -2835,8 +2836,8 @@ class ConfigurarEtapaTareaTests(TestCase):
             editor.configurar_etapa_tarea(hito, self.actor)
 
     def test_reconfigurar_reemplaza_valores_anteriores(self):
-        usuario1 = Usuario.objects.create_user(username="conftarea_u1", password=CLAVE_PRUEBA)
-        usuario2 = Usuario.objects.create_user(username="conftarea_u2", password=CLAVE_PRUEBA)
+        usuario1 = Usuario.objects.create_user("conftarea_u1@pruebas.orbita")
+        usuario2 = Usuario.objects.create_user("conftarea_u2@pruebas.orbita")
         editor.configurar_etapa_tarea(
             self.etapa, self.actor, tipo_responsable=ConfiguracionEtapaTarea.TipoResponsable.USUARIO, usuario_responsable=usuario1
         )
@@ -2850,12 +2851,12 @@ class ConfigurarEtapaTareaTests(TestCase):
 
 class ConfigurarEtapaAprobacionTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="confaprob_actor", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("confaprob_actor@pruebas.orbita")
         self.workflow = crear_workflow(self.actor, nombre="Config aprobacion")
         self.version = self.workflow.versiones.get()
         self.etapa = editor.crear_etapa(self.version, self.actor, tipo=Etapa.Tipo.APROBACION, nombre="Aprobar")
-        self.aprobador_a = Usuario.objects.create_user(username="confaprob_a", password=CLAVE_PRUEBA)
-        self.aprobador_b = Usuario.objects.create_user(username="confaprob_b", password=CLAVE_PRUEBA)
+        self.aprobador_a = Usuario.objects.create_user("confaprob_a@pruebas.orbita")
+        self.aprobador_b = Usuario.objects.create_user("confaprob_b@pruebas.orbita")
 
     def test_version_activa_conserva_configuracion_y_participantes(self):
         editor.configurar_etapa_aprobacion(
@@ -2963,7 +2964,7 @@ class ConfigurarEtapaAprobacionTests(TestCase):
 
 class ConfigurarEtapaEsperaTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="confespera_actor", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("confespera_actor@pruebas.orbita")
         self.workflow = crear_workflow(self.actor, nombre="Config espera")
         self.version = self.workflow.versiones.get()
         self.etapa = editor.crear_etapa(self.version, self.actor, tipo=Etapa.Tipo.ESPERA, nombre="Esperar")
@@ -3011,7 +3012,7 @@ class ConfigurarEtapaEsperaTests(TestCase):
 
 class EditorTransicionTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="edittrans_actor", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("edittrans_actor@pruebas.orbita")
         self.workflow = crear_workflow(self.actor, nombre="Transiciones editor")
         self.version = self.workflow.versiones.get()
         self.inicio = editor.crear_etapa(self.version, self.actor, tipo=Etapa.Tipo.INICIO, nombre="Inicio")
@@ -3095,7 +3096,7 @@ class EditorTransicionTests(TestCase):
 
 class InmutabilidadEditorTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="inmuteditor_actor", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("inmuteditor_actor@pruebas.orbita")
         self.workflow, self.version, self.etapas = _crear_workflow_lineal()
         activar_version(self.workflow, self.version, actor=self.actor)
         self.version.refresh_from_db()
@@ -3122,16 +3123,16 @@ class InmutabilidadEditorTests(TestCase):
 
 class EditorViewsAutorizacionTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user(username="edview_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("edview_admin@pruebas.orbita")
         _otorgar_workflows_administrar(self.admin)
-        self.lector = Usuario.objects.create_user(username="edview_lector", password=CLAVE_PRUEBA)
+        self.lector = Usuario.objects.create_user("edview_lector@pruebas.orbita")
         _otorgar_workflows_consultar(self.lector)
         self.workflow = crear_workflow(self.admin, nombre="Editor HTTP")
         self.version = self.workflow.versiones.get()
         self.etapa = editor.crear_etapa(self.version, self.admin, tipo=Etapa.Tipo.HITO, nombre="Hito")
 
     def test_crear_etapa_no_autorizado_devuelve_403(self):
-        self.client.login(username="edview_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edview_lector@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("workflows:crear_etapa", args=[self.version.pk]),
             {"tipo": Etapa.Tipo.HITO, "nombre": "No debería crearse"},
@@ -3140,7 +3141,7 @@ class EditorViewsAutorizacionTests(TestCase):
         self.assertFalse(Etapa.objects.filter(nombre="No debería crearse").exists())
 
     def test_editar_etapa_no_autorizado_devuelve_403(self):
-        self.client.login(username="edview_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edview_lector@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("workflows:editar_etapa", args=[self.etapa.pk]),
             {f"etapa-{self.etapa.pk}-editar-nombre": "Hackeado"},
@@ -3150,31 +3151,31 @@ class EditorViewsAutorizacionTests(TestCase):
         self.assertEqual(self.etapa.nombre, "Hito")
 
     def test_eliminar_etapa_no_autorizado_devuelve_403(self):
-        self.client.login(username="edview_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edview_lector@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:eliminar_etapa", args=[self.etapa.pk]))
         self.assertEqual(respuesta.status_code, 403)
         self.assertTrue(Etapa.objects.filter(pk=self.etapa.pk).exists())
 
     def test_configurar_etapa_no_autorizado_devuelve_403(self):
-        self.client.login(username="edview_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edview_lector@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:configurar_etapa", args=[self.etapa.pk]))
         self.assertEqual(respuesta.status_code, 403)
 
     def test_crear_transicion_no_autorizado_devuelve_403(self):
-        self.client.login(username="edview_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edview_lector@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:crear_transicion", args=[self.etapa.pk]))
         self.assertEqual(respuesta.status_code, 403)
 
 
 class EditorViewsExitosoTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user(username="edexito_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("edexito_admin@pruebas.orbita")
         _otorgar_workflows_administrar(self.admin)
         self.workflow = crear_workflow(self.admin, nombre="Editor HTTP exitoso")
         self.version = self.workflow.versiones.get()
 
     def test_crear_etapa_exitoso(self):
-        self.client.login(username="edexito_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edexito_admin@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("workflows:crear_etapa", args=[self.version.pk]),
             {"tipo": Etapa.Tipo.HITO, "nombre": "Nueva etapa"},
@@ -3184,7 +3185,7 @@ class EditorViewsExitosoTests(TestCase):
 
     def test_editar_etapa_exitoso(self):
         etapa = editor.crear_etapa(self.version, self.admin, tipo=Etapa.Tipo.HITO, nombre="Original")
-        self.client.login(username="edexito_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edexito_admin@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("workflows:editar_etapa", args=[etapa.pk]),
             {f"etapa-{etapa.pk}-editar-nombre": "Editado desde HTTP"},
@@ -3195,7 +3196,7 @@ class EditorViewsExitosoTests(TestCase):
 
     def test_eliminar_etapa_exitoso(self):
         etapa = editor.crear_etapa(self.version, self.admin, tipo=Etapa.Tipo.HITO, nombre="Para eliminar")
-        self.client.login(username="edexito_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edexito_admin@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:eliminar_etapa", args=[etapa.pk]))
         self.assertEqual(respuesta.status_code, 302)
         self.assertFalse(Etapa.objects.filter(pk=etapa.pk).exists())
@@ -3203,7 +3204,7 @@ class EditorViewsExitosoTests(TestCase):
     def test_crear_transicion_exitoso(self):
         inicio = editor.crear_etapa(self.version, self.admin, tipo=Etapa.Tipo.INICIO, nombre="Inicio")
         fin = editor.crear_etapa(self.version, self.admin, tipo=Etapa.Tipo.FIN, nombre="Fin")
-        self.client.login(username="edexito_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edexito_admin@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("workflows:crear_transicion", args=[inicio.pk]),
             {f"etapa-{inicio.pk}-transicion-etapa_destino": fin.pk, f"etapa-{inicio.pk}-transicion-prioridad": 0},
@@ -3214,13 +3215,13 @@ class EditorViewsExitosoTests(TestCase):
 
 class VersionDetalleEditorContextoTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user(username="edcontexto_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("edcontexto_admin@pruebas.orbita")
         _otorgar_workflows_administrar(self.admin)
         self.workflow = crear_workflow(self.admin, nombre="Contexto editor")
         self.version = self.workflow.versiones.get()
 
     def test_borrador_editable_true_para_administrador(self):
-        self.client.login(username="edcontexto_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edcontexto_admin@pruebas.orbita"))
         respuesta = self.client.get(reverse("workflows:version_detalle", args=[self.version.pk]))
         self.assertTrue(respuesta.context["editable"])
         self.assertIsNotNone(respuesta.context["form_crear_etapa"])
@@ -3231,7 +3232,7 @@ class VersionDetalleEditorContextoTests(TestCase):
         editor.crear_transicion(etapa_inicio, etapa_fin, self.admin)
         activar_version(self.workflow, self.version, actor=self.admin)
         self.version.refresh_from_db()
-        self.client.login(username="edcontexto_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edcontexto_admin@pruebas.orbita"))
         respuesta = self.client.get(reverse("workflows:version_detalle", args=[self.version.pk]))
         self.assertFalse(respuesta.context["editable"])
         self.assertIsNone(respuesta.context["form_crear_etapa"])
@@ -3239,14 +3240,14 @@ class VersionDetalleEditorContextoTests(TestCase):
 
 class EditorInmutabilidadHTTPTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user(username="edinmut_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("edinmut_admin@pruebas.orbita")
         _otorgar_workflows_administrar(self.admin)
         self.workflow, self.version, self.etapas = _crear_workflow_lineal()
         activar_version(self.workflow, self.version, actor=self.admin)
         self.version.refresh_from_db()
 
     def test_post_directo_crear_etapa_sobre_version_activa_no_persiste(self):
-        self.client.login(username="edinmut_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edinmut_admin@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("workflows:crear_etapa", args=[self.version.pk]),
             {"tipo": Etapa.Tipo.HITO, "nombre": "No debería crearse"},
@@ -3255,7 +3256,7 @@ class EditorInmutabilidadHTTPTests(TestCase):
         self.assertFalse(Etapa.objects.filter(nombre="No debería crearse").exists())
 
     def test_post_directo_eliminar_etapa_sobre_version_activa_no_borra(self):
-        self.client.login(username="edinmut_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edinmut_admin@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:eliminar_etapa", args=[self.etapas["fin"].pk]))
         self.assertEqual(respuesta.status_code, 302)
         self.assertTrue(Etapa.objects.filter(pk=self.etapas["fin"].pk).exists())
@@ -3263,13 +3264,13 @@ class EditorInmutabilidadHTTPTests(TestCase):
 
 class EditorTiposReservadosHTTPTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user(username="edreservado_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("edreservado_admin@pruebas.orbita")
         _otorgar_workflows_administrar(self.admin)
         self.workflow = crear_workflow(self.admin, nombre="Tipos reservados")
         self.version = self.workflow.versiones.get()
 
     def test_ticket_no_puede_crearse_desde_formulario(self):
-        self.client.login(username="edreservado_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edreservado_admin@pruebas.orbita"))
         self.client.post(
             reverse("workflows:crear_etapa", args=[self.version.pk]),
             {"tipo": Etapa.Tipo.TICKET, "nombre": "No debería crearse"},
@@ -3277,7 +3278,7 @@ class EditorTiposReservadosHTTPTests(TestCase):
         self.assertFalse(Etapa.objects.filter(nombre="No debería crearse").exists())
 
     def test_gaceta_no_puede_crearse_desde_formulario(self):
-        self.client.login(username="edreservado_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("edreservado_admin@pruebas.orbita"))
         self.client.post(
             reverse("workflows:crear_etapa", args=[self.version.pk]),
             {"tipo": Etapa.Tipo.GACETA, "nombre": "No debería crearse"},
@@ -3307,7 +3308,7 @@ class EditorTiposReservadosHTTPTests(TestCase):
 
 class CrearEditarWorkflowTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="crearworkflow_actor", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("crearworkflow_actor@pruebas.orbita")
 
     def test_crear_workflow_crea_v1_borrador_vacia(self):
         workflow = crear_workflow(self.actor, nombre="Nuevo", descripcion="Descripción")
@@ -3365,7 +3366,7 @@ class CrearEditarWorkflowTests(TestCase):
 
 class WorkflowsListaViewTests(TestCase):
     def setUp(self):
-        self.lector = Usuario.objects.create_user(username="wf_lista_lector", password=CLAVE_PRUEBA)
+        self.lector = Usuario.objects.create_user("wf_lista_lector@pruebas.orbita")
         _otorgar_workflows_consultar(self.lector)
         self.workflow = crear_workflow(self.lector, nombre="Listado 1")
 
@@ -3375,13 +3376,13 @@ class WorkflowsListaViewTests(TestCase):
         self.assertIn("/login", respuesta.url)
 
     def test_requiere_permiso_consultar(self):
-        sin_permiso = Usuario.objects.create_user(username="wf_lista_sinpermiso", password=CLAVE_PRUEBA)
-        self.client.login(username="wf_lista_sinpermiso", password=CLAVE_PRUEBA)
+        sin_permiso = Usuario.objects.create_user("wf_lista_sinpermiso@pruebas.orbita")
+        self.client.force_login(persona("wf_lista_sinpermiso@pruebas.orbita"))
         respuesta = self.client.get(reverse("workflows:lista"))
         self.assertEqual(respuesta.status_code, 403)
 
     def test_lista_renderiza_para_lector(self):
-        self.client.login(username="wf_lista_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_lista_lector@pruebas.orbita"))
         respuesta = self.client.get(reverse("workflows:lista"))
         self.assertEqual(respuesta.status_code, 200)
         nombres = [w.nombre for w in respuesta.context["workflows"]]
@@ -3391,18 +3392,18 @@ class WorkflowsListaViewTests(TestCase):
 
 class WorkflowsCrearViewTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user(username="wf_crear_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("wf_crear_admin@pruebas.orbita")
         _otorgar_workflows_administrar(self.admin)
-        self.lector = Usuario.objects.create_user(username="wf_crear_lector", password=CLAVE_PRUEBA)
+        self.lector = Usuario.objects.create_user("wf_crear_lector@pruebas.orbita")
         _otorgar_workflows_consultar(self.lector)
 
     def test_get_requiere_administrar(self):
-        self.client.login(username="wf_crear_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_crear_lector@pruebas.orbita"))
         respuesta = self.client.get(reverse("workflows:crear"))
         self.assertEqual(respuesta.status_code, 403)
 
     def test_crear_exitoso(self):
-        self.client.login(username="wf_crear_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_crear_admin@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("workflows:crear"), {"nombre": "Desde HTTP", "descripcion": "Creado vía UI"}
         )
@@ -3412,13 +3413,13 @@ class WorkflowsCrearViewTests(TestCase):
         self.assertRedirects(respuesta, reverse("workflows:detalle", args=[workflow.pk]))
 
     def test_crear_no_autorizado_devuelve_403(self):
-        self.client.login(username="wf_crear_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_crear_lector@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:crear"), {"nombre": "No debería crearse"})
         self.assertEqual(respuesta.status_code, 403)
         self.assertFalse(Workflow.objects.filter(nombre="No debería crearse").exists())
 
     def test_formulario_invalido_reafirma_pagina_con_errores(self):
-        self.client.login(username="wf_crear_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_crear_admin@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:crear"), {"nombre": ""})
         self.assertEqual(respuesta.status_code, 200)
         self.assertTrue(respuesta.context["form"].errors)
@@ -3427,14 +3428,14 @@ class WorkflowsCrearViewTests(TestCase):
 
 class WorkflowsDetalleEditarViewTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user(username="wf_det_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("wf_det_admin@pruebas.orbita")
         _otorgar_workflows_administrar(self.admin)
-        self.lector = Usuario.objects.create_user(username="wf_det_lector", password=CLAVE_PRUEBA)
+        self.lector = Usuario.objects.create_user("wf_det_lector@pruebas.orbita")
         _otorgar_workflows_consultar(self.lector)
         self.workflow = crear_workflow(self.admin, nombre="Detalle 1")
 
     def test_detalle_visible_para_lector_sin_form_de_edicion(self):
-        self.client.login(username="wf_det_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_det_lector@pruebas.orbita"))
         respuesta = self.client.get(reverse("workflows:detalle", args=[self.workflow.pk]))
         self.assertEqual(respuesta.status_code, 200)
         self.assertIsNone(respuesta.context["form"])
@@ -3442,13 +3443,13 @@ class WorkflowsDetalleEditarViewTests(TestCase):
         self.assertEqual(list(respuesta.context["versiones"]), list(self.workflow.versiones.all()))
 
     def test_detalle_no_autorizado_sin_ningun_permiso_devuelve_403(self):
-        sin_permiso = Usuario.objects.create_user(username="wf_det_sinpermiso", password=CLAVE_PRUEBA)
-        self.client.login(username="wf_det_sinpermiso", password=CLAVE_PRUEBA)
+        sin_permiso = Usuario.objects.create_user("wf_det_sinpermiso@pruebas.orbita")
+        self.client.force_login(persona("wf_det_sinpermiso@pruebas.orbita"))
         respuesta = self.client.get(reverse("workflows:detalle", args=[self.workflow.pk]))
         self.assertEqual(respuesta.status_code, 403)
 
     def test_editar_exitoso(self):
-        self.client.login(username="wf_det_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_det_admin@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("workflows:editar", args=[self.workflow.pk]), {"nombre": "Renombrado", "descripcion": "x"}
         )
@@ -3457,7 +3458,7 @@ class WorkflowsDetalleEditarViewTests(TestCase):
         self.assertEqual(self.workflow.nombre, "Renombrado")
 
     def test_editar_no_autorizado_devuelve_403(self):
-        self.client.login(username="wf_det_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_det_lector@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:editar", args=[self.workflow.pk]), {"nombre": "Hackeado"})
         self.assertEqual(respuesta.status_code, 403)
         self.workflow.refresh_from_db()
@@ -3466,9 +3467,9 @@ class WorkflowsDetalleEditarViewTests(TestCase):
 
 class WorkflowsCrearVersionViewTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user(username="wf_ver_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("wf_ver_admin@pruebas.orbita")
         _otorgar_workflows_administrar(self.admin)
-        self.lector = Usuario.objects.create_user(username="wf_ver_lector", password=CLAVE_PRUEBA)
+        self.lector = Usuario.objects.create_user("wf_ver_lector@pruebas.orbita")
         _otorgar_workflows_consultar(self.lector)
         self.workflow, self.version1, self.etapas = _crear_workflow_lineal()
         activar_version(self.workflow, self.version1, actor=self.admin)
@@ -3478,7 +3479,7 @@ class WorkflowsCrearVersionViewTests(TestCase):
         """Mismo comportamiento de `clonar_desde` que ya define el
         dominio (por defecto clona `version_activa`) — la vista no decide
         una política distinta ni pasa `clonar_desde` explícito."""
-        self.client.login(username="wf_ver_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_ver_admin@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:crear_version", args=[self.workflow.pk]))
         self.assertEqual(respuesta.status_code, 302)
         version2 = self.workflow.versiones.get(numero=2)
@@ -3487,7 +3488,7 @@ class WorkflowsCrearVersionViewTests(TestCase):
         self.assertRedirects(respuesta, reverse("workflows:version_detalle", args=[version2.pk]))
 
     def test_crear_version_no_autorizado_devuelve_403(self):
-        self.client.login(username="wf_ver_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_ver_lector@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:crear_version", args=[self.workflow.pk]))
         self.assertEqual(respuesta.status_code, 403)
         self.assertEqual(self.workflow.versiones.count(), 1)
@@ -3495,14 +3496,14 @@ class WorkflowsCrearVersionViewTests(TestCase):
 
 class WorkflowsVersionDetalleViewTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user(username="wf_vd_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("wf_vd_admin@pruebas.orbita")
         _otorgar_workflows_administrar(self.admin)
-        self.lector = Usuario.objects.create_user(username="wf_vd_lector", password=CLAVE_PRUEBA)
+        self.lector = Usuario.objects.create_user("wf_vd_lector@pruebas.orbita")
         _otorgar_workflows_consultar(self.lector)
         self.workflow, self.version, self.etapas = _crear_workflow_lineal()
 
     def test_borrador_muestra_etapas_transiciones_y_sin_errores(self):
-        self.client.login(username="wf_vd_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_vd_lector@pruebas.orbita"))
         respuesta = self.client.get(reverse("workflows:version_detalle", args=[self.version.pk]))
         self.assertEqual(respuesta.status_code, 200)
         self.assertEqual(respuesta.context["errores"], [])
@@ -3513,7 +3514,7 @@ class WorkflowsVersionDetalleViewTests(TestCase):
         workflow = Workflow.objects.create(nombre="Incompleto para detalle")
         version = WorkflowVersion.objects.create(workflow=workflow, numero=1)
         Etapa.objects.create(version=version, tipo=Etapa.Tipo.INICIO, nombre="Inicio")
-        self.client.login(username="wf_vd_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_vd_lector@pruebas.orbita"))
         respuesta = self.client.get(reverse("workflows:version_detalle", args=[version.pk]))
         self.assertEqual(respuesta.context["errores"], validar_estructura(version))
         self.assertTrue(respuesta.context["errores"])
@@ -3522,28 +3523,28 @@ class WorkflowsVersionDetalleViewTests(TestCase):
     def test_activa_no_calcula_errores_ni_expone_controles_de_edicion(self):
         activar_version(self.workflow, self.version, actor=self.admin)
         self.version.refresh_from_db()
-        self.client.login(username="wf_vd_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_vd_lector@pruebas.orbita"))
         respuesta = self.client.get(reverse("workflows:version_detalle", args=[self.version.pk]))
         self.assertEqual(respuesta.context["errores"], [])
         self.assertNotContains(respuesta, reverse("workflows:activar_version", args=[self.version.pk]))
 
     def test_version_detalle_no_autorizado_devuelve_403(self):
-        sin_permiso = Usuario.objects.create_user(username="wf_vd_sinpermiso", password=CLAVE_PRUEBA)
-        self.client.login(username="wf_vd_sinpermiso", password=CLAVE_PRUEBA)
+        sin_permiso = Usuario.objects.create_user("wf_vd_sinpermiso@pruebas.orbita")
+        self.client.force_login(persona("wf_vd_sinpermiso@pruebas.orbita"))
         respuesta = self.client.get(reverse("workflows:version_detalle", args=[self.version.pk]))
         self.assertEqual(respuesta.status_code, 403)
 
 
 class WorkflowsActivarVersionViewTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user(username="wf_act_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("wf_act_admin@pruebas.orbita")
         _otorgar_workflows_administrar(self.admin)
-        self.lector = Usuario.objects.create_user(username="wf_act_lector", password=CLAVE_PRUEBA)
+        self.lector = Usuario.objects.create_user("wf_act_lector@pruebas.orbita")
         _otorgar_workflows_consultar(self.lector)
 
     def test_activar_version_valida_exitoso(self):
         workflow, version, etapas = _crear_workflow_lineal()
-        self.client.login(username="wf_act_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_act_admin@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:activar_version", args=[version.pk]))
         self.assertEqual(respuesta.status_code, 302)
         version.refresh_from_db()
@@ -3553,7 +3554,7 @@ class WorkflowsActivarVersionViewTests(TestCase):
         workflow = Workflow.objects.create(nombre="Incompleto")
         version = WorkflowVersion.objects.create(workflow=workflow, numero=1)
         Etapa.objects.create(version=version, tipo=Etapa.Tipo.INICIO, nombre="Inicio")
-        self.client.login(username="wf_act_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_act_admin@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:activar_version", args=[version.pk]), follow=True)
         version.refresh_from_db()
         self.assertEqual(version.estado, WorkflowVersion.Estado.BORRADOR)
@@ -3562,7 +3563,7 @@ class WorkflowsActivarVersionViewTests(TestCase):
 
     def test_activar_version_no_autorizado_devuelve_403(self):
         workflow, version, etapas = _crear_workflow_lineal()
-        self.client.login(username="wf_act_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("wf_act_lector@pruebas.orbita"))
         respuesta = self.client.post(reverse("workflows:activar_version", args=[version.pk]))
         self.assertEqual(respuesta.status_code, 403)
         version.refresh_from_db()
@@ -3576,7 +3577,7 @@ class NavegacionWorkflowsApuntaALaVistaFuncionalTests(TestCase):
     def test_item_workflows_apunta_a_la_vista_funcional(self):
         from apps.core.navegacion import elementos_navegacion
 
-        usuario = Usuario.objects.create_user(username="wf_nav", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("wf_nav@pruebas.orbita")
         _otorgar_workflows_consultar(usuario)
         elementos = elementos_navegacion(usuario)
         # Desde D1 los flujos viven dentro del Diseñador (entrada unificada).
@@ -3592,9 +3593,9 @@ class _EscenarioActoresEjecucion:
         from apps.catalogo.models import Categoria, Formulario, Servicio
         from apps.catalogo.versionamiento import crear_nueva_version as crear_entrada, activar_version as activar_entrada
 
-        self.solicitante = Usuario.objects.create_user("solicitante43")
-        self.responsable = Usuario.objects.create_user("responsable43")
-        self.nuevo = Usuario.objects.create_user("nuevo43")
+        self.solicitante = Usuario.objects.create_user("solicitante43@pruebas.orbita")
+        self.responsable = Usuario.objects.create_user("responsable43@pruebas.orbita")
+        self.nuevo = Usuario.objects.create_user("nuevo43@pruebas.orbita")
         self.equipo = Equipo.objects.create(nombre="Equipo43")
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.responsable)
         MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.nuevo)
@@ -4105,8 +4106,9 @@ class ResolutorVariablesSinTicketTests(TestCase):
 
         campos = [SimpleNamespace(clave="valor_estimado", etiqueta="Valor estimado"), SimpleNamespace(clave="", etiqueta="Sin clave")]
         bloques = [
-            SimpleNamespace(tipo="APROBACION", clave="aprobacion_jefe", nombre="Aprobación jefe"),
-            SimpleNamespace(tipo="ACTIVIDAD", clave="atender", nombre="Atender"),
+            # Como un BloqueOperativo real: siempre trae `configuracion` (la de publicación la lee desde 2026-11-12).
+            SimpleNamespace(tipo="APROBACION", clave="aprobacion_jefe", nombre="Aprobación jefe", configuracion={}),
+            SimpleNamespace(tipo="ACTIVIDAD", clave="atender", nombre="Atender", configuracion={}),
         ]
         referencias = [r for r, _ in referencias_disponibles(campos=campos, bloques=bloques)]
         self.assertIn("ticket.estado", referencias)
@@ -4120,7 +4122,7 @@ class VariablesLegacyEjecutableTests(TestCase):
     """LEGACY_EJECUTABLE (Etapa) conserva su contrato con las variables planas."""
 
     def setUp(self):
-        self.actor = get_user_model().objects.create_user("vars_legacy", password="Clave-Segura-123")
+        self.actor = get_user_model().objects.create_user("vars_legacy@pruebas.orbita")
 
     def test_variable_plana_numerica_alimenta_la_condicion(self):
         workflow, etapas = _crear_workflow_activo_con_condicion(self.actor)

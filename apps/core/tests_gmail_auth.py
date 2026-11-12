@@ -3,15 +3,21 @@ from tempfile import TemporaryDirectory
 from unittest.mock import Mock, patch
 
 from django.core.exceptions import PermissionDenied
-from django.http import HttpResponseRedirect
+from django.http import Http404, HttpResponseRedirect
 from django.test import RequestFactory, SimpleTestCase, override_settings
 
 from apps.core.correo import ErrorCorreo
 from apps.core.gmail_auth import callback, conectar, guardar_token
 
 
-@override_settings(GMAIL_SENDER_EMAIL="remitente@edilandina.com")
+# Versión 1: la conexión web de Gmail solo existe en desarrollo (DEBUG) y la abre el permiso de plataforma.
+@override_settings(GMAIL_SENDER_EMAIL="remitente@edilandina.com", DEBUG=True)
 class GmailConexionTests(SimpleTestCase):
+    def setUp(self):
+        administra = patch("apps.core.plataforma.administra_plataforma", return_value=True)
+        self.administra = administra.start()
+        self.addCleanup(administra.stop)
+
     def test_guardado_conserva_variables_existentes(self):
         with TemporaryDirectory() as directory, override_settings(
             BASE_DIR=Path(directory), GMAIL_AUTH_MODE="service_account", GMAIL_REFRESH_TOKEN=""
@@ -41,14 +47,22 @@ class GmailConexionTests(SimpleTestCase):
 
     def request(self):
         request = RequestFactory().get("/auth/gmail/callback/")
-        request.user = Mock(is_authenticated=True, is_active=True, is_superuser=True)
+        request.user = Mock(is_authenticated=True, is_active=True)
         return request
 
     def test_usuario_sin_privilegio_no_puede_conectar(self):
-        request = self.request()
-        request.user.is_superuser = False
+        self.administra.return_value = False
         with self.assertRaises(PermissionDenied):
-            conectar(request)
+            conectar(self.request())
+
+    def test_en_produccion_no_existe_ni_escribe_el_env(self):
+        with override_settings(DEBUG=False):
+            with self.assertRaises(Http404):
+                conectar(self.request())
+            with self.assertRaises(Http404):
+                callback(self.request())
+            with self.assertRaises(ErrorCorreo):
+                guardar_token("token-prueba_123")
 
     @patch("apps.core.gmail_auth.redirect")
     @patch("apps.core.gmail_auth.messages")

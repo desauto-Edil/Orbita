@@ -85,7 +85,7 @@ def ticket_de_prueba(recurso, hoy=None):
     if ticket.estado == Ticket.Estado.RADICADO:
         iniciar_atencion_ticket(ticket, p.planificador)
         ticket.refresh_from_db()
-        lineas.append(f"{p.planificador.get_username()} inició la atención.")
+        lineas.append(f"{p.planificador.email} inició la atención.")
     parrilla = parrilla_ops.parrilla_de(ticket)
     if parrilla is None:
         raise ValidationError("El ticket no tiene la colección de publicaciones.")
@@ -100,6 +100,6 @@ def ticket_de_prueba(recurso, hoy=None):
         )
     lineas.append(
         f"{len(caso.ideas)} ideas registradas como borradores de la lluvia de ideas (ninguna enviada). "
-        f"Entra como {p.planificador.get_username()} para revisarlas y enviarlas."
+        f"Entra como {p.planificador.email} para revisarlas y enviarlas."
     )
     return lineas

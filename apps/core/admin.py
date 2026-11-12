@@ -1,5 +1,8 @@
 """Django Admin como interfaz administrativa provisional de Sprint 0.
 
+Versión 1: se sirve por el sitio protegido de Órbita (`apps.core.admin_sitio`): apagado en el sitio público, solo
+con `plataforma.administracion_avanzada` + ingreso reciente con Google, sin borrados y con todo cambio auditado.
+
 No es la UX definitiva de Órbita (decisión estructural ya aprobada) — cubre
 CU-004, CU-005, CU-006, CU-007 y CU-008. La interfaz cotidiana para esos CU es
 ahora Configuración (`apps/core/configuracion.py`); este Admin se conserva
@@ -7,7 +10,7 @@ como «Administración avanzada» para lo que aún no tiene interfaz propia.
 """
 
 from django.contrib import admin
-from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.models import Group
 
 from apps.core.auditoria import guardar_formset_auditado, registrar_evento, serializar
 from apps.core.autorizacion import usuario_tiene_permiso
@@ -41,6 +44,9 @@ class AdminAuditableMixin:
     proyecto hoy donde una mutación de estos modelos ocurre *y* se conoce a
     `request.user` al mismo tiempo — ver `apps/core/auditoria.py`.
     """
+
+    # El sitio de Órbita (`apps.core.admin_sitio`) no vuelve a auditar lo que este mixin ya registra.
+    _audita_cambios = True
 
     def save_model(self, request, obj, form, change):
         anterior = None
@@ -84,14 +90,27 @@ class AdminAuditableMixin:
 
 
 @admin.register(Usuario)
-class UsuarioAdmin(AdminAuditableMixin, UserAdmin):
-    pass
+class UsuarioAdmin(AdminAuditableMixin, admin.ModelAdmin):
+    """Versión 1: la cuenta es un correo, sin usuario, contraseña, is_staff, is_superuser, grupos ni permisos de Django
+    (el acceso es por roles de Órbita). La interfaz habitual es Configuración › Usuarios."""
+
+    fields = ("email", "first_name", "last_name", "is_active", "last_login", "date_joined")
+    readonly_fields = ("last_login", "date_joined")
+    list_display = ("email", "first_name", "last_name", "is_active")
+    list_filter = ("is_active",)
+    search_fields = ("email", "first_name", "last_name")
+    ordering = ("first_name", "last_name", "email")
+
+
+# Los grupos de Django no se usan (los accesos son roles y permisos de Órbita).
+if admin.site.is_registered(Group):
+    admin.site.unregister(Group)
 
 
 @admin.register(PerfilOrganizacional)
 class PerfilOrganizacionalAdmin(AdminAuditableMixin, admin.ModelAdmin):
     list_display = ("usuario", "cargo", "telefono")
-    search_fields = ("usuario__username", "cargo")
+    search_fields = ("usuario__email", "cargo")
 
 
 @admin.register(Area)
@@ -118,14 +137,14 @@ class AreaUnidadNegocioAdmin(AdminAuditableMixin, admin.ModelAdmin):
 class UsuarioAreaAdmin(AdminAuditableMixin, admin.ModelAdmin):
     list_display = ("usuario", "area", "es_principal", "activo")
     list_filter = ("activo", "es_principal")
-    search_fields = ("usuario__username", "area__nombre")
+    search_fields = ("usuario__email", "area__nombre")
 
 
 @admin.register(UsuarioUnidadNegocio)
 class UsuarioUnidadNegocioAdmin(AdminAuditableMixin, admin.ModelAdmin):
     list_display = ("usuario", "unidad_negocio", "es_principal", "activo")
     list_filter = ("activo", "es_principal")
-    search_fields = ("usuario__username", "unidad_negocio__nombre")
+    search_fields = ("usuario__email", "unidad_negocio__nombre")
 
 
 @admin.register(Equipo)
@@ -187,7 +206,7 @@ class RolFuncionalAdmin(AdminAuditableMixin, admin.ModelAdmin):
 class AsignacionRolAdmin(AdminAuditableMixin, admin.ModelAdmin):
     list_display = ("usuario", "rol", "tipo_alcance", "area", "unidad_negocio", "activo")
     list_filter = ("tipo_alcance", "activo")
-    search_fields = ("usuario__username", "rol__nombre")
+    search_fields = ("usuario__email", "rol__nombre")
 
 
 @admin.register(RegistroAuditoria)
@@ -202,7 +221,7 @@ class RegistroAuditoriaAdmin(admin.ModelAdmin):
 
     list_display = ("creado_en", "accion", "modelo", "objeto_repr", "origen", "usuario")
     list_filter = ("accion", "origen", "content_type")
-    search_fields = ("modelo", "objeto_repr", "usuario__username")
+    search_fields = ("modelo", "objeto_repr", "usuario__email")
     readonly_fields = [campo.name for campo in RegistroAuditoria._meta.fields]
 
     def has_view_permission(self, request, obj=None):

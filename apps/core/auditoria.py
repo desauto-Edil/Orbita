@@ -17,14 +17,14 @@ from django.db.models import FileField
 
 from apps.core.models.auditoria import RegistroAuditoria
 
-CAMPOS_SENSIBLES = {"password"}
+CAMPOS_SENSIBLES = {"password", "clave_sesion"}
 
 
 def serializar(instancia):
     """Dict JSON-serializable de los campos concretos de `instancia`.
 
-    Excluye campos sensibles (`CAMPOS_SENSIBLES`) — hoy solo `password` en
-    `Usuario`, el único caso real entre los modelos auditados. Los `ForeignKey`
+    Excluye campos sensibles (`CAMPOS_SENSIBLES`) — la clave que firma las
+    sesiones de `Usuario` (`password` se conserva por los registros históricos). Los `ForeignKey`
     se guardan como `<campo>_id` (el id crudo), sin resolver ni serializar el
     objeto relacionado: evita recursión y consultas adicionales, y basta para
     reconstruir qué cambió.

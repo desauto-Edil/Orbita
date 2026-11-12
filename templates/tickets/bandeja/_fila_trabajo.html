@@ -9,17 +9,19 @@
 <li class="bt-fila{% if grupo.requiere_atencion %} is-atencion{% endif %}{% if grupo.vencido or grupo.requiere_atencion and plazo == 'vencido' %} is-vencido{% endif %}" data-fila="{{ ticket.pk }}">
   <a class="bt-fila__enlace" href="{{ grupo.url }}" data-inspector="{% url 'tickets:inspector' ticket.pk %}?desde=trabajo&amp;situacion={{ grupo.situacion }}">
     <span class="bt-celda bt-celda--ticket">
-      <span class="bt-fila__nombre">{{ ticket.detalle_servicio.servicio.nombre }}</span>
+      {# Lo que distingue un ticket de otro del mismo servicio: su número y quién lo pidió (2026-11-12). #}
+      <span class="bt-fila__nombre"><span class="bt-fila__codigo tabular">{{ ticket.codigo|default:"Sin código" }}</span><span class="bt-fila__sep" aria-hidden="true">·</span><span class="bt-fila__quien"><span class="sr-only">Solicitado por: </span>{% if ticket.solicitante %}{{ ticket.solicitante.nombre_visible }}{% else %}{{ ticket.etiqueta|default:"Proceso programado" }}{% endif %}</span></span>
       <span class="bt-fila__meta">
-        <span class="tabular">{{ ticket.codigo|default:"Sin código" }}</span>{% if ticket.etiqueta %}<span>{{ ticket.etiqueta }}</span>{% endif %}<span><span class="sr-only">Tu participación: </span>{{ grupo.participacion|join:" · " }}</span>
+        <span><span class="sr-only">Servicio o proceso: </span>{{ ticket.detalle_servicio.servicio.nombre }}</span>{% if ticket.etiqueta and ticket.solicitante %}<span>{{ ticket.etiqueta }}</span>{% endif %}<span><span class="sr-only">Tu participación: </span>{{ grupo.participacion|join:" · " }}</span>
       </span>
       <span class="bt-fila__compacto">
         <span class="estado-etiqueta estado-etiqueta--{{ ticket.estado|lower }}"><span class="sr-only">Estado del ticket: </span>{{ ticket.get_estado_display }}</span>{% if grupo.fase %}<span><span class="sr-only">Fase: </span>{{ grupo.fase }}</span>{% endif %}
       </span>
     </span>
-    <span class="bt-celda bt-celda--fase">{% if grupo.fase %}<span class="sr-only">Fase: </span>{{ grupo.fase }}{% endif %}</span>
+    <span class="bt-celda bt-celda--fase">{% if grupo.fase %}<span class="sr-only">Fase: </span>{{ grupo.fase }}{% else %}<span class="bt-vacio" aria-label="Sin fase">—</span>{% endif %}</span>
     <span class="bt-celda bt-celda--situacion">
-      <span class="estado-etiqueta estado-etiqueta--{{ grupo.situacion }}">{% if grupo.requiere_atencion %}Requiere tu atención{% else %}En seguimiento{% endif %}</span>
+      {# Texto, no otra píldora: la única etiqueta de color de la fila es el estado; la atención va en negrita. #}
+      <span class="bt-tu-situacion{% if grupo.requiere_atencion %} is-atencion{% endif %}">{% if grupo.requiere_atencion %}Requiere tu atención{% else %}En seguimiento{% endif %}</span>
       {% if siguiente %}<span class="bt-fila__siguiente"><span class="sr-only">{% if grupo.requiere_atencion %}Siguiente acción: {% else %}Sigues: {% endif %}</span>{{ siguiente.titulo }}{% if grupo.acciones|length > 1 %} <span class="bt-fila__mas tabular">+{{ grupo.acciones|length|add:"-1" }}</span>{% endif %}</span>{% endif %}
     </span>
     <span class="bt-celda bt-celda--estado"><span class="sr-only">Estado del ticket: </span><span class="estado-etiqueta estado-etiqueta--{{ ticket.estado|lower }}">{{ ticket.get_estado_display }}</span></span>

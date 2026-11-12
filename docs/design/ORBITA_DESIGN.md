@@ -228,9 +228,11 @@ fases y entregables viven solo en el espacio completo del ticket.
 ## 5.7 Espacio del ticket: encabezado persistente y panel del ticket
 
 - **Encabezado persistente** (escritorio ≥1024 × 720, `content-area--espacio`): regreso, nombre, estado, código,
-  responsable, fecha objetivo, recorrido y el banner de «Tu misión» quedan inmóviles; debajo, UNA zona que se
-  desplaza (`tb-cuerpo`). Entre 720 y 880 px de alto el encabezado se compacta (menos aire, objetivo de la misión
-  en dos líneas). Con menos altura, en tableta o móvil, el desplazamiento es el natural de la página. Estructura
+  responsable, fecha objetivo y recorrido quedan inmóviles; debajo, UNA zona que se desplaza (`tb-cuerpo`) que
+  empieza en «Tu misión» (pestañas y banner). Entre 720 y 880 px de alto el encabezado se compacta (menos aire).
+- **Pestañas de misión** (`.ms-otras__item`): píldoras con una sombra del acento del sistema en el borde
+  (`color-mix` de `--color-primary`; más marcada y con borde del acento en la actual). El acento nunca es color de
+  texto. Cada pestaña muestra SOLO su misión. Con menos altura, en tableta o móvil, el desplazamiento es el natural de la página. Estructura
   flex/grid con `min-height: 0`, sin `sticky` ni posiciones absolutas.
 - **Panel del ticket** (`.tp`): la Conversación es de todos los involucrados; el Historial solo aparece para quien
   consulta el ticket. UNA superficie con borde fino, sin sombra en el layout; pestañas con el componente
@@ -241,6 +243,10 @@ fases y entregables viven solo en el espacio completo del ticket.
   burbuja suave (`--surface-sunken`; los propios en `--color-primary-soft`), sin tarjetas por mensaje; compositor
   fijo al pie (textarea que crece hasta 160 px; Enter envía, Mayús+Enter nueva línea). Estados de carga, vacío,
   error y reconexión en una línea discreta.
+- **Canales:** quien pertenece a ambos ve, bajo las pestañas, un selector en píldora «Equipo | Interesados»
+  (`.tp-canales`, el activo sobre `--surface-card`) con el contador de cada uno, y una línea discreta que dice quién
+  lee ese canal. Quien solo es interesado no ve selector: solo su conversación, con la aclaración de que lo interno
+  del equipo no se muestra.
 - **No leídos:** contador pequeño en el acceso «Conversación» (`.tp-acceso__cuenta`, acento con
   `--color-on-primary`: es un indicador), sin ventanas emergentes.
 - **Historial:** línea de tiempo vertical (`.tl`) de todo lo ocurrido en el ticket y sus piezas: avatar de 32 px
@@ -268,8 +274,15 @@ fases y entregables viven solo en el espacio completo del ticket.
   completa. Cierra con el botón, Escape o un clic fuera.
 - **Revisión**: Aprobar (primario) · Corregir (secundario) · Eliminar (fantasma en `--status-danger`), con un
   comentario obligatorio. **Anotación** (solo aprobación de un ítem, sobre imagen): barra flotante bajo la imagen con
-  lápiz, resaltador, tres colores de estado, deshacer y borrar; un aviso discreto (`--status-info`) indica que el
-  dibujo viaja con la revisión.
+  lápiz, resaltador, borrador, deshacer, borrar todo y cinco colores fijos (`--anotacion-rojo|ambar|azul|verde|negro`,
+  iguales en ambos modos: el dibujo se guarda como PNG). Con algo dibujado, Aprobar y Eliminar se deshabilitan
+  (opacidad 45 %) y un aviso explica que la revisión solo puede ser «Corregir».
+- **Por contenido** (`espacio.modo_de_revision`): tarjetas y visor solo si algún ítem trae un audiovisual (imagen o
+  video). Sin audiovisuales (un plan de trabajo) la revisión y la gaceta son de **datos**: tabla (`.rd-tabla`, hasta 5
+  columnas) o **lista compacta** (`.pi-lista` / `.pi`): una sola superficie con separadores finos, una fila por ítem
+  con número, nombre y estado, sus datos en una rejilla densa (`auto-fill` de 200 px, texto completo, nunca
+  recortado), archivos como enlaces y comentarios; al lado (≥1024 px, 260–320 px) la decisión del aprobador o, en la
+  gaceta, Comentar · Reenviar corregida · Excluir. En una gaceta nadie aprueba: nunca hay botones de decisión.
 - **Gaceta**: el menú «Coordinar» (encabezado de la gaceta, popover) sustituye a la página propia de la gaceta.
 
 ## 5.1 Iconografía

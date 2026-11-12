@@ -190,14 +190,14 @@ ESTADO_RECORRIDO = {
 def _responsable_de(tarea=None, participaciones=()):
     if tarea is not None:
         if tarea.usuario_responsable_id:
-            return tarea.usuario_responsable.get_full_name().strip() or tarea.usuario_responsable.get_username()
+            return tarea.usuario_responsable.nombre_visible
         return tarea.equipo_responsable.nombre if tarea.equipo_responsable_id else "Sin asignar"
     nombres = []
     for aprobacion in participaciones:
         if aprobacion.estado != "PENDIENTE":
             continue
         if aprobacion.aprobador_usuario_id:
-            nombres.append(aprobacion.aprobador_usuario.get_full_name().strip() or aprobacion.aprobador_usuario.get_username())
+            nombres.append(aprobacion.aprobador_usuario.nombre_visible)
         elif aprobacion.aprobador_equipo_id:
             nombres.append(aprobacion.aprobador_equipo.nombre)
     return ", ".join(nombres)
@@ -403,7 +403,7 @@ def _panel_actividad(usuario, trabajo, panel):
         return
     panel["tarea"] = tarea
     panel["tarea_responsable"] = (
-        tarea.usuario_responsable.get_full_name().strip() or tarea.usuario_responsable.get_username()
+        tarea.usuario_responsable.nombre_visible
         if tarea.usuario_responsable_id
         else (tarea.equipo_responsable.nombre if tarea.equipo_responsable_id else "")
     )

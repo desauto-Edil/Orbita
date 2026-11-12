@@ -21,20 +21,21 @@ ITEM, configuración `{"gaceta": <clave>}`), revisa SOLO ese ítem y deja SOLO s
   condición no cumplida en una gaceta OBLIGATORIA) es un ERROR funcional de ESE recorrido, visible y
   reintentable (`workflows.integracion.reintentar_recorrido`), nunca un ingreso perdido en silencio. Una gaceta
   opcional cuya condición el ítem no cumple se salta y queda registrado (`resultado = NO_INGRESA`).
-- `continuar_por_item`: cuando la gaceta APRUEBA al ítem (`operaciones._finalizar`), reanuda el recorrido de ese
-  ítem que la espera en su paso y publica `gacetas.<clave_paso>.resultado`. Devolver lo manda a corrección y el
-  recorrido sigue esperando; rechazar o excluir lo saca del alcance y cancela SOLO su recorrido (mecanismo de la
-  Fase 3). Idempotente: un segundo aviso ya no encuentra la espera.
+- `continuar_por_item`: cuando la gaceta ACEPTA al ítem (`operaciones._finalizar`: al cerrar el periodo sin
+  comentarios pendientes, o al reenviar su corrección con el periodo cerrado; nadie aprueba en una gaceta), reanuda
+  el recorrido de ese ítem que la espera en su paso y publica `gacetas.<clave_paso>.resultado`. Un comentario lo
+  manda a corrección y el recorrido sigue esperando; excluirlo (quien coordina) lo saca del alcance y cancela SOLO su
+  recorrido (mecanismo de la Fase 3). Idempotente: un segundo aviso ya no encuentra la espera.
 
 Bloque 5.3 — protección del cierre: una gaceta que un recorrido usa como paso por ítem no cierra su periodo ni se
 resuelve mientras haya ítems en el alcance que todavía deban llegar a ese paso (`llegadas_pendientes`), ni mientras
-el alcance de la colección siga abierto y puedan entrar ítems nuevos; tampoco se resuelve con ítems en revisión o
-corrección (cada uno se decide en su recorrido). La regla vive en `operaciones.cerrar_periodo` / `resolver` /
-`_resolver_si_corresponde`; la aprobación individual sigue reanudando su recorrido sin esperar el cierre, y la
-cancelación del ticket no pasa por aquí.
+el alcance de la colección siga abierto y puedan entrar ítems nuevos; tampoco se resuelve con ítems en corrección
+(cada uno espera su versión corregida en su recorrido; lo que está en revisión se acepta al cerrar el periodo). La
+regla vive en `operaciones.cerrar_periodo` / `resolver` / `_resolver_si_corresponde`; la cancelación del ticket no
+pasa por aquí.
 
 Sin bloqueos circulares: la resolución de la gaceta no depende de la instancia principal (solo la avisa), los
-recorridos de ítems son subinstancias independientes y las decisiones van por `apps.aprobaciones`. Orden de
+recorridos de ítems son subinstancias independientes y en la gaceta nadie aprueba. Orden de
 locks: instancia principal → (subinstancia) → Ticket → gaceta → participación. Toda operación de la gaceta
 bloquea primero la principal (`operaciones._bloquear`), así que reanudar una subinstancia desde una decisión
 respeta el orden «principal → hija» del motor.
@@ -49,7 +50,10 @@ from apps.gacetas.models import GacetaTicket, ParticipacionItemGaceta, RondaRevi
 from apps.workflows.models import InstanciaEtapa, InstanciaWorkflow
 
 NO_INGRESA = "NO_INGRESA"
-RONDAS_APROBADAS = (RondaRevisionGaceta.Resultado.APROBADA, RondaRevisionGaceta.Resultado.ACEPTADA_AUTOMATICA)
+RONDAS_APROBADAS = (
+    RondaRevisionGaceta.Resultado.APROBADA, RondaRevisionGaceta.Resultado.ACEPTADA_AUTOMATICA,
+    RondaRevisionGaceta.Resultado.ACEPTADA_CORRECCION,
+)
 
 
 def entrar_al_bloque(ticket, bloque):
@@ -137,7 +141,7 @@ def _motivo_aprobacion_no_vigente(participacion, elemento, *, verificar_version)
     return None
 
 
-def entrar_item(ticket, bloque, elemento):
+def entrar_item(ticket, bloque, elemento, *, dias=None):
     """Entrada del paso GACETA en el recorrido de `elemento` (la llama su Strategy, dentro del motor, con la
     principal y la subinstancia bloqueadas). Devuelve `(esperar, datos)`; `ValidationError` = error funcional
     reintentable de ESE recorrido."""
@@ -197,6 +201,14 @@ def entrar_item(ticket, bloque, elemento):
         participacion = operaciones._presentar_bloqueado(
             gaceta, elemento, None, origen=ParticipacionItemGaceta.Origen.FLUJO, silencioso=False
         )
+        if dias:
+            # Ventana PROPIA del ítem: la duración que eligió su aprobador al publicarlo (días calendario).
+            from datetime import timedelta
+
+            from django.utils import timezone
+
+            participacion.vence_revision_en = timezone.now() + timedelta(days=int(dias))
+            participacion.save(update_fields=["vence_revision_en", "actualizado_en"])
     return True, _datos_item(gaceta, elemento, participacion, resultado=participacion.estado)
 
 
@@ -356,7 +368,7 @@ def bloqueos_de_cierre(gaceta, *, resolver):
         motivos.append(
             f"La gaceta «{gaceta.nombre}» revisa cada ítem en su recorrido y todavía faltan ítems por llegar: "
             + ", ".join(f"#{n}" for n in llegadas.por_llegar)
-            + f". Cuando lleguen y se decidan, o se excluyan, podrás {accion}."
+            + f". Cuando lleguen, o se excluyan, podrás {accion}."
         )
     for nombre in llegadas.alcances_abiertos:
         motivos.append(
@@ -364,15 +376,18 @@ def bloqueos_de_cierre(gaceta, *, resolver):
             f"ciérralo antes de {accion}."
         )
     if resolver:
+        # Lo que está en revisión queda aceptado al cerrar el periodo (nadie aprueba en una gaceta); lo que está en
+        # corrección espera su versión corregida en su recorrido.
         pendientes = list(
             ParticipacionItemGaceta.objects.filter(
-                gaceta=gaceta, estado__in=ParticipacionItemGaceta.ESTADOS_PENDIENTES
+                gaceta=gaceta, estado=ParticipacionItemGaceta.Estado.EN_CORRECCION
             ).select_related("elemento").order_by("elemento__numero")
         )
         if pendientes:
             motivos.append(
-                f"Hay ítems de la gaceta «{gaceta.nombre}» en revisión o corrección: "
+                f"Hay ítems de la gaceta «{gaceta.nombre}» en corrección: "
                 + ", ".join(f"#{p.elemento.numero}" for p in pendientes)
-                + ". Cada uno espera en su recorrido: apruébalos, recházalos o exclúyelos antes de resolverla."
+                + ". Cada uno espera en su recorrido: espera a que se reenvíen corregidos, o exclúyelos, antes de "
+                "resolverla."
             )
     return motivos

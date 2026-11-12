@@ -6,7 +6,7 @@
 {% endcomment %}
 {% load archivos %}
 <li class="pz pz--{{ p.situacion|default:'pendiente' }}" data-situacion="{{ p.situacion|default:'pendiente' }}" id="pieza-{{ p.elemento.pk }}">
-  <a class="pz__abrir" href="{{ base }}?elemento={{ p.elemento.pk }}#item-{{ p.elemento.pk }}" data-pieza="pz-{{ p.clave }}" aria-haspopup="dialog" aria-label="Abrir {{ p.titulo }}">
+  <a class="pz__abrir" href="{{ base }}?{% if mision %}mision={{ mision.clave|urlencode }}&{% endif %}elemento={{ p.elemento.pk }}#item-{{ p.elemento.pk }}" data-pieza="pz-{{ p.clave }}" aria-haspopup="dialog" aria-label="Abrir {{ p.titulo }}">
     {% if p.portada %}
       {% url 'tickets:descargar_adjunto' p.portada.pk as url_portada %}
       {% if p.portada|clase_vista_previa == "video" %}
@@ -22,6 +22,10 @@
     {% endif %}
     {% if p.fecha %}<span class="pz__fecha" title="{{ p.fecha.etiqueta }}"><b class="tabular">{{ p.fecha.valor|date:"d" }}</b><small>{{ p.fecha.valor|date:"M" }}</small></span>{% endif %}
     <span class="pz__estado pz__estado--{{ p.situacion|default:'pendiente' }}">{{ estado_texto }}</span>
+    {% if p.siguiente %}
+      {# Tras la gaceta: el siguiente paso con su fecha y, si hay lista de evidencias, cuántas pruebas ya se subieron. #}
+      <span class="pz__sigue">{{ p.siguiente.paso }}{% if p.siguiente.fecha %} · <span class="tabular">{{ p.siguiente.fecha|date:"j M" }}</span>{% endif %}{% for lista in p.evidencias %} · <span class="tabular{% if lista.completo %} pz__sigue--hecho{% endif %}">✓ {{ lista.hechos }}/{{ lista.total }}</span>{% endfor %}</span>
+    {% endif %}
     <span class="sr-only">{{ p.titulo }}</span>
   </a>
   <template id="pz-{{ p.clave }}">{% include "tickets/espacio/piezas/_visor.html" %}</template>

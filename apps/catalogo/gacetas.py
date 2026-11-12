@@ -4,7 +4,14 @@
 de su validación y de las operaciones de administración (crear, editar, retirar), auditadas. La ejecución vive en
 `apps.gacetas`; la evaluación de las reglas de finalización, en `apps.tickets.finalizacion`.
 
-Contrato de una gaceta (todo opcional salvo colecciones y aprobadores):
+REGLA DE ORO (vigente para todo tipo de ticket): en una gaceta NADIE APRUEBA. Es un espacio de COMENTARIOS: los
+revisores comentan, un comentario manda el ítem a corrección y su versión corregida vuelve a la gaceta; al CERRAR
+EL PERIODO queda aceptado lo que no tenga comentarios pendientes (y una corrección que llega con el periodo ya
+cerrado queda aceptada al reenviarse). Las claves de aprobación de configuraciones anteriores (`aprobadores`,
+`politica`, `aceptacion_automatica`, `permite_exclusion`, `justificacion_al_aprobar`) ya no forman parte del
+contrato: `normalizar` las descarta y suma los antiguos aprobadores a los revisores (siguen pudiendo comentar).
+
+Contrato de una gaceta (todo opcional salvo colecciones y revisores):
 
     colecciones            [clave de colección, …] del Proceso cuyos ítems participan
     condicion_ingreso      {"variable": "item.<columna>", "operador": …, "valor": …} o null
@@ -12,14 +19,11 @@ Contrato de una gaceta (todo opcional salvo colecciones y aprobadores):
                            (cómo entra un ítem además del bloque GACETA y de la presentación manual)
     apertura               AL_INICIAR (se abre al iniciar el ticket) | POR_FLUJO (la abre un bloque GACETA)
     exige_item_completo    bool: solo entra un ítem completo según sus columnas obligatorias
-    revisores              [{"tipo": "USUARIO"|"EQUIPO", "usuario_id"|"equipo_id"}] — registran observaciones
-    aprobadores            ídem — deciden (aprobar, devolver, rechazar, excluir) con `apps.aprobaciones`
-    politica               TODOS | CUALQUIERA (con varios aprobadores)
-    plazo_revision         {"cantidad", "unidad": DIAS|HORAS, "habiles"} desde la apertura (cierre del periodo)
-    plazo_correccion       ídem, desde cada devolución u observación
-    aceptacion_automatica  bool: al vencer el periodo, se aceptan los ítems en revisión sin observaciones
-    permite_exclusion      bool: los aprobadores pueden EXCLUIR (rechazar siempre se puede)
-    justificacion_al_aprobar  bool
+    revisores              [{"tipo": "USUARIO"|"EQUIPO", "usuario_id"|"equipo_id"}] — comentan (nunca aprueban)
+    plazo_revision         {"cantidad", "unidad": DIAS|HORAS, "habiles"} desde la apertura (cierre del periodo,
+                           que acepta lo que no tenga comentarios pendientes); sin plazo, el periodo lo cierra
+                           quien coordina
+    plazo_correccion       ídem, desde cada comentario que manda el ítem a corrección
     al_resolver_pendientes IMPEDIR | EXCLUIR | RECHAZAR (qué pasa con lo pendiente al resolver)
     resolucion_automatica  bool: resolver sola cuando se cierra el periodo y se puede
     responsable_correccion_columna  clave de una columna USUARIO/EQUIPO del ítem (vacío: responsable del ticket)
@@ -54,7 +58,6 @@ from apps.tickets import tiempos
 INGRESOS = ("MANUAL", "AL_CUMPLIR_CONDICION", "AL_TERMINAR_RECORRIDO")
 APERTURAS = ("AL_INICIAR", "POR_FLUJO")
 PENDIENTES = ("IMPEDIR", "EXCLUIR", "RECHAZAR")
-POLITICAS = ("TODOS", "CUALQUIERA")
 OPERADORES = (
     "IGUAL_A", "DISTINTO_DE", "CONTIENE", "NO_CONTIENE", "MAYOR_QUE", "MENOR_QUE", "ESTA_VACIO", "NO_ESTA_VACIO",
 )
@@ -68,13 +71,8 @@ POR_DEFECTO = {
     "apertura": "AL_INICIAR",
     "exige_item_completo": True,
     "revisores": [],
-    "aprobadores": [],
-    "politica": "TODOS",
     "plazo_revision": None,
     "plazo_correccion": None,
-    "aceptacion_automatica": False,
-    "permite_exclusion": False,
-    "justificacion_al_aprobar": False,
     "al_resolver_pendientes": "IMPEDIR",
     "resolucion_automatica": False,
     "responsable_correccion_columna": "",
@@ -124,6 +122,8 @@ def normalizar(configuracion):
     de forma. No mira el Proceso (eso es `errores_de_definicion`)."""
     cfg = dict(POR_DEFECTO)
     cfg.update({k: v for k, v in (configuracion or {}).items() if k in POR_DEFECTO})
+    # Regla de oro: quienes antes aprobaban la gaceta pasan a ser revisores (comentan; nadie aprueba).
+    cfg["revisores"] = list(cfg.get("revisores") or []) + list((configuracion or {}).get("aprobadores") or [])
     errores = []
     cfg["colecciones"] = [c for c in dict.fromkeys(cfg.get("colecciones") or []) if isinstance(c, str) and c]
     if not cfg["colecciones"]:
@@ -137,22 +137,17 @@ def normalizar(configuracion):
         else:
             condicion = {"variable": variable, "operador": condicion["operador"], "valor": str(condicion.get("valor") or "")}
     cfg["condicion_ingreso"] = condicion or None
-    for llave, permitidos in (("ingreso", INGRESOS), ("apertura", APERTURAS), ("al_resolver_pendientes", PENDIENTES),
-                              ("politica", POLITICAS)):
+    for llave, permitidos in (("ingreso", INGRESOS), ("apertura", APERTURAS), ("al_resolver_pendientes", PENDIENTES)):
         if cfg[llave] not in permitidos:
             errores.append(f"Valor no válido para «{llave}».")
             cfg[llave] = POR_DEFECTO[llave]
     cfg["revisores"] = _actores(cfg["revisores"], "revisores", errores)
-    cfg["aprobadores"] = _actores(cfg["aprobadores"], "aprobadores", errores)
-    if not cfg["aprobadores"]:
-        errores.append("Indica al menos un aprobador (persona o equipo) de la gaceta.")
+    if not cfg["revisores"]:
+        errores.append("Indica al menos un revisor (persona o equipo) que comente en la gaceta.")
     cfg["plazo_revision"] = _plazo(cfg["plazo_revision"], "plazo de revisión", errores)
     cfg["plazo_correccion"] = _plazo(cfg["plazo_correccion"], "plazo de corrección", errores)
-    for llave in ("exige_item_completo", "aceptacion_automatica", "permite_exclusion", "justificacion_al_aprobar",
-                  "resolucion_automatica"):
+    for llave in ("exige_item_completo", "resolucion_automatica"):
         cfg[llave] = bool(cfg[llave])
-    if cfg["aceptacion_automatica"] and cfg["plazo_revision"] is None:
-        errores.append("La aceptación automática necesita un plazo de revisión.")
     cfg["responsable_correccion_columna"] = str(cfg.get("responsable_correccion_columna") or "")
     origen = str(cfg.get("responsable_correccion_origen") or "")
     if origen not in ORIGENES_CORRECCION:
@@ -206,7 +201,7 @@ def errores_de_definicion(servicio, configuracion):
     if faltan:
         errores.append(f"La gaceta muestra columnas que sus colecciones no tienen ({', '.join(faltan)}).")
     for etiqueta, lista in (
-        ("revisor", cfg["revisores"]), ("aprobador", cfg["aprobadores"]),
+        ("revisor", cfg["revisores"]),
         ("coordinador", [cfg["coordinador"]] if cfg["coordinador"] else []),
     ):
         for actor in lista:
@@ -227,8 +222,9 @@ def errores_de_uso_por_item(configuracion):
     positivo»): el periodo corre desde la apertura (el primer ítem que llega, con apertura POR_FLUJO) sin
     reiniciarse, y la protección del Bloque 5.3 (`integracion.bloqueos_de_cierre`) impide cerrarlo mientras
     falten ítems por llegar: la ventana se extiende hasta la última pieza, ninguna queda fuera y ninguna se
-    acepta sin haber estado en revisión. Al cerrarse se aceptan las que están en revisión sin observaciones
-    pendientes; las que están en corrección esperan la decisión de un aprobador. Lista vacía = compatible."""
+    acepta sin haber estado en revisión. Al cerrarse se aceptan las que están en revisión sin comentarios
+    pendientes; las que están en corrección quedan aceptadas al reenviarse (nadie aprueba en una gaceta). Lista
+    vacía = compatible."""
     cfg, _ = normalizar(configuracion)
     errores = []
     if cfg["ingreso"] != "MANUAL":
@@ -395,3 +391,75 @@ def configurar_reglas_finalizacion(servicio, actor, configuracion):
         origen=RegistroAuditoria.Origen.USUARIO, usuario=actor, datos_anteriores=anterior, datos_nuevos=cfg,
     )
     return regla
+
+
+# --- Publicación a interesados decidida por el aprobador (demo «Diseño de nuevas soluciones») --------------------
+# Requerimiento nuevo del usuario (2026-11-11; CU por asignar, extiende las gacetas de la Fase 3 y la aprobación de un
+# ítem de la Fase 2): la APROBACIÓN de un ítem puede ofrecer, al aprobar, «Publicar a los interesados» y la duración
+# de esa revisión (1…`dias_maximos` días). Se configura en el bloque APROBACION (rama ITEM):
+#
+#     publicacion   {"gaceta": <clave de una gaceta del Proceso>, "dias_maximos": 1…DIAS_MAXIMOS_PUBLICACION}
+#
+# La decisión se publica con el resultado (`aprobaciones.<clave>.publicar` / `.dias`): una DECISION posterior manda
+# el ítem a un paso GACETA de esa gaceta, y ese paso, con `dias_desde_aprobacion = <clave de la aprobación>`, abre
+# para ESE ítem una ventana de revisión de esos días (`ParticipacionItemGaceta.vence_revision_en`; al vencer, lo
+# que no tenga comentarios pendientes queda aceptado — silencio positivo, nadie aprueba en una gaceta).
+
+DIAS_MAXIMOS_PUBLICACION = 7
+
+
+def publicacion_de(configuracion_bloque):
+    """`{"gaceta", "dias_maximos"}` de un bloque APROBACION que ofrece publicar, o `None`."""
+    valor = (configuracion_bloque or {}).get("publicacion")
+    if not isinstance(valor, dict) or not valor.get("gaceta"):
+        return None
+    try:
+        dias = int(valor.get("dias_maximos") or 1)
+    except (TypeError, ValueError):
+        dias = 1
+    return {"gaceta": str(valor["gaceta"]), "dias_maximos": dias}
+
+
+def errores_de_publicacion(servicio, bloque):
+    """Para publicar el flujo: la opción solo existe en la aprobación de un ítem, sobre una gaceta ACTIVA del Proceso
+    que revisa la colección recorrida, con una duración máxima válida."""
+    cfg = (bloque.configuracion or {}).get("publicacion")
+    if cfg in (None, {}, ""):
+        return []
+    errores = []
+    publicacion = publicacion_de(bloque.configuracion)
+    if publicacion is None:
+        return [f"La aprobación {bloque.nombre}: «Publicar a los interesados» necesita una gaceta."]
+    if bloque.rama != "ITEM":
+        errores.append(f"La aprobación {bloque.nombre}: solo la aprobación de un ítem puede publicar a los interesados.")
+    if not 1 <= publicacion["dias_maximos"] <= DIAS_MAXIMOS_PUBLICACION:
+        errores.append(
+            f"La aprobación {bloque.nombre}: la duración máxima de la publicación va de 1 a {DIAS_MAXIMOS_PUBLICACION} días."
+        )
+    definicion = DefinicionGaceta.objects.filter(servicio=servicio, clave=publicacion["gaceta"], activa=True).first()
+    if definicion is None:
+        errores.append(f"La aprobación {bloque.nombre}: la gaceta para publicar ya no existe o fue retirada.")
+    elif bloque.contenedor_id is not None:
+        coleccion = (bloque.contenedor.configuracion or {}).get("coleccion")
+        if coleccion and coleccion not in (definicion.configuracion or {}).get("colecciones", []):
+            errores.append(
+                f"La aprobación {bloque.nombre}: la gaceta «{definicion.nombre}» no revisa la colección del recorrido."
+            )
+    return errores
+
+
+def eleccion_de_publicacion(configuracion_bloque, *, publicar, dias):
+    """Valida lo que eligió el aprobador. Devuelve `{"publicar": bool, "dias": int|None}` o `None` si el bloque no
+    ofrece publicar. Elegir publicar exige una duración entre 1 y el máximo configurado."""
+    publicacion = publicacion_de(configuracion_bloque)
+    if publicacion is None:
+        return None
+    if not publicar:
+        return {"publicar": False, "dias": None}
+    try:
+        dias = int(dias)
+    except (TypeError, ValueError):
+        raise ValidationError("Indica cuántos días estará publicado para los interesados.")
+    if not 1 <= dias <= publicacion["dias_maximos"]:
+        raise ValidationError(f"La publicación dura entre 1 y {publicacion['dias_maximos']} días.")
+    return {"publicar": True, "dias": dias}

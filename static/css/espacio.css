@@ -350,6 +350,24 @@
   box-shadow: var(--shadow-float);
 }
 
+.esp-mas__opcion { display: grid; gap: var(--space-2); }
+.esp-mas__opcion + .esp-mas__opcion { padding-top: var(--space-4); border-top: 1px solid var(--border-subtle); }
+.esp-mas__titulo { margin: 0; font-weight: var(--font-weight-semibold); color: var(--text-primary); }
+.esp-mas__nota { margin: 0; font-size: var(--font-size-small); color: var(--text-secondary); }
+
+/* Cancelación por aprobar: el ticket está congelado (lo ve todo el que entra al espacio). */
+.esp-congelado {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--status-warning-soft);
+  color: var(--status-warning);
+}
+.esp-congelado--consulta { background: var(--surface-sunken); color: var(--text-secondary); }
+
 /* Selector compacto de acciones (varias pendientes) */
 .esp-selector { display: flex; flex-wrap: wrap; gap: var(--space-2); }
 
@@ -548,6 +566,36 @@
 .esp-verificacion li { display: flex; gap: var(--space-2); align-items: center; }
 .esp-verificacion form { margin: 0; }
 
+/* Lista de verificación con conclusión: cada punto se revisa y se concluye (la conclusión queda para quienes siguen). */
+.esp-criterios { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--space-3); max-width: var(--measure-form); }
+.esp-criterio { display: grid; gap: var(--space-2); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border-subtle); }
+.esp-criterio:last-child { border-bottom: 0; padding-bottom: 0; }
+.esp-criterio__cabeza { display: flex; gap: var(--space-2); align-items: flex-start; }
+.esp-criterio__cabeza .esp-check { cursor: default; flex: 0 0 auto; }
+.esp-criterio__texto { font-weight: var(--font-weight-semibold); }
+.esp-criterio__form { display: grid; gap: var(--space-2); margin: 0; padding-left: calc(22px + var(--space-2)); }
+.esp-criterio__form textarea { width: 100%; resize: vertical; }
+.esp-criterio__botones { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.esp-criterio__conclusion, .esp-criterio__quien { margin: 0; padding-left: calc(22px + var(--space-2)); }
+.esp-criterio__quien { font-size: var(--font-size-caption); }
+.esp-criterio.is-hecho .esp-criterio__texto { color: var(--text-secondary); }
+
+/* Ítem enviado a revisión: solo lectura hasta que lo devuelvan. */
+.esp-solo-lectura { display: flex; gap: var(--space-2); align-items: center; margin: var(--space-2) 0 0; color: var(--text-secondary); font-size: var(--font-size-small); }
+
+/* «Revisa la solicitud» dentro de la misión (primer paso del flujo: abierta). */
+.esp-solicitud { margin-bottom: var(--space-4); padding-bottom: var(--space-3); border-bottom: 1px solid var(--border-subtle); }
+.esp-solicitud > summary { cursor: pointer; font-weight: var(--font-weight-semibold); display: flex; gap: var(--space-2); align-items: center; }
+.esp-solicitud[open] > summary { margin-bottom: var(--space-2); }
+.esp-solicitud__paso {
+  font-size: var(--font-size-caption);
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+.esp-solicitud__nota { margin: 0 0 var(--space-2); color: var(--text-secondary); }
+
 .esp-check {
   width: 22px;
   height: 22px;
@@ -735,6 +783,12 @@
 .esp-derecho__cuerpo > p { margin: 0; }
 .esp-derecho__cuerpo .card { padding: 0; border: 0; box-shadow: none; background: transparent; }
 .esp-derecho__cuerpo .card > h3 { display: none; } /* el panel ya lleva su título */
+/* Solicitud (panel y «Revisa la solicitud» de la misión): la pregunta en negrilla y la respuesta debajo, en gris
+   oscuro, para que no se lea como un bloque plano (2026-11-12). */
+.esp-derecho__cuerpo .field > label,
+.esp-solicitud .field > label { display: block; margin: 0 0 2px; font-weight: var(--font-weight-semibold); color: var(--text-primary); }
+.esp-derecho__cuerpo .field > p,
+.esp-solicitud .field > p { margin: 0; color: var(--text-secondary); }
 .esp-derecho__pie { margin: var(--space-2) 0 0; }
 
 .esp-cerrar {
@@ -1112,3 +1166,79 @@
   .bj-fila,
   .esp-selector__item { transition: none; }
 }
+
+/* Resumen del ticket dentro del espacio (`?vista=resumen`): lo que antes era la página aislada del detalle. */
+/* Resumen del ticket (`espacio/_resumen.html`): ficha de datos en columnas + rejilla compacta que aprovecha el ancho.
+   Los bloques son secciones planas de borde fino (no tarjetas apiladas); lo tabular va a todo lo ancho. */
+.esp-resumen { display: grid; gap: var(--space-4); min-width: 0; }
+.esp-resumen__cabeza { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); flex-wrap: wrap; }
+.esp-resumen__cabeza h2 { margin: 0; font-size: var(--font-size-section-title); font-weight: var(--font-weight-semibold); }
+
+.rs-ficha {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 11rem), 1fr));
+  gap: 0;
+  margin: 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  overflow: hidden;
+}
+.rs-ficha > div {
+  display: grid;
+  gap: 2px;
+  padding: var(--space-3) var(--space-4);
+  border-right: 1px solid var(--border-subtle);
+  border-bottom: 1px solid var(--border-subtle);
+  margin: 0 -1px -1px 0; /* sin doble borde en los bordes de la rejilla */
+  min-width: 0;
+}
+.rs-ficha dt { color: var(--text-muted); font-size: var(--font-size-caption); }
+.rs-ficha dd { margin: 0; color: var(--text-primary); font-size: var(--font-size-small); font-weight: var(--font-weight-semibold); overflow-wrap: anywhere; }
+
+.rs-rejilla {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 22rem), 1fr));
+  gap: var(--space-3);
+  align-items: start;
+}
+.rs-ancho { display: grid; gap: var(--space-3); min-width: 0; }
+
+.esp-resumen .card {
+  margin: 0;
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  box-shadow: none;
+  background: var(--surface-card);
+  min-width: 0;
+}
+.esp-resumen .card > h3,
+.esp-resumen .card > header h3 { margin: 0 0 var(--space-2); font-size: var(--font-size-body); font-weight: var(--font-weight-semibold); }
+.esp-resumen .card h4 { margin: var(--space-3) 0 var(--space-1); font-size: var(--font-size-small); }
+.esp-resumen .card p { margin: 0 0 var(--space-2); font-size: var(--font-size-small); }
+.esp-resumen .card .form { gap: var(--space-2); }
+.esp-resumen .card .field { margin: 0; }
+.esp-resumen .card textarea { min-height: 4.5rem; }
+.esp-resumen .card .plain-list,
+.esp-resumen .card .list-row-group { font-size: var(--font-size-small); }
+/* El historial del ticket puede ser largo: se desplaza dentro de su celda. */
+.rs-rejilla > .card:last-child .plain-list { max-height: 22rem; overflow-y: auto; position: relative; }
+
+/* «Publicar a los interesados» al aprobar un ítem (`acciones/_publicacion.html`). */
+.esp-publicar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2) var(--space-3);
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  font-size: var(--font-size-small);
+}
+.esp-publicar__casilla { display: inline-flex; align-items: center; gap: var(--space-2); font-weight: var(--font-weight-medium); }
+.esp-publicar__dias { display: inline-flex; align-items: center; gap: var(--space-2); color: var(--text-secondary); }
+.esp-publicar__dias select { min-height: 2rem; border: 1px solid var(--border-control); border-radius: var(--radius-control); background: var(--surface-control); color: var(--text-primary); }
+.esp-publicar__ayuda { flex-basis: 100%; margin: 0; color: var(--text-muted); font-size: var(--font-size-caption); }

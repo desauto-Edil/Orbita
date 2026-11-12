@@ -149,8 +149,9 @@ class VistasDeEdicionPorTareaTests(_MediaAisladaMixin, _TareasConEdicionMixin, T
 
     def test_la_tarea_ofrece_editar_su_elemento(self):
         self.assertEqual(elemento_de_tarea(self.tarea, self.persona), self.elemento)
+        # La tarea se trabaja en el espacio de su ticket (su página propia se retiró y lleva allí).
         pagina = self.client.get(reverse("tareas:detalle", args=[self.tarea.pk]))
-        self.assertContains(pagina, reverse("tickets:elemento_tarea", args=[self.ticket.pk, self.elemento.pk]))
+        self.assertRedirects(pagina, reverse("tickets:espacio", args=[self.ticket.pk]), fetch_redirect_response=False)
 
     def test_la_pantalla_solo_ofrece_las_columnas_autorizadas(self):
         pagina = self.client.get(reverse("tickets:elemento_tarea", args=[self.ticket.pk, self.elemento.pk]))
@@ -197,7 +198,8 @@ class ActividadDeRecorridoPorColumnaTests(_EscenarioRecorridosMixin, TestCase):
     def test_al_completar_la_actividad_pierde_la_edicion(self):
         self._producir(self.banner, self.disenadora)
         self.assertFalse(columnas_por_tarea(self.disenadora, self.banner))
-        with self.assertRaises(PermissionDenied):
+        # Sin tarea ya no edita; además el ítem quedó en su aprobación (en revisión = solo lectura, `en_revision`).
+        with self.assertRaises((PermissionDenied, ValidationError)):
             parrilla_ops.actualizar_valores(self.banner, self.disenadora, {self.columnas["Pieza"].pk: "Tarde"})
 
     def test_una_actividad_fuera_de_un_recorrido_no_puede_conceder_columnas(self):
@@ -231,7 +233,8 @@ class CorreccionDeGacetaPorColumnaTests(_EscenarioGacetasMixin, TestCase):
         parrilla_ops.actualizar_valores(self.banner, self.disenadora, {self.columnas["Pieza"].pk: "Banner con logo"})
         with self.assertRaises(PermissionDenied):
             parrilla_ops.actualizar_valores(self.banner, self.disenadora, {self.columnas["Entrega"].pk: "2026-12-01"})
-        with self.assertRaises(PermissionDenied):
+        # El otro ítem no es suyo y además sigue en revisión en la gaceta (solo lectura, `en_revision`).
+        with self.assertRaises((PermissionDenied, ValidationError)):
             parrilla_ops.actualizar_valores(self.video, self.disenadora, {self.columnas["Pieza"].pk: "Ajeno"})
         gacetas_ops.reenviar(self.p_banner, self.disenadora, "Listo")
         self.p_banner.refresh_from_db()

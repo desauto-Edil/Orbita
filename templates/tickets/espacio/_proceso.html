@@ -69,7 +69,7 @@
     <ul class="esp-historia">
       {% for g in gacetas_ticket %}
         <li>
-          {% if g.puede_ver %}<a href="{% url 'tickets:espacio' g.gaceta.ticket_id %}#gaceta-{{ g.gaceta.pk }}">{{ g.gaceta.nombre }}</a>{% else %}{{ g.gaceta.nombre }}{% endif %}
+          {% if g.puede_ver %}<a href="{% url 'tickets:espacio' g.gaceta.ticket_id %}?gaceta={{ g.gaceta.pk }}#gaceta-{{ g.gaceta.pk }}">{{ g.gaceta.nombre }}</a>{% else %}{{ g.gaceta.nombre }}{% endif %}
           · <span class="badge">{{ g.gaceta.get_estado_display }}</span>
           <span class="text-muted">{{ g.resumen.aprobados }} aprobado{{ g.resumen.aprobados|pluralize }} · {{ g.resumen.en_revision }} en revisión · {{ g.resumen.en_correccion }} en corrección</span>
         </li>

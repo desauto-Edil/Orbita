@@ -9,6 +9,7 @@
         <h3 id="ficha-t" class="esp-ficha__titulo">{{ ficha.nombre|default:ficha.nombre_elemento }} <span class="text-muted tabular">· {{ ficha.nombre_elemento }} #{{ elemento.numero }}</span></h3>
         {% if ficha.salida %}<p><span class="estado-etiqueta estado-etiqueta--cancelado">{{ ficha.salida.get_tipo_display }}</span> <span class="text-muted">{{ ficha.salida.justificacion }}</span></p>{% endif %}
         {% if elemento.retirado_en %}<p><span class="estado-etiqueta">Retirado</span></p>{% endif %}
+        {% if ficha.en_revision %}<p class="esp-solo-lectura" role="status">{% include "components/icon.html" with name="lock" size="sm" %}<span>{{ ficha.en_revision }}</span></p>{% endif %}
       </div>
       {% if ficha.item %}<span class="text-muted">{{ ficha.item.estado }}</span>{% elif ficha.enviable %}<span class="estado-etiqueta">Borrador</span>{% endif %}
     </header>
@@ -76,8 +77,8 @@
         <ul class="esp-observaciones">
           {% for obs in g.observaciones %}
             <li>
-              <strong>{{ obs.autor.get_full_name|default:obs.autor.get_username }}</strong> <span class="text-muted">{{ obs.creada_en|date:"d/m H:i" }} · ronda {{ obs.ronda.numero }}</span><br>{{ obs.texto }}
-              {% if obs.respuesta %}<br><span class="text-muted">Respuesta de {{ obs.respondida_por.get_full_name|default:obs.respondida_por.get_username }}: {{ obs.respuesta }}</span>
+              <strong>{{ obs.autor.nombre_visible }}</strong> <span class="text-muted">{{ obs.creada_en|date:"d/m H:i" }} · ronda {{ obs.ronda.numero }}</span><br>{{ obs.texto }}
+              {% if obs.respuesta %}<br><span class="text-muted">Respuesta de {{ obs.respondida_por.nombre_visible }}: {{ obs.respuesta }}</span>
               {% elif g.puede_corregir %}
                 <form method="post" action="{% url 'gacetas:responder' obs.pk %}" class="esp-inline">
                   {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
@@ -104,7 +105,7 @@
       <h3 id="ficha-ver-t" class="esp-guia__titulo">Versiones <span class="work-count">{{ ficha.versiones|length }}</span></h3>
       <ul class="esp-historia">
         {% for version in ficha.versiones %}
-          <li>Versión {{ version.numero }} · {% if version.creada_por %}{{ version.creada_por.get_full_name|default:version.creada_por.get_username }}{% else %}Sistema{% endif %} <span class="text-muted">{{ version.creada_en|date:"d/m/Y H:i" }}</span>{% if version.motivo %} — {{ version.motivo }}{% endif %}</li>
+          <li>Versión {{ version.numero }} · {% if version.creada_por %}{{ version.creada_por.nombre_visible }}{% else %}Sistema{% endif %} <span class="text-muted">{{ version.creada_en|date:"d/m/Y H:i" }}</span>{% if version.motivo %} — {{ version.motivo }}{% endif %}</li>
         {% endfor %}
       </ul>
       {% if ficha.ver_versiones %}<p class="ws-nota"><a href="{% url 'tickets:elemento_versiones' ticket.pk elemento.pk %}">Comparar el contenido de cada versión</a></p>{% endif %}

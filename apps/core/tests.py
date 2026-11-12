@@ -10,7 +10,9 @@ correrlas manualmente vía Docker. Organizadas en clases por CU, en un
 regresiones.
 """
 
+import hashlib
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.contrib import admin as django_admin
 from django.contrib.auth import get_user_model
@@ -49,6 +51,7 @@ from apps.core.models import (
 )
 from apps.tareas.models import Tarea
 from apps.tareas.operaciones import crear_tarea
+from apps.core.pruebas import persona
 
 Usuario = get_user_model()
 
@@ -60,31 +63,50 @@ class IdentidadTests(TestCase):
 
     def setUp(self):
         self.usuario = Usuario.objects.create_user(
-            username="jperez", password=CLAVE_PRUEBA, email="jperez@edilandina.com"
+            "jperez@edilandina.com",
         )
 
-    def test_login_valido_establece_sesion(self):
-        # RQF-001, CU-001
+    def test_el_login_solo_ofrece_google(self):
+        # RQF-001, CU-001 (Versión 1): ya no hay usuario y contraseña.
+        respuesta = self.client.get(reverse("core:login"))
+        self.assertContains(respuesta, reverse("core:google_login"))
+        self.assertContains(respuesta, "Ingresar con Google")
+        self.assertNotContains(respuesta, 'name="password"')
+        self.assertNotContains(respuesta, 'name="username"')
+
+    def test_el_login_ya_no_acepta_usuario_y_contrasena(self):
+        # RQF-001
         respuesta = self.client.post(
             reverse("core:login"), {"username": "jperez", "password": CLAVE_PRUEBA}
         )
-        self.assertEqual(respuesta.status_code, 302)
-        self.assertIn("_auth_user_id", self.client.session)
-
-    def test_login_invalido_no_autentica(self):
-        # RQF-001
-        respuesta = self.client.post(
-            reverse("core:login"), {"username": "jperez", "password": "incorrecta"}
-        )
-        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.status_code, 405)
         self.assertNotIn("_auth_user_id", self.client.session)
+
+    def test_el_login_lleva_el_destino_interno_a_google_y_descarta_uno_externo(self):
+        url = reverse("core:login")
+        respuesta = self.client.get(url, {"next": "/tickets/7/"})
+        self.assertContains(respuesta, '<input type="hidden" name="next" value="/tickets/7/">')
+        for externo in ("https://otro.com/", "//otro.com/x"):
+            with self.subTest(externo=externo):
+                self.assertNotContains(self.client.get(url, {"next": externo}), 'name="next"')
+
+    def test_con_sesion_el_login_va_al_destino(self):
+        self.client.force_login(self.usuario)
+        respuesta = self.client.get(reverse("core:login"), {"next": "/perfil/"})
+        self.assertRedirects(respuesta, "/perfil/", fetch_redirect_response=False)
 
     def test_logout_invalida_sesion(self):
         # RQF-002, RN-001, CU-002
-        self.client.login(username="jperez", password=CLAVE_PRUEBA)
+        self.client.force_login(self.usuario)
         self.client.post(reverse("core:logout"))
         respuesta = self.client.get(reverse("core:perfil"))
         self.assertEqual(respuesta.status_code, 302)
+
+    def test_logout_solo_por_post(self):
+        # Un enlace o imagen de otro sitio no puede cerrar la sesión.
+        self.client.force_login(self.usuario)
+        self.assertEqual(self.client.get(reverse("core:logout")).status_code, 405)
+        self.assertIn("_auth_user_id", self.client.session)
 
     def test_acceso_protegido_sin_sesion_redirige_a_login(self):
         # RQF-004, RN-001, CU-001
@@ -98,7 +120,7 @@ class PerfilTests(TestCase):
 
     def setUp(self):
         self.usuario = Usuario.objects.create_user(
-            username="mgomez", password=CLAVE_PRUEBA, email="mgomez@edilandina.com"
+            "mgomez@edilandina.com",
         )
         PerfilOrganizacional.objects.create(usuario=self.usuario, cargo="Analista")
         self.area1 = Area.objects.create(nombre="TIC", codigo="TIC-P")
@@ -114,7 +136,7 @@ class PerfilTests(TestCase):
 
     def test_consultar_perfil_muestra_datos_propios_y_areas_unidades(self):
         # RQF-003, RQF-016, RQF-017, RN-004, CU-003
-        self.client.login(username="mgomez", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("mgomez@edilandina.com"))
         respuesta = self.client.get(reverse("core:perfil"))
         self.assertEqual(respuesta.status_code, 200)
         self.assertEqual(respuesta.context["areas"].count(), 2)
@@ -137,12 +159,19 @@ class PerfilFaseVisualTests(TestCase):
     """CU-003 (Mi perfil, Fase visual) y CU-001 (registro de accesos)."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="lperez", password=CLAVE_PRUEBA, first_name="Laura")
-
-    def _entrar(self, agente=CHROME_MAC):
-        return self.client.post(
-            reverse("core:login"), {"username": "lperez", "password": CLAVE_PRUEBA}, HTTP_USER_AGENT=agente
+        self.usuario = Usuario.objects.create_user(
+            "lperez@edilandina.com", first_name="Laura",
         )
+
+    def _entrar(self, agente=CHROME_MAC, email="lperez@edilandina.com"):
+        """Ingreso por Google (el único, Versión 1) con el proveedor simulado."""
+        claims = {"sub": "google-lperez", "email": email, "email_verified": True, "hd": "edilandina.com"}
+        with override_settings(
+            GOOGLE_OAUTH_CLIENT_ID="cliente-prueba", GOOGLE_OAUTH_CLIENT_SECRET="secreto-prueba",
+            GOOGLE_OAUTH_ALLOWED_DOMAINS=["edilandina.com"],
+        ), patch("apps.core.google_auth.cliente") as cliente:
+            cliente.return_value.authorize_access_token.return_value = {"userinfo": claims}
+            return self.client.get(reverse("core:google_callback"), HTTP_USER_AGENT=agente)
 
     # --- Accesos (CU-001 registra, CU-003 muestra) ---
 
@@ -151,7 +180,7 @@ class PerfilFaseVisualTests(TestCase):
         acceso = AccesoUsuario.objects.get(usuario=self.usuario)
         self.assertEqual(
             (acceso.metodo, acceso.navegador, acceso.sistema_operativo, acceso.es_movil),
-            (AccesoUsuario.Metodo.CONTRASENA, "Chrome", "macOS", False),
+            (AccesoUsuario.Metodo.GOOGLE, "Chrome", "macOS", False),
         )
         self.assertEqual(len(acceso.huella_sesion), 64)
         self.assertNotIn(self.client.session.session_key, acceso.huella_sesion)
@@ -159,7 +188,8 @@ class PerfilFaseVisualTests(TestCase):
         self.assertFalse({"ip", "direccion_ip", "user_agent"} & campos)
 
     def test_un_intento_fallido_no_se_registra(self):
-        self.client.post(reverse("core:login"), {"username": "lperez", "password": "incorrecta"})
+        self._entrar(email="no-registrado@edilandina.com")
+        self.assertNotIn("_auth_user_id", self.client.session)
         self.assertFalse(AccesoUsuario.objects.exists())
 
     def test_resumen_del_agente(self):
@@ -191,10 +221,10 @@ class PerfilFaseVisualTests(TestCase):
     def test_companeros_son_los_de_sus_equipos_activos_sin_incluirse(self):
         equipo = Equipo.objects.create(nombre="Soporte")
         otro_equipo = Equipo.objects.create(nombre="Ajeno")
-        ana = Usuario.objects.create_user(username="ana", first_name="Ana")
-        retirado = Usuario.objects.create_user(username="retirado")
-        inactivo = Usuario.objects.create_user(username="inactivo", is_active=False)
-        ajeno = Usuario.objects.create_user(username="ajeno")
+        ana = Usuario.objects.create_user("ana@pruebas.orbita", first_name="Ana")
+        retirado = Usuario.objects.create_user("retirado@pruebas.orbita")
+        inactivo = Usuario.objects.create_user("inactivo@pruebas.orbita", is_active=False)
+        ajeno = Usuario.objects.create_user("ajeno@pruebas.orbita")
         MiembroEquipo.objects.create(equipo=equipo, usuario=self.usuario)
         MiembroEquipo.objects.create(equipo=equipo, usuario=ana)
         MiembroEquipo.objects.create(equipo=equipo, usuario=retirado, activo=False)
@@ -207,7 +237,7 @@ class PerfilFaseVisualTests(TestCase):
     def test_sin_equipos_los_companeros_son_los_de_su_area_principal(self):
         area = Area.objects.create(nombre="Finanzas", codigo="FIN-COMP")
         UsuarioArea.objects.create(usuario=self.usuario, area=area, es_principal=True)
-        colega = Usuario.objects.create_user(username="colega")
+        colega = Usuario.objects.create_user("colega@pruebas.orbita")
         UsuarioArea.objects.create(usuario=colega, area=area)
         self.client.force_login(self.usuario)
         respuesta = self.client.get(reverse("core:perfil"))
@@ -324,14 +354,14 @@ class OrganizacionTests(TestCase):
 
     def test_perfil_organizacional_separado_de_autenticacion(self):
         # RQF-015
-        usuario = Usuario.objects.create_user(username="lcastro", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("lcastro@pruebas.orbita")
         perfil = PerfilOrganizacional.objects.create(usuario=usuario, cargo="Coordinador")
         self.assertNotEqual(type(usuario), type(perfil))
         self.assertEqual(usuario.perfil_organizacional, perfil)
 
     def test_usuario_pertenece_a_varias_areas_y_unidades_simultaneamente(self):
         # RQF-016, RQF-017, RN-004
-        usuario = Usuario.objects.create_user(username="afranco", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("afranco@pruebas.orbita")
         area1 = Area.objects.create(nombre="Legal", codigo="LEG")
         area2 = Area.objects.create(nombre="Riesgo", codigo="RIE")
         unidad1 = UnidadNegocio.objects.create(nombre="Cumplimiento", codigo="CUMP")
@@ -345,7 +375,7 @@ class OrganizacionTests(TestCase):
 
     def test_rn036_solo_una_area_principal_activa_por_usuario(self):
         # RN-036
-        usuario = Usuario.objects.create_user(username="rvargas", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("rvargas@pruebas.orbita")
         area1 = Area.objects.create(nombre="Contabilidad", codigo="CONT")
         area2 = Area.objects.create(nombre="Tesorería", codigo="TES")
         UsuarioArea.objects.create(usuario=usuario, area=area1, es_principal=True)
@@ -355,7 +385,7 @@ class OrganizacionTests(TestCase):
 
     def test_rn037_solo_una_unidad_principal_activa_por_usuario(self):
         # RN-037
-        usuario = Usuario.objects.create_user(username="dpineda", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("dpineda@pruebas.orbita")
         unidad1 = UnidadNegocio.objects.create(nombre="Compras", codigo="COMPU")
         unidad2 = UnidadNegocio.objects.create(nombre="Inventarios", codigo="INV")
         UsuarioUnidadNegocio.objects.create(
@@ -374,14 +404,14 @@ class EquiposTests(TestCase):
     def test_crear_equipo_con_miembros(self):
         # RQF-018
         equipo = Equipo.objects.create(nombre="Soporte N1")
-        usuario = Usuario.objects.create_user(username="hgomez", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("hgomez@pruebas.orbita")
         MiembroEquipo.objects.create(equipo=equipo, usuario=usuario)
         self.assertEqual(equipo.miembros.count(), 1)
 
     def test_retirar_miembro_conserva_fila_con_fecha_fin(self):
         # RQF-019
         equipo = Equipo.objects.create(nombre="Soporte N2")
-        usuario = Usuario.objects.create_user(username="ncruz", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("ncruz@pruebas.orbita")
         membresia = MiembroEquipo.objects.create(equipo=equipo, usuario=usuario)
 
         membresia.activo = False
@@ -434,7 +464,7 @@ class RolesPermisosTests(TestCase):
         permiso = Permiso.objects.create(codigo="equipos.gestionar", nombre="Gestionar equipos")
         rol = RolFuncional.objects.create(nombre="Cualquiera")
         RolPermiso.objects.create(rol=rol, permiso=permiso)
-        usuario = Usuario.objects.create_user(username="rfranco", password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user("rfranco@pruebas.orbita")
         AsignacionRol.objects.create(
             usuario=usuario, rol=rol, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL
         )
@@ -455,7 +485,7 @@ class AsignacionRolTests(TestCase):
         self.permiso = Permiso.objects.create(codigo="areas.administrar", nombre="Administrar áreas")
         self.rol = RolFuncional.objects.create(nombre="Administrador de Área")
         RolPermiso.objects.create(rol=self.rol, permiso=self.permiso)
-        self.usuario = Usuario.objects.create_user(username="cmora", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("cmora@pruebas.orbita")
         self.area = Area.objects.create(nombre="TIC", codigo="TIC-AR")
         self.unidad = UnidadNegocio.objects.create(nombre="Infraestructura", codigo="INFRA-AR")
 
@@ -589,7 +619,7 @@ class AutorizacionTests(TestCase):
         self.permiso = Permiso.objects.create(codigo="areas.administrar", nombre="Administrar áreas")
         self.rol = RolFuncional.objects.create(nombre="Administrador de Área")
         RolPermiso.objects.create(rol=self.rol, permiso=self.permiso)
-        self.usuario = Usuario.objects.create_user(username="jsalas", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("jsalas@pruebas.orbita")
         self.area = Area.objects.create(nombre="TIC", codigo="TIC-AZ")
         self.otra_area = Area.objects.create(nombre="Compras", codigo="COMP-AZ")
         self.unidad = UnidadNegocio.objects.create(nombre="Infraestructura", codigo="INFRA-AZ")
@@ -731,15 +761,31 @@ class AutorizacionTests(TestCase):
         self.assertEqual(alcances["unidades_negocio"], [])
 
 
+def entrar_a_la_administracion(client, usuario):
+    """Etapa 4 (Versión 1): la sesión que acepta la administración avanzada — el permiso de plataforma y un ingreso
+    con Google de ESTA sesión (lo que registraría el callback de Google en `AccesoUsuario`)."""
+    from apps.core import plataforma
+
+    _otorgar_permiso_nav(usuario, plataforma.PERMISO_ADMINISTRACION_AVANZADA)
+    client.force_login(usuario)
+    huella = hashlib.sha256(client.session.session_key.encode()).hexdigest()
+    AccesoUsuario.objects.create(usuario=usuario, metodo=AccesoUsuario.Metodo.GOOGLE, huella_sesion=huella)
+
+
+@override_settings(ADMIN_HABILITADA=True)
 class AuditoriaTests(TestCase):
     """CU-040 Consultar auditoría y trazabilidad global (RQF-008/116/117/120,
     RN-033/034). Cierra, para los modelos de 0.2/0.3, las postcondiciones
-    "...auditada"/"...cambios auditados" de CU-004, CU-005, CU-007 y CU-008."""
+    "...auditada"/"...cambios auditados" de CU-004, CU-005, CU-007 y CU-008.
+
+    Versión 1: la administración avanzada exige el permiso de plataforma y un ingreso reciente con Google
+    (`entrar_a_la_administracion`), no permite borrar y está apagada sin ADMIN_HABILITADA."""
 
     def setUp(self):
-        self.staff = Usuario.objects.create_user(
-            username="auditor_admin", password=CLAVE_PRUEBA, is_staff=True, is_superuser=True
-        )
+        self.staff = Usuario.objects.create_user("auditor_admin@pruebas.orbita")
+
+    def _entrar(self):
+        entrar_a_la_administracion(self.client, self.staff)
 
     # --- registrar_evento / serializar: captura explícita, sin señales ---
 
@@ -793,11 +839,11 @@ class AuditoriaTests(TestCase):
         self.assertIsNone(evento.usuario)
         self.assertEqual(evento.origen, RegistroAuditoria.Origen.SISTEMA)
 
-    def test_password_no_se_captura_en_serializacion(self):
-        # Sección F: dato sensible excluido del snapshot
-        usuario = Usuario.objects.create_user(username="conclave", password=CLAVE_PRUEBA)
+    def test_la_clave_de_sesion_no_se_captura_en_serializacion(self):
+        # Sección F: dato sensible excluido del snapshot (Versión 1: ya no hay contraseña; sí la clave de sesión)
+        usuario = Usuario.objects.create_user("conclave@pruebas.orbita")
         datos = serializar(usuario)
-        self.assertNotIn("password", datos)
+        self.assertFalse({"password", "clave_sesion"} & set(datos))
 
     # --- coherencia origen/usuario a nivel de base de datos ---
 
@@ -878,7 +924,7 @@ class AuditoriaTests(TestCase):
     # --- AdminAuditableMixin: captura explícita vía Django Admin ---
 
     def test_crear_area_via_admin_registra_evento_crear(self):
-        self.client.login(username="auditor_admin", password=CLAVE_PRUEBA)
+        self._entrar()
         respuesta = self.client.post(
             reverse("admin:core_area_add"),
             {"nombre": "Servicios Generales", "codigo": "SERVGEN", "descripcion": "", "activo": "on"},
@@ -896,7 +942,7 @@ class AuditoriaTests(TestCase):
         # Caso crítico: datos_anteriores debe reflejar el valor previo al
         # cambio, no el nuevo.
         area = Area.objects.create(nombre="Finanzas", codigo="FINAUD")
-        self.client.login(username="auditor_admin", password=CLAVE_PRUEBA)
+        self._entrar()
         respuesta = self.client.post(
             reverse("admin:core_area_change", args=[area.pk]),
             {"nombre": "Finanzas Corporativas", "codigo": "FINAUD", "descripcion": "", "activo": "on"},
@@ -908,24 +954,24 @@ class AuditoriaTests(TestCase):
         self.assertEqual(evento.datos_anteriores["nombre"], "Finanzas")
         self.assertEqual(evento.datos_nuevos["nombre"], "Finanzas Corporativas")
 
-    def test_eliminar_area_via_admin_registra_evento_eliminar(self):
+    def test_la_administracion_avanzada_no_permite_eliminar(self):
+        # Versión 1: en Órbita retirar es desactivar; ni el ModelAdmin ni la acción masiva borran.
         area = Area.objects.create(nombre="Descartable", codigo="DESC1")
-        self.client.login(username="auditor_admin", password=CLAVE_PRUEBA)
+        self._entrar()
         respuesta = self.client.post(reverse("admin:core_area_delete", args=[area.pk]), {"post": "yes"})
-        self.assertEqual(respuesta.status_code, 302)
-        self.assertFalse(Area.objects.filter(pk=area.pk).exists())
-        evento = RegistroAuditoria.objects.get(
-            modelo="core.area", object_id=area.pk, accion=RegistroAuditoria.Accion.ELIMINAR
+        self.assertEqual(respuesta.status_code, 403)
+        respuesta = self.client.post(
+            reverse("admin:core_area_changelist"), {"action": "delete_selected", "_selected_action": [area.pk], "post": "yes"}
         )
-        self.assertEqual(evento.datos_anteriores["codigo"], "DESC1")
-        self.assertIsNone(evento.datos_nuevos)
+        self.assertTrue(Area.objects.filter(pk=area.pk).exists())
+        self.assertFalse(RegistroAuditoria.objects.filter(modelo="core.area", accion=RegistroAuditoria.Accion.ELIMINAR).exists())
 
     def test_asociar_permiso_a_rol_via_inline_registra_evento_crear(self):
         # RolPermiso solo se gestiona vía el inline de RolFuncionalAdmin —
         # sin el override de save_formset quedaría sin auditar (CU-007/RQF-120).
         rol = RolFuncional.objects.create(nombre="Rol Para Inline")
         permiso = Permiso.objects.create(codigo="inline.probar", nombre="Probar inline")
-        self.client.login(username="auditor_admin", password=CLAVE_PRUEBA)
+        self._entrar()
         datos = {
             "nombre": rol.nombre,
             "descripcion": "",
@@ -945,11 +991,11 @@ class AuditoriaTests(TestCase):
         self.assertEqual(evento.accion, RegistroAuditoria.Accion.CREAR)
         self.assertEqual(evento.datos_nuevos["permiso"], permiso.pk)
 
-    def test_eliminar_permiso_de_rol_via_inline_registra_evento_eliminar(self):
+    def test_un_inline_tampoco_elimina(self):
         rol = RolFuncional.objects.create(nombre="Rol Para Quitar")
         permiso = Permiso.objects.create(codigo="inline.quitar", nombre="Quitar inline")
         rp = RolPermiso.objects.create(rol=rol, permiso=permiso)
-        self.client.login(username="auditor_admin", password=CLAVE_PRUEBA)
+        self._entrar()
         datos = {
             "nombre": rol.nombre,
             "descripcion": "",
@@ -963,13 +1009,67 @@ class AuditoriaTests(TestCase):
             "rolpermiso-0-activo": "on",
             "rolpermiso-0-DELETE": "on",
         }
-        respuesta = self.client.post(reverse("admin:core_rolfuncional_change", args=[rol.pk]), datos)
-        self.assertEqual(respuesta.status_code, 302)
-        self.assertFalse(RolPermiso.objects.filter(pk=rp.pk).exists())
-        evento = RegistroAuditoria.objects.get(
-            modelo="core.rolpermiso", object_id=rp.pk, accion=RegistroAuditoria.Accion.ELIMINAR
+        self.client.post(reverse("admin:core_rolfuncional_change", args=[rol.pk]), datos)
+        self.assertTrue(RolPermiso.objects.filter(pk=rp.pk).exists())
+        self.assertFalse(
+            RegistroAuditoria.objects.filter(modelo="core.rolpermiso", accion=RegistroAuditoria.Accion.ELIMINAR).exists()
         )
-        self.assertEqual(evento.datos_anteriores["permiso"], permiso.pk)
+
+    # --- Sitio de administración de Órbita (Versión 1, etapa 4) ---
+
+    def test_sin_admin_habilitada_toda_ruta_responde_404(self):
+        self._entrar()
+        with override_settings(ADMIN_HABILITADA=False):
+            for url in (reverse("admin:index"), reverse("admin:core_area_changelist"), reverse("admin:login")):
+                with self.subTest(url=url):
+                    self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_sin_el_permiso_de_plataforma_no_se_abre_la_administracion(self):
+        self.client.force_login(self.staff)
+        respuesta = self.client.get(reverse("admin:index"))
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertEqual(self.client.get(respuesta.url).status_code, 403)  # sin el permiso de plataforma
+
+    def test_con_permiso_pero_sin_un_ingreso_reciente_con_google_pide_confirmar(self):
+        entrar_a_la_administracion(self.client, self.staff)
+        AccesoUsuario.objects.filter(usuario=self.staff).update(fecha=timezone.now() - timedelta(hours=2))
+        respuesta = self.client.get(reverse("admin:index"), follow=True)
+        self.assertContains(respuesta, "Confirmar con Google")
+        self.assertContains(respuesta, 'name="reautenticar" value="1"')
+
+    @override_settings(GOOGLE_OAUTH_ALLOWED_DOMAINS=["edilandina.com"])
+    def test_otorgar_administrador_crea_la_cuenta_y_el_acceso_una_sola_vez(self):
+        from io import StringIO
+
+        from django.core.management import CommandError, call_command
+
+        from apps.core import plataforma
+        from apps.core.autorizacion import usuario_tiene_permiso
+
+        call_command("otorgar_administrador", correo="Primera@edilandina.com", nombre="Ana Pérez", stdout=StringIO())
+        ana = Usuario.objects.get(email="primera@edilandina.com")
+        self.assertEqual((ana.first_name, ana.last_name, ana.has_usable_password()), ("Ana", "Pérez", False))
+        for codigo in plataforma.PERMISOS_DEL_ADMINISTRADOR:
+            self.assertTrue(usuario_tiene_permiso(ana, codigo), codigo)
+        # Idempotente: repetirlo no duplica la cuenta ni la asignación.
+        call_command("otorgar_administrador", correo="primera@edilandina.com", stdout=StringIO())
+        self.assertEqual(Usuario.objects.filter(email__iexact="primera@edilandina.com").count(), 1)
+        self.assertEqual(AsignacionRol.objects.filter(usuario=ana, activo=True).count(), 1)
+        self.assertTrue(RegistroAuditoria.objects.filter(modelo="core.asignacionrol", usuario__isnull=True).exists())
+        # Con un administrador vigente, el segundo se niega salvo --forzar.
+        with self.assertRaises(CommandError):
+            call_command("otorgar_administrador", correo="segunda@edilandina.com", stdout=StringIO())
+        call_command("otorgar_administrador", correo="segunda@edilandina.com", forzar=True, stdout=StringIO())
+        self.assertTrue(usuario_tiene_permiso(Usuario.objects.get(email="segunda@edilandina.com"),
+                                              plataforma.PERMISO_ADMINISTRACION_AVANZADA))
+        # Un dominio no permitido no podría ingresar: se rechaza.
+        with self.assertRaises(CommandError):
+            call_command("otorgar_administrador", correo="alguien@otro.com", forzar=True, stdout=StringIO())
+
+    def test_sin_sesion_se_entra_por_el_login_de_google(self):
+        respuesta = self.client.get(reverse("admin:login"), {"next": "/admin/"})
+        self.assertEqual(respuesta.status_code, 302)
+        self.assertTrue(respuesta.url.startswith(reverse("core:login")))
 
     # --- autorización funcional de la consulta (no django.contrib.auth.Permission) ---
 
@@ -981,10 +1081,10 @@ class AuditoriaTests(TestCase):
         rol = RolFuncional.objects.create(nombre="Cualquiera")
         RolPermiso.objects.create(rol=rol, permiso=permiso)
         usuario_sin_permiso = Usuario.objects.create_user(
-            username="staff_sin_permiso", password=CLAVE_PRUEBA, is_staff=True
+            "staff_sin_permiso@pruebas.orbita",
         )
         usuario_con_permiso = Usuario.objects.create_user(
-            username="staff_con_permiso", password=CLAVE_PRUEBA, is_staff=True
+            "staff_con_permiso@pruebas.orbita",
         )
         AsignacionRol.objects.create(
             usuario=usuario_con_permiso, rol=rol, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL
@@ -1002,7 +1102,7 @@ class AuditoriaTests(TestCase):
         # Decisión deliberada: is_superuser no otorga un bypass implícito;
         # la autorización pasa siempre por el sistema funcional de Órbita.
         superusuario = Usuario.objects.create_user(
-            username="superuser_sin_permiso", password=CLAVE_PRUEBA, is_staff=True, is_superuser=True
+            "superuser_sin_permiso@pruebas.orbita",
         )
         admin_instance = RegistroAuditoriaAdmin(RegistroAuditoria, django_admin.site)
         request = RequestFactory().get("/admin/core/registroauditoria/")
@@ -1024,17 +1124,14 @@ class ApplicationShellTests(TestCase):
     topbar + dock flotante, sin sidebar) — sin CU propio.
 
     Comportamiento real únicamente: autenticación requerida, información
-    organizacional real renderizada, y navegación condicionada a is_staff /
+    organizacional real renderizada, y navegación condicionada a permisos /
     alcances de `tickets.atender`. Nada sobre colores/tamaños/CSS — eso no
     es competencia de estas pruebas.
     """
 
     def setUp(self):
         self.usuario = Usuario.objects.create_user(
-            username="ecamacho",
-            password=CLAVE_PRUEBA,
-            first_name="Elena",
-            last_name="Camacho",
+            "ecamacho@pruebas.orbita", first_name="Elena", last_name="Camacho",
         )
 
     def test_inicio_requiere_autenticacion(self):
@@ -1051,7 +1148,7 @@ class ApplicationShellTests(TestCase):
         UsuarioUnidadNegocio.objects.create(
             usuario=self.usuario, unidad_negocio=unidad, es_principal=True
         )
-        self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ecamacho@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertEqual(respuesta.status_code, 200)
         self.assertEqual(respuesta.context["saludo"]["nombre"], "Elena")
@@ -1062,26 +1159,25 @@ class ApplicationShellTests(TestCase):
     def test_perfil_conserva_la_informacion_organizacional(self):
         area = Area.objects.create(nombre="Tecnología", codigo="TEC-SHELL-P")
         UsuarioArea.objects.create(usuario=self.usuario, area=area, es_principal=True)
-        self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ecamacho@pruebas.orbita"))
         self.assertContains(self.client.get(reverse("core:perfil")), "Tecnología")
 
-    def test_administracion_visible_en_navegacion_solo_para_is_staff(self):
-        self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("core:inicio"))
-        self.assertNotContains(respuesta, "Administración")
-
-        self.usuario.is_staff = True
+    def test_la_administracion_avanzada_ya_no_esta_en_la_navegacion(self):
+        # Versión 1: ni is_staff ni el permiso de plataforma la ponen en el menú (se entra por el contenedor admin).
+        self.client.force_login(persona("ecamacho@pruebas.orbita"))
+        self.usuario.is_staff = self.usuario.is_superuser = True
         self.usuario.save()
+        _otorgar_permiso_nav(self.usuario, "plataforma.administracion_avanzada")
         respuesta = self.client.get(reverse("core:inicio"))
-        self.assertContains(respuesta, "Administración")
-        self.assertContains(respuesta, "Administración avanzada")
+        self.assertNotContains(respuesta, "Administración avanzada")
+        self.assertNotContains(respuesta, reverse("admin:index"))
 
     def test_perfil_muestra_badge_principal_solo_en_la_relacion_marcada(self):
         area_principal = Area.objects.create(nombre="Finanzas", codigo="FIN-SHELL")
         area_secundaria = Area.objects.create(nombre="Compras", codigo="COMP-SHELL")
         UsuarioArea.objects.create(usuario=self.usuario, area=area_principal, es_principal=True)
         UsuarioArea.objects.create(usuario=self.usuario, area=area_secundaria)
-        self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ecamacho@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:perfil"))
         self.assertContains(respuesta, "Finanzas")
         self.assertContains(respuesta, "Compras")
@@ -1090,7 +1186,7 @@ class ApplicationShellTests(TestCase):
     def test_login_sigue_respondiendo_correctamente_con_base_html(self):
         respuesta = self.client.get(reverse("core:login"))
         self.assertEqual(respuesta.status_code, 200)
-        self.assertContains(respuesta, "Entrar")
+        self.assertContains(respuesta, "Ingresar con Google")
 
     def test_catalogo_sigue_accesible_para_cualquier_autenticado(self):
         # V0: "Servicios" dejó el dock (solo hay Inicio/Mis tickets/Trabajo/Más),
@@ -1104,7 +1200,7 @@ class ApplicationShellTests(TestCase):
             nombre="Visible", categoria=Categoria.objects.create(nombre="General"), activo=True,
             alcance_visibilidad=Servicio.AlcanceVisibilidad.PUBLICO_INTERNO,
         )
-        self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ecamacho@pruebas.orbita"))
         self.assertContains(self.client.get(reverse("tickets:mis_tickets")), "Nuevo ticket")
         for vista in ("core:inicio", "tickets:mis_tickets"):
             self.assertContains(self.client.get(reverse(vista)), reverse("catalogo:lista"))
@@ -1112,7 +1208,7 @@ class ApplicationShellTests(TestCase):
     def test_shell_autenticado_contiene_dock(self):
         # 2.UI.1: el shell autenticado se navega desde el dock flotante,
         # no desde un sidebar — regresión de estructura, no de estilo.
-        self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ecamacho@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertContains(respuesta, 'class="dock"')
         self.assertContains(respuesta, "dock__list")
@@ -1120,7 +1216,7 @@ class ApplicationShellTests(TestCase):
     def test_shell_ya_no_contiene_sidebar(self):
         # 2.UI.1: el sidebar permanente desaparece del shell (eliminado,
         # no solo ocultado) — sustituido por topbar + dock.
-        self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ecamacho@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertNotContains(respuesta, 'class="sidebar"')
 
@@ -1135,7 +1231,7 @@ class ApplicationShellTests(TestCase):
         # aparece si el usuario tiene `tickets.atender` en algún alcance (o
         # trabajo personal) — no es un destino visible para cualquier
         # autenticado, a diferencia de "Mis tickets".
-        self.client.login(username="ecamacho", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ecamacho@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertNotContains(respuesta, "Trabajo")
 
@@ -1177,7 +1273,7 @@ class MiTrabajoTests(TestCase):
     y navegación, que es lo que este incremento agrega de verdad."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="mtrabajo", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("mtrabajo@pruebas.orbita")
 
     def _crear_esquema(self, participante):
         return crear_esquema_aprobacion(
@@ -1192,18 +1288,21 @@ class MiTrabajoTests(TestCase):
         self.assertIn(reverse("core:login"), respuesta.url)
 
     def test_usuario_sin_trabajo_obtiene_empty_state(self):
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("mtrabajo@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:mi_trabajo"))
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "No tienes trabajo pendiente.")
 
-    def test_tarea_asignada_aparece_en_todo_y_en_su_pestana(self):
+    def test_lo_que_no_pertenece_a_un_ticket_no_se_lista(self):
+        # Una sola vista de trabajo: Mi trabajo agrupa por ticket; ya no hay pendientes «sin ticket asociado».
         crear_tarea(titulo="Revisar contrato", creada_por=self.usuario, usuario_responsable=self.usuario)
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        aprobacion = self._crear_esquema(self.usuario).participaciones.get()
+        self.client.force_login(persona("mtrabajo@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:mi_trabajo"))
-        self.assertContains(respuesta, "Revisar contrato")
-        respuesta_tareas = self.client.get(reverse("core:mi_trabajo"), {"tab": "tareas"})
-        self.assertContains(respuesta_tareas, "Revisar contrato")
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertNotContains(respuesta, "Revisar contrato")
+        self.assertNotContains(respuesta, f"Aprobación #{aprobacion.pk}")
+        self.assertNotContains(respuesta, "Sin ticket asociado")
 
     def test_usuario_con_tareas_gestionar_no_rompe_la_union_de_consultas(self):
         # Regresión: para quien tiene `tareas.gestionar`, "disponibles para
@@ -1213,111 +1312,28 @@ class MiTrabajoTests(TestCase):
         rol = RolFuncional.objects.create(nombre="Gestor de tareas mi trabajo")
         RolPermiso.objects.create(rol=rol, permiso=permiso)
         AsignacionRol.objects.create(usuario=self.usuario, rol=rol, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL)
-        otro = Usuario.objects.create_user(username="otro_gestion", password=CLAVE_PRUEBA)
+        otro = Usuario.objects.create_user("otro_gestion@pruebas.orbita")
         crear_tarea(titulo="Propia gestor", creada_por=self.usuario, usuario_responsable=self.usuario)
         crear_tarea(titulo="Libre para tomar", creada_por=otro)
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("mtrabajo@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:mi_trabajo"))
         self.assertEqual(respuesta.status_code, 200)
-        self.assertContains(respuesta, "Propia gestor")
-        self.assertContains(respuesta, "Libre para tomar")
-        self.assertEqual(respuesta.context["total_tareas"], 2)
 
-    def test_tarea_de_otro_usuario_no_aparece(self):
-        otro = Usuario.objects.create_user(username="otro_mt", password=CLAVE_PRUEBA)
-        crear_tarea(titulo="Tarea ajena", creada_por=otro, usuario_responsable=otro)
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("core:mi_trabajo"))
-        self.assertNotContains(respuesta, "Tarea ajena")
-
-    def test_aprobacion_pendiente_aparece_en_todo_y_en_su_pestana(self):
-        esquema = self._crear_esquema(self.usuario)
-        aprobacion = esquema.participaciones.get()
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("core:mi_trabajo"))
-        self.assertContains(respuesta, f"Aprobación #{aprobacion.pk}")
-        respuesta_aprob = self.client.get(reverse("core:mi_trabajo"), {"tab": "aprobaciones"})
-        self.assertContains(respuesta_aprob, f"Aprobación #{aprobacion.pk}")
-
-    def test_aprobacion_no_asignada_no_aparece(self):
-        otro = Usuario.objects.create_user(username="otro_aprob_mt", password=CLAVE_PRUEBA)
-        esquema = self._crear_esquema(otro)
-        aprobacion_ajena = esquema.participaciones.get()
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("core:mi_trabajo"))
-        self.assertNotContains(respuesta, f"Aprobación #{aprobacion_ajena.pk}")
-
-    def test_tarea_de_equipo_sin_responsable_no_se_duplica_en_todo(self):
-        # Simultáneamente "asignada" (vía membresía de equipo) y
-        # "disponible para tomar" (sin usuario_responsable directo) —
-        # el caso real de solapamiento entre ambas consultas (punto 5).
-        equipo = Equipo.objects.create(nombre="Equipo Mi trabajo")
-        MiembroEquipo.objects.create(equipo=equipo, usuario=self.usuario, activo=True)
-        crear_tarea(titulo="Tarea de equipo sin tomar", creada_por=self.usuario, equipo_responsable=equipo)
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("core:mi_trabajo"))
-        self.assertContains(respuesta, "Tarea de equipo sin tomar", count=1)
-
-    def test_tab_invalido_cae_en_default_seguro(self):
-        crear_tarea(titulo="Con tab invalido", creada_por=self.usuario, usuario_responsable=self.usuario)
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("core:mi_trabajo"), {"tab": "no-existe"})
-        self.assertEqual(respuesta.status_code, 200)
-        self.assertContains(respuesta, "Con tab invalido")
-        self.assertEqual(respuesta.context["tab"], "todo")
-
-    def test_pestana_tareas_no_muestra_aprobaciones(self):
-        crear_tarea(titulo="Solo tarea", creada_por=self.usuario, usuario_responsable=self.usuario)
-        aprobacion = self._crear_esquema(self.usuario).participaciones.get()
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+    def test_las_pestanas_tecnicas_se_retiraron(self):
+        # `?tab=` ya no cambia nada y las bandejas técnicas de tareas y aprobaciones llevan a Mi trabajo.
+        self.client.force_login(persona("mtrabajo@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:mi_trabajo"), {"tab": "tareas"})
-        self.assertContains(respuesta, "Solo tarea")
-        self.assertNotContains(respuesta, f"Aprobación #{aprobacion.pk}")
-
-    def test_pestana_aprobaciones_no_muestra_tareas(self):
-        crear_tarea(titulo="Tarea oculta en pestaña", creada_por=self.usuario, usuario_responsable=self.usuario)
-        aprobacion = self._crear_esquema(self.usuario).participaciones.get()
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("core:mi_trabajo"), {"tab": "aprobaciones"})
-        self.assertContains(respuesta, f"Aprobación #{aprobacion.pk}")
-        self.assertNotContains(respuesta, "Tarea oculta en pestaña")
-
-    def test_enlaces_apuntan_a_detalles_reales(self):
-        tarea = crear_tarea(titulo="Con enlace", creada_por=self.usuario, usuario_responsable=self.usuario)
-        aprobacion = self._crear_esquema(self.usuario).participaciones.get()
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("core:mi_trabajo"))
-        self.assertContains(respuesta, reverse("tareas:detalle", args=[tarea.pk]))
-        self.assertContains(respuesta, reverse("aprobaciones:detalle", args=[aprobacion.pk]))
-
-    def test_sin_pestanas_ni_enlaces_tecnicos_visibles_pero_urls_vigentes(self):
-        # UX-2: la bandeja solo muestra tickets agrupados; «Tareas», «Aprobaciones» y «Ver todas…» salen de la
-        # navegación visible, pero sus URL siguen respondiendo (compatibilidad).
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("core:mi_trabajo"))
-        self.assertNotContains(respuesta, "Ver todas las tareas")
-        self.assertNotContains(respuesta, "Ver todas las aprobaciones")
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertNotIn("tab", respuesta.context)
         self.assertNotContains(respuesta, "?tab=tareas")
-        self.assertNotContains(respuesta, "?tab=aprobaciones")
-        self.assertEqual(self.client.get(reverse("tareas:lista")).status_code, 200)
-        self.assertEqual(self.client.get(reverse("aprobaciones:lista")).status_code, 200)
-        self.assertEqual(self.client.get(reverse("core:mi_trabajo"), {"tab": "tareas"}).status_code, 200)
-
-    def test_contadores_reflejan_las_listas_reales(self):
-        crear_tarea(titulo="Contador 1", creada_por=self.usuario, usuario_responsable=self.usuario)
-        crear_tarea(titulo="Contador 2", creada_por=self.usuario, usuario_responsable=self.usuario)
-        self._crear_esquema(self.usuario)
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
-        respuesta = self.client.get(reverse("core:mi_trabajo"))
-        self.assertEqual(respuesta.context["total_tareas"], 2)
-        self.assertEqual(respuesta.context["total_aprobaciones"], 1)
-        self.assertEqual(respuesta.context["total"], 3)
+        for url in (reverse("tareas:lista"), reverse("aprobaciones:lista")):
+            self.assertRedirects(self.client.get(url), reverse("core:mi_trabajo"), fetch_redirect_response=False)
 
     def test_trabajo_aparece_en_navegacion_solo_con_trabajo_personal(self):
         # V0: sin rol/permiso especial (nada de rol hardcodeado), pero ya no
         # para cualquier autenticado: "Trabajo" solo se muestra si hay algo
         # que requiera acción del usuario (aquí, una tarea asignada).
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("mtrabajo@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertNotContains(respuesta, reverse("core:mi_trabajo"))
         crear_tarea(titulo="Trabajo visible", creada_por=self.usuario, usuario_responsable=self.usuario)
@@ -1328,7 +1344,7 @@ class MiTrabajoTests(TestCase):
     def test_resto_de_navegacion_no_se_altera(self):
         # Regresión mínima: el gate de Trabajo no alcanza a Cola ni a
         # Administración (siguen ausentes por defecto).
-        self.client.login(username="mtrabajo", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("mtrabajo@pruebas.orbita"))
         crear_tarea(titulo="Solo tarea", creada_por=self.usuario, usuario_responsable=self.usuario)
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertNotContains(respuesta, reverse("tickets:cola"))
@@ -1344,7 +1360,7 @@ class MensajesGlobalesTests(TestCase):
     `MESSAGE_TAGS`, ver `config/settings.py`)."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="msgshell24c", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("msgshell24c@pruebas.orbita")
 
     def _renderizar_inicio_con_mensaje(self, nivel, texto):
         from django.contrib.messages import add_message
@@ -1405,7 +1421,7 @@ def _otorgar_permiso_nav(usuario, codigo, tipo_alcance=None, area=None):
     """Concede `codigo` al usuario por el mecanismo normal (Permiso → Rol →
     Asignación): sin roles hardcodeados ni sembrado global."""
     permiso, _ = Permiso.objects.get_or_create(codigo=codigo, defaults={"nombre": codigo})
-    rol = RolFuncional.objects.create(nombre=f"Rol nav {codigo} {usuario.username}")
+    rol = RolFuncional.objects.create(nombre=f"Rol nav {codigo} {usuario.email}")
     RolPermiso.objects.create(rol=rol, permiso=permiso)
     return AsignacionRol.objects.create(
         usuario=usuario, rol=rol, tipo_alcance=tipo_alcance or AsignacionRol.TipoAlcance.GLOBAL, area=area
@@ -1420,8 +1436,8 @@ class NavegacionGlobalTests(TestCase):
     sobre colores, tamaños ni CSS."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="nav_v0", password=CLAVE_PRUEBA)
-        self.client.login(username="nav_v0", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("nav_v0@pruebas.orbita")
+        self.client.force_login(persona("nav_v0@pruebas.orbita"))
 
     def _get(self, vista="core:inicio"):
         return self.client.get(reverse(vista))
@@ -1531,9 +1547,9 @@ class NavegacionGlobalTests(TestCase):
         self.assertEqual(self._mas(self._get()), {"Gestión": ["Diseñador"], "Administración": ["Configuración"]})
 
         for codigo in ("workflows.consultar", "workflows.administrar"):
-            otro = Usuario.objects.create_user(username=f"nav_d1_{codigo}", password=CLAVE_PRUEBA)
+            otro = Usuario.objects.create_user(f"nav_d1_{codigo}@pruebas.orbita")
             _otorgar_permiso_nav(otro, codigo)
-            self.client.login(username=otro.username, password=CLAVE_PRUEBA)
+            self.client.force_login(otro)
             self.assertEqual(self._mas(self._get()), {"Gestión": ["Diseñador"]}, codigo)
 
     def test_vincular_por_si_solo_no_abre_el_disenador(self):
@@ -1543,11 +1559,11 @@ class NavegacionGlobalTests(TestCase):
         self.assertEqual(self._mas(self._get()), {})
         self.assertEqual(self.client.get(reverse("core:disenador")).status_code, 403)
 
-    def test_administracion_avanzada_solo_para_is_staff(self):
-        self.assertEqual(self._mas(self._get()), {})
-        self.usuario.is_staff = True
+    def test_administracion_avanzada_no_es_un_destino(self):
+        self.usuario.is_staff = self.usuario.is_superuser = True
         self.usuario.save()
-        self.assertEqual(self._mas(self._get()), {"Administración": ["Administración avanzada"]})
+        _otorgar_permiso_nav(self.usuario, "plataforma.administracion_avanzada")
+        self.assertEqual(self._mas(self._get()), {})
 
     def test_configuracion_depende_de_capacidades_no_de_is_staff(self):
         for codigo in (
@@ -1577,7 +1593,7 @@ class NavegacionGlobalTests(TestCase):
     def test_trabajo_se_resalta_en_cola_mi_trabajo_y_detalles_de_tareas(self):
         _otorgar_permiso_nav(self.usuario, "tickets.atender")
         self._con_tarea()
-        for vista in ("tickets:cola", "core:mi_trabajo", "tareas:lista"):
+        for vista in ("tickets:cola", "core:mi_trabajo"):
             self.assertEqual(self._get(vista).context["nav_item_activo"], "core:mi_trabajo", vista)
         self.assertEqual(self._get("tickets:mis_tickets").context["nav_item_activo"], "tickets:mis_tickets")
 
@@ -1641,12 +1657,13 @@ class NavegacionGlobalTests(TestCase):
         self.assertEqual(respuesta.status_code, 302)
         self.assertIn(reverse("core:login"), respuesta.url)
 
-    def test_sistema_visual_prohibido_para_no_staff(self):
+    def test_sistema_visual_prohibido_sin_el_permiso_de_plataforma(self):
+        self.usuario.is_staff = self.usuario.is_superuser = True  # ya no abren nada
+        self.usuario.save()
         self.assertEqual(self._get("core:sistema_visual").status_code, 403)
 
-    def test_sistema_visual_disponible_para_staff(self):
-        self.usuario.is_staff = True
-        self.usuario.save()
+    def test_sistema_visual_disponible_con_el_permiso_de_plataforma(self):
+        _otorgar_permiso_nav(self.usuario, "plataforma.administracion_avanzada")
         respuesta = self._get("core:sistema_visual")
         self.assertEqual(respuesta.status_code, 200)
         for seccion in ("Fundamentos", "Componentes", "Patrones"):
@@ -1671,13 +1688,13 @@ class InicioPortalTests(TestCase):
         from apps.catalogo.models import Categoria, Servicio
 
         self.usuario = Usuario.objects.create_user(
-            username="portal_v1", password=CLAVE_PRUEBA, first_name="Yeimi Paola", last_name="Rojas"
+            "portal_v1@pruebas.orbita", first_name="Yeimi Paola", last_name="Rojas",
         )
-        self.otro = Usuario.objects.create_user(username="portal_otro", password=CLAVE_PRUEBA)
+        self.otro = Usuario.objects.create_user("portal_otro@pruebas.orbita")
         self.categoria = Categoria.objects.create(nombre="Tecnología")
         self.Servicio = Servicio
         self.Categoria = Categoria
-        self.client.login(username="portal_v1", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("portal_v1@pruebas.orbita"))
 
     # --- helpers ---
 
@@ -1723,7 +1740,7 @@ class InicioPortalTests(TestCase):
         self.assertEqual(saludo(self.usuario, a_las(21))["momento"], "Buenas noches")
         self.assertEqual(saludo(self.usuario, a_las(8))["nombre"], "Yeimi")
 
-    def test_sin_nombre_de_pila_se_usa_el_usuario(self):
+    def test_sin_nombre_de_pila_se_usa_el_correo_antes_de_la_arroba(self):
         from apps.core.inicio import saludo
 
         self.assertEqual(saludo(self.otro)["nombre"], "portal_otro")
@@ -1761,7 +1778,7 @@ class InicioPortalTests(TestCase):
         )
         self.assertContains(self._explorar(), "Solo con concesión")
         # …y sigue oculto para quien no tiene la concesión.
-        self.client.login(username="portal_otro", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("portal_otro@pruebas.orbita"))
         self.assertNotContains(self._explorar(), "Solo con concesión")
 
     def test_el_explorador_busca_por_nombre_descripcion_o_categoria(self):
@@ -2088,7 +2105,7 @@ class InicioPortalTests(TestCase):
             )
         resultado = agenda(self.usuario, ahora=ahora)
         self.assertEqual([e["tipo"] for e in resultado["proximos"]], ["entrega"])
-        self.assertEqual(resultado["proximos"][0]["url"], reverse("tickets:detalle", args=[ticket.pk]))
+        self.assertEqual(resultado["proximos"][0]["url"], reverse("tickets:espacio", args=[ticket.pk]))
 
     def test_navegar_a_otro_mes_conserva_la_agenda_aunque_este_vacia(self):
         crear_tarea(
@@ -2131,8 +2148,8 @@ class DisenadorTests(TestCase):
         from apps.catalogo.models import Categoria, Servicio
         from apps.workflows.models import Workflow, WorkflowVersion
 
-        self.usuario = Usuario.objects.create_user(username="dis_d1", password=CLAVE_PRUEBA)
-        self.client.login(username="dis_d1", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("dis_d1@pruebas.orbita")
+        self.client.force_login(persona("dis_d1@pruebas.orbita"))
         self.categoria = Categoria.objects.create(nombre="Comunicaciones")
         self.Servicio, self.Workflow, self.WorkflowVersion = Servicio, Workflow, WorkflowVersion
 
@@ -2349,9 +2366,9 @@ class ConfiguracionTests(TestCase):
     del modelo, que nada se borra y que todo queda auditado (CU-040)."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="cfg_admin", password=CLAVE_PRUEBA)
-        self.client.login(username="cfg_admin", password=CLAVE_PRUEBA)
-        self.persona = Usuario.objects.create_user(username="cfg_persona", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("cfg_admin@pruebas.orbita")
+        self.client.force_login(persona("cfg_admin@pruebas.orbita"))
+        self.persona = Usuario.objects.create_user("cfg_persona@pruebas.orbita")
 
     def _con(self, *codigos):
         for codigo in codigos:
@@ -2383,8 +2400,8 @@ class ConfiguracionTests(TestCase):
             self.assertEqual(self.client.get(self._url(nombre)).status_code, 403, nombre)
         self.assertEqual(self.client.get(self._url("_usuario", self.persona.pk)).status_code, 403)
 
-    def test_is_staff_por_si_solo_no_abre_configuracion(self):
-        self.usuario.is_staff = True
+    def test_is_staff_ni_is_superuser_abren_configuracion(self):
+        self.usuario.is_staff = self.usuario.is_superuser = True
         self.usuario.save()
         self.assertEqual(self.client.get(self._url("")).status_code, 403)
 
@@ -2407,12 +2424,12 @@ class ConfiguracionTests(TestCase):
                 estado = self.client.get(self._url(f"_{clave}")).status_code
                 self.assertEqual(estado, 200 if clave in esperadas else 403, f"{codigo} → {clave}")
 
-    def test_superusuario_abre_las_secciones_del_nucleo_pero_no_categorias(self):
+    def test_superusuario_ya_no_abre_ninguna_seccion(self):
+        # Versión 1: el primer permiso lo da `otorgar_administrador`; is_superuser no es una puerta trasera.
         self.usuario.is_superuser = True
         self.usuario.save()
-        claves = [s["clave"] for s in self.client.get(self._url("")).context["config_secciones"]]
-        self.assertEqual(claves, ["general", "notificaciones", "usuarios", "roles", "areas", "unidades"])
-        self.assertEqual(self.client.get(self._url("_categorias")).status_code, 403)
+        for nombre in ("", "_general", "_usuarios", "_roles", "_areas", "_unidades", "_categorias"):
+            self.assertEqual(self.client.get(self._url(nombre)).status_code, 403, nombre)
 
     def test_permisos_globales_respeta_alcance_y_vigencia(self):
         area = Area.objects.create(nombre="Zona", codigo="CFG-ZONA")
@@ -2470,7 +2487,7 @@ class ConfiguracionTests(TestCase):
             self.assertEqual(respuesta["Content-Type"], "image/png")
             self.assertEqual(b"".join(respuesta.streaming_content), PNG_MINIMO)
 
-            self.client.login(username="cfg_admin", password=CLAVE_PRUEBA)
+            self.client.force_login(persona("cfg_admin@pruebas.orbita"))
             self.client.post(self._url("_general"), {"nombre": "Órbita", "quitar_logo": "on"})
             self.assertFalse(ConfiguracionSistema.actual().logo)
 
@@ -2502,7 +2519,7 @@ class ConfiguracionTests(TestCase):
             self.assertEqual(respuesta.status_code, 200)
             self.assertEqual(b"".join(respuesta.streaming_content), PNG_MINIMO)
 
-            self.client.login(username="cfg_admin", password=CLAVE_PRUEBA)
+            self.client.force_login(persona("cfg_admin@pruebas.orbita"))
             self.client.post(self._url("_general"), {"nombre": "Órbita", "quitar_logo_oscuro": "on"})
             config = ConfiguracionSistema.actual()
             self.assertTrue(config.logo)
@@ -2513,7 +2530,10 @@ class ConfiguracionTests(TestCase):
         pantalla = self.client.get(self._url("_general"))
         for clave in temas.TEMAS:
             self.assertContains(pantalla, f'data-tema="{clave}"')
-        self.assertContains(self.client.get(reverse("core:inicio")), '<html lang="es" data-tema="lima"')
+        # Versión 1: Cielo es el predeterminado (Lima sigue disponible).
+        self.assertEqual(temas.TEMA_POR_DEFECTO, "cielo")
+        self.assertContains(self.client.get(reverse("core:inicio")), '<html lang="es" data-tema="cielo"')
+        self.assertContains(pantalla, "predeterminado")
 
         respuesta = self.client.post(self._url("_general"), {"nombre": "Órbita", "tema": "coral"})
         self.assertRedirects(respuesta, self._url("_general"))
@@ -2521,8 +2541,57 @@ class ConfiguracionTests(TestCase):
         self.assertEqual(config.tema, "coral")
         self.assertEqual(self._auditados(config).count(), 1)
         self.assertContains(self.client.get(reverse("core:inicio")), '<html lang="es" data-tema="coral"')
+        # El color PERSONAL manda solo para esa persona; vacío vuelve al del sistema y lo ajeno a la lista se ignora.
+        self.client.post(reverse("core:tema"), {"tema": "lavanda"})
+        self.assertContains(self.client.get(reverse("core:inicio")), '<html lang="es" data-tema="lavanda"')
+        otra = Usuario.objects.create_user("cfg_otra@pruebas.orbita")
+        self.client.force_login(otra)
+        self.assertContains(self.client.get(reverse("core:inicio")), '<html lang="es" data-tema="coral"')
+        self.client.post(reverse("core:tema"), {"tema": "#ff0000"})
+        otra.refresh_from_db()
+        self.assertEqual(otra.tema, "")
+        self.client.force_login(self.usuario)
+        self.client.post(reverse("core:tema"), {"tema": ""})
+        self.assertContains(self.client.get(reverse("core:inicio")), '<html lang="es" data-tema="coral"')
         self.client.logout()
         self.assertContains(self.client.get(reverse("core:login")), '<html lang="es" data-tema="coral"')
+
+    @override_settings(BIENVENIDA_OBLIGATORIA=True)
+    def test_la_bienvenida_se_muestra_hasta_completarla_y_guarda_solo_lo_personal(self):
+        from apps.core import bienvenida
+
+        destino = reverse("tickets:mis_tickets")
+        respuesta = self.client.get(destino)
+        self.assertRedirects(respuesta, f"{reverse('core:bienvenida')}?next=%2Ftickets%2F", fetch_redirect_response=False)
+        # Ni un envío de formulario ni una petición de fondo se interrumpen; tampoco salir.
+        self.assertNotEqual(self.client.get(destino, HTTP_X_REQUESTED_WITH="fetch").status_code, 302)
+        self.assertNotEqual(self.client.post(reverse("core:apariencia"), {"apariencia": "OSCURO"}).url,
+                            reverse("core:bienvenida"))
+        url = reverse("core:bienvenida")
+        for clave, _nombre in bienvenida.PASOS:
+            self.assertEqual(self.client.get(url, {"paso": clave}).status_code, 200, clave)
+        self.client.post(url, {"paso": "apariencia", "apariencia": "CLARO", "accion": "siguiente"})
+        self.client.post(url, {"paso": "color", "tema": "menta", "accion": "siguiente"})
+        self.usuario.refresh_from_db()
+        self.assertEqual((self.usuario.apariencia, self.usuario.tema), ("CLARO", "menta"))
+        # «Tu organización» es de solo lectura: no ofrece cambiar área, unidades, equipos ni jefe.
+        organizacion = self.client.get(url, {"paso": "organizacion"}).content.decode()
+        self.assertIn("Pídele al administrador", organizacion)
+        for campo in ('name="area', 'name="unidad', 'name="equipo', 'name="jefe'):
+            self.assertNotIn(campo, organizacion)
+        respuesta = self.client.post(url, {"paso": "companeros", "accion": "terminar", "next": destino})
+        self.assertRedirects(respuesta, destino, fetch_redirect_response=False)
+        self.usuario.refresh_from_db()
+        self.assertIsNotNone(self.usuario.bienvenida_completada_en)
+        self.assertEqual(self.client.get(destino).status_code, 200)
+
+    @override_settings(BIENVENIDA_OBLIGATORIA=True)
+    def test_la_bienvenida_se_puede_omitir_desde_cualquier_paso(self):
+        respuesta = self.client.post(reverse("core:bienvenida"), {"paso": "bienvenida", "accion": "omitir"})
+        self.assertRedirects(respuesta, reverse("core:inicio"), fetch_redirect_response=False)
+        self.usuario.refresh_from_db()
+        self.assertIsNotNone(self.usuario.bienvenida_completada_en)
+        self.assertEqual(self.client.get(reverse("core:inicio")).status_code, 200)
 
     def test_estilo_fuera_de_la_lista_se_rechaza_y_omitirlo_lo_conserva(self):
         self._con("sistema.configurar")
@@ -2548,37 +2617,44 @@ class ConfiguracionTests(TestCase):
 
     # --- Usuarios ---
 
-    def test_crear_usuario_con_perfil_y_auditoria_sin_contrasena(self):
+    @override_settings(GOOGLE_OAUTH_ALLOWED_DOMAINS=["edilandina.com"])
+    def test_crear_usuario_por_correo_con_perfil_y_auditoria_sin_contrasena(self):
+        # Versión 1: la cuenta es el correo (con él ingresa con Google); no hay usuario ni contraseña.
         self._con("usuarios.administrar")
         respuesta = self.client.post(
             self._url("_usuario_crear"),
-            {
-                "username": "nueva.persona", "first_name": "Nueva", "last_name": "Persona",
-                "email": "nueva@edilandina.com", "cargo": "Analista", "telefono": "",
-                "password1": CLAVE_PRUEBA, "password2": CLAVE_PRUEBA,
-            },
+            {"first_name": "Nueva", "last_name": "Persona", "email": " Nueva@Edilandina.com ", "cargo": "Analista",
+             "telefono": ""},
         )
-        creado = Usuario.objects.get(username="nueva.persona")
+        creado = Usuario.objects.get(email="nueva@edilandina.com")
         self.assertRedirects(respuesta, self._url("_usuario", creado.pk))
-        self.assertTrue(creado.check_password(CLAVE_PRUEBA))
+        self.assertFalse(creado.has_usable_password())
+        self.assertEqual(creado.nombre_visible, "Nueva Persona")
         self.assertEqual(creado.perfil_organizacional.cargo, "Analista")
         evento = self._auditados(creado, RegistroAuditoria.Accion.CREAR).get()
         self.assertEqual(evento.usuario, self.usuario)
-        self.assertNotIn("password", evento.datos_nuevos)
+        self.assertFalse({"password", "clave_sesion"} & set(evento.datos_nuevos))
+        # Un correo de otro dominio no podría ingresar, y uno repetido (sin importar mayúsculas) se rechaza.
+        for correo in ("alguien@otro.com", "NUEVA@edilandina.com"):
+            respuesta = self.client.post(self._url("_usuario_crear"), {"first_name": "X", "email": correo})
+            self.assertIn("email", respuesta.context["form"].errors, correo)
+        self.assertEqual(Usuario.objects.filter(email__iexact="nueva@edilandina.com").count(), 1)
 
     def test_lista_de_usuarios_busca_y_filtra_por_estado(self):
         self._con("usuarios.administrar")
         self.persona.is_active = False
         self.persona.save()
-        nombres = lambda r: [u.username for u in r.context["pagina"].object_list]  # noqa: E731
-        self.assertEqual(nombres(self.client.get(self._url("_usuarios"))), ["cfg_admin"])
-        self.assertEqual(nombres(self.client.get(self._url("_usuarios") + "?estado=inactivos")), ["cfg_persona"])
-        self.assertEqual(nombres(self.client.get(self._url("_usuarios") + "?estado=todos&q=persona")), ["cfg_persona"])
+        nombres = lambda r: [u.email for u in r.context["pagina"].object_list]  # noqa: E731
+        self.assertEqual(nombres(self.client.get(self._url("_usuarios"))), ["cfg_admin@pruebas.orbita"])
+        inactivos = self.client.get(self._url("_usuarios") + "?estado=inactivos")
+        self.assertEqual(nombres(inactivos), ["cfg_persona@pruebas.orbita"])
+        buscados = self.client.get(self._url("_usuarios") + "?estado=todos&q=persona")
+        self.assertEqual(nombres(buscados), ["cfg_persona@pruebas.orbita"])
 
     def test_editar_datos_y_desactivar_conserva_la_cuenta(self):
         self._con("usuarios.administrar")
-        self._ficha({"accion": "datos", "username": "cfg_persona", "first_name": "Ana", "last_name": "",
-                     "email": "", "cargo": "Jefe", "telefono": "123"})
+        self._ficha({"accion": "datos", "email": "cfg_persona@pruebas.orbita", "first_name": "Ana", "last_name": "",
+                     "cargo": "Jefe", "telefono": "123"})
         self.persona.refresh_from_db()
         self.assertEqual(self.persona.first_name, "Ana")
         self.assertFalse(self.persona.is_active)  # el interruptor no vino marcado
@@ -2590,34 +2666,49 @@ class ConfiguracionTests(TestCase):
     def test_no_puede_desactivar_su_propia_cuenta(self):
         self._con("usuarios.administrar")
         respuesta = self.client.post(
-            self._url("_usuario", self.usuario.pk), {"accion": "datos", "username": "cfg_admin"}
+            self._url("_usuario", self.usuario.pk),
+            {"accion": "datos", "email": "cfg_admin@pruebas.orbita", "first_name": "Admin"},
         )
         self.assertEqual(respuesta.status_code, 200)
         self.assertIn("is_active", respuesta.context["form_datos"].errors)
         self.usuario.refresh_from_db()
         self.assertTrue(self.usuario.is_active)
 
-    def test_solo_un_superusuario_modifica_privilegios_o_cuentas_de_superusuario(self):
+    def test_la_ficha_no_ofrece_privilegios_y_protege_a_quien_administra_la_plataforma(self):
         self._con("usuarios.administrar")
-        # Sin ser superusuario, los campos de privilegio se ignoran aunque se envíen.
-        self._ficha({"accion": "datos", "username": "cfg_persona", "is_active": "on",
+        # «Administración avanzada» y «Superusuario» ya no existen en la ficha: se ignoran aunque se envíen.
+        self._ficha({"accion": "datos", "email": "cfg_persona@pruebas.orbita", "first_name": "Ana", "is_active": "on",
                      "is_staff": "on", "is_superuser": "on"})
-        self.persona.refresh_from_db()
-        self.assertFalse(self.persona.is_staff or self.persona.is_superuser)
+        campos = {campo.name for campo in Usuario._meta.get_fields()}
+        self.assertFalse({"username", "password", "is_staff", "is_superuser", "groups", "user_permissions"} & campos)
+        formulario = self.client.get(self._url("_usuario", self.persona.pk)).context["form_datos"]
+        self.assertEqual(set(formulario.fields) - {"cargo", "telefono", "jefe"}, {"email", "first_name", "last_name", "is_active"})
 
-        jefe = Usuario.objects.create_user(username="cfg_root", password=CLAVE_PRUEBA, is_superuser=True)
+        # La cuenta de quien administra la plataforma solo la cambia otro que también la administra.
+        jefe = Usuario.objects.create_user("cfg_root@pruebas.orbita")
+        _otorgar_permiso_nav(jefe, "plataforma.administracion_avanzada")
         url = self._url("_usuario", jefe.pk)
         self.assertFalse(self.client.get(url).context["edita_cuenta"])
-        for accion in ("datos", "clave", "area_agregar"):
+        clave = jefe.clave_sesion
+        for accion in ("datos", "sesiones", "area_agregar"):
             self.assertEqual(self.client.post(url, {"accion": accion}).status_code, 403, accion)
-        self.assertTrue(Usuario.objects.get(pk=jefe.pk).check_password(CLAVE_PRUEBA))
+        self.assertEqual(Usuario.objects.get(pk=jefe.pk).clave_sesion, clave)
 
-    def test_cambiar_contrasena(self):
+    def test_cerrar_todas_sus_sesiones(self):
+        # Versión 1: sin contraseñas, lo que se puede hacer ante un equipo perdido es cerrar sus sesiones.
+        from django.test import Client
+
+        otro_navegador = Client()
+        otro_navegador.force_login(self.persona)
+        self.assertEqual(otro_navegador.get(reverse("core:perfil")).status_code, 200)
         self._con("usuarios.administrar")
-        self._ficha({"accion": "clave", "new_password1": "Otra-Clave-456", "new_password2": "Otra-Clave-456"})
+        clave = self.persona.clave_sesion
+        self._ficha({"accion": "sesiones"})
         self.persona.refresh_from_db()
-        self.assertTrue(self.persona.check_password("Otra-Clave-456"))
-        self.assertEqual(self._auditados(self.persona).count(), 1)
+        self.assertNotEqual(self.persona.clave_sesion, clave)
+        self.assertEqual(otro_navegador.get(reverse("core:perfil")).status_code, 302)  # su sesión ya no vale
+        evento = self._auditados(self.persona, RegistroAuditoria.Accion.ACTUALIZAR).get()
+        self.assertEqual(evento.datos_nuevos, {"sesiones_cerradas": True})
 
     def test_pertenencias_una_sola_principal_y_quitar_no_borra(self):
         self._con("usuarios.administrar")
@@ -2660,7 +2751,7 @@ class ConfiguracionTests(TestCase):
         contexto = self.client.get(self._url("_usuario", self.persona.pk)).context
         self.assertTrue(contexto["edita_roles"])
         self.assertFalse(contexto["edita_cuenta"])
-        self.assertEqual(self._ficha({"accion": "datos", "username": "x"}).status_code, 403)
+        self.assertEqual(self._ficha({"accion": "datos", "email": "x@pruebas.orbita"}).status_code, 403)
         self.assertEqual(self.client.get(self._url("_usuario_crear")).status_code, 403)
 
     def test_asignar_y_retirar_rol_con_alcance(self):
@@ -2775,7 +2866,7 @@ class TrabajoTests(TestCase):
         self.escenario = _EscenarioAtencionMixin()
         self.escenario._preparar_escenario()
         self.responsable = self.escenario.responsable_directo
-        self.client.login(username=self.responsable.username, password=CLAVE_PRUEBA)
+        self.client.force_login(self.responsable)
 
     def _otro_ticket(self):
         from apps.tickets.operaciones import crear_borrador, radicar_ticket
@@ -2817,61 +2908,17 @@ class TrabajoTests(TestCase):
         cola = next(t for t in respuesta.context["nav_trabajo_tabs"] if t["etiqueta"] == "Cola")
         self.assertEqual(cola["total"], 1)
         self.client.logout()
-        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("ajeno23@pruebas.orbita"))
         self.assertEqual(list(self._cola("?ver=para_tomar").context["tickets"]), [])
 
-    # --- Mi trabajo: vista previa ---
+    # --- Mi trabajo: las vistas previas técnicas se retiraron (una sola vista de trabajo) ---
 
-    def test_cada_fila_de_mi_trabajo_trae_su_vista_previa_y_su_detalle(self):
-        tarea = crear_tarea(titulo="Revisar anexos", creada_por=self.responsable, usuario_responsable=self.responsable)
-        respuesta = self.client.get(reverse("core:mi_trabajo"))
-        fila = respuesta.context["filas"][0]
-        self.assertEqual(fila["vista_url"], reverse("tareas:vista_previa", args=[tarea.pk]))
-        self.assertContains(respuesta, f'data-vista="{fila["vista_url"]}"')
-        self.assertContains(respuesta, f'href="{reverse("tareas:detalle", args=[tarea.pk])}"')
+    def test_las_vistas_previas_tecnicas_ya_no_existen(self):
+        from django.urls import NoReverseMatch
 
-    def test_vista_previa_de_tarea_respeta_la_autorizacion_del_detalle(self):
-        tarea = crear_tarea(
-            titulo="Revisar anexos", descripcion="Validar firmas", creada_por=self.responsable,
-            usuario_responsable=self.responsable,
-        )
-        url = reverse("tareas:vista_previa", args=[tarea.pk])
-        respuesta = self.client.get(url)
-        self.assertContains(respuesta, "Revisar anexos")
-        self.assertContains(respuesta, "Validar firmas")
-        self.assertContains(respuesta, reverse("tareas:detalle", args=[tarea.pk]))
-        self.assertNotContains(respuesta, "<form")  # solo lectura
-        self.assertEqual(self.client.post(url).status_code, 405)
-
-        self.client.logout()
-        self.assertEqual(self.client.get(url).status_code, 302)
-        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
-        self.assertEqual(self.client.get(url).status_code, 403)
-
-    def test_vista_previa_de_aprobacion_respeta_la_autorizacion_del_detalle(self):
-        esquema = crear_esquema_aprobacion(
-            modo=EsquemaAprobacion.Modo.PARALELA,
-            politica=EsquemaAprobacion.Politica.CUALQUIERA,
-            participantes=[(Aprobacion.TipoAprobador.USUARIO, self.responsable)],
-        )
-        aprobacion = esquema.participaciones.get()
-        url = reverse("aprobaciones:vista_previa", args=[aprobacion.pk])
-        respuesta = self.client.get(url)
-        self.assertContains(respuesta, f"Aprobación #{aprobacion.pk}")
-        self.assertContains(respuesta, "Abrir y decidir")
-        self.assertNotContains(respuesta, "<form")
-
-        self.client.logout()
-        self.client.login(username="ajeno23", password=CLAVE_PRUEBA)
-        self.assertEqual(self.client.get(url).status_code, 403)
-
-    def test_mi_trabajo_se_pagina_cuando_hay_mucho(self):
-        for n in range(35):
-            crear_tarea(titulo=f"Tarea {n}", creada_por=self.responsable, usuario_responsable=self.responsable)
-        respuesta = self.client.get(reverse("core:mi_trabajo"))
-        self.assertEqual(len(respuesta.context["filas"]), 30)
-        self.assertEqual(respuesta.context["total_tareas"], 35)
-        self.assertEqual(len(self.client.get(reverse("core:mi_trabajo") + "?pagina=2").context["filas"]), 5)
+        for nombre in ("tareas:vista_previa", "aprobaciones:vista_previa"):
+            with self.assertRaises(NoReverseMatch):
+                reverse(nombre, args=[1])
 
 
 class NecesidadBuscadorTests(TestCase):
@@ -2880,8 +2927,8 @@ class NecesidadBuscadorTests(TestCase):
     del dominio se prueban en `apps.catalogo.tests.BusquedaPorNecesidadTests`."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user("necesidad_u", password=CLAVE_PRUEBA)
-        self.client.login(username="necesidad_u", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("necesidad_u@pruebas.orbita")
+        self.client.force_login(persona("necesidad_u@pruebas.orbita"))
 
     def _servicio(self, nombre, *, tipo="SERVICIO", publico=True, descripcion="", activo=True):
         from apps.catalogo.models import Servicio
@@ -3015,10 +3062,10 @@ class ConfiguracionEquiposDeUsuarioTests(TestCase):
     la ficha de la persona solo la expone, sin modelo paralelo ni regla nueva de responsables."""
 
     def setUp(self):
-        self.admin = Usuario.objects.create_user(username="eq_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("eq_admin@pruebas.orbita")
         _otorgar_permiso_nav(self.admin, "usuarios.administrar")
-        self.client.login(username="eq_admin", password=CLAVE_PRUEBA)
-        self.persona = Usuario.objects.create_user(username="eq_persona", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("eq_admin@pruebas.orbita"))
+        self.persona = Usuario.objects.create_user("eq_persona@pruebas.orbita")
         self.mercadeo = Equipo.objects.create(nombre="Mercadeo")
         self.tic = Equipo.objects.create(nombre="TIC")
         self.financiera = Equipo.objects.create(nombre="Financiera")
@@ -3114,7 +3161,7 @@ class ConfiguracionEquiposDeUsuarioTests(TestCase):
         self.assertEqual(self._ficha({"accion": "equipo_principal", "membresia": miembro.pk}).status_code, 403)
 
     def test_no_se_puede_retirar_la_membresia_de_otra_persona(self):
-        otra = Usuario.objects.create_user(username="eq_otra", password=CLAVE_PRUEBA)
+        otra = Usuario.objects.create_user("eq_otra@pruebas.orbita")
         ajena = MiembroEquipo.objects.create(equipo=self.tic, usuario=otra)
         self.assertEqual(self._ficha({"accion": "equipo_quitar", "membresia": ajena.pk}).status_code, 404)
         ajena.refresh_from_db()
@@ -3126,13 +3173,13 @@ class ConfiguracionEquiposTests(TestCase):
     sobre los modelos de Sprint 0 (`Equipo`, `EquipoArea`, `EquipoUnidadNegocio`, `MiembroEquipo`)."""
 
     def setUp(self):
-        self.admin = Usuario.objects.create_user(username="org_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("org_admin@pruebas.orbita")
         _otorgar_permiso_nav(self.admin, "organizacion.administrar")
-        self.client.login(username="org_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("org_admin@pruebas.orbita"))
         self.area = Area.objects.create(nombre="Área Equipos", codigo="AEQ")
         self.unidad = UnidadNegocio.objects.create(nombre="Unidad Equipos", codigo="UEQ")
-        self.ana = Usuario.objects.create_user(username="eq_ana", password=CLAVE_PRUEBA)
-        self.beto = Usuario.objects.create_user(username="eq_beto", password=CLAVE_PRUEBA)
+        self.ana = Usuario.objects.create_user("eq_ana@pruebas.orbita")
+        self.beto = Usuario.objects.create_user("eq_beto@pruebas.orbita")
 
     def _guardar(self, equipo=None, **datos):
         url = reverse("core:configuracion_equipo", args=[equipo.pk]) if equipo else reverse("core:configuracion_equipo_crear")
@@ -3188,9 +3235,9 @@ class ConfiguracionEquiposTests(TestCase):
         self.assertEqual(Equipo.objects.count(), 1)
 
     def test_sin_organizacion_administrar_no_entra(self):
-        otro = Usuario.objects.create_user(username="eq_sin_permiso", password=CLAVE_PRUEBA)
+        otro = Usuario.objects.create_user("eq_sin_permiso@pruebas.orbita")
         _otorgar_permiso_nav(otro, "usuarios.administrar")
-        self.client.login(username="eq_sin_permiso", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("eq_sin_permiso@pruebas.orbita"))
         self.assertEqual(self.client.get(reverse("core:configuracion_equipo_crear")).status_code, 403)
         self.assertEqual(self._guardar().status_code, 403)
         self.assertFalse(Equipo.objects.exists())

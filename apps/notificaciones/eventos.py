@@ -68,6 +68,14 @@ def _despachar(lote):
         despacho.despachar(lote)
     except Exception:  # noqa: BLE001 — RN-032: un aviso nunca tumba ni deshace la operación.
         logger.exception("No se pudieron despachar %s eventos de notificación", len(lote))
+    # Segundo consumidor de los mismos eventos: los espacios de Google Chat de la Conversación recalculan miembros y
+    # estado del ticket al que le pasó algo (`apps.tickets.espacios_chat`; no avisa a nadie).
+    try:
+        from apps.tickets.espacios_chat import al_ocurrir
+
+        al_ocurrir(lote)
+    except Exception:  # noqa: BLE001
+        logger.exception("No se pudieron entregar %s eventos a los espacios de Google Chat", len(lote))
 
 
 def publicar(clave_evento, /, *, actor=None, ticket=None, ticket_id=None, **objetos_y_datos):

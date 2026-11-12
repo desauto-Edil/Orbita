@@ -98,7 +98,7 @@ class AsignacionRol(RegistroBase):
             # Coherencia de alcance: GLOBAL sin área/unidad; AREA exige área
             # y rechaza unidad; UNIDAD exige unidad y rechaza área.
             models.CheckConstraint(
-                check=(
+                condition=(
                     Q(tipo_alcance="GLOBAL", area__isnull=True, unidad_negocio__isnull=True)
                     | Q(tipo_alcance="AREA", area__isnull=False, unidad_negocio__isnull=True)
                     | Q(tipo_alcance="UNIDAD", unidad_negocio__isnull=False, area__isnull=True)

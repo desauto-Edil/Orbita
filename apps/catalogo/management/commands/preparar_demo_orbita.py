@@ -15,7 +15,7 @@ from apps.catalogo.models import RecursoDemo
 from apps.core.autorizacion import usuario_tiene_permiso
 from apps.workflows.autorizacion import puede_administrar_workflows
 
-FASES = ("preparar", "verificar", "publicar", "ejemplos", "retirar", "eliminar")
+FASES = ("preparar", "verificar", "publicar", "ejemplos", "avanzar", "cierre", "retirar", "eliminar")
 
 
 class _Deshacer(Exception):
@@ -29,18 +29,20 @@ def _mensaje(exc):
 class Command(BaseCommand):
     help = (
         "Prepara la demostración de Órbita (parrilla, webinar, pieza gráfica, presentaciones) con las operaciones "
-        "del dominio. Fases: preparar, verificar, publicar, ejemplos, retirar, eliminar (borrado físico de lo que "
-        "creó la demo; exige --confirmar-eliminar)."
+        "del dominio. Fases: preparar, verificar, publicar, ejemplos, avanzar (imperandina: lleva su ticket de "
+        "prueba a después de la gaceta; desarrollo: el aprobador decide el plan y entra a la gaceta), retirar, eliminar (borrado físico de lo que creó la demo; exige "
+        "--confirmar-eliminar)."
     )
 
     def add_arguments(self, parser):
         parser.add_argument("--fase", required=True, choices=FASES)
-        parser.add_argument("--actor", required=True, help="Usuario existente que ejecuta y queda en la auditoría.")
+        parser.add_argument("--actor", required=True, help="Correo (o su parte local) de la persona que ejecuta y queda en la auditoría.")
         parser.add_argument(
             "--casos", default=",".join(contrato.ALIAS_POR_DEFECTO),
             help=(
-                "Casos separados por coma: parrilla, webinar, pieza, presentaciones (por defecto, esos cuatro) e "
-                "imperandina (solo si se pide: personas, equipos y calendario fijos en su contrato)."
+                "Casos separados por coma: parrilla, webinar, pieza, presentaciones (por defecto, esos cuatro), "
+                "imperandina (personas, equipos y calendario fijos en su contrato) y desarrollo (plan de trabajo de "
+                "un desarrollo de software); estos dos solo si se piden."
             ),
         )
         parser.add_argument("--simular", action="store_true", help="Ejecuta la fase y deshace todo al final.")
@@ -56,7 +58,6 @@ class Command(BaseCommand):
         parser.add_argument("--aprobador", help="Aprobador interno (idea y pieza); por defecto también del webinar.")
         parser.add_argument("--responsable-publicacion", dest="responsable_publicacion")
         parser.add_argument("--revisores", help="Revisores de la gaceta: usuarios o equipo:<nombre>, separados por coma.")
-        parser.add_argument("--aprobadores-gaceta", dest="aprobadores_gaceta")
         parser.add_argument(
             "--dia-creacion", dest="dia_creacion", type=int,
             help="Día (1-28) en que se crea cada ejecución mensual; 20 por defecto. También vale al publicar.",
@@ -115,7 +116,7 @@ class Command(BaseCommand):
             if not puede_administrar_workflows(actor):
                 faltan.append("workflows.administrar")
         if faltan:
-            raise CommandError(f"El actor {actor.username} no tiene: {', '.join(faltan)}.")
+            raise CommandError(f"El actor {actor.email} no tiene: {', '.join(faltan)}.")
 
     def _ejecutar(self, opciones, actor, casos):
         fase = opciones["fase"]
@@ -163,6 +164,10 @@ class Command(BaseCommand):
             return fases.publicar(recurso, actor, dia_creacion=opciones.get("dia_creacion"), periodo=opciones.get("periodo"))
         if fase == "ejemplos":
             return fases.ejemplos(recurso, actor, solicitante=solicitante, area=area)
+        if fase == "avanzar":
+            return fases.avanzar(recurso, actor)
+        if fase == "cierre":
+            return fases.cierre(recurso, actor)
         if fase == "eliminar":
             from apps.catalogo.demo.eliminacion import eliminar
 

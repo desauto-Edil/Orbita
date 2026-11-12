@@ -10,7 +10,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import PermissionDenied, ValidationError
 from django.contrib.auth.models import AnonymousUser
 from django.db import IntegrityError, connection, transaction
-from django.test import RequestFactory, SimpleTestCase, TestCase, TransactionTestCase
+from django.test import RequestFactory, SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
@@ -56,6 +56,7 @@ from apps.core.models import (
     UsuarioArea,
     UsuarioUnidadNegocio,
 )
+from apps.core.pruebas import persona
 
 Usuario = get_user_model()
 
@@ -77,7 +78,7 @@ def _otorgar_permiso(usuario, codigo, *, nombre_rol=None):
 def _con_ruta_de_atencion(*servicios):
     """Bloque 2: publicar exige que alguien pueda iniciar (visibilidad) y atender (`tickets.atender`) lo publicado.
     Deja a los `servicios` como PÚBLICO INTERNO y asegura que alguien tenga `tickets.atender` GLOBAL."""
-    atiende, creado = Usuario.objects.get_or_create(username="ruta_atencion_global")
+    atiende, creado = Usuario.objects.get_or_create(email="ruta_atencion_global@pruebas.orbita")
     if creado:
         _permiso_get_or_create(atiende, "tickets.atender", "Rol ruta de atención global")
     for servicio in servicios:
@@ -115,7 +116,7 @@ class ServicioVisibilidadTests(TestCase):
     def setUp(self):
         categoria = Categoria.objects.create(nombre="Tecnología")
         self.servicio = Servicio.objects.create(nombre="Soporte técnico", categoria=categoria)
-        self.usuario = Usuario.objects.create_user(username="mvargas", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("mvargas@pruebas.orbita")
         self.area = Area.objects.create(nombre="TIC", codigo="TIC-CAT")
         self.unidad = UnidadNegocio.objects.create(nombre="Infraestructura", codigo="INFRA-CAT")
 
@@ -187,7 +188,7 @@ class ServicioResponsableTests(TestCase):
     def setUp(self):
         categoria = Categoria.objects.create(nombre="Tecnología")
         self.servicio = Servicio.objects.create(nombre="Soporte técnico", categoria=categoria)
-        self.usuario = Usuario.objects.create_user(username="jgarcia", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("jgarcia@pruebas.orbita")
         self.equipo = Equipo.objects.create(nombre="Mesa de ayuda")
 
     def test_constraint_usuario_exige_usuario_y_rechaza_equipo(self):
@@ -322,7 +323,7 @@ class VisibilidadCatalogoTests(TestCase):
 
     def setUp(self):
         self.categoria = Categoria.objects.create(nombre="Tecnología")
-        self.usuario = Usuario.objects.create_user(username="lrios", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("lrios@pruebas.orbita")
         self.area = Area.objects.create(nombre="TIC", codigo="TIC-VIS")
         self.unidad = UnidadNegocio.objects.create(nombre="Infraestructura", codigo="INFRA-VIS")
 
@@ -409,7 +410,7 @@ class CatalogoVistasTests(TestCase):
 
     def setUp(self):
         self.categoria = Categoria.objects.create(nombre="Tecnología")
-        self.usuario = Usuario.objects.create_user(username="pariza", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("pariza@pruebas.orbita")
         self.publico = Servicio.objects.create(
             nombre="Servicio público",
             categoria=self.categoria,
@@ -426,13 +427,13 @@ class CatalogoVistasTests(TestCase):
         self.assertEqual(respuesta.status_code, 302)
 
     def test_lista_solo_muestra_servicios_visibles(self):
-        self.client.login(username="pariza", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("pariza@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:lista"))
         self.assertContains(respuesta, "Servicio público")
         self.assertNotContains(respuesta, "Servicio ajeno")
 
     def test_lista_filtra_por_texto(self):
-        self.client.login(username="pariza", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("pariza@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:lista"), {"q": "público"})
         self.assertContains(respuesta, "Servicio público")
 
@@ -443,7 +444,7 @@ class CatalogoVistasTests(TestCase):
             categoria=otra_categoria,
             alcance_visibilidad=Servicio.AlcanceVisibilidad.PUBLICO_INTERNO,
         )
-        self.client.login(username="pariza", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("pariza@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:lista"), {"categoria": self.categoria.pk})
         self.assertContains(respuesta, "Servicio público")
         self.assertNotContains(respuesta, "Otro servicio")
@@ -453,14 +454,14 @@ class CatalogoVistasTests(TestCase):
         self.assertEqual(respuesta.status_code, 302)
 
     def test_detalle_accesible_si_es_visible(self):
-        self.client.login(username="pariza", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("pariza@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:detalle", args=[self.publico.pk]))
         self.assertEqual(respuesta.status_code, 200)
         self.assertContains(respuesta, "Servicio público")
 
     def test_detalle_404_si_no_es_visible(self):
         # Acceso directo por URL respeta la misma visibilidad que la lista
-        self.client.login(username="pariza", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("pariza@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:detalle", args=[self.restringido_no_concedido.pk]))
         self.assertEqual(respuesta.status_code, 404)
 
@@ -473,13 +474,13 @@ class CatalogoAdminAutorizacionTests(TestCase):
         self.rol = RolFuncional.objects.create(nombre="Gestor de Catálogo")
         RolPermiso.objects.create(rol=self.rol, permiso=self.permiso)
         self.usuario_con_permiso = Usuario.objects.create_user(
-            username="gcastro", password=CLAVE_PRUEBA, is_staff=True
+            "gcastro@pruebas.orbita",
         )
         AsignacionRol.objects.create(
             usuario=self.usuario_con_permiso, rol=self.rol, tipo_alcance=AsignacionRol.TipoAlcance.GLOBAL
         )
         self.usuario_sin_permiso = Usuario.objects.create_user(
-            username="staff_sin_permiso_cat", password=CLAVE_PRUEBA, is_staff=True
+            "staff_sin_permiso_cat@pruebas.orbita",
         )
 
     def test_sin_permiso_no_puede_ver_catalogo_en_admin(self):
@@ -497,13 +498,12 @@ class CatalogoAdminAutorizacionTests(TestCase):
         self.assertTrue(admin_instance.has_change_permission(request))
 
 
+@override_settings(ADMIN_HABILITADA=True)
 class CatalogoAuditoriaTests(TestCase):
-    """CU-010 — auditoría de cambios administrativos (RQF-116/120)."""
+    """CU-010 — auditoría de cambios administrativos (RQF-116/120). Versión 1: por el sitio protegido de Órbita."""
 
     def setUp(self):
-        self.staff = Usuario.objects.create_user(
-            username="auditor_catalogo", password=CLAVE_PRUEBA, is_staff=True, is_superuser=True
-        )
+        self.staff = Usuario.objects.create_user("auditor_catalogo@pruebas.orbita")
         permiso = Permiso.objects.get(codigo="catalogo.administrar")
         rol = RolFuncional.objects.create(nombre="Gestor de Catálogo (auditoría)")
         RolPermiso.objects.create(rol=rol, permiso=permiso)
@@ -511,7 +511,9 @@ class CatalogoAuditoriaTests(TestCase):
         self.categoria = Categoria.objects.create(nombre="Tecnología")
 
     def test_crear_servicio_via_admin_registra_evento_crear(self):
-        self.client.login(username="auditor_catalogo", password=CLAVE_PRUEBA)
+        from apps.core.tests import entrar_a_la_administracion
+
+        entrar_a_la_administracion(self.client, self.staff)
         datos = {
             "nombre": "Nuevo servicio",
             "tipo": Servicio.Tipo.SERVICIO,
@@ -562,7 +564,7 @@ class FormularioVersionamientoTests(TestCase):
     """RQF-046/047, RN-013 — `crear_nueva_version`."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="gdiaz", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("gdiaz@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="Solicitud de equipo")
 
     def test_primera_version_es_borrador_vacia(self):
@@ -617,7 +619,7 @@ class ActivarVersionTests(TestCase):
     """RQF-047 — `activar_version`."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="lvega", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("lvega@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="Solicitud de acceso")
 
     def test_activar_version_borrador(self):
@@ -657,7 +659,7 @@ class InmutabilidadVersionTests(TestCase):
     por las vías ordinarias de dominio/Admin."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="rmora", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("rmora@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="Solicitud de viaje")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
         self.campo = Campo.objects.create(version=self.version, tipo=Campo.TipoCampo.TEXTO, etiqueta="Destino")
@@ -710,7 +712,7 @@ class EstrategiaTextoTests(TestCase):
     """RQF-040/041 — familia TEXTO/TEXTO_LARGO/CORREO/URL."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="atorres", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("atorres@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="F")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
 
@@ -748,7 +750,7 @@ class EstrategiaTextoTests(TestCase):
 
 class EstrategiaNumericaTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="bcruz", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("bcruz@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="F")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
         self.campo = Campo.objects.create(
@@ -786,7 +788,7 @@ class EstrategiaNumericaTests(TestCase):
 
 class EstrategiaTemporalTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="cnieto", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("cnieto@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="F")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
         self.campo = Campo.objects.create(
@@ -813,7 +815,7 @@ class EstrategiaSeleccionTests(TestCase):
     """RQF-042 — opciones en `OpcionCampo`, nunca en el JSON."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="dlopez", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("dlopez@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="F")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
         self.lista = Campo.objects.create(version=self.version, tipo=Campo.TipoCampo.LISTA, etiqueta="Prioridad")
@@ -854,7 +856,7 @@ class EstrategiaSeleccionTests(TestCase):
 
 class EstrategiaBooleanoTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="ejara", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("ejara@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="F")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
         self.campo = Campo.objects.create(version=self.version, tipo=Campo.TipoCampo.BOOLEANO, etiqueta="Acepta")
@@ -874,7 +876,7 @@ class EstrategiaArchivoTests(TestCase):
     """
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="fperez", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("fperez@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="F")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
         self.campo = Campo.objects.create(
@@ -905,7 +907,7 @@ class EstrategiaReferenciaOrganizacionalTests(TestCase):
     """USUARIO/AREA/UNIDAD reutilizan los modelos reales de `apps.core`."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="gsilva", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("gsilva@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="F")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
         self.area = Area.objects.create(nombre="Compras", codigo="COMP-1.2")
@@ -932,7 +934,7 @@ class EstrategiaReferenciaOrganizacionalTests(TestCase):
 
 class OpcionCampoTests(TestCase):
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="pcarrillo", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("pcarrillo@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="F")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
         self.campo = Campo.objects.create(version=self.version, tipo=Campo.TipoCampo.LISTA, etiqueta="Prioridad")
@@ -948,7 +950,7 @@ class EspecificacionReglaTests(TestCase):
     """RQF-043 — `EspecificacionRegla.es_satisfecha_por`."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="hrios", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("hrios@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="F")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
         self.origen = Campo.objects.create(version=self.version, tipo=Campo.TipoCampo.NUMERO, etiqueta="Monto")
@@ -1010,7 +1012,7 @@ class ReglaCondicionalIntegridadTests(TestCase):
     ciclos permitidos (ver `reglas.py::validar_integridad_regla`)."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="ivargas", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("ivargas@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="F")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
         self.otra_version = crear_nueva_version(Formulario.objects.create(nombre="Otro"), actor=self.usuario)
@@ -1090,7 +1092,7 @@ class ReglaCondicionalComposicionTests(TestCase):
     en vez de resolverlas con una precedencia en tiempo de evaluación."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="jsalas", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("jsalas@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="F")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
         self.origen_1 = Campo.objects.create(version=self.version, tipo=Campo.TipoCampo.TEXTO, etiqueta="Origen1")
@@ -1139,9 +1141,9 @@ class PrevisualizarVersionTests(TestCase):
     """CU-013/RQF-045 — previsualización real, sin persistencia."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="jquintero", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("jquintero@pruebas.orbita")
         _otorgar_permiso(self.usuario, "formulario.administrar")
-        self.sin_permiso = Usuario.objects.create_user(username="sin_permiso_form", password=CLAVE_PRUEBA)
+        self.sin_permiso = Usuario.objects.create_user("sin_permiso_form@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="Solicitud de compra")
         self.version = crear_nueva_version(self.formulario, actor=self.usuario)
         Campo.objects.create(version=self.version, tipo=Campo.TipoCampo.TEXTO, etiqueta="Descripción")
@@ -1151,12 +1153,12 @@ class PrevisualizarVersionTests(TestCase):
         self.assertEqual(respuesta.status_code, 302)
 
     def test_exige_permiso_formulario_administrar(self):
-        self.client.login(username="sin_permiso_form", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("sin_permiso_form@pruebas.orbita"))
         respuesta = self.client.get(reverse("formularios:previsualizar_version", args=[self.version.pk]))
         self.assertEqual(respuesta.status_code, 403)
 
     def test_renderiza_campos_sin_persistir_nada(self):
-        self.client.login(username="jquintero", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("jquintero@pruebas.orbita"))
         total_auditoria_antes = RegistroAuditoria.objects.count()
         respuesta = self.client.get(reverse("formularios:previsualizar_version", args=[self.version.pk]))
         self.assertEqual(respuesta.status_code, 200)
@@ -1169,7 +1171,7 @@ class ServicioFormularioAsociacionTests(TestCase):
     """RQF-034 (CU-010) — cierre del pendiente de 1.1."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="kmedina", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("kmedina@pruebas.orbita")
         self.categoria = Categoria.objects.create(nombre="Compras")
         self.formulario = Formulario.objects.create(nombre="Solicitud de compra")
 
@@ -1199,13 +1201,13 @@ class AutorizacionFormularioTests(TestCase):
     """`formulario.administrar` separado de `catalogo.administrar`."""
 
     def setUp(self):
-        self.con_permiso = Usuario.objects.create_user(username="lsalas", password=CLAVE_PRUEBA, is_staff=True)
+        self.con_permiso = Usuario.objects.create_user("lsalas@pruebas.orbita")
         _otorgar_permiso(self.con_permiso, "formulario.administrar")
         self.solo_catalogo = Usuario.objects.create_user(
-            username="msolo_cat", password=CLAVE_PRUEBA, is_staff=True
+            "msolo_cat@pruebas.orbita",
         )
         _otorgar_permiso(self.solo_catalogo, "catalogo.administrar")
-        self.sin_permiso = Usuario.objects.create_user(username="nsin_permiso", password=CLAVE_PRUEBA, is_staff=True)
+        self.sin_permiso = Usuario.objects.create_user("nsin_permiso@pruebas.orbita")
 
     def test_con_permiso_formulario_administrar_puede_administrar(self):
         admin_instance = FormularioAdmin(Formulario, django_admin.site)
@@ -1250,7 +1252,7 @@ class AuditoriaVersionamientoTests(TestCase):
     de auditoría de 0.4 — ningún historial paralelo."""
 
     def setUp(self):
-        self.usuario = Usuario.objects.create_user(username="opardo", password=CLAVE_PRUEBA)
+        self.usuario = Usuario.objects.create_user("opardo@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="Solicitud de vacaciones")
 
     def test_crear_nueva_version_registra_evento_crear(self):
@@ -1274,8 +1276,8 @@ class PublicacionCatalogoTests(TestCase):
     """4.1: publicación explícita, sin reinterpretar visibilidad histórica."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user("publicador41")
-        self.otro = Usuario.objects.create_user("solicitante41")
+        self.actor = Usuario.objects.create_user("publicador41@pruebas.orbita")
+        self.otro = Usuario.objects.create_user("solicitante41@pruebas.orbita")
         _otorgar_permiso(self.actor, "catalogo.administrar")
         self.categoria = Categoria.objects.create(nombre="Mercadeo")
         self.formulario = Formulario.objects.create(nombre="Entrada")
@@ -1423,10 +1425,11 @@ class PublicacionCatalogoTests(TestCase):
         ServicioResponsable.objects.create(servicio=proceso, tipo_responsable="USUARIO", usuario=self.otro)
         self.assertTrue(usuario_es_responsable_configurado(self.otro, proceso))
 
+    @override_settings(ADMIN_HABILITADA=True)
     def test_admin_publica_con_validacion_y_conserva_activo_historico_al_editar(self):
-        self.actor.is_staff = True
-        self.actor.save()
-        self.client.force_login(self.actor)
+        from apps.core.tests import entrar_a_la_administracion
+
+        entrar_a_la_administracion(self.client, self.actor)
         servicio = self._crear()
         eventos = RegistroAuditoria.objects.count()
         respuesta = self.client.post(reverse("admin:catalogo_servicio_changelist"), {
@@ -1477,8 +1480,8 @@ class PublicacionCatalogoTests(TestCase):
 
 class DefinicionEntregableTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user("def_entregables")
-        self.ajeno = Usuario.objects.create_user("def_ajeno")
+        self.actor = Usuario.objects.create_user("def_entregables@pruebas.orbita")
+        self.ajeno = Usuario.objects.create_user("def_ajeno@pruebas.orbita")
         _otorgar_permiso(self.actor, "catalogo.administrar")
         self.categoria = Categoria.objects.create(nombre="Salidas")
         self.servicio = Servicio.objects.create(nombre="Servicio", categoria=self.categoria)
@@ -1558,7 +1561,7 @@ class ConfiguracionEjecucionFasesR1Tests(TestCase):
         from apps.workflows import fases as fases_ops
         from apps.workflows.versionamiento import activar_version
 
-        self.actor = Usuario.objects.create_user(username="conf_fases", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("conf_fases@pruebas.orbita")
         _otorgar_permiso(self.actor, "catalogo.administrar", nombre_rol="Catalogo configura fases")
         self.categoria = Categoria.objects.create(nombre="Diseno")
         self.servicio = Servicio.objects.create(nombre="Pieza grafica", categoria=self.categoria)
@@ -1768,8 +1771,8 @@ class EjecucionConfigurableTests(TestCase):
         from apps.catalogo import ejecucion
 
         self.ejecucion = ejecucion
-        self.actor = Usuario.objects.create_user("configurador43")
-        self.otro = Usuario.objects.create_user("ajeno43")
+        self.actor = Usuario.objects.create_user("configurador43@pruebas.orbita")
+        self.otro = Usuario.objects.create_user("ajeno43@pruebas.orbita")
         _otorgar_permiso(self.actor, "catalogo.administrar")
         _otorgar_permiso(self.actor, "workflows.administrar")
         self.categoria = Categoria.objects.create(nombre="Servicios configurables")
@@ -2055,11 +2058,11 @@ class StudioTests(TestCase):
     que el Studio los coordina correctamente vía HTTP, sin duplicarlos."""
 
     def setUp(self):
-        self.administrador = Usuario.objects.create_user("studio_admin", password=CLAVE_PRUEBA)
+        self.administrador = Usuario.objects.create_user("studio_admin@pruebas.orbita")
         _otorgar_permiso(self.administrador, "catalogo.administrar")
         _otorgar_permiso(self.administrador, "formulario.administrar")
         _otorgar_permiso(self.administrador, "workflows.administrar")
-        self.sin_permiso = Usuario.objects.create_user("studio_sin_permiso", password=CLAVE_PRUEBA)
+        self.sin_permiso = Usuario.objects.create_user("studio_sin_permiso@pruebas.orbita")
         self.categoria = Categoria.objects.create(nombre="Studio Categoria")
         self.servicio = Servicio.objects.create(nombre="Pieza para redes", categoria=self.categoria, activo=False)
         self.proceso = Servicio.objects.create(
@@ -2067,7 +2070,7 @@ class StudioTests(TestCase):
         )
 
     def _login_admin(self):
-        self.client.login(username="studio_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("studio_admin@pruebas.orbita"))
 
     def _preparar_ejecucion_http(self, servicio=None):
         servicio = servicio or self.servicio
@@ -2084,7 +2087,7 @@ class StudioTests(TestCase):
         self.assertEqual(respuesta.status_code, 302)
 
     def test_studio_rechaza_sin_permiso_catalogo_administrar(self):
-        self.client.login(username="studio_sin_permiso", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("studio_sin_permiso@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]))
         self.assertEqual(respuesta.status_code, 403)
 
@@ -2112,7 +2115,7 @@ class StudioTests(TestCase):
         self.assertEqual(respuesta.context["tab"], "general")
 
     def test_studio_lista_requiere_permiso_y_lista_servicios_reales(self):
-        self.client.login(username="studio_sin_permiso", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("studio_sin_permiso@pruebas.orbita"))
         self.assertEqual(self.client.get(reverse("catalogo:studio_lista")).status_code, 403)
         self._login_admin()
         respuesta = self.client.get(reverse("catalogo:studio_lista"))
@@ -2123,7 +2126,7 @@ class StudioTests(TestCase):
         self._login_admin()
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertContains(respuesta, "Diseñador")
-        self.client.login(username="studio_sin_permiso", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("studio_sin_permiso@pruebas.orbita"))
         respuesta = self.client.get(reverse("core:inicio"))
         self.assertNotContains(respuesta, "Diseñador")
 
@@ -2513,18 +2516,18 @@ class StudioTests(TestCase):
 
 class StudioCierreFuncionalTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user("cierre_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("cierre_admin@pruebas.orbita")
         _otorgar_permiso(self.admin, "catalogo.administrar")
-        self.sin_permiso = Usuario.objects.create_user("cierre_sin_permiso", password=CLAVE_PRUEBA)
+        self.sin_permiso = Usuario.objects.create_user("cierre_sin_permiso@pruebas.orbita")
         self.categoria = Categoria.objects.create(nombre="Mercadeo")
         self.servicio = Servicio.objects.create(nombre="Diseño de piezas", categoria=self.categoria, activo=False)
-        self.persona = Usuario.objects.create_user("cierre_persona", password=CLAVE_PRUEBA)
+        self.persona = Usuario.objects.create_user("cierre_persona@pruebas.orbita")
         self.area = Area.objects.create(nombre="Mercadeo área")
         self.unidad = UnidadNegocio.objects.create(nombre="Unidad Norte")
         self.equipo = Equipo.objects.create(nombre="Equipo de Mercadeo")
 
     def _login_admin(self):
-        self.client.login(username="cierre_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("cierre_admin@pruebas.orbita"))
 
     def _crear(self, **extra):
         datos = {
@@ -2598,7 +2601,7 @@ class StudioCierreFuncionalTests(TestCase):
     def test_crear_sin_permiso_o_sin_sesion_no_crea(self):
         antes = Servicio.objects.count()
         self.assertEqual(self.client.get(reverse("catalogo:studio_crear")).status_code, 302)
-        self.client.login(username="cierre_sin_permiso", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("cierre_sin_permiso@pruebas.orbita"))
         self.assertEqual(self.client.get(reverse("catalogo:studio_crear")).status_code, 403)
         self.assertEqual(self._crear().status_code, 403)
         self.assertEqual(Servicio.objects.count(), antes)
@@ -2673,7 +2676,7 @@ class StudioCierreFuncionalTests(TestCase):
         self._login_admin()
         self._conceder(tipo_alcance="USUARIO")
         self._conceder(tipo_alcance="AREA", usuario=self.persona.pk)
-        inactivo = Usuario.objects.create_user("cierre_inactivo", password=CLAVE_PRUEBA, is_active=False)
+        inactivo = Usuario.objects.create_user("cierre_inactivo@pruebas.orbita", is_active=False)
         self._conceder(tipo_alcance="USUARIO", usuario=inactivo.pk)
         self.assertFalse(ServicioVisibilidad.objects.filter(servicio=self.servicio).exists())
 
@@ -2710,7 +2713,7 @@ class StudioCierreFuncionalTests(TestCase):
         concesion = ServicioVisibilidad.objects.create(
             servicio=self.servicio, tipo_alcance=ServicioVisibilidad.TipoAlcance.AREA, area=self.area
         )
-        self.client.login(username="cierre_sin_permiso", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("cierre_sin_permiso@pruebas.orbita"))
         self.assertEqual(self._conceder(tipo_alcance="USUARIO", usuario=self.persona.pk).status_code, 403)
         self.assertEqual(
             self.client.post(
@@ -2727,7 +2730,7 @@ class StudioCierreFuncionalTests(TestCase):
         # filas que Studio escribió, sin ninguna capa intermedia.
         Servicio.objects.filter(pk=self.servicio.pk).update(activo=True)
         UsuarioArea.objects.create(usuario=self.persona, area=self.area)
-        ajeno = Usuario.objects.create_user("cierre_ajeno", password=CLAVE_PRUEBA)
+        ajeno = Usuario.objects.create_user("cierre_ajeno@pruebas.orbita")
         self.assertNotIn(self.servicio, servicios_visibles_para(self.persona))
         self._login_admin()
         self._conceder(tipo_alcance="AREA", area=self.area.pk)
@@ -2797,7 +2800,7 @@ class StudioCierreFuncionalTests(TestCase):
         responsable = ServicioResponsable.objects.create(
             servicio=self.servicio, tipo_responsable=ServicioResponsable.TipoResponsable.USUARIO, usuario=self.persona
         )
-        self.client.login(username="cierre_sin_permiso", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("cierre_sin_permiso@pruebas.orbita"))
         self.assertEqual(self._agregar_responsable(tipo_responsable="EQUIPO", equipo=self.equipo.pk).status_code, 403)
         self.assertEqual(
             self.client.post(
@@ -2921,12 +2924,12 @@ class StudioCierreFuncionalTests(TestCase):
 
 class StudioEdicionContinuaTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user("continua_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("continua_admin@pruebas.orbita")
         _otorgar_permiso(self.admin, "catalogo.administrar")
         _otorgar_permiso(self.admin, "workflows.administrar")
         self.categoria = Categoria.objects.create(nombre="Continua")
         self.servicio = Servicio.objects.create(nombre="Flujo continuo", categoria=self.categoria, activo=False)
-        self.client.login(username="continua_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("continua_admin@pruebas.orbita"))
         self.client.post(reverse("catalogo:studio_ejecucion_configurar", args=[self.servicio.pk]))
         self.servicio.refresh_from_db()
         from apps.workflows.models import WorkflowVersion
@@ -3283,9 +3286,9 @@ class StudioEdicionContinuaTests(TestCase):
 
 class StudioPoliticaEntregaTests(TestCase):
     def setUp(self):
-        self.admin = Usuario.objects.create_user("politica_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("politica_admin@pruebas.orbita")
         _otorgar_permiso(self.admin, "catalogo.administrar")
-        self.sin_permiso = Usuario.objects.create_user("politica_sin_permiso", password=CLAVE_PRUEBA)
+        self.sin_permiso = Usuario.objects.create_user("politica_sin_permiso@pruebas.orbita")
         self.categoria = Categoria.objects.create(nombre="Entrega")
         self.servicio = Servicio.objects.create(nombre="Con entrega", categoria=self.categoria, activo=False)
 
@@ -3297,14 +3300,14 @@ class StudioPoliticaEntregaTests(TestCase):
 
     def test_servicio_nuevo_no_tiene_politica_y_salida_la_ofrece(self):
         self.assertEqual((self.servicio.politica_entrega, self.servicio.dias_observacion), ("", None))
-        self.client.login(username="politica_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("politica_admin@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "salida"})
         self.assertContains(respuesta, "Entrega al solicitante")
         self.assertContains(respuesta, "Guardar política")
         self.assertContains(respuesta, "sin entrega formal")
 
     def test_configurar_periodo_de_observaciones(self):
-        self.client.login(username="politica_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("politica_admin@pruebas.orbita"))
         self._guardar(politica="PERIODO_OBSERVACIONES", dias_observacion="5")
         self.servicio.refresh_from_db()
         self.assertEqual((self.servicio.politica_entrega, self.servicio.dias_observacion), ("PERIODO_OBSERVACIONES", 5))
@@ -3314,14 +3317,14 @@ class StudioPoliticaEntregaTests(TestCase):
         self.assertEqual(evento.usuario, self.admin)
 
     def test_cierre_directo_descarta_los_dias(self):
-        self.client.login(username="politica_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("politica_admin@pruebas.orbita"))
         self._guardar(politica="PERIODO_OBSERVACIONES", dias_observacion="5")
         self._guardar(politica="CIERRE_DIRECTO", dias_observacion="9")
         self.servicio.refresh_from_db()
         self.assertEqual((self.servicio.politica_entrega, self.servicio.dias_observacion), ("CIERRE_DIRECTO", None))
 
     def test_rechaza_periodo_sin_dias_o_fuera_de_rango_y_politicas_invalidas(self):
-        self.client.login(username="politica_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("politica_admin@pruebas.orbita"))
         for datos in (
             {"politica": "PERIODO_OBSERVACIONES"}, {"politica": "PERIODO_OBSERVACIONES", "dias_observacion": "0"},
             {"politica": "PERIODO_OBSERVACIONES", "dias_observacion": "91"}, {"politica": "ESPERAR_SIEMPRE"},
@@ -3334,13 +3337,13 @@ class StudioPoliticaEntregaTests(TestCase):
         self.assertFalse(self._auditorias().filter(accion=RegistroAuditoria.Accion.ACTUALIZAR).exists())
 
     def test_guardar_la_misma_politica_no_duplica_auditoria(self):
-        self.client.login(username="politica_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("politica_admin@pruebas.orbita"))
         self._guardar(politica="PERIODO_OBSERVACIONES", dias_observacion="3")
         self._guardar(politica="PERIODO_OBSERVACIONES", dias_observacion="3")
         self.assertEqual(self._auditorias().filter(accion=RegistroAuditoria.Accion.ACTUALIZAR).count(), 1)
 
     def test_sin_permiso_no_configura(self):
-        self.client.login(username="politica_sin_permiso", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("politica_sin_permiso@pruebas.orbita"))
         self.assertEqual(self._guardar(politica="CIERRE_DIRECTO").status_code, 403)
         self.servicio.refresh_from_db()
         self.assertEqual(self.servicio.politica_entrega, "")
@@ -3356,7 +3359,7 @@ class StudioPoliticaEntregaTests(TestCase):
             Servicio.objects.filter(pk=self.servicio.pk).update(politica_entrega="PERIODO_OBSERVACIONES")
 
     def test_publicacion_informa_pero_no_exige_politica(self):
-        self.client.login(username="politica_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("politica_admin@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "publicacion"})
         self.assertContains(respuesta, "Sin política de entrega")
         self._guardar(politica="CIERRE_DIRECTO")
@@ -3364,7 +3367,7 @@ class StudioPoliticaEntregaTests(TestCase):
         self.assertContains(respuesta, "Entrega al solicitante definida")
 
     def test_las_cinco_pestanas_siguen_respondiendo(self):
-        self.client.login(username="politica_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("politica_admin@pruebas.orbita"))
         for tab in ("general", "entrada", "ejecucion", "salida", "publicacion"):
             respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": tab})
             self.assertEqual(respuesta.status_code, 200, tab)
@@ -3372,14 +3375,14 @@ class StudioPoliticaEntregaTests(TestCase):
 
 class _EscenarioCompartidoMixin:
     def _preparar_usuarios(self):
-        self.admin = Usuario.objects.create_user("compartido_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("compartido_admin@pruebas.orbita")
         _otorgar_permiso(self.admin, "catalogo.administrar", nombre_rol="Rol cat admin comp")
         _otorgar_permiso(self.admin, "workflows.administrar", nombre_rol="Rol wf admin comp")
         self.categoria = Categoria.objects.create(nombre="Compartidos")
-        self.client.login(username="compartido_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("compartido_admin@pruebas.orbita"))
 
     def _usuario_con(self, username, *codigos):
-        usuario = Usuario.objects.create_user(username, password=CLAVE_PRUEBA)
+        usuario = Usuario.objects.create_user(f"{username}@pruebas.orbita")
         for codigo in codigos:
             _otorgar_permiso(usuario, codigo, nombre_rol=f"Rol {codigo} {username}")
         return usuario
@@ -3639,7 +3642,7 @@ class StudioWorkflowCompartidoTests(_EscenarioCompartidoMixin, TestCase):
         from apps.workflows.models import WorkflowVersion
 
         self._usuario_con("solo_vincula", "catalogo.administrar", "workflows.vincular")
-        self.client.login(username="solo_vincula", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solo_vincula"))
         # Puede elegir un flujo existente...
         pagina = self._pagina()
         self.assertContains(pagina, "Usar flujo existente")
@@ -3665,7 +3668,7 @@ class StudioWorkflowCompartidoTests(_EscenarioCompartidoMixin, TestCase):
 
     def test_sin_permiso_de_vincular_no_se_ve_ni_se_usa(self):
         self._usuario_con("solo_catalogo_comp", "catalogo.administrar")
-        self.client.login(username="solo_catalogo_comp", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solo_catalogo_comp"))
         self.assertNotContains(self._pagina(), "Usar flujo existente")
         self.assertEqual(self._vincular().status_code, 403)
         self.destino.refresh_from_db()
@@ -3673,7 +3676,7 @@ class StudioWorkflowCompartidoTests(_EscenarioCompartidoMixin, TestCase):
 
     def test_solo_workflows_vincular_sin_permiso_de_catalogo_no_entra_a_studio(self):
         self._usuario_con("solo_wf_vincular", "workflows.vincular")
-        self.client.login(username="solo_wf_vincular", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("solo_wf_vincular"))
         self.assertEqual(self._pagina().status_code, 403)
         self.assertEqual(self._vincular().status_code, 403)
 
@@ -3688,7 +3691,7 @@ class StudioWorkflowCompartidoTests(_EscenarioCompartidoMixin, TestCase):
         # Quien configura servicios y puede vincular entra al Diseñador, pero la
         # vista técnica de los flujos exige poder consultarlos.
         self._usuario_con("vincula_sin_avanzado", "catalogo.administrar", "workflows.vincular")
-        self.client.login(username="vincula_sin_avanzado", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("vincula_sin_avanzado"))
         self.assertContains(self.client.get(reverse("core:inicio")), "Diseñador")
         self.assertEqual(self.client.get(reverse("workflows:lista")).status_code, 403)
 
@@ -3837,12 +3840,12 @@ class DisenadorFlujosTests(TestCase):
         self.Etapa, self.Workflow, self.Version = Etapa, Workflow, WorkflowVersion
         self.Fase, self.TransicionFase = FaseWorkflow, TransicionFaseWorkflow
         # Diseña flujos SIN poder configurar el catálogo: la independencia es el punto.
-        self.diseñador = Usuario.objects.create_user("d2_disenador", password=CLAVE_PRUEBA)
+        self.diseñador = Usuario.objects.create_user("d2_disenador@pruebas.orbita")
         _permiso_get_or_create(self.diseñador, "workflows.administrar", "Rol D2 administrar flujos")
-        self.lector = Usuario.objects.create_user("d2_lector", password=CLAVE_PRUEBA)
+        self.lector = Usuario.objects.create_user("d2_lector@pruebas.orbita")
         _permiso_get_or_create(self.lector, "workflows.consultar", "Rol D2 consultar flujos")
         self.categoria = Categoria.objects.create(nombre="D2")
-        self.client.login(username="d2_disenador", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("d2_disenador@pruebas.orbita"))
 
     # --- helpers ---
     # D3: un Flujo es una plantilla de FASES; los bloques viven en cada Servicio/Proceso.
@@ -3918,7 +3921,7 @@ class DisenadorFlujosTests(TestCase):
         self.assertFalse(self.Workflow.objects.exists())
 
     def test_crear_exige_poder_administrar_flujos(self):
-        self.client.login(username="d2_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("d2_lector@pruebas.orbita"))
         self.assertEqual(self.client.get(reverse("flujos:nuevo")).status_code, 403)
         self.assertEqual(self.client.post(reverse("flujos:nuevo"), {"nombre": "No"}).status_code, 403)
         self.assertFalse(self.Workflow.objects.exists())
@@ -3928,7 +3931,7 @@ class DisenadorFlujosTests(TestCase):
 
         from apps.catalogo.ejecucion import crear_flujo
 
-        sin_permiso = Usuario.objects.create_user("d2_nadie", password=CLAVE_PRUEBA)
+        sin_permiso = Usuario.objects.create_user("d2_nadie@pruebas.orbita")
         with self.assertRaises(PermissionDenied):
             crear_flujo(sin_permiso, nombre="No debería")
 
@@ -3937,17 +3940,17 @@ class DisenadorFlujosTests(TestCase):
     def test_ver_el_lienzo_exige_consultar_y_no_basta_con_vincular(self):
         workflow = self._crear_flujo()
         self.assertEqual(self.client.get(reverse("flujos:lienzo", args=[workflow.pk])).status_code, 200)
-        self.client.login(username="d2_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("d2_lector@pruebas.orbita"))
         self.assertEqual(self.client.get(reverse("flujos:lienzo", args=[workflow.pk])).status_code, 200)
-        vincula = Usuario.objects.create_user("d2_vincula", password=CLAVE_PRUEBA)
+        vincula = Usuario.objects.create_user("d2_vincula@pruebas.orbita")
         _permiso_get_or_create(vincula, "workflows.vincular", "Rol D2 vincular")
-        self.client.login(username="d2_vincula", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("d2_vincula@pruebas.orbita"))
         self.assertEqual(self.client.get(reverse("flujos:lienzo", args=[workflow.pk])).status_code, 403)
 
     def test_quien_solo_consulta_no_ve_ni_puede_usar_las_acciones_de_edicion(self):
         workflow = self._crear_flujo()
         self._fase(workflow, "Fase uno")
-        self.client.login(username="d2_lector", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("d2_lector@pruebas.orbita"))
         respuesta = self.client.get(reverse("flujos:lienzo", args=[workflow.pk]))
         self.assertContains(respuesta, "Fase uno")
         self.assertFalse(respuesta.context["editable_ejecucion"])
@@ -4229,10 +4232,10 @@ class DisenadorServiciosD3Tests(TestCase):
         from apps.workflows.models import Etapa, TransicionEtapa, Workflow, WorkflowVersion
 
         self.Etapa, self.Transicion, self.Workflow, self.Version = Etapa, TransicionEtapa, Workflow, WorkflowVersion
-        self.configurador = Usuario.objects.create_user("d3_configurador", password=CLAVE_PRUEBA)
+        self.configurador = Usuario.objects.create_user("d3_configurador@pruebas.orbita")
         for codigo in ("catalogo.administrar", "formulario.administrar", "workflows.vincular", "workflows.administrar"):
             _permiso_get_or_create(self.configurador, codigo, f"Rol D3 {codigo}")
-        self.solo_vincula = Usuario.objects.create_user("d3_vincula", password=CLAVE_PRUEBA)
+        self.solo_vincula = Usuario.objects.create_user("d3_vincula@pruebas.orbita")
         for codigo in ("catalogo.administrar", "formulario.administrar", "workflows.vincular"):
             _permiso_get_or_create(self.solo_vincula, codigo, f"Rol D3 solo {codigo}")
         self.categoria = Categoria.objects.create(nombre="D3")
@@ -4289,7 +4292,7 @@ class DisenadorServiciosD3Tests(TestCase):
         servicio.refresh_from_db()
 
     def test_servicio_simple_sin_flujo_es_opcional_en_disenador(self):
-        self.client.login(username="d3_configurador", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("d3_configurador@pruebas.orbita"))
         servicio = self._servicio("Simple sin flujo")
         respuesta = self.client.get(reverse("catalogo:studio", args=[servicio.pk]), {"tab": "ejecucion"})
         self.assertEqual(respuesta.status_code, 200)
@@ -4300,7 +4303,7 @@ class DisenadorServiciosD3Tests(TestCase):
     def test_proceso_sin_flujo_queda_sin_configurar_y_no_publica(self):
         from apps.catalogo.operaciones import validar_publicacion
 
-        self.client.login(username="d3_configurador", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("d3_configurador@pruebas.orbita"))
         proceso = self._servicio("Proceso sin flujo", tipo=Servicio.Tipo.PROCESO)
         respuesta = self.client.get(reverse("catalogo:studio", args=[proceso.pk]), {"tab": "ejecucion"})
         flujo = next(s for s in respuesta.context["secciones"] if s["clave"] == "ejecucion")
@@ -4313,7 +4316,7 @@ class DisenadorServiciosD3Tests(TestCase):
     def test_usuario_que_solo_vincula_ve_tarjetas_y_puede_seleccionar_flujo_publicado(self):
         workflow = self._flujo_publicado()
         servicio = self._servicio("Usa existente")
-        self.client.login(username="d3_vincula", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("d3_vincula@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:studio", args=[servicio.pk]), {"tab": "ejecucion"})
         self.assertContains(respuesta, "Compra de insumos")
         self.assertContains(respuesta, "Revision")
@@ -4332,14 +4335,14 @@ class DisenadorServiciosD3Tests(TestCase):
         servicio = self._servicio("Publica con flujo", workflow=workflow)
         self._activar_configuracion_operativa(servicio)
         _con_ruta_de_atencion(servicio)
-        self.client.login(username="d3_vincula", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("d3_vincula@pruebas.orbita"))
         respuesta = self.client.post(reverse("catalogo:studio_publicar", args=[servicio.pk]))
         self.assertEqual(respuesta.status_code, 302)
         servicio.refresh_from_db()
         self.assertTrue(servicio.activo)
 
     def test_crear_flujo_desde_servicio_crea_workflow_real_y_conserva_retorno(self):
-        self.client.login(username="d3_configurador", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("d3_configurador@pruebas.orbita"))
         servicio = self._servicio("Servicio crea flujo")
         respuesta = self.client.post(
             reverse("catalogo:studio_ejecucion_crear_flujo", args=[servicio.pk]),
@@ -4368,7 +4371,7 @@ class DisenadorServiciosD3Tests(TestCase):
             configuracion={"tipo_actor": "SOLICITANTE"},
         )
 
-        self.client.login(username="d3_configurador", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("d3_configurador@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:studio", args=[servicio.pk]), {"tab": "ejecucion"})
 
         flujo = next(s for s in respuesta.context["secciones"] if s["clave"] == "ejecucion")
@@ -4379,7 +4382,7 @@ class DisenadorServiciosD3Tests(TestCase):
         workflow = self._flujo_publicado("Compartido D3")
         servicio_a = self._servicio("Servicio A", workflow=workflow)
         servicio_b = self._servicio("Servicio B", workflow=workflow)
-        self.client.login(username="d3_configurador", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("d3_configurador@pruebas.orbita"))
 
         self.client.post(reverse("catalogo:studio_ejecucion_copia", args=[servicio_a.pk]))
         servicio_a.refresh_from_db()
@@ -4399,9 +4402,9 @@ class TiempoObjetivoServicioTests(TestCase):
     """4.A1 — tiempo objetivo de atención del Servicio/Proceso (Studio → Básico)."""
 
     def setUp(self):
-        self.admin = Usuario.objects.create_user("tiempo_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("tiempo_admin@pruebas.orbita")
         _otorgar_permiso(self.admin, "catalogo.administrar")
-        self.sin_permiso = Usuario.objects.create_user("tiempo_sin_permiso", password=CLAVE_PRUEBA)
+        self.sin_permiso = Usuario.objects.create_user("tiempo_sin_permiso@pruebas.orbita")
         self.categoria = Categoria.objects.create(nombre="Tiempo")
         self.servicio = Servicio.objects.create(nombre="Con tiempo", categoria=self.categoria, activo=False)
         self.proceso = Servicio.objects.create(
@@ -4425,21 +4428,21 @@ class TiempoObjetivoServicioTests(TestCase):
 
     def test_servicio_nuevo_no_tiene_compromiso_temporal_y_basico_lo_ofrece(self):
         self.assertEqual(self._tiempo(), (None, "", False))
-        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("tiempo_admin@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "general"})
         self.assertContains(respuesta, "Tiempo objetivo de atención")
         self.assertContains(respuesta, "Guardar tiempo objetivo")
         self.assertContains(respuesta, "Sin compromiso")
 
     def test_configura_servicio_y_proceso_con_la_misma_regla(self):
-        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("tiempo_admin@pruebas.orbita"))
         self._guardar(self.servicio, cantidad="5", unidad="DIAS", habiles="on")
         self._guardar(self.proceso, cantidad="8", unidad="HORAS")
         self.assertEqual(self._tiempo(self.servicio), (5, "DIAS", True))
         self.assertEqual(self._tiempo(self.proceso), (8, "HORAS", False))
 
     def test_audita_con_valores_anteriores_y_nuevos(self):
-        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("tiempo_admin@pruebas.orbita"))
         self._guardar(cantidad="3", unidad="DIAS", habiles="on")
         evento = self._auditorias().get()
         self.assertEqual(
@@ -4453,20 +4456,20 @@ class TiempoObjetivoServicioTests(TestCase):
         self.assertEqual(evento.usuario, self.admin)
 
     def test_guardar_lo_mismo_no_duplica_auditoria(self):
-        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("tiempo_admin@pruebas.orbita"))
         self._guardar(cantidad="3", unidad="DIAS")
         self._guardar(cantidad="3", unidad="DIAS")
         self.assertEqual(self._auditorias().count(), 1)
 
     def test_dejar_vacio_quita_el_compromiso_y_descarta_habiles(self):
-        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("tiempo_admin@pruebas.orbita"))
         self._guardar(cantidad="3", unidad="DIAS", habiles="on")
         self._guardar(habiles="on")
         self.assertEqual(self._tiempo(), (None, "", False))
         self.assertEqual(self._auditorias().count(), 2)
 
     def test_rechaza_datos_incoherentes_sin_tocar_el_servicio(self):
-        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("tiempo_admin@pruebas.orbita"))
         for datos in (
             {"cantidad": "3"}, {"unidad": "DIAS"}, {"cantidad": "0", "unidad": "DIAS"},
             {"cantidad": "1000", "unidad": "DIAS"}, {"cantidad": "3", "unidad": "SEMANAS"},
@@ -4478,11 +4481,11 @@ class TiempoObjetivoServicioTests(TestCase):
         self.assertFalse(self._auditorias().exists())
 
     def test_solo_post_y_exige_permiso_de_catalogo(self):
-        self.client.login(username="tiempo_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("tiempo_admin@pruebas.orbita"))
         url = reverse("catalogo:studio_tiempo_objetivo_guardar", args=[self.servicio.pk])
         self.assertEqual(self.client.get(url).status_code, 405)
         self.client.logout()
-        self.client.login(username="tiempo_sin_permiso", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("tiempo_sin_permiso@pruebas.orbita"))
         self.assertEqual(self._guardar(cantidad="3", unidad="DIAS").status_code, 403)
         self.assertEqual(self._tiempo(), (None, "", False))
 
@@ -4528,11 +4531,11 @@ class PoliticaProrrogaServicioTests(TestCase):
     def setUp(self):
         from apps.core.models import Equipo
 
-        self.admin = Usuario.objects.create_user("prorroga_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("prorroga_admin@pruebas.orbita")
         _otorgar_permiso(self.admin, "catalogo.administrar")
-        self.sin_permiso = Usuario.objects.create_user("prorroga_sin_permiso", password=CLAVE_PRUEBA)
-        self.aprobador = Usuario.objects.create_user("prorroga_aprobador", password=CLAVE_PRUEBA)
-        self.inactivo = Usuario.objects.create_user("prorroga_inactivo", password=CLAVE_PRUEBA, is_active=False)
+        self.sin_permiso = Usuario.objects.create_user("prorroga_sin_permiso@pruebas.orbita")
+        self.aprobador = Usuario.objects.create_user("prorroga_aprobador@pruebas.orbita")
+        self.inactivo = Usuario.objects.create_user("prorroga_inactivo@pruebas.orbita", is_active=False)
         self.equipo = Equipo.objects.create(nombre="Equipo aprobador")
         self.equipo_inactivo = Equipo.objects.create(nombre="Equipo apagado", activo=False)
         self.categoria = Categoria.objects.create(nombre="Prórroga")
@@ -4558,13 +4561,13 @@ class PoliticaProrrogaServicioTests(TestCase):
 
     def test_servicio_nuevo_no_tiene_politica_y_basico_la_ofrece(self):
         self.assertEqual(self._estado(), ("", None, None))
-        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("prorroga_admin@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "general"})
         self.assertContains(respuesta, "Prórroga de la fecha objetivo")
         self.assertContains(respuesta, "Guardar política de prórroga")
 
     def test_las_tres_politicas_se_configuran_para_servicio_y_proceso(self):
-        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("prorroga_admin@pruebas.orbita"))
         self._guardar(self.servicio, politica="NO_PERMITE")
         self.assertEqual(self._estado(self.servicio), ("NO_PERMITE", None, None))
         self._guardar(self.servicio, politica="SIN_APROBACION")
@@ -4575,13 +4578,13 @@ class PoliticaProrrogaServicioTests(TestCase):
         self.assertEqual(self._estado(self.servicio), ("CON_APROBACION", None, self.equipo.pk))
 
     def test_cambiar_a_una_politica_sin_aprobacion_descarta_el_aprobador(self):
-        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("prorroga_admin@pruebas.orbita"))
         self._guardar(politica="CON_APROBACION", aprobador_usuario=self.aprobador.pk)
         self._guardar(politica="SIN_APROBACION", aprobador_usuario=self.aprobador.pk)
         self.assertEqual(self._estado(), ("SIN_APROBACION", None, None))
 
     def test_con_aprobacion_exige_exactamente_un_aprobador_activo(self):
-        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("prorroga_admin@pruebas.orbita"))
         for datos in (
             {"politica": "CON_APROBACION"},
             {"politica": "CON_APROBACION", "aprobador_usuario": self.aprobador.pk, "aprobador_equipo": self.equipo.pk},
@@ -4612,7 +4615,7 @@ class PoliticaProrrogaServicioTests(TestCase):
         self.assertEqual(self._estado(), ("", None, None))
 
     def test_audita_y_es_idempotente(self):
-        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("prorroga_admin@pruebas.orbita"))
         self._guardar(politica="CON_APROBACION", aprobador_usuario=self.aprobador.pk)
         self._guardar(politica="CON_APROBACION", aprobador_usuario=self.aprobador.pk)
         evento = self._auditorias().get()
@@ -4631,12 +4634,12 @@ class PoliticaProrrogaServicioTests(TestCase):
         self.assertEqual(evento.usuario, self.admin)
 
     def test_solo_post_y_exige_permiso_de_catalogo(self):
-        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("prorroga_admin@pruebas.orbita"))
         self.assertEqual(
             self.client.get(reverse("catalogo:studio_prorroga_guardar", args=[self.servicio.pk])).status_code, 405
         )
         self.client.logout()
-        self.client.login(username="prorroga_sin_permiso", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("prorroga_sin_permiso@pruebas.orbita"))
         self.assertEqual(self._guardar(politica="SIN_APROBACION").status_code, 403)
         self.assertEqual(self._estado(), ("", None, None))
 
@@ -4672,7 +4675,7 @@ class PoliticaProrrogaServicioTests(TestCase):
 
     def test_la_politica_no_depende_del_workflow(self):
         self.assertIsNone(self.servicio.workflow_id)
-        self.client.login(username="prorroga_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("prorroga_admin@pruebas.orbita"))
         self._guardar(politica="SIN_APROBACION")
         self.assertEqual(self._estado(), ("SIN_APROBACION", None, None))
 
@@ -4741,9 +4744,9 @@ class TerminoServicioTests(TestCase):
     auditoría y Studio (Básico)."""
 
     def setUp(self):
-        self.admin = Usuario.objects.create_user("terminos_admin", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("terminos_admin@pruebas.orbita")
         _otorgar_permiso(self.admin, "catalogo.administrar")
-        self.sin_permiso = Usuario.objects.create_user("terminos_sin_permiso", password=CLAVE_PRUEBA)
+        self.sin_permiso = Usuario.objects.create_user("terminos_sin_permiso@pruebas.orbita")
         self.categoria = Categoria.objects.create(nombre="Términos")
         self.servicio = Servicio.objects.create(nombre="Creación de presentaciones", categoria=self.categoria, activo=False)
         self.proceso = Servicio.objects.create(
@@ -4897,7 +4900,7 @@ class TerminoServicioTests(TestCase):
 
     def test_studio_muestra_la_seccion_en_servicio_y_en_proceso(self):
         crear_termino(self.servicio, self.admin, "powerpoint")
-        self.client.login(username="terminos_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("terminos_admin@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "general"})
         self.assertContains(respuesta, "Términos de búsqueda")
         self.assertContains(respuesta, "powerpoint")
@@ -4907,12 +4910,12 @@ class TerminoServicioTests(TestCase):
 
     def test_studio_no_ofrece_terminos_para_el_ticket_general(self):
         Servicio.objects.filter(pk=self.servicio.pk).update(es_ticket_general=True)
-        self.client.login(username="terminos_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("terminos_admin@pruebas.orbita"))
         respuesta = self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "general"})
         self.assertNotContains(respuesta, "Términos de búsqueda")
 
     def test_studio_agrega_edita_desactiva_y_elimina(self):
-        self.client.login(username="terminos_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("terminos_admin@pruebas.orbita"))
         self._crear_por_studio(self.servicio, "powerpoint")
         termino = TerminoServicio.objects.get(servicio=self.servicio)
         self.client.post(
@@ -4935,7 +4938,7 @@ class TerminoServicioTests(TestCase):
         self.assertFalse(TerminoServicio.objects.exists())
 
     def test_studio_informa_el_error_de_un_duplicado(self):
-        self.client.login(username="terminos_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("terminos_admin@pruebas.orbita"))
         self._crear_por_studio(self.servicio, "powerpoint")
         respuesta = self._crear_por_studio(self.servicio, "POWERPOINT")
         self.assertEqual(respuesta.status_code, 302)
@@ -4944,7 +4947,7 @@ class TerminoServicioTests(TestCase):
 
     def test_studio_sin_permiso_no_puede_nada(self):
         termino = crear_termino(self.servicio, self.admin, "powerpoint")
-        self.client.login(username="terminos_sin_permiso", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("terminos_sin_permiso@pruebas.orbita"))
         self.assertEqual(self._crear_por_studio(self.servicio, "otro").status_code, 403)
         self.assertEqual(
             self.client.post(
@@ -4964,7 +4967,7 @@ class TerminoServicioTests(TestCase):
 
     def test_studio_solo_acepta_post_y_no_cruza_servicios(self):
         otro = crear_termino(self.proceso, self.admin, "descanso")
-        self.client.login(username="terminos_admin", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("terminos_admin@pruebas.orbita"))
         self.assertEqual(
             self.client.get(reverse("catalogo:studio_termino_crear", args=[self.servicio.pk])).status_code, 405
         )
@@ -4982,9 +4985,9 @@ class BusquedaPorNecesidadTests(TestCase):
     seguridad y rendimiento."""
 
     def setUp(self):
-        self.admin = Usuario.objects.create_user("busqueda_admin", password=CLAVE_PRUEBA)
-        self.usuario = Usuario.objects.create_user("busqueda_usuario", password=CLAVE_PRUEBA)
-        self.otro = Usuario.objects.create_user("busqueda_otro", password=CLAVE_PRUEBA)
+        self.admin = Usuario.objects.create_user("busqueda_admin@pruebas.orbita")
+        self.usuario = Usuario.objects.create_user("busqueda_usuario@pruebas.orbita")
+        self.otro = Usuario.objects.create_user("busqueda_otro@pruebas.orbita")
         self.tecnologia = Categoria.objects.create(nombre="Tecnología")
         self.rrhh = Categoria.objects.create(nombre="Recursos humanos")
 
@@ -5407,7 +5410,7 @@ class ClavesPurasTests(SimpleTestCase):
 
 class CampoClaveTests(TestCase):
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="clave_actor", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("clave_actor@pruebas.orbita")
         self.formulario = Formulario.objects.create(nombre="Formulario con claves")
         self.version = crear_nueva_version(self.formulario, self.actor)
 
@@ -5521,7 +5524,7 @@ class _EscenarioBloquesClaveMixin:
         from apps.workflows import fases as fases_ops
         from apps.workflows.versionamiento import activar_version as activar_workflow
 
-        self.actor = Usuario.objects.create_user(username="bloque_clave", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("bloque_clave@pruebas.orbita")
         _otorgar_permiso(self.actor, "catalogo.administrar", nombre_rol="Catalogo claves de bloque")
         categoria = Categoria.objects.create(nombre="Claves")
         self.servicio = Servicio.objects.create(nombre="Servicio con claves", categoria=categoria)
@@ -5693,7 +5696,7 @@ class BackfillClavesTests(_EscenarioBloquesClaveMixin, TestCase):
 
         self.asignar = importlib.import_module("apps.catalogo.migrations.0016_claves_estables").asignar_claves
         self.registro = registro
-        self.actor = Usuario.objects.create_user(username="backfill_actor", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("backfill_actor@pruebas.orbita")
 
     def _formulario_historico(self, nombre, etiquetas):
         formulario = Formulario.objects.create(nombre=nombre)
@@ -6005,7 +6008,7 @@ class StudioBloqueEntregableTests(_EscenarioBloqueEntregableCatalogoMixin, TestC
         self.servicio.activo = False
         self.servicio.save(update_fields=["formulario", "activo", "actualizado_en"])
         self.version = self._version()
-        self.client.login(username="bloque_clave", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("bloque_clave@pruebas.orbita"))
 
     def _pagina(self):
         return self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": "ejecucion"})
@@ -6384,7 +6387,7 @@ class StudioOrdenYRevisionTests(_EscenarioE2CatalogoMixin, TestCase):
         self.servicio.activo = False
         self.servicio.save(update_fields=["formulario", "activo", "actualizado_en"])
         self.version = self._version()
-        self.client.login(username="bloque_clave", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("bloque_clave@pruebas.orbita"))
 
     def _pagina(self, tab="ejecucion"):
         return self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": tab})
@@ -6577,9 +6580,9 @@ class _EscenarioStudioF1Mixin(_EscenarioE2CatalogoMixin):
         self.servicio.activo = False
         self.servicio.save(update_fields=["formulario", "activo", "actualizado_en"])
         self.version = self._version()
-        self.otro_usuario = Usuario.objects.create_user(username="f1_otro", password=CLAVE_PRUEBA)
+        self.otro_usuario = Usuario.objects.create_user("f1_otro@pruebas.orbita")
         self.equipo = Equipo.objects.create(nombre="Equipo comercial F1")
-        self.client.login(username="bloque_clave", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("bloque_clave@pruebas.orbita"))
 
     def _pagina(self, tab="ejecucion"):
         return self.client.get(reverse("catalogo:studio", args=[self.servicio.pk]), {"tab": tab})
@@ -6997,7 +7000,7 @@ class FechaRequeridaFormularioTests(TestCase):
     """4.F2 — marca semántica del campo que representa el plazo que pide el solicitante."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="fecha_req_admin", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("fecha_req_admin@pruebas.orbita")
         _otorgar_permiso(self.actor, "catalogo.administrar", nombre_rol="Catalogo fecha requerida")
         _otorgar_permiso(self.actor, "formulario.administrar", nombre_rol="Formularios fecha requerida")
         self.formulario = Formulario.objects.create(nombre="Formulario con fecha")
@@ -7088,7 +7091,7 @@ class StudioFechaRequeridaTests(TestCase):
     """4.F2 — la casilla «Usar como fecha requerida» en el Studio del formulario."""
 
     def setUp(self):
-        self.actor = Usuario.objects.create_user(username="studio_fecha", password=CLAVE_PRUEBA)
+        self.actor = Usuario.objects.create_user("studio_fecha@pruebas.orbita")
         for codigo in ("catalogo.administrar", "formulario.administrar"):
             _otorgar_permiso(self.actor, codigo, nombre_rol=f"Rol {codigo} fecha studio")
         categoria = Categoria.objects.create(nombre="Fecha studio")
@@ -7097,7 +7100,7 @@ class StudioFechaRequeridaTests(TestCase):
         self.servicio.formulario = self.formulario
         self.servicio.save(update_fields=["formulario", "actualizado_en"])
         self.version = crear_nueva_version(self.formulario, self.actor)
-        self.client.login(username="studio_fecha", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("studio_fecha@pruebas.orbita"))
 
     def _guardar(self, **campos):
         datos = {"campo-nuevo-orden": "0", "campo-nuevo-tipo": "FECHA", "campo-nuevo-etiqueta": "Para cuándo", **campos}
@@ -7161,7 +7164,7 @@ class StudioActividadAmpliadaTests(_EscenarioBloqueEntregableCatalogoMixin, Test
         self.servicio.activo = False
         self.servicio.save(update_fields=["formulario", "activo", "actualizado_en"])
         self.version = self._version()
-        self.client.login(username="bloque_clave", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("bloque_clave@pruebas.orbita"))
 
     def _crear(self, nombre="Preparar", **extra):
         datos = {
@@ -7266,7 +7269,7 @@ class StudioRecorridosTests(_EscenarioBloqueEntregableCatalogoMixin, TestCase):
         activar_version(self.definicion.formulario, columnas, self.actor)
         self.definicion.refresh_from_db()
         self.version = self._version()
-        self.client.login(username="bloque_clave", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("bloque_clave@pruebas.orbita"))
 
     def _crear(self, tipo, nombre, **extra):
         datos = {"fase_id": self.fase.pk, "nuevo-tipo": tipo, "nuevo-nombre": nombre, "nuevo-descripcion": ""}
@@ -7420,7 +7423,7 @@ class StudioDatosInicioTests(_EscenarioBloquesClaveMixin, TestCase):
         self._preparar_escenario_bloques()
         self.servicio.tipo = "PROCESO"
         self.servicio.save(update_fields=["tipo", "actualizado_en"])
-        self.client.login(username="bloque_clave", password=CLAVE_PRUEBA)
+        self.client.force_login(persona("bloque_clave@pruebas.orbita"))
 
     def _guardar(self, **extra):
         return self.client.post(

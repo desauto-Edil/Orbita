@@ -30,11 +30,10 @@ depende de una capacidad real que ya existe en el dominio:
                         unidades, categorías e identidad del sistema): alguna
                         de las capacidades de `apps/core/configuracion.py`,
                         que también decide qué sección ve cada quien.
-                        Administración avanzada (Django Admin, para lo que aún
-                        no tiene interfaz propia): `is_staff`, la compuerta
-                        nativa de Django Admin. No se crea un Permiso de Órbita
-                        para duplicarla ni se usa "Administrador" como
-                        autorización implícita.
+                        La administración avanzada (Django Admin) ya NO es un
+                        destino (Versión 1): está apagada en el sitio público y
+                        se entra por el contenedor `admin` (túnel SSH), ver
+                        `apps/core/admin_sitio.py`.
 
 "Más" solo se renderiza si el usuario tiene al menos un destino dentro; los
 grupos vacíos tampoco. El Diseñador nunca va dentro de Trabajo.
@@ -179,17 +178,6 @@ def _construir_elementos(usuario, acceso_cola, trabajo_personal):
                 "grupo": "Administración",
             }
         )
-    if usuario.is_staff:
-        elementos.append(
-            {
-                "etiqueta": "Administración avanzada",
-                "url_name": "admin:index",
-                "icono": "lock",
-                "namespaces": ("admin",),
-                "en_mas": True,
-                "grupo": "Administración",
-            }
-        )
     return elementos
 
 
@@ -257,6 +245,7 @@ def construir_navegacion(usuario, resolver_match, destino=None):
             "nav_mas_grupos": [],
             "nav_mas_activo": False,
             "nav_trabajo_tabs": [],
+            "nav_mi_equipo": False,
         }
 
     vista = resolver_match.view_name if resolver_match else None
@@ -298,4 +287,12 @@ def construir_navegacion(usuario, resolver_match, destino=None):
         "nav_mas_grupos": grupos,
         "nav_mas_activo": any(i["activo"] for g in grupos for i in g["items"]),
         "nav_trabajo_tabs": pestanas,
+        # «Mi equipo» (menú de usuario): solo quien tiene personal a cargo (jefatura directa, no un rol).
+        "nav_mi_equipo": _tiene_personal_a_cargo(usuario),
     }
+
+
+def _tiene_personal_a_cargo(usuario):
+    from apps.core.jefaturas import tiene_colaboradores
+
+    return tiene_colaboradores(usuario)

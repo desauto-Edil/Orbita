@@ -37,7 +37,7 @@ class AsignacionTareaForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["usuario"].queryset = Usuario.objects.filter(is_active=True).order_by("username")
+        self.fields["usuario"].queryset = Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email")
         self.fields["equipo"].queryset = Equipo.objects.filter(activo=True).order_by("nombre")
 
     def clean(self):
@@ -54,29 +54,6 @@ class ReasignacionTareaForm(AsignacionTareaForm):
     existe o no un responsable), no de qué datos HTTP se reciben."""
 
 
-class DelegacionTareaForm(forms.Form):
-    delegado_a = forms.ModelChoiceField(queryset=Usuario.objects.none(), label="Delegar a")
-    desde = forms.DateTimeField(label="Desde", input_formats=_FORMATOS_FECHA_HORA)
-    hasta = forms.DateTimeField(label="Hasta", input_formats=_FORMATOS_FECHA_HORA)
-    motivo = forms.CharField(required=False, widget=forms.Textarea, label="Motivo")
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields["delegado_a"].queryset = Usuario.objects.filter(is_active=True).order_by("username")
-        for campo in ("desde", "hasta"):
-            self.fields[campo].widget = forms.DateTimeInput(
-                attrs={"type": "datetime-local"}, format=_FORMATOS_FECHA_HORA[0]
-            )
-
-    # Sin validación de "desde < hasta" aquí a propósito: es una regla de
-    # dominio (ya expresada en `DelegacionTarea.clean()` y en el
-    # `CheckConstraint` de BD) — duplicarla en el Form sería reimplementar
-    # una regla funcional, exactamente lo que la instrucción prohíbe. El
-    # Form solo garantiza que ambos valores lleguen con formato de fecha
-    # válido; `delegar_tarea` deja propagar el `ValidationError` real si
-    # la vigencia es inválida, y la vista lo muestra como mensaje.
-
-
 class SubtareaForm(forms.Form):
     titulo = forms.CharField(max_length=200, label="Título")
     descripcion = forms.CharField(required=False, widget=forms.Textarea, label="Descripción")
@@ -90,7 +67,7 @@ class SubtareaForm(forms.Form):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.fields["usuario_responsable"].queryset = Usuario.objects.filter(is_active=True).order_by("username")
+        self.fields["usuario_responsable"].queryset = Usuario.objects.filter(is_active=True).order_by("first_name", "last_name", "email")
         self.fields["equipo_responsable"].queryset = Equipo.objects.filter(activo=True).order_by("nombre")
         self.fields["fecha_limite"].widget = forms.DateTimeInput(
             attrs={"type": "datetime-local"}, format=_FORMATOS_FECHA_HORA[0]

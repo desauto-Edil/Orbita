@@ -208,6 +208,8 @@
 
 .pzv__herramientas {
   display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: center;
   align-items: center;
   gap: var(--space-1);
   margin-top: var(--space-3);
@@ -247,11 +249,14 @@
   width: 16px;
   height: 16px;
   border-radius: 50%;
-  background: var(--status-danger);
+  background: var(--anotacion-rojo);
+  box-shadow: inset 0 0 0 1px rgb(var(--rgb-brillo) / .35);
 }
 
-.pzv__color[data-color="--status-warning"]::before { background: var(--status-warning); }
-.pzv__color[data-color="--status-info"]::before { background: var(--status-info); }
+.pzv__color[data-color="--anotacion-ambar"]::before { background: var(--anotacion-ambar); }
+.pzv__color[data-color="--anotacion-azul"]::before { background: var(--anotacion-azul); }
+.pzv__color[data-color="--anotacion-verde"]::before { background: var(--anotacion-verde); }
+.pzv__color[data-color="--anotacion-negro"]::before { background: var(--anotacion-negro); }
 .pzv__color.is-activo { box-shadow: inset 0 0 0 2px var(--text-primary); }
 
 .pzv__separador { width: 1px; height: 18px; margin-inline: var(--space-1); background: var(--border-subtle); }
@@ -416,3 +421,194 @@
 @media (prefers-reduced-motion: reduce) {
   .pz__abrir { transition: none; }
 }
+
+/* Con un dibujo solo se puede Corregir: Aprobar y Eliminar quedan deshabilitados (`piezas.js`). */
+.pzv__botones .btn:disabled { opacity: .45; cursor: not-allowed; }
+.pzv__lienzo.is-borrando canvas { cursor: cell; }
+
+/* --- Revisión de DATOS (ítems solo con texto, `_tabla_revision.html`) ---
+   Tabla mientras quepa; con muchas columnas, una ficha (formulario) por ítem. El texto se ve COMPLETO: las celdas
+   ajustan su alto al contenido y parten palabras largas; nunca se recorta ni se trunca. */
+.rd { display: grid; gap: var(--space-3); min-width: 0; }
+
+.rd-tabla-marco {
+  position: relative;
+  overflow-x: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+}
+
+.rd-tabla { width: 100%; border-collapse: collapse; font-size: var(--font-size-body); }
+
+.rd-tabla th,
+.rd-tabla td {
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  text-align: left;
+  vertical-align: top;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  min-width: 12ch;
+}
+
+.rd-tabla thead th {
+  background: var(--surface-sunken);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-semibold);
+  color: var(--text-secondary);
+}
+
+.rd-tabla tbody tr:last-child td { border-bottom: 0; }
+.rd-tabla td { color: var(--text-primary); line-height: 1.5; }
+.rd-tabla .rd-tabla__num { min-width: 0; width: 1%; white-space: nowrap; color: var(--text-secondary); }
+.rd-tabla .rd-tabla__decision { min-width: 260px; width: 30%; }
+
+/* --- Lista COMPACTA de información (`pi-*`): la revisión de datos con muchas columnas y la gaceta de datos (sin
+   audiovisuales, p. ej. un plan de trabajo). Una sola superficie con separadores finos, una fila por ítem: número,
+   nombre y estado; todos sus datos en una rejilla densa (el texto completo, nunca recortado); sus archivos y
+   comentarios; y al lado lo que la persona puede hacer. La información es la protagonista. */
+.pi-lista {
+  position: relative;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+}
+
+.pi {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.pi:last-child { border-bottom: 0; }
+.pi[hidden] { display: none; }
+
+@media (min-width: 1024px) {
+  .pi:has(> .pi__lado) { grid-template-columns: minmax(0, 1fr) minmax(260px, 320px); gap: var(--space-5); }
+}
+
+.pi__cuerpo { display: grid; gap: var(--space-2); min-width: 0; }
+
+.pi__cabeza { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-2); margin: 0; }
+.pi__num { color: var(--text-secondary); font-size: var(--font-size-small); }
+.pi__titulo { font-weight: var(--font-weight-semibold); overflow-wrap: anywhere; }
+.pi__meta { color: var(--text-secondary); font-size: var(--font-size-small); }
+.pi__cabeza .pz__estado { position: static; }
+
+.pi__datos {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+}
+.pi__datos > div { min-width: 0; }
+.pi__datos dt { font-size: var(--font-size-small); color: var(--text-secondary); }
+.pi__datos dd { margin: 0; line-height: 1.45; white-space: normal; overflow-wrap: anywhere; }
+.pi__datos .is-vacio dd { color: var(--text-muted); }
+
+.pi__archivos { display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-3); margin: 0; padding: 0; list-style: none; }
+.pi__archivos a { display: inline-flex; align-items: center; gap: var(--space-1); font-size: var(--font-size-small); }
+
+.pi__comentarios {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-2) 0 0;
+  list-style: none;
+  border-top: 1px dashed var(--border-subtle);
+}
+.pi__autor { margin: 0; font-size: var(--font-size-small); font-weight: var(--font-weight-semibold); }
+.pi__autor .tabular { font-weight: var(--font-weight-regular); color: var(--text-secondary); }
+.pi__texto { margin: 0; overflow-wrap: anywhere; }
+.pi__respuesta { margin: 0; font-size: var(--font-size-small); color: var(--text-secondary); }
+.pi__mini { display: flex; gap: var(--space-2); margin-top: var(--space-1); }
+.pi__mini input { flex: 1; min-width: 0; }
+
+.pi__lado { display: grid; align-content: start; gap: var(--space-3); min-width: 0; }
+.pi__form { display: grid; gap: var(--space-2); }
+.pi__form textarea { width: 100%; min-height: 3.2em; resize: vertical; }
+.pi__botones { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+.pi__excluir summary { cursor: pointer; font-size: var(--font-size-small); color: var(--text-secondary); }
+.pi__excluir[open] summary { margin-bottom: var(--space-2); }
+
+.rd-decision { display: grid; gap: var(--space-2); }
+.rd-decision textarea { width: 100%; min-height: 3.5em; resize: vertical; }
+.rd-decision__botones { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+.rd-previa {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-md);
+  background: var(--status-warning-soft);
+  font-size: var(--font-size-small);
+}
+.rd-previa span { font-weight: var(--font-weight-semibold); }
+
+/* En móvil la tabla se vuelve un formulario por fila (cada celda con su etiqueta encima). */
+@media (max-width: 720px) {
+  .rd-tabla thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .rd-tabla, .rd-tabla tbody, .rd-tabla tr, .rd-tabla td { display: block; width: auto; }
+  .rd-tabla tr { padding: var(--space-3) 0; border-bottom: 1px solid var(--border-subtle); }
+  .rd-tabla td { border: 0; padding: var(--space-1) var(--space-4); }
+  .rd-tabla .rd-tabla__decision { min-width: 0; }
+  .rd-tabla td[data-etiqueta]::before {
+    content: attr(data-etiqueta);
+    display: block;
+    font-size: var(--font-size-small);
+    color: var(--text-secondary);
+  }
+}
+
+/* 6. Después de la gaceta: qué sigue y las pruebas (listas de evidencias) -------------------------------------- */
+
+.pz__abrir .pz__sigue {
+  position: absolute;
+  right: var(--space-2);
+  bottom: var(--space-2);
+  left: var(--space-2);
+  overflow: hidden;
+  padding: 3px var(--space-2);
+  border-radius: var(--radius-sm);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.pz__sigue--hecho { color: var(--status-success); font-weight: var(--font-weight-semibold); }
+
+.pzv__sigue {
+  display: grid;
+  gap: var(--space-1);
+  justify-items: start;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.pzv__sigue .pzv__sub { margin-top: 0; }
+.pzv__sigue-paso { margin: 0; color: var(--text-primary); }
+.pzv__sigue-quien { margin: 0; color: var(--text-secondary); font-size: var(--font-size-small); }
+
+/* «Estoy conforme»: franja bajo la cabecera de la gaceta (con todos los interesados conformes, termina antes). */
+.gl-conforme {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  align-items: center;
+  justify-content: space-between;
+  margin: 0 0 var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+}
+.gl-conforme__texto { margin: 0; flex: 1 1 280px; display: flex; flex-wrap: wrap; gap: var(--space-1) var(--space-2); }
+.gl-conforme form { margin: 0; }

@@ -1,7 +1,9 @@
 {% comment %}
   Panel contextual del ticket — UN panel derecho compartido por todos los servicios y procesos, con dos pestañas:
-  Conversación (chat de texto en tiempo real del ticket ENTERO, `apps/tickets/conversacion.py` +
-  `static/js/panel_ticket.js`; la recibe todo el que participa) e Historial (línea de tiempo de todo lo ocurrido,
+  Conversación (chat en tiempo real con texto, emojis y archivos, el ÚNICO medio de conversación del ticket, en dos
+  canales aislados, con quién de cada canal está en línea ahora:
+  «Equipo» —quienes desarrollan el servicio o proceso— e «Interesados» —el equipo con quien solicitó y quienes revisan
+  la gaceta—; cada persona ve solo los suyos, `apps/tickets/conversacion.py` + `static/js/panel_ticket.js`) e Historial (línea de tiempo de todo lo ocurrido,
   `apps/tickets/linea_tiempo.py`; solo quien consulta el ticket, `historial_visible`). Encabezado (pestañas y cierre) fijo; cada pestaña desplaza solo su contenido; el compositor queda al
   pie. Sin JS, las pestañas son enlaces (`?panel=conversacion|historial`) y el panel llega abierto desde el
   servidor; con JS se abre y cierra sin recargar y recuerda su estado POR TICKET en `sessionStorage`.
@@ -14,8 +16,9 @@
        data-url-mensajes="{% url 'tickets:conversacion' ticket.pk %}"
        data-url-enviar="{% url 'tickets:conversacion_enviar' ticket.pk %}"
        data-url-leido="{% url 'tickets:conversacion_leido' ticket.pk %}"
+       data-url-presencia="{% url 'tickets:conversacion_presencia' ticket.pk %}"
        data-ws="/ws/tickets/{{ ticket.pk }}/conversacion/"
-       data-pestana-inicial="{{ panel_global|default:'conversacion' }}"
+       data-pestana-inicial="{{ panel_global|default:'conversacion' }}" data-canal-inicial="{{ canal_inicial }}"
        {% if not panel_global %}hidden{% endif %}>
   {% csrf_token %}
   <header class="tp__cabeza">
@@ -28,17 +31,49 @@
     <a class="btn-icon tp__cerrar" href="{{ url_sin_panel }}" data-tp-cerrar aria-label="Cerrar el panel">{% include "components/icon.html" with name="x" size="sm" %}</a>
   </header>
 
-  {# --- Conversación: mensajes (desplazables) + compositor fijo al pie --- #}
+  {# --- Conversación: dos canales aislados (equipo / interesados), mensajes desplazables + compositor al pie --- #}
   <section class="tp__vista tp-chat" id="tp-conversacion" role="tabpanel" aria-labelledby="tp-tab-conversacion" data-tp-vista="conversacion"{% if panel_global == "historial" %} hidden{% endif %}>
-    <div class="tp-chat__mensajes" data-chat-lista aria-live="polite" aria-relevant="additions" tabindex="0">
-      <p class="tp-chat__estado" data-chat-estado>{% if panel_global == "conversacion" %}Cargando la conversación…{% endif %}</p>
-    </div>
+    {% if conversacion.canales|length > 1 %}
+      <div class="tp-canales" role="tablist" aria-label="Conversaciones del ticket">
+        {% for c in conversacion.canales %}
+          <button type="button" class="tp-canales__canal{% if c.clave == canal_inicial %} is-activo{% endif %}" role="tab" aria-selected="{% if c.clave == canal_inicial %}true{% else %}false{% endif %}" data-chat-canal="{{ c.clave }}">
+            {{ c.etiqueta }}<span class="tp-canales__cuenta tabular" data-chat-canal-cuenta="{{ c.clave }}"{% if not c.no_leidos %} hidden{% endif %}>{{ c.no_leidos }}</span>
+          </button>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% for c in conversacion.canales %}
+      <p class="tp-canales__ayuda" data-chat-ayuda="{{ c.clave }}"{% if c.clave != canal_inicial %} hidden{% endif %}>
+        {% if c.clave == "EQUIPO" %}Solo quienes desarrollan este {{ ticket.get_tipo_display|lower }}: no la ven quien solicitó ni quienes revisan la gaceta.{% else %}Con quien solicitó y quienes revisan la gaceta.{% if conversacion.canales|length == 1 %} Las conversaciones internas del equipo no se muestran aquí.{% endif %}{% endif %}
+        {% if c.google_chat %}<a class="tp-canales__chat" href="{{ c.google_chat }}" target="_blank" rel="noopener">Abrir en Google Chat</a>{% endif %}
+      </p>
+      {# Quién de este canal tiene Órbita abierta ahora (`conversacion.participantes`); lo pinta el script. #}
+      <details class="tp-presencia" data-chat-presencia="{{ c.clave }}" hidden>
+        <summary class="tp-presencia__resumen"><span class="tp-presencia__caras" data-presencia-caras></span><span data-presencia-texto></span></summary>
+        <ul class="tp-presencia__lista" data-presencia-lista></ul>
+      </details>
+      <div class="tp-chat__mensajes" data-chat-lista="{{ c.clave }}" aria-live="polite" aria-relevant="additions" tabindex="0"{% if c.clave != canal_inicial %} hidden{% endif %}>
+        <p class="tp-chat__estado" data-chat-estado>{% if panel_global == "conversacion" and c.clave == canal_inicial %}Cargando la conversación…{% endif %}</p>
+      </div>
+    {% endfor %}
     <p class="tp-chat__conexion" data-chat-conexion hidden></p>
-    {% if conversacion.puede_escribir %}
-      <form class="tp-chat__compositor" method="post" action="{% url 'tickets:conversacion_enviar' ticket.pk %}" data-chat-form>
-        {% csrf_token %}
+    {% if conversacion.canales.0.puede_escribir %}
+      <form class="tp-chat__compositor" method="post" action="{% url 'tickets:conversacion_enviar' ticket.pk %}" enctype="multipart/form-data"
+            data-chat-form data-max-archivos="{{ conversacion.max_archivos }}" data-tamano-maximo="{{ conversacion.tamano_maximo_mb }}">
+        {% csrf_token %}<input type="hidden" name="canal" value="{{ canal_inicial }}" data-chat-canal-campo>
+        <ul class="tp-chat__adjuntos" data-chat-adjuntos aria-label="Archivos para enviar" hidden></ul>
+        <div class="tp-chat__herramientas">
+          <label class="btn-icon tp-chat__herramienta" title="Adjuntar archivos (hasta {{ conversacion.max_archivos }}, {{ conversacion.tamano_maximo_mb }} MB cada uno)">
+            {% include "components/icon.html" with name="paperclip" size="sm" %}<span class="sr-only">Adjuntar archivos</span>
+            <input type="file" name="archivos" multiple class="sr-only" data-chat-archivos>
+          </label>
+          <button type="button" class="btn-icon tp-chat__herramienta" aria-haspopup="true" aria-expanded="false" aria-controls="tp-chat-emojis" title="Emojis" data-chat-emoji-abrir>
+            {% include "components/icon.html" with name="smile" size="sm" %}<span class="sr-only">Insertar un emoji</span>
+          </button>
+          <div class="tp-emojis" id="tp-chat-emojis" role="group" aria-label="Emojis" data-chat-emojis hidden></div>
+        </div>
         <label class="sr-only" for="tp-chat-texto">Escribe un mensaje</label>
-        <textarea id="tp-chat-texto" name="texto" rows="1" maxlength="{{ conversacion.longitud_maxima }}" placeholder="Escribe un mensaje…" required data-chat-texto></textarea>
+        <textarea id="tp-chat-texto" name="texto" rows="1" maxlength="{{ conversacion.longitud_maxima }}" placeholder="Escribe un mensaje…" data-chat-texto></textarea>
         <button type="submit" class="btn btn--primary btn--sm tp-chat__enviar" aria-label="Enviar mensaje">{% include "components/icon.html" with name="arrow-right" size="sm" %}</button>
         <p class="tp-chat__error" data-chat-error role="alert" hidden></p>
       </form>

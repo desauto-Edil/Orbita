@@ -30,9 +30,9 @@ from apps.tickets.tests_inicio import CLAVE, Usuario, _BaseInicio
 class _BaseParticipacion(_BaseInicio):
     def _preparar_participacion(self):
         self._preparar_inicio()
-        self.participante = Usuario.objects.create_user("b3_participante", password=CLAVE)
-        self.miembro = Usuario.objects.create_user("b3_miembro", password=CLAVE)
-        self.ajeno = Usuario.objects.create_user("b3_ajeno", password=CLAVE)
+        self.participante = Usuario.objects.create_user("b3_participante@pruebas.orbita")
+        self.miembro = Usuario.objects.create_user("b3_miembro@pruebas.orbita")
+        self.ajeno = Usuario.objects.create_user("b3_ajeno@pruebas.orbita")
         self.equipo = Equipo.objects.create(nombre="Equipo de contenidos B3")
         self.membresia = MiembroEquipo.objects.create(equipo=self.equipo, usuario=self.miembro)
         self.proceso, _ = self._publicar("Parrilla B3", tipo=Servicio.Tipo.PROCESO, coleccion=True)
@@ -116,7 +116,7 @@ class AccesoDenegadoTests(_BaseParticipacion, TestCase):
     def test_quien_no_participa_no_opera(self):
         ticket, parrilla = self._ticket()
         for usuario in (self.ajeno, self.solicitante):
-            with self.subTest(usuario=usuario.username):
+            with self.subTest(usuario=usuario.email):
                 self.assertFalse(puede_operar_coleccion(usuario, parrilla))
                 with self.assertRaises(PermissionDenied):
                     parrilla_ops.crear_elemento(ticket, usuario, {})

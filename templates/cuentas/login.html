@@ -6,27 +6,15 @@
   <div class="auth-card card">
     <h1 class="auth-card__brand">{% include "layout/marca.html" %}{{ sistema.nombre }}</h1>
 
-    {% if form.errors %}
-      <div class="alert alert--danger" role="alert">Usuario o contraseña incorrectos.</div>
+    <p class="auth-card__intro">Ingresa con tu cuenta corporativa de Google.</p>
+    {% if not google_login_disponible %}
+      <div class="alert alert--warning" role="status">El ingreso con Google aún no está configurado. Contacta al administrador de {{ sistema.nombre }}.</div>
     {% endif %}
 
-    <form method="post" class="form" novalidate>
-      {% csrf_token %}
-      <div class="field">
-        <label for="{{ form.username.id_for_label }}">Usuario</label>
-        {{ form.username }}
-      </div>
-      <div class="field">
-        <label for="{{ form.password.id_for_label }}">Contraseña</label>
-        {{ form.password }}
-      </div>
-      <button type="submit" class="btn btn--primary btn--block">Entrar</button>
-    </form>
-
-    <div class="auth-card__divider" aria-hidden="true"><span>o</span></div>
     <form method="post" action="{% url 'core:google_login' %}">
       {% csrf_token %}
-      <button type="submit" class="btn btn--secondary btn--block auth-card__google">
+      {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+      <button type="submit" class="btn btn--secondary btn--block auth-card__google"{% if not google_login_disponible %} disabled{% endif %}>
         <svg width="20" height="20" viewBox="0 0 48 48" aria-hidden="true" focusable="false">
           <path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5Z"/>
           <path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6C44.4 38.04 46.98 31.9 46.98 24.55Z"/>

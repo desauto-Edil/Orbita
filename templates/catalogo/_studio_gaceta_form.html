@@ -22,7 +22,7 @@
     <div class="field">{{ form.revisores_usuarios.label_tag }}{{ form.revisores_usuarios }}</div>
     <div class="field">{{ form.revisores_equipos.label_tag }}{{ form.revisores_equipos }}</div>
   </div>
-  <p class="svc-help">Los revisores registran observaciones; no deciden.</p>
+  <p class="svc-help">Los revisores comentan cada ítem. En una gaceta nadie aprueba: un comentario envía el ítem a corrección y su versión corregida vuelve a la gaceta.</p>
 </fieldset>
 <fieldset class="svc-fieldset" data-paso="Qué se ve">
   <legend>Qué ven quienes revisan</legend>
@@ -36,18 +36,10 @@
     <p class="svc-help">Elige primero las colecciones de la gaceta y guarda: después podrás decidir qué datos se muestran.</p>
   {% endif %}
 </fieldset>
-<fieldset class="svc-fieldset" data-paso="Revisión y aprobación">
-  <legend>Revisión y aprobación</legend>
-  <div class="svc-form-grid svc-form-grid--two">
-    <div class="field">{{ form.aprobadores_usuarios.label_tag }}{{ form.aprobadores_usuarios }}</div>
-    <div class="field">{{ form.aprobadores_equipos.label_tag }}{{ form.aprobadores_equipos }}</div>
-  </div>
-  <div class="field">{{ form.politica.label_tag }}{{ form.politica }}</div>
+<fieldset class="svc-fieldset" data-paso="Periodo de revisión">
+  <legend>Periodo de revisión</legend>
   <div class="field">{{ form.plazo_revision_cantidad.label_tag }}<span class="svc-inline">{{ form.plazo_revision_cantidad }} {{ form.plazo_revision_unidad }} {{ form.plazo_revision_habiles }} {{ form.plazo_revision_habiles.label }}</span></div>
-  <label class="choice">{{ form.aceptacion_automatica }} {{ form.aceptacion_automatica.label }}</label>
-  <label class="choice">{{ form.permite_exclusion }} {{ form.permite_exclusion.label }}</label>
-  <label class="choice">{{ form.justificacion_al_aprobar }} {{ form.justificacion_al_aprobar.label }}</label>
-  <p class="svc-help">Los aprobadores deciden (aprobar, devolver, rechazar y, si se permite, excluir). Un ítem en corrección nunca se acepta automáticamente.</p>
+  <p class="svc-help">Al cerrarse el periodo queda aceptado lo que no tenga comentarios pendientes; lo que esté en corrección queda aceptado cuando se reenvíe. Sin plazo, el periodo lo cierra quien coordina.</p>
 </fieldset>
 <fieldset class="svc-fieldset" data-paso="Coordinación y cierre">
   <legend>Coordinación y cierre</legend>
@@ -55,7 +47,7 @@
     <div class="field">{{ form.coordinador_usuario.label_tag }}{{ form.coordinador_usuario }}</div>
     <div class="field">{{ form.coordinador_equipo.label_tag }}{{ form.coordinador_equipo }}</div>
   </div>
-  <p class="svc-help">Quien coordina presenta ítems, cierra el periodo, resuelve la gaceta y puede excluir un ítem. Si lo dejas vacío, coordina quien atiende el ticket (responsable individual). No es el aprobador ni quien corrige.</p>
+  <p class="svc-help">Quien coordina presenta ítems, cierra el periodo, resuelve la gaceta y puede excluir un ítem. Si lo dejas vacío, coordina quien atiende el ticket (responsable individual). No es quien corrige.</p>
   <label class="choice">{{ form.obligatoria }} {{ form.obligatoria.label }}</label>
   <p class="svc-help">Con la condición «Las gacetas están resueltas», una gaceta obligatoria que nunca se abrió impide resolver el ticket; una opcional no lo bloquea solo por existir.</p>
   <div class="field">{{ form.al_resolver_pendientes.label_tag }}{{ form.al_resolver_pendientes }}</div>

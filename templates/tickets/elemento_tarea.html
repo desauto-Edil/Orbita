@@ -15,7 +15,7 @@
     <a href="{% url 'core:mi_trabajo' %}">Mi trabajo</a>
     {% if tarea_id %}
       <span class="breadcrumb__separator" aria-hidden="true">/</span>
-      <a href="{% url 'tareas:detalle' tarea_id %}">Tarea</a>
+      <a href="{% url 'tickets:espacio' ticket.pk %}">Espacio del ticket</a>
     {% endif %}
     <span class="breadcrumb__separator" aria-hidden="true">/</span>
     <span class="breadcrumb__current">{{ ticket.codigo|default:"" }}{% if ticket.etiqueta %} · {{ ticket.etiqueta }}{% endif %}</span>
@@ -49,6 +49,9 @@
   {% endif %}
 
   {% for celda in ficha.celdas_archivo %}
+    {% if celda.es_checklist %}
+    <section class="card">{% include "tickets/evidencias/_editar.html" with lista=celda.checklist elemento=ficha.elemento volver=ws_next %}</section>
+    {% else %}
     <section class="card">
       <h2>{{ celda.campo.etiqueta }}{% if celda.obligatorio %} <abbr title="Obligatorio">*</abbr>{% endif %}</h2>
       {% for archivo in celda.archivos %}
@@ -64,6 +67,7 @@
         <button type="submit" class="btn btn--secondary btn--sm">Adjuntar</button>
       </form>
     </section>
+    {% endif %}
   {% endfor %}
 
   <section class="card">

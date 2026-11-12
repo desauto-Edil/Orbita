@@ -32,6 +32,7 @@ from apps.catalogo.tests import _permiso_get_or_create
 from apps.catalogo.tests_fase4a import CLAVE, Usuario, _Base4A
 from apps.catalogo.versionamiento import crear_nueva_version, mover_campo
 from apps.core.models import RegistroAuditoria
+from apps.core.pruebas import persona
 
 RAIZ = Path(settings.BASE_DIR)
 
@@ -172,9 +173,9 @@ class ConstructorDeFormularioTests(_Base4B, TestCase):
         self.assertEqual(list(Campo.objects.filter(version=self.borrador).order_by("orden").values_list("etiqueta", flat=True)), ["A", "B", "C"])
 
     def test_mover_exige_el_permiso_de_formularios(self):
-        limitado = Usuario.objects.create_user("f4b_limitado", password=CLAVE)
+        limitado = Usuario.objects.create_user("f4b_limitado@pruebas.orbita")
         _permiso_get_or_create(limitado, "catalogo.administrar", "Rol 4B limitado")
-        self.client.login(username="f4b_limitado", password=CLAVE)
+        self.client.force_login(persona("f4b_limitado@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("catalogo:studio_campo_mover", args=[self.servicio.pk, self.c.pk]), {"direccion": "subir"}
         )
@@ -203,7 +204,7 @@ class SalidaPorCategoriasTests(_Base4B, TestCase):
         proceso = self._servicio("Proceso", tipo=Servicio.Tipo.PROCESO)
         pagina = self.client.get(self._url(proceso, "salida"))
         self.assertContains(pagina, "data-pasos")
-        for paso in ("Identidad y colecciones", "Ingreso y apertura", "Participantes", "Revisión y aprobación",
+        for paso in ("Identidad y colecciones", "Ingreso y apertura", "Participantes", "Periodo de revisión",
                      "Coordinación y cierre", "Opciones avanzadas"):
             self.assertContains(pagina, f'data-paso="{paso}"')
         self.assertContains(pagina, "data-multiselect")
@@ -351,9 +352,9 @@ class PosicionesVisualesTests(_Base4B, TestCase):
         self.assertFalse(PosicionVisualBloque.objects.exists())
 
     def test_exige_el_permiso_de_flujos(self):
-        limitado = Usuario.objects.create_user("f4b_sin_flujos", password=CLAVE)
+        limitado = Usuario.objects.create_user("f4b_sin_flujos@pruebas.orbita")
         _permiso_get_or_create(limitado, "catalogo.administrar", "Rol 4B sin flujos")
-        self.client.login(username="f4b_sin_flujos", password=CLAVE)
+        self.client.force_login(persona("f4b_sin_flujos@pruebas.orbita"))
         self.assertEqual(self._posiciones(self.servicio, [{"clave": self.a.clave, "y": 1}]).status_code, 403)
 
     def test_las_posiciones_sobreviven_a_otra_version_de_la_configuracion(self):
@@ -419,9 +420,9 @@ class CambiarDeFaseTests(_Base4B, TestCase):
             cambiar_fase_bloque_operativo(self.config, self.a, self.admin, fase=ajeno.version_activa.fases.first())
 
     def test_exige_el_permiso_de_flujos(self):
-        limitado = Usuario.objects.create_user("f4b_sin_fase", password=CLAVE)
+        limitado = Usuario.objects.create_user("f4b_sin_fase@pruebas.orbita")
         _permiso_get_or_create(limitado, "catalogo.administrar", "Rol 4B sin fase")
-        self.client.login(username="f4b_sin_fase", password=CLAVE)
+        self.client.force_login(persona("f4b_sin_fase@pruebas.orbita"))
         respuesta = self.client.post(
             reverse("catalogo:studio_bloque_fase", args=[self.servicio.pk, self.a.pk]), {"fase_id": self.revision.pk}
         )
@@ -488,7 +489,7 @@ class CompatibilidadYSistemaVisualTests(_Base4B, TestCase):
     def test_fondos_neutros_y_documento_de_diseno(self):
         tokens = (RAIZ / "static" / "css" / "tokens.css").read_text(encoding="utf-8")
         self.assertIn("--surface-page: var(--palette-gray-50);", tokens)
-        self.assertIn("--color-primary: var(--palette-lima-500);", tokens)  # el lima corporativo sigue siendo el estilo por defecto
+        self.assertIn("--color-primary: var(--palette-cielo-500);", tokens)  # Versión 1: Cielo es el estilo por defecto
         self.assertTrue((RAIZ / "docs" / "design" / "ORBITA_DESIGN.md").exists())
         estudio = (RAIZ / "static" / "css" / "studio.css").read_text(encoding="utf-8")
         self.assertIn("prefers-reduced-motion", estudio)
@@ -768,7 +769,7 @@ class EstadosDeBasicoTests(_Base4B, TestCase):
         self.assertEqual(self._agregado(servicio), "progress")
         # Prórroga con aprobación cuyo aprobador ya no está activo (la BD exige que haya uno: constraint
         # `ck_servicio_prorroga_coherente`; el validador exige además que siga activo).
-        aprobador = Usuario.objects.create_user("f4b_aprobador_inactivo", password=CLAVE, is_active=False)
+        aprobador = Usuario.objects.create_user("f4b_aprobador_inactivo@pruebas.orbita", is_active=False)
         Servicio.objects.filter(pk=servicio.pk).update(
             alcance_visibilidad="PUBLICO_INTERNO", politica_prorroga="CON_APROBACION", prorroga_aprobador_usuario=aprobador,
         )

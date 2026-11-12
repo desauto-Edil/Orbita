@@ -275,6 +275,27 @@
     </form>
   </section>
 
+  <section class="svc-panel svc-panel--extension">
+    <div class="svc-panel__head">
+      <div>
+        <h3>Cancelación de un ticket</h3>
+        <p>Si cancelar un ticket necesita que alguien lo acepte. Mientras decide, el trabajo del ticket queda detenido.</p>
+      </div>
+      {% if servicio.cancelacion_con_aprobacion %}<span class="svc-pill svc-pill--ok">Con aprobación</span>{% else %}<span class="svc-pill">Directa</span>{% endif %}
+    </div>
+    <form method="post" action="{% url 'catalogo:studio_cancelacion_guardar' servicio.pk %}" class="form">
+      {% csrf_token %}
+      <div class="ui-rejilla ui-rejilla--tres">
+        <div class="field">{{ form_cancelacion.politica.label_tag }}{{ form_cancelacion.politica }}</div>
+        <div class="field" data-mostrar-si="politica=CON_APROBACION">{{ form_cancelacion.aprobador_usuario.label_tag }}{{ form_cancelacion.aprobador_usuario }}</div>
+        <div class="field" data-mostrar-si="politica=CON_APROBACION">{{ form_cancelacion.aprobador_equipo.label_tag }}{{ form_cancelacion.aprobador_equipo }}</div>
+        <p class="svc-help ui-campo--completo" data-mostrar-si="politica=CON_APROBACION">Elige un usuario o un equipo, no ambos.</p>
+      </div>
+      <p class="svc-help">La piden quien solicitó el ticket o quien lo atiende. Aplica a los tickets que se creen desde ahora.</p>
+      <div class="form-actions"><button type="submit" class="btn btn--primary">Guardar política de cancelación</button></div>
+    </form>
+  </section>
+
   </div>
 
   {% comment %} Asistente de Básico: Anterior / Continuar entre grupos. Continuar guarda el grupo actual si tiene

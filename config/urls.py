@@ -3,6 +3,7 @@ from django.contrib import admin
 from django.urls import include, path
 
 urlpatterns = [
+    # Siempre enrutada, pero el sitio de Órbita responde 404 mientras ADMIN_HABILITADA esté apagada (sitio público).
     path("admin/", admin.site.urls),
     path("", include("apps.notificaciones.urls")),
     path("servicios/", include("apps.catalogo.urls")),
@@ -16,7 +17,7 @@ urlpatterns = [
     path("", include("apps.core.urls")),
 ]
 
-if settings.DEBUG:
+if "debug_toolbar" in settings.INSTALLED_APPS:
     import debug_toolbar
 
     urlpatterns += [path("__debug__/", include(debug_toolbar.urls))]

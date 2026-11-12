@@ -1,0 +1,16 @@
+{% comment %}
+  «Publicar a los interesados» al APROBAR un ítem (`catalogo.gacetas.publicacion_de`, bloque APROBACION con
+  `publicacion`): casilla y duración (1…máximo días). Solo cuenta con «Aprobar»: marcada, `static/js/app.js`
+  deshabilita las demás decisiones del formulario y el dominio rechaza combinarla con otra
+  (`integracion._eleccion_de_publicacion`). Espera `pub` = {"nombre", "dias_maximos", "dias"} y `uid` (sufijo único de los ids).
+{% endcomment %}
+<fieldset class="esp-publicar">
+  <legend class="sr-only">Publicación a los interesados</legend>
+  <label class="esp-publicar__casilla"><input type="checkbox" name="publicar" value="1" data-publicar> Publicar a los interesados en «{{ pub.nombre }}» al aprobar</label>
+  <label class="esp-publicar__dias" for="dias-pub-{{ uid }}">Durante
+    <select id="dias-pub-{{ uid }}" name="dias_publicacion">
+      {% for d in pub.dias %}<option value="{{ d }}"{% if forloop.last %} selected{% endif %}>{{ d }} día{{ d|pluralize }}</option>{% endfor %}
+    </select>
+  </label>
+  <p class="esp-publicar__ayuda">Publicar es aprobar: con la marca solo puedes «Aprobar» (para pedir correcciones, quítala). Entra a la gaceta solo este ítem; al vencer, si no tiene comentarios, queda aceptado.</p>
+</fieldset>

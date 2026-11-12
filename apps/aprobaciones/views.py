@@ -40,10 +40,8 @@ es dominio. Esta vista necesita:
 from django.contrib import messages
 from django.contrib.auth.decorators import login_required
 from django.core.exceptions import PermissionDenied, ValidationError
-from django.shortcuts import get_object_or_404, redirect, render
-from django.http import HttpResponse, HttpResponseNotAllowed
-from django.template.loader import render_to_string
-from django.views.decorators.http import require_GET
+from django.shortcuts import get_object_or_404, redirect
+from django.http import HttpResponseNotAllowed
 
 from apps.aprobaciones.autorizacion import (
     es_aprobador_directo,
@@ -51,12 +49,12 @@ from apps.aprobaciones.autorizacion import (
     puede_consultar_aprobacion,
     puede_reasignar_aprobacion,
 )
-from apps.aprobaciones.consultas import aprobaciones_pendientes_para, aprobaciones_visibles_para
 from apps.aprobaciones.decisiones import aplicar as aplicar_decision
 from apps.aprobaciones.forms import DecisionAprobacionForm, ReasignacionAprobacionForm
 from apps.aprobaciones.models import Aprobacion
 from apps.aprobaciones.operaciones import reasignar_aprobacion
 from apps.core.redirecciones import volver_a
+from apps.tickets.vinculos import url_de_aprobacion
 from apps.tickets.autorizacion import puede_consultar_ticket
 from apps.tickets.models import Ticket
 from apps.workflows.models import EsquemaAprobacionWorkflow, InstanciaEtapa
@@ -227,96 +225,18 @@ def _decision_form(aprobacion, *, es_prorroga, datos=None):
 
 @login_required
 def bandeja_view(request):
-    """RQF-078 — "Pendientes" (`aprobaciones_pendientes_para`) y "Todas"
-    (`aprobaciones_visibles_para`), ambas consultas ya existentes de
-    `apps.aprobaciones.consultas`, usadas sin reescribir su `QuerySet`."""
-    tab = request.GET.get("tab")
-    if tab == "todas":
-        aprobaciones = aprobaciones_visibles_para(request.user)
-    else:
-        tab = "pendientes"
-        aprobaciones = aprobaciones_pendientes_para(request.user)
-    aprobaciones = aprobaciones.select_related("esquema", "aprobador_usuario", "aprobador_equipo").order_by(
-        "-creado_en"
-    )
-
-    contexto_workflow = _contexto_workflow_por_esquema({a.esquema_id for a in aprobaciones})
-    filas = [
-        {"aprobacion": aprobacion, "contexto_workflow": contexto_workflow.get(aprobacion.esquema_id)}
-        for aprobacion in aprobaciones
-    ]
-    contexto = {"tab": tab, "filas": filas, "titulo_pagina": "Aprobaciones"}
-    return render(request, "aprobaciones/lista.html", contexto)
-
-
-@login_required
-@require_GET
-def vista_previa_view(request, pk):
-    """Fragmento de LECTURA para el panel de vista previa de Mi trabajo. Misma
-    autorización de objeto que el detalle (`puede_consultar_aprobacion`); la
-    decisión se registra al abrirla, nunca desde aquí."""
-    aprobacion = get_object_or_404(
-        Aprobacion.objects.select_related("esquema", "aprobador_usuario", "aprobador_equipo"), pk=pk
-    )
-    if not puede_consultar_aprobacion(request.user, aprobacion):
-        raise PermissionDenied
-    participaciones = list(
-        aprobacion.esquema.participaciones.select_related("aprobador_usuario", "aprobador_equipo").order_by("orden")
-    )
-    contexto = {
-        "aprobacion": aprobacion,
-        "esquema": aprobacion.esquema,
-        "contexto_workflow": _contexto_workflow_por_esquema([aprobacion.esquema_id]).get(aprobacion.esquema_id),
-        "participaciones": participaciones,
-        "decididas": sum(1 for p in participaciones if p.decidida_en is not None),
-        "puede_decidir": puede_aprobar(request.user, aprobacion),
-        "contexto_prorroga": _contexto_prorroga(request.user, aprobacion.esquema),
-        "entregable_revisado": _contexto_entregable_revisado(request.user, aprobacion),
-        "item_aprobado": _contexto_item(aprobacion),
-    }
-    return HttpResponse(render_to_string("aprobaciones/_vista_previa.html", contexto))
+    """Retirada: las aprobaciones se deciden desde Mi trabajo y el espacio del ticket. Se conserva la URL."""
+    return redirect("core:mi_trabajo")
 
 
 @login_required
 def detalle_view(request, pk):
-    aprobacion = get_object_or_404(
-        Aprobacion.objects.select_related("esquema", "aprobador_usuario", "aprobador_equipo", "decidido_por"),
-        pk=pk,
-    )
+    """Retirada como página: redirige al espacio del ticket (enlaces de correos y avisos ya enviados). Misma
+    autorización de objeto de siempre (`puede_consultar_aprobacion`)."""
+    aprobacion = get_object_or_404(Aprobacion, pk=pk)
     if not puede_consultar_aprobacion(request.user, aprobacion):
         raise PermissionDenied
-
-    puede_decidir = puede_aprobar(request.user, aprobacion)
-    puede_reasignar = puede_reasignar_aprobacion(request.user, aprobacion)
-    contexto_workflow = _contexto_workflow_por_esquema([aprobacion.esquema_id]).get(aprobacion.esquema_id)
-    contexto_prorroga = _contexto_prorroga(request.user, aprobacion.esquema)
-
-    contexto = {
-        "aprobacion": aprobacion,
-        "esquema": aprobacion.esquema,
-        "contexto_workflow": contexto_workflow,
-        "contexto_prorroga": contexto_prorroga,
-        "entregable_revisado": _contexto_entregable_revisado(request.user, aprobacion),
-        "item_aprobado": _contexto_item(aprobacion),
-        "participaciones": aprobacion.esquema.participaciones.select_related(
-            "aprobador_usuario", "aprobador_equipo", "decidido_por"
-        ).all(),
-        "reasignaciones": aprobacion.reasignaciones.select_related(
-            "aprobador_anterior_usuario",
-            "aprobador_anterior_equipo",
-            "aprobador_nuevo_usuario",
-            "aprobador_nuevo_equipo",
-            "reasignado_por",
-        ).all(),
-        "puede_decidir": puede_decidir,
-        "puede_reasignar": puede_reasignar,
-        "decision_form": (
-            _decision_form(aprobacion, es_prorroga=contexto_prorroga is not None) if puede_decidir else None
-        ),
-        "reasignacion_form": ReasignacionAprobacionForm() if puede_reasignar else None,
-        "titulo_pagina": f"Aprobación #{aprobacion.pk}",
-    }
-    return render(request, "aprobaciones/detalle.html", contexto)
+    return redirect(url_de_aprobacion(aprobacion))
 
 
 @login_required
@@ -326,11 +246,14 @@ def decidir_view(request, pk):
     aprobacion = get_object_or_404(Aprobacion.objects.select_related("esquema"), pk=pk)
     if not puede_aprobar(request.user, aprobacion):
         raise PermissionDenied
-    es_prorroga = _prorroga_del_esquema(aprobacion.esquema) is not None
+    # Una prórroga o una cancelación solo se aprueban o se rechazan (no hay trabajo que devolver).
+    es_prorroga = _prorroga_del_esquema(aprobacion.esquema) is not None or hasattr(aprobacion.esquema, "cancelacion")
     form = _decision_form(aprobacion, es_prorroga=es_prorroga, datos=request.POST)
     if not form.is_valid():
         messages.error(request, "Revise los datos de la decisión.")
         return volver_a(request, "aprobaciones:detalle", pk)
+    from apps.tickets.views import publicacion_de_post
+
     try:
         # La vía según el origen (prórroga, ronda de gaceta, Workflow o simple) vive en `decisiones.aplicar`.
         aplicar_decision(
@@ -338,6 +261,7 @@ def decidir_view(request, pk):
             request.user,
             decision=form.cleaned_data["decision"],
             observacion=form.cleaned_data.get("observacion", ""),
+            publicacion=publicacion_de_post(request.POST),
         )
     except ValidationError as exc:
         messages.error(request, _mensaje_error(exc))

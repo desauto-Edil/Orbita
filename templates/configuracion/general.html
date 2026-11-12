@@ -53,7 +53,7 @@
               <label class="opcion-tarjeta config-tema__opcion" data-tema="{{ opcion.clave }}">
                 <input type="radio" name="{{ form.tema.html_name }}" value="{{ opcion.clave }}"{% if opcion.clave == tema_elegido %} checked{% endif %} data-tema-opcion>
                 <span class="opcion-tarjeta__icono config-tema__muestra" aria-hidden="true"></span>
-                <span class="opcion-tarjeta__nombre">{{ opcion.nombre }}{% if opcion.clave == "lima" %} <span class="config-tema__origen">original</span>{% endif %}</span>
+                <span class="opcion-tarjeta__nombre">{{ opcion.nombre }}{% if opcion.clave == predeterminado %} <span class="config-tema__origen">predeterminado</span>{% endif %}</span>
                 <span class="opcion-tarjeta__texto">{{ opcion.descripcion }}</span>
                 <span class="opcion-tarjeta__marca" aria-hidden="true">{% include "components/icon.html" with name="check" size="sm" %}</span>
               </label>

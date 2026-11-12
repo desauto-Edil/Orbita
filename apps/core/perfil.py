@@ -25,7 +25,7 @@ def _grupo(nombre, tipo, miembros):
 
 def _orden(qs):
     return qs.select_related("usuario", "usuario__perfil_organizacional").order_by(
-        "usuario__first_name", "usuario__last_name", "usuario__username"
+        "usuario__first_name", "usuario__last_name", "usuario__email"
     )
 
 

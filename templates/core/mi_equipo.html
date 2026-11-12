@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% load static %}
+{% comment %}
+  «Mi equipo» — vista general para quien tiene personal a cargo (`apps.core.jefaturas.resumen_de_equipo`): una
+  TARJETA por colaborador directo con su foto, nombre, correo, cargo y área, cuántos tickets tiene a cargo, sus
+  pendientes y vencidos. Búsqueda, filtros, orden y
+  cambio de cuadrícula a lista son locales (`static/js/mi_equipo.js`, sin JS se ve la cuadrícula completa). Cada
+  tarjeta abre el detalle de la persona. Solo lectura.
+{% endcomment %}
+{% block title %}Mi equipo — {{ sistema.nombre }}{% endblock %}
+{% block content_modifier %}content-area--operativo{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'css/espacio.css' %}"><link rel="stylesheet" href="{% static 'css/mi_equipo.css' %}">{% endblock %}
+
+{% block content %}
+  <header class="eq-cabecera">
+    <div>
+      <h1 class="op-cabecera__titulo">Mi equipo</h1>
+      <p class="op-cabecera__sub">{{ equipo|length }} persona{{ equipo|length|pluralize }} a tu cargo · en qué trabaja cada una. Solo lectura.</p>
+    </div>
+    <label class="eq-buscar">
+      {% include "components/icon.html" with name="search" size="sm" %}
+      <span class="sr-only">Buscar por nombre</span>
+      <input type="search" placeholder="Buscar por nombre" data-eq-buscar autocomplete="off">
+    </label>
+  </header>
+
+  <div class="eq-herramientas" data-eq-herramientas hidden>
+    <div class="eq-filtros">
+      {% if areas|length > 1 %}
+        <label class="eq-control"><span class="sr-only">Área</span>
+          <select data-eq-area>
+            <option value="">Todas las áreas</option>
+            {% for area in areas %}<option value="{{ area }}">{{ area }}</option>{% endfor %}
+          </select>
+        </label>
+      {% endif %}
+      <label class="eq-control"><span class="sr-only">Situación</span>
+        <select data-eq-situacion>
+          <option value="">Todas las situaciones</option>
+          <option value="vencidos">Con vencidos</option>
+          <option value="pendientes">Con pendientes</option>
+          <option value="libres">Sin pendientes</option>
+        </select>
+      </label>
+    </div>
+    <div class="eq-filtros">
+      <label class="eq-control eq-control--orden"><span>Ordenar:</span>
+        <select data-eq-orden>
+          <option value="nombre">Nombre</option>
+          <option value="vencidos">Más vencidos</option>
+          <option value="pendientes">Más pendientes</option>
+          <option value="tickets">Más tickets</option>
+        </select>
+      </label>
+      <div class="eq-vista" role="group" aria-label="Cómo ver al equipo">
+        <button type="button" class="btn-icon is-activo" data-eq-vista="cuadricula" aria-pressed="true" title="Tarjetas">{% include "components/icon.html" with name="grid" size="sm" %}<span class="sr-only">Tarjetas</span></button>
+        <button type="button" class="btn-icon" data-eq-vista="lista" aria-pressed="false" title="Lista">{% include "components/icon.html" with name="list" size="sm" %}<span class="sr-only">Lista</span></button>
+      </div>
+    </div>
+  </div>
+
+  <ul class="eq-personas" aria-label="Personas a tu cargo" data-eq-personas>
+    {% for fila in equipo %}
+      {% with persona=fila.persona %}
+      <li class="eq-tarjeta{% if fila.vencidos %} is-vencido{% endif %}"
+          data-eq-persona data-nombre="{{ persona.nombre_visible|lower }}" data-area="{{ fila.area }}"
+          data-vencidos="{{ fila.vencidos }}" data-pendientes="{{ fila.pendientes }}" data-tickets="{{ fila.tickets_activos }}">
+        <a class="eq-tarjeta__enlace" href="{% url 'core:mi_equipo_persona' persona.pk %}">
+          <span class="eq-foto{% if fila.en_linea %} is-en-linea{% endif %}">
+            <span class="eq-foto__inicial" aria-hidden="true">{{ persona.nombre_visible|first|upper }}</span>
+            {% if persona.foto_mediana %}<img src="{{ persona.foto_mediana }}" alt="" referrerpolicy="no-referrer" loading="lazy">{% endif %}
+            {% if fila.en_linea %}<span class="eq-foto__punto"><span class="sr-only">En línea</span></span>{% endif %}
+          </span>
+          <span class="eq-tarjeta__id">
+            <span class="eq-tarjeta__nombre">{{ persona.nombre_visible }}</span>
+            {% if persona.email %}<span class="eq-tarjeta__correo">{{ persona.email }}</span>{% endif %}
+          </span>
+          <span class="eq-cifras" aria-label="Resumen">
+            <span class="eq-cifra"><b class="tabular">{{ fila.tickets_activos }}</b><span>a cargo</span></span>
+            <span class="eq-cifra"><b class="tabular">{{ fila.pendientes }}</b><span>pendientes</span></span>
+            <span class="eq-cifra{% if fila.vencidos %} eq-cifra--vencido{% endif %}"><b class="tabular">{{ fila.vencidos }}</b><span>vencidos</span></span>
+          </span>
+          <span class="eq-tarjeta__pie">
+            <span class="eq-tarjeta__cargo">{{ fila.cargo|default:"Sin cargo" }}{% if fila.area %} · {{ fila.area }}{% endif %}</span>
+            {% if fila.proxima %}<span class="eq-tarjeta__proxima tabular">Próximo: {{ fila.proxima|date:"j M" }}</span>{% endif %}
+          </span>
+        </a>
+      </li>
+      {% endwith %}
+    {% endfor %}
+  </ul>
+  <p class="eq-sin-resultados" data-eq-vacio hidden>Nadie coincide con la búsqueda.</p>
+  <script src="{% static 'js/mi_equipo.js' %}" defer></script>
+{% endblock %}

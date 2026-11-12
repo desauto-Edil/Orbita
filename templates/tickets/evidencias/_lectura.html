@@ -1,0 +1,33 @@
+{% comment %}
+  Pruebas de UNA lista de evidencias, en solo lectura: cada punto con su archivo (miniatura si es imagen) o su enlace,
+  quién la subió y cuándo. Espera `lista` (`evidencias.checklist`). La descarga revalida (`tickets:evidencia`).
+{% endcomment %}
+{% load archivos %}
+<div class="evd">
+  <p class="evd__titulo">{{ lista.campo.etiqueta }} <span class="evd__cuenta tabular{% if lista.completo %} is-completa{% endif %}">{{ lista.hechos }}/{{ lista.total }}</span></p>
+  <ul class="evd__puntos">
+    {% for punto in lista.puntos %}
+      <li class="evd__punto{% if punto.marca %} is-hecho{% endif %}">
+        <span class="evd__check" aria-hidden="true">{% if punto.marca %}✓{% endif %}</span>
+        <span class="evd__texto">{{ punto.etiqueta }}</span>
+        {% if punto.marca %}
+          {% with m=punto.marca %}
+            {% if m.es_archivo %}
+              {% url 'tickets:evidencia' m.pk as url_prueba %}
+              {% if m|clase_vista_previa == "imagen" %}
+                <a class="evd__miniatura" href="{{ url_prueba }}?ver=1" target="_blank" rel="noopener"><img src="{{ url_prueba }}?ver=1" alt="Prueba: {{ punto.etiqueta }}" loading="lazy"></a>
+              {% else %}
+                <a class="evd__prueba" href="{{ url_prueba }}{% if m|clase_vista_previa %}?ver=1{% endif %}" target="_blank" rel="noopener">{{ m.nombre_original|truncatechars:40 }}</a>
+              {% endif %}
+            {% else %}
+              <a class="evd__prueba" href="{{ m.enlace }}" target="_blank" rel="noopener noreferrer">{{ m.enlace|truncatechars:48 }}</a>
+            {% endif %}
+            <span class="evd__quien">{{ m.marcada_por.nombre_visible }} · {{ m.creado_en|date:"j M, H:i" }}</span>
+          {% endwith %}
+        {% else %}
+          <span class="evd__quien">Pendiente</span>
+        {% endif %}
+      </li>
+    {% endfor %}
+  </ul>
+</div>

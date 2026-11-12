@@ -60,7 +60,7 @@
           </details>
         {% endif %}
         {% if rel.consulta %}
-          <p class="ws-nota">Retirar, excluir y altas extraordinarias: <a href="{% url 'tickets:detalle' ticket.pk %}#elementos">gestión avanzada</a>.</p>
+          <p class="ws-nota">Retirar, excluir y altas extraordinarias: <a href="{% url 'tickets:espacio' ticket.pk %}?vista=resumen#elementos">gestión avanzada</a>.</p>
         {% endif %}
       </div>
     {% endwith %}

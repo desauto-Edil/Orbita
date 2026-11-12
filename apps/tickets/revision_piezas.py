@@ -23,6 +23,7 @@ from apps.tickets.models import Adjunto, AnotacionRevision
 
 SALIDAS = (("APROBADA", "Aprobar"), ("DEVUELTA", "Corregir"), ("EXCLUIDA", "Eliminar"))
 LONGITUD_COMENTARIO = 2000
+DECISION_CON_DIBUJO = "DEVUELTA"  # con un dibujo solo se puede Corregir
 MAXIMO_ANOTACION = 8 * 1024 * 1024
 _PREFIJO_PNG = "data:image/png;base64,"
 _FIRMA_PNG = b"\x89PNG\r\n\x1a\n"
@@ -41,7 +42,18 @@ def es_de_gaceta(aprobacion):
 
 
 def decodificar_anotacion(texto):
-    """`data:image/png;base64,…` → `ContentFile` PNG validado (firma y tamaño), o `None` si no llegó nada."""
+    """La anotación → `ContentFile` PNG validado (firma y tamaño), o `None` si no llegó nada. Llega como ARCHIVO
+    (`request.FILES`, lo que envía el visor: un PNG grande no cabe en un campo de texto, que Django limita con
+    `DATA_UPLOAD_MAX_MEMORY_SIZE`) o como `data:image/png;base64,…`."""
+    if hasattr(texto, "read"):
+        if texto.size > MAXIMO_ANOTACION:
+            raise ValidationError("La anotación es demasiado grande.")
+        datos = texto.read(MAXIMO_ANOTACION + 1)
+        if not datos:
+            return None
+        if len(datos) > MAXIMO_ANOTACION or not datos.startswith(_FIRMA_PNG):
+            raise ValidationError("La anotación no es una imagen válida.")
+        return ContentFile(datos, name="anotacion.png")
     texto = (texto or "").strip()
     if not texto:
         return None
@@ -66,7 +78,7 @@ def _aprobacion_del_ticket(ticket, aprobacion_id):
 
 
 @transaction.atomic
-def decidir(ticket, aprobacion_id, usuario, *, decision, comentario, anotacion="", archivo_base_id=None):
+def decidir(ticket, aprobacion_id, usuario, *, decision, comentario, anotacion="", archivo_base_id=None, publicacion=None):
     """Decide la aprobación `aprobacion_id` del ticket con un comentario obligatorio y, si llega, guarda la
     anotación visual de la pieza. Devuelve la `Aprobacion`."""
     from apps.aprobaciones.autorizacion import puede_aprobar
@@ -88,8 +100,11 @@ def decidir(ticket, aprobacion_id, usuario, *, decision, comentario, anotacion="
     item = _contexto_item(aprobacion) if imagen is not None else None
     if imagen is not None and (es_de_gaceta(aprobacion) or item is None):
         raise ValidationError("Las anotaciones solo acompañan la aprobación de un ítem, no una gaceta.")
+    if imagen is not None and decision != DECISION_CON_DIBUJO:
+        # Dibujar sobre la pieza es señalar qué corregir: con un dibujo no se aprueba ni se elimina.
+        raise ValidationError("Con un dibujo sobre la pieza la revisión solo puede ser «Corregir». Bórralo para aprobar o eliminar.")
 
-    aplicar(aprobacion, usuario, decision=decision, observacion=comentario)
+    aplicar(aprobacion, usuario, decision=decision, observacion=comentario, publicacion=publicacion)
 
     if imagen is not None:
         elemento = item["elemento"]

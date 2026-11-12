@@ -10,11 +10,10 @@ desactivar.
 
 import mimetypes
 
+from django.conf import settings
 from django.contrib import messages
-from django.contrib.auth import update_session_auth_hash
 from django.contrib.auth.decorators import login_required
-from django.contrib.auth.forms import SetPasswordForm
-from django.core.exceptions import PermissionDenied
+from django.core.exceptions import PermissionDenied, ValidationError
 from django.core.paginator import Paginator
 from django.db import transaction
 from django.db.models import Count, Prefetch, Q
@@ -23,8 +22,8 @@ from django.shortcuts import get_object_or_404, redirect, render
 from django.utils import timezone
 from django.views.decorators.http import require_GET, require_http_methods
 
-from apps.core import configuracion, temas
-from apps.core.auditoria import auditar_guardado, serializar
+from apps.core import configuracion, jefaturas, plataforma, temas
+from apps.core.auditoria import auditar_guardado, registrar_evento, serializar
 from apps.core.forms import (
     AreaForm,
     AsignacionRolForm,
@@ -48,6 +47,7 @@ from apps.core.models import (
     EquipoUnidadNegocio,
     MiembroEquipo,
     Permiso,
+    RegistroAuditoria,
     RolFuncional,
     RolPermiso,
     UnidadNegocio,
@@ -145,6 +145,7 @@ def general_view(request):
     ]
     elegido = form["tema"].value()
     contexto["tema_elegido"] = elegido if elegido in temas.TEMAS else form.instance.tema
+    contexto["predeterminado"] = temas.TEMA_POR_DEFECTO
     return render(request, "configuracion/general.html", contexto)
 
 
@@ -216,12 +217,12 @@ def usuarios_view(request):
         usuarios = usuarios.filter(is_active=estado == "activos")
     if texto:
         usuarios = usuarios.filter(
-            Q(username__icontains=texto)
+            Q(email__icontains=texto)
             | Q(first_name__icontains=texto)
             | Q(last_name__icontains=texto)
             | Q(email__icontains=texto)
         )
-    pagina = Paginator(usuarios.order_by("first_name", "last_name", "username"), USUARIOS_POR_PAGINA).get_page(
+    pagina = Paginator(usuarios.order_by("first_name", "last_name", "email"), USUARIOS_POR_PAGINA).get_page(
         request.GET.get("pagina")
     )
     contexto.update({"pagina": pagina, "texto": texto, "estado": estado})
@@ -239,7 +240,9 @@ def usuario_crear_view(request):
             perfil, _existia = form.perfil_con_datos(usuario)
             if perfil.cargo or perfil.telefono:
                 _guardar(perfil, request.user)
-        messages.success(request, f"Se creó la cuenta de {usuario.get_username()}. Ahora puedes indicar sus áreas y roles.")
+            if form.cleaned_data.get("jefe") is not None:
+                jefaturas.asignar_jefe(usuario, form.cleaned_data["jefe"], request.user)
+        messages.success(request, f"Se creó la cuenta de {usuario.nombre_visible}. Ahora puedes indicar sus áreas y roles.")
         return redirect("core:configuracion_usuario", pk=usuario.pk)
     contexto["form"] = form
     return render(request, "configuracion/usuario_crear.html", contexto)
@@ -321,9 +324,10 @@ def usuario_view(request, pk):
     caps, contexto = _entrar(request, "ve_usuarios", "usuarios", "Usuario — Configuración")
     objetivo = get_object_or_404(Usuario, pk=pk)
     actor = request.user
-    # La cuenta de un superusuario solo la modifica otro superusuario: quien
-    # administra usuarios no puede apropiarse de una cuenta con más poder.
-    edita_cuenta = caps["usuarios"] and (actor.is_superuser or not objetivo.is_superuser)
+    # La cuenta de quien administra la plataforma solo la modifica otro que también la administra: quien
+    # administra usuarios no puede apropiarse de una cuenta con más poder (antes, la regla de is_superuser).
+    objetivo_administra = plataforma.administra_plataforma(objetivo)
+    edita_cuenta = caps["usuarios"] and (not objetivo_administra or plataforma.administra_plataforma(actor))
     edita_roles = caps["permisos"]
 
     forms_ = {}
@@ -340,21 +344,30 @@ def usuario_view(request, pk):
                     perfil, existia = form.perfil_con_datos(objetivo)
                     if existia or perfil.cargo or perfil.telefono:
                         _guardar(perfil, actor)
-                    messages.success(request, "Los datos se guardaron.")
+                    try:
+                        jefaturas.asignar_jefe(objetivo, form.cleaned_data.get("jefe"), actor)
+                    except ValidationError as exc:
+                        transaction.set_rollback(True)
+                        form.add_error("jefe", exc)
+                        forms_["form_datos"] = form
+                        objetivo = Usuario.objects.get(pk=pk)
+                    else:
+                        messages.success(request, "Los datos se guardaron.")
                 else:
                     forms_["form_datos"] = form
                     objetivo = Usuario.objects.get(pk=pk)
-            elif accion == "clave":
-                form = SetPasswordForm(objetivo, request.POST)
-                if form.is_valid():
-                    anterior = serializar(objetivo)
-                    form.save()
-                    auditar_guardado(objetivo, actor, anterior)
-                    if objetivo.pk == actor.pk:
-                        update_session_auth_hash(request, objetivo)
-                    messages.success(request, "La contraseña se cambió.")
-                else:
-                    forms_["form_clave"] = form
+            elif accion == "sesiones":
+                # Versión 1 (sin contraseñas): cerrar TODAS las sesiones abiertas de la persona (p. ej. un equipo
+                # perdido). La próxima petición de cada una le pide ingresar de nuevo con Google.
+                objetivo.cerrar_sesiones()
+                registrar_evento(
+                    accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=objetivo,
+                    origen=RegistroAuditoria.Origen.USUARIO, usuario=actor,
+                    datos_anteriores={"sesiones_cerradas": False}, datos_nuevos={"sesiones_cerradas": True},
+                )
+                if objetivo.pk == actor.pk:
+                    return redirect(settings.LOGIN_URL)
+                messages.success(request, f"Se cerraron las sesiones de {objetivo.nombre_visible}.")
             elif accion in {f"{t}_{o}" for t in _MEMBRESIAS for o in ("agregar", "principal", "quitar")}:
                 tipo, operacion = accion.split("_")
                 form = _accion_membresia(request, objetivo, tipo, operacion)
@@ -394,6 +407,7 @@ def usuario_view(request, pk):
             "objetivo": objetivo,
             "edita_cuenta": edita_cuenta,
             "edita_roles": edita_roles,
+            "objetivo_administra_plataforma": objetivo_administra,
             "es_propia": objetivo.pk == actor.pk,
             "areas": objetivo.areas.filter(activo=True).select_related("area").order_by("-es_principal", "area__nombre"),
             "unidades": objetivo.unidades_negocio.filter(activo=True)
@@ -406,8 +420,9 @@ def usuario_view(request, pk):
     if edita_cuenta:
         contexto.update(
             {
-                "form_datos": UsuarioDatosForm(instance=objetivo, editor=actor),
-                "form_clave": SetPasswordForm(objetivo),
+                "form_datos": UsuarioDatosForm(
+                    instance=objetivo, editor=actor, initial={"jefe": getattr(jefaturas.jefe_de(objetivo), "pk", None)},
+                ),
                 "form_area": _form_membresia("area", objetivo),
                 "form_unidad": _form_membresia("unidad", objetivo),
                 "form_equipo": _form_membresia("equipo", objetivo),
@@ -460,7 +475,7 @@ def rol_view(request, pk=None):
             rol.asignaciones.filter(activo=True, fecha_inicio__lte=hoy)
             .filter(Q(fecha_fin__isnull=True) | Q(fecha_fin__gte=hoy))
             .select_related("usuario", "area", "unidad_negocio")
-            .order_by("usuario__first_name", "usuario__username")
+            .order_by("usuario__first_name", "usuario__email")
         )
     contexto.update({"form": form, "rol": rol})
     return render(request, "configuracion/rol.html", contexto)

@@ -62,12 +62,18 @@ def validar_ejecucion_proceso(servicio):
 
 
 def errores_de_prorroga(servicio):
-    """La regla de publicación de la prórroga (4.A2), reutilizable por quien muestra su estado. Solo lectura."""
+    """La regla de publicación de la prórroga (4.A2) y de la cancelación con aprobación, reutilizable por quien
+    muestra su estado. Solo lectura."""
+    errores = []
     if servicio.politica_prorroga == Servicio.PoliticaProrroga.CON_APROBACION:
         usuario, equipo = servicio.prorroga_aprobador_usuario, servicio.prorroga_aprobador_equipo
         if not ((usuario is not None and usuario.is_active) or (equipo is not None and equipo.activo)):
-            return ["La prórroga con aprobación necesita un aprobador activo (usuario o equipo)."]
-    return []
+            errores.append("La prórroga con aprobación necesita un aprobador activo (usuario o equipo).")
+    if servicio.cancelacion_con_aprobacion:
+        usuario, equipo = servicio.cancelacion_aprobador_usuario, servicio.cancelacion_aprobador_equipo
+        if not ((usuario is not None and usuario.is_active) or (equipo is not None and equipo.activo)):
+            errores.append("La cancelación con aprobación necesita un aprobador activo (usuario o equipo).")
+    return errores
 
 
 def requiere_formulario_inicial(servicio):
@@ -732,6 +738,48 @@ def configurar_politica_prorroga(servicio, actor, *, politica, aprobador_usuario
     )
     return servicio
 
+
+
+@transaction.atomic
+def configurar_politica_cancelacion(servicio, actor, *, con_aprobacion, aprobador_usuario=None, aprobador_equipo=None):
+    """Cancelación con aprobación (extiende CU-019): si cancelar un ticket de este Servicio/Proceso exige que un
+    aprobador (UN usuario o UN equipo activos) lo acepte. Solo configura el Servicio: cada Ticket la congela al
+    crearse, así que un cambio aquí no modifica tickets existentes. Auditado."""
+    _exigir_administracion(actor)
+    if con_aprobacion:
+        if (aprobador_usuario is None) == (aprobador_equipo is None):
+            raise ValidationError("La cancelación con aprobación necesita un aprobador: un usuario o un equipo, no ambos.")
+        if aprobador_usuario is not None and not aprobador_usuario.is_active:
+            raise ValidationError("El aprobador seleccionado no está activo.")
+        if aprobador_equipo is not None and not aprobador_equipo.activo:
+            raise ValidationError("El equipo aprobador seleccionado no está activo.")
+    else:
+        aprobador_usuario = aprobador_equipo = None
+    servicio = Servicio.objects.select_for_update().get(pk=servicio.pk)
+    anterior = {
+        "cancelacion_con_aprobacion": servicio.cancelacion_con_aprobacion,
+        "cancelacion_aprobador_usuario_id": servicio.cancelacion_aprobador_usuario_id,
+        "cancelacion_aprobador_equipo_id": servicio.cancelacion_aprobador_equipo_id,
+    }
+    nuevo = {
+        "cancelacion_con_aprobacion": bool(con_aprobacion),
+        "cancelacion_aprobador_usuario_id": aprobador_usuario.pk if aprobador_usuario else None,
+        "cancelacion_aprobador_equipo_id": aprobador_equipo.pk if aprobador_equipo else None,
+    }
+    if anterior == nuevo:
+        return servicio
+    servicio.cancelacion_con_aprobacion = bool(con_aprobacion)
+    servicio.cancelacion_aprobador_usuario = aprobador_usuario
+    servicio.cancelacion_aprobador_equipo = aprobador_equipo
+    servicio.save(update_fields=[
+        "cancelacion_con_aprobacion", "cancelacion_aprobador_usuario", "cancelacion_aprobador_equipo", "actualizado_en",
+    ])
+    registrar_evento(
+        accion=RegistroAuditoria.Accion.ACTUALIZAR, instancia=servicio,
+        origen=RegistroAuditoria.Origen.USUARIO, usuario=actor,
+        datos_anteriores=anterior, datos_nuevos=nuevo,
+    )
+    return servicio
 
 
 @transaction.atomic

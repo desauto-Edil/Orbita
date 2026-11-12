@@ -30,7 +30,7 @@
           <ul class="list-row-group">
             {% for asignacion in personas %}
               <li class="list-row">
-                <a class="list-row__title" href="{% url 'core:configuracion_usuario' asignacion.usuario.pk %}">{{ asignacion.usuario.get_full_name|default:asignacion.usuario.get_username }}</a>
+                <a class="list-row__title" href="{% url 'core:configuracion_usuario' asignacion.usuario.pk %}">{{ asignacion.usuario.nombre_visible }}</a>
                 <span class="badge">{% if asignacion.tipo_alcance == "AREA" %}{{ asignacion.area.nombre }}{% elif asignacion.tipo_alcance == "UNIDAD" %}{{ asignacion.unidad_negocio.nombre }}{% else %}Toda la organización{% endif %}</span>
               </li>
             {% endfor %}

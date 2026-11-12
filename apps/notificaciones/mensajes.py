@@ -12,7 +12,7 @@ MAX_EXTRACTO = 280
 def _nombre(usuario):
     if usuario is None:
         return ""
-    return usuario.get_full_name() or usuario.get_username()
+    return usuario.nombre_visible
 
 
 def _actor(aviso):
@@ -72,6 +72,10 @@ def _hechos(aviso, ticket):
         if fase:
             hechos.append(["Etapa", fase])
     contexto = aviso.contexto
+    if aviso.clave == "COMENTARIO" and contexto.get("canal"):
+        from apps.tickets.conversacion import ETIQUETAS, HECHO_CANAL
+
+        hechos.append([HECHO_CANAL, ETIQUETAS.get(contexto["canal"], contexto["canal"])])
     if contexto.get("tarea") and aviso.cantidad == 1:
         hechos.append(["Actividad", contexto["tarea"]])
     if contexto.get("fecha_limite"):
@@ -132,7 +136,7 @@ def _texto(clave, c, quien, t, codigo, cantidad):
         "TICKET_CERRADO": ("Ticket cerrado", _por(quien, f"cerró {t}.", f"{t} se cerró.")),
         "TICKET_CANCELADO": ("Ticket cancelado", _por(quien, f"canceló {t}.", f"{t} fue cancelado.")),
         "TICKET_REABIERTO": ("Ticket reabierto", _por(quien, f"reabrió {t}.", f"{t} se reabrió.")),
-        "TICKET_EN_COLA": ("Nuevo ticket en la Cola", f"{t} llegó a la Cola de tu equipo. Puedes tomarlo."),
+        "TICKET_EN_COLA": ("Nuevo ticket en la Cola", f"{t} llegó a la Cola y nadie lo ha tomado. Puedes tomarlo o asignarlo."),
         "TICKET_ASIGNADO": ("Te asignaron un ticket",
                             f"{t} se dirigió a ti." if c.get("dirigido") else _por(quien, f"te asignó {t}.", f"{t} quedó a tu cargo.")),
         "TICKET_REASIGNADO_FUERA": ("Ya no tienes este ticket", _por(quien, f"reasignó {t} a otra persona.", f"{t} se reasignó.")),
@@ -142,6 +146,11 @@ def _texto(clave, c, quien, t, codigo, cantidad):
         "ENTREGA_ACEPTADA": ("Entrega aceptada", _por(quien, f"aceptó la entrega de {t}.", f"Se aceptó la entrega de {t}.")),
         "ENTREGA_OBSERVADA": ("La entrega tiene observaciones", _por(quien, f"observó la entrega de {t}.", f"La entrega de {t} tiene observaciones.")),
         "PRORROGA_RECHAZADA": ("Prórroga rechazada", _por(quien, f"rechazó la prórroga de {t}.", f"La prórroga de {t} fue rechazada.")),
+        "CANCELACION_SOLICITADA": ("Se pidió cancelar el ticket", _por(
+            quien, f"pidió cancelar {t}. Queda detenido hasta que {c.get('aprobador') or 'su aprobador'} decida.",
+            f"Se pidió cancelar {t}. Queda detenido hasta que {c.get('aprobador') or 'su aprobador'} decida.")),
+        "CANCELACION_RECHAZADA": ("Cancelación rechazada", _por(quien, f"rechazó cancelar {t}: el trabajo continúa.",
+                                                                f"No se aceptó cancelar {t}: el trabajo continúa.")),
         "APROBACION_TURNO": ("Tienes una aprobación pendiente", f"Es tu turno de aprobar {c.get('que') or 'una aprobación'} en {t}."),
         "TRABAJO_DEVUELTO": (
             "Rechazaron el trabajo" if c.get("rechazo") else "Devolvieron el trabajo",
@@ -154,11 +163,20 @@ def _texto(clave, c, quien, t, codigo, cantidad):
         "GACETA_PERIODO_CERRADO": ("Se cerró el periodo de revisión", f"Terminó el periodo de observaciones de la gaceta {gaceta}."),
         "GACETA_RESUELTA": ("Gaceta resuelta", _por(quien, f"resolvió la gaceta {gaceta}.", f"La gaceta {gaceta} se resolvió.")),
     }
+    if clave == "APROBACION_TURNO" and cantidad > 1:
+        paso = f"«{c['paso']}»" if c.get("paso") else "aprobación"
+        return (f"Tienes {cantidad} aprobaciones pendientes",
+                f"Llegaron {cantidad} ítems a {paso} en {t}: es tu turno de aprobarlos.")
+    if clave == "RECORRIDO_COMPLETADO":
+        paso = f"«{c['paso']}»" if c.get("paso") else "el recorrido"
+        completados, fuera = c.get("completados") or 0, c.get("excluidos") or 0
+        detalle = f"{completados} ítem{'s' if completados != 1 else ''} completo{'s' if completados != 1 else ''}"
+        if fuera:
+            detalle += f" y {fuera} fuera del alcance"
+        return (f"Se completó {paso}", f"Todos los ítems de {paso} terminaron en {t}: {detalle}.")
     if clave == "TAREA_ASIGNADA":
         if cantidad > 1:
             return f"Tienes {cantidad} actividades nuevas", f"Tienes {cantidad} actividades nuevas en {t}."
-        if c.get("delegada"):
-            return "Te delegaron una actividad", _por(quien, f"te delegó {tarea}.", f"Te delegaron {tarea}.")
         return "Te asignaron una actividad", _por(quien, f"te asignó {tarea}" + (f" en {t}." if c.get("tarea") and t != "el ticket" else "."),
                                                  f"Tienes una nueva actividad: {tarea}.")
     if clave == "REGLA_ETAPA":
@@ -186,12 +204,19 @@ def enlace_para(usuario, aviso):
             rel = espacio.relacion(usuario, ticket)
         except Exception:  # noqa: BLE001
             rel = None
+        if rel is not None and aviso.clave == "COMENTARIO" and rel.puede_abrir:
+            # Un mensaje de la conversación abre el ticket con ESA conversación a la vista.
+            canal = aviso.contexto.get("canal") or ""
+            return reverse("tickets:espacio", args=[ticket.pk]) + f"?panel=conversacion&canal={canal}"
         if rel is not None:
             solo_solicita = rel.es_solicitante and not (rel.atiende or rel.tareas or rel.aprobaciones or rel.gacetas)
             if solo_solicita and ticket.solicitante_id == usuario.pk:
                 return reverse("tickets:seguimiento", args=[ticket.pk])
             if rel.puede_abrir:
                 return reverse("tickets:espacio", args=[ticket.pk])
+        if aviso.clave == "TICKET_EN_COLA":
+            # Quien puede tomarlo aún no consulta el ticket: el aviso lo lleva a la Cola, donde está el botón.
+            return reverse("tickets:cola")
     tarea_id = aviso.contexto.get("tarea_id")
     if tarea_id:
         from apps.tareas.autorizacion import puede_consultar_tarea
@@ -199,7 +224,9 @@ def enlace_para(usuario, aviso):
 
         tarea = Tarea.objects.filter(pk=tarea_id).first()
         if tarea is not None and puede_consultar_tarea(usuario, tarea):
-            return reverse("tareas:detalle", args=[tarea.pk])
+            from apps.tickets.vinculos import url_de_tarea
+
+            return url_de_tarea(tarea)
     aprobacion_id = aviso.contexto.get("aprobacion_id")
     if aprobacion_id:
         from apps.aprobaciones.autorizacion import puede_consultar_aprobacion
@@ -207,5 +234,7 @@ def enlace_para(usuario, aviso):
 
         aprobacion = Aprobacion.objects.filter(pk=aprobacion_id).select_related("esquema").first()
         if aprobacion is not None and puede_consultar_aprobacion(usuario, aprobacion):
-            return reverse("aprobaciones:detalle", args=[aprobacion.pk])
+            from apps.tickets.vinculos import url_de_aprobacion
+
+            return url_de_aprobacion(aprobacion)
     return ""

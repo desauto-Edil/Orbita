@@ -85,7 +85,8 @@ def saludo(usuario, ahora=None):
         momento = "Buenas tardes"
     else:
         momento = "Buenas noches"
-    nombre = (usuario.first_name or "").split(" ")[0] or usuario.get_username()
+    # Sin nombre de pila, el saludo usa la parte del correo antes de la @ (no el correo completo).
+    nombre = (usuario.first_name or "").split(" ")[0] or usuario.email.split("@", 1)[0]
     dia_semana = date_format(ahora.date(), "l")
     mes_anio = date_format(ahora.date(), "F Y")
     return {
@@ -265,11 +266,13 @@ def _eventos(usuario, hasta):
         .filter(fecha_limite__isnull=False, fecha_limite__lt=hasta)
         .order_by("fecha_limite")[:LIMITE_EVENTOS]
     )
+    from apps.tickets.vinculos import url_de_tarea
+
     for tarea in tareas:
         eventos.append(
             {
                 "tipo": "tarea", "titulo": tarea.titulo, "fecha": tarea.fecha_limite,
-                "url": reverse("tareas:detalle", args=[tarea.pk]), "etiqueta": "Vence la tarea",
+                "url": url_de_tarea(tarea), "etiqueta": "Vence la tarea",
             }
         )
     # 4.F3: la fecha objetivo (real, ya fijada al radicar) de los tickets que la persona atiende.
@@ -303,7 +306,7 @@ def _eventos(usuario, hasta):
         eventos.append(
             {
                 "tipo": "entrega", "titulo": entrega.ticket.detalle_servicio.servicio.nombre,
-                "fecha": entrega.vence_en, "url": reverse("tickets:detalle", args=[entrega.ticket_id]),
+                "fecha": entrega.vence_en, "url": reverse("tickets:espacio", args=[entrega.ticket_id]),
                 "etiqueta": "Plazo para responder la entrega",
             }
         )

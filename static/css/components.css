@@ -1325,21 +1325,9 @@
   margin-bottom: var(--space-5);
 }
 
-.auth-card__divider {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  margin: var(--space-5) 0;
-  color: var(--text-muted);
-  font-size: var(--font-size-small);
-}
-
-.auth-card__divider::before,
-.auth-card__divider::after {
-  content: "";
-  height: 1px;
-  flex: 1;
-  background: var(--border-subtle);
+.auth-card__intro {
+  margin-bottom: var(--space-4);
+  color: var(--text-secondary);
 }
 
 .auth-card__google svg { flex-shrink: 0; }
@@ -1996,3 +1984,51 @@
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
+
+/* Lista de evidencias (Campo CHECKLIST), en lectura y edición: un punto por fila con su prueba (archivo o enlace).
+   La usan el formulario de solicitud, las fichas y tablas de ítems, la actividad y el visor de piezas. */
+.evd { display: grid; gap: var(--space-2); margin-block: var(--space-2); }
+.evd__titulo { margin: 0; font-size: var(--font-size-small); font-weight: var(--font-weight-semibold); color: var(--text-primary); }
+.evd__ayuda { margin: 0; color: var(--text-secondary); font-size: var(--font-size-small); }
+
+.evd__cuenta {
+  margin-left: var(--space-1);
+  padding: 1px var(--space-2);
+  border-radius: var(--radius-pill);
+  background: var(--status-neutral-soft);
+  color: var(--status-neutral);
+  font-size: var(--font-size-caption);
+}
+
+.evd__cuenta.is-completa { background: var(--status-success-soft); color: var(--status-success); }
+.evd__puntos { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+
+.evd__punto {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.evd__check {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  color: var(--status-success);
+  font-size: var(--font-size-caption);
+}
+
+.evd__punto.is-hecho .evd__check { border-color: var(--status-success); background: var(--status-success-soft); }
+.evd__texto { flex: 1 1 160px; color: var(--text-primary); }
+.evd__prueba { overflow-wrap: anywhere; }
+.evd__quien { color: var(--text-muted); font-size: var(--font-size-caption); }
+.evd__miniatura img { display: block; width: 72px; height: 72px; border-radius: var(--radius-sm); object-fit: cover; }
+.evd__subir, .evd__quitar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+.evd__subir input[type="url"] { flex: 1 1 180px; min-width: 0; }
+.evd__o { color: var(--text-muted); font-size: var(--font-size-caption); }

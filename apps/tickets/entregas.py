@@ -105,6 +105,9 @@ def entregar_ticket(ticket, actor):
     (nueva por ciclo) con su snapshot y transiciona RESUELTO. Con la política
     de cierre directo, cierra el ticket en la misma transacción."""
     ticket = Ticket.objects.select_for_update().get(pk=ticket.pk)
+    from apps.tickets.cancelaciones import exigir_sin_cancelacion_pendiente
+
+    exigir_sin_cancelacion_pendiente(ticket)  # una cancelación por aprobar congela el ticket
     if ticket.estado != Ticket.Estado.EN_ATENCION:
         raise ValidationError("Solo un ticket EN_ATENCION puede entregarse.")
     if not ticket.entrega_politica:

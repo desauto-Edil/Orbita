@@ -15,6 +15,27 @@
 (function () {
   "use strict";
 
+  /* ------------------------------ Presencia ------------------------------
+     Mientras una pestaña de Órbita esté visible, confirma cada minuto que la persona sigue aquí
+     (`core:presencia`): así sus compañeros la ven «en línea» en la Conversación del ticket y los mensajes
+     no le llegan por correo. Una pestaña oculta no confirma nada. */
+  (function () {
+    var url = document.body && document.body.getAttribute("data-presencia");
+    if (!url || !window.fetch) return;
+    var csrf = document.cookie.match(/(?:^|;\s*)csrftoken=([^;]+)/);
+    function senal() {
+      if (document.visibilityState !== "visible") return;
+      fetch(url, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "X-CSRFToken": csrf ? decodeURIComponent(csrf[1]) : "" },
+        keepalive: true,
+      }).catch(function () { /* sin red: se reintenta en el siguiente minuto */ });
+    }
+    window.setInterval(senal, 60000);
+    document.addEventListener("visibilitychange", senal);
+  })();
+
   // Si Google no puede entregar la foto, conservar las iniciales del avatar.
   document.addEventListener("error", function (event) {
     if (event.target.matches && event.target.matches(".avatar img")) {
@@ -228,6 +249,31 @@
     else if (event.key === "ArrowDown") indice = (indice + 1) % items.length;
     else indice = (indice - 1 + items.length) % items.length;
     items[indice].focus();
+  });
+
+  /* ------------------- «Publicar a los interesados» = aprobar ------------------- */
+  /* Con la casilla marcada solo queda «Aprobar»: las demás decisiones del formulario se deshabilitan (el servidor
+     también rechaza combinarlas). Solo se reactivan las que deshabilitó esta casilla (no las que bloquea un dibujo). */
+
+  document.addEventListener("change", function (event) {
+    var casilla = event.target;
+    if (!casilla.matches || !casilla.matches("input[data-publicar]")) return;
+    var form = casilla.closest("form");
+    if (!form) return;
+    form.querySelectorAll('button[name="decision"]').forEach(function (boton) {
+      if (boton.value === "APROBADA") return;
+      if (casilla.checked) {
+        if (!boton.disabled) {
+          boton.disabled = true;
+          boton.setAttribute("data-bloqueado-por-publicar", "");
+          boton.title = "Publicar es aprobar: quita la marca para elegir otra decisión.";
+        }
+      } else if (boton.hasAttribute("data-bloqueado-por-publicar")) {
+        boton.disabled = false;
+        boton.removeAttribute("data-bloqueado-por-publicar");
+        boton.removeAttribute("title");
+      }
+    });
   });
 
   /* ------------------------------ Uploader ------------------------------- */

@@ -61,6 +61,9 @@ class Notificacion(models.Model):
     clave_agrupacion = models.CharField(max_length=200, blank=True, default="")
     creada_en = models.DateTimeField(auto_now_add=True, db_index=True)
     leida_en = models.DateTimeField(null=True, blank=True)
+    # Conversación del ticket: el mensaje llegó con la persona FUERA DE LÍNEA y su correo espera unos minutos
+    # (`correo_conversacion`): si para entonces sigue sin leer, sale UN correo con todo lo pendiente de ese canal.
+    correo_pendiente_desde = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         ordering = ["-creada_en", "-pk"]
@@ -206,7 +209,7 @@ DEFAULTS = {
     "sin_tomar_horas": 8,
     "tarea_dias_antes": 1,
     "tarea_dias_sin_fecha": 2,
-    "aprobacion_dias": 2,
+    "aprobacion_dias": 1,
     "informacion_dias": 3,
     "repetir_cada_dias": 1,
     "maximo_recordatorios": 3,

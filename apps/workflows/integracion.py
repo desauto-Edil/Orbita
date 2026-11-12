@@ -95,11 +95,12 @@ def completar_tarea_workflow(tarea, actor):
     instancia_id = _instancia_id_de_tarea(tarea)
     if instancia_id is not None:
         bloquear_instancia(instancia_id)
+    _exigir_ticket_sin_cancelacion_pendiente(tarea)
     vinculo = TareaWorkflow.objects.filter(tarea=tarea).select_related("instancia_etapa").first()
     if vinculo is None and hasattr(tarea, "vinculo_elemento"):
         # 4.G2D2: una Tarea generada por un elemento no tiene su propio bloque; si es la última del conjunto,
         # libera el bloque TAREAS_ELEMENTOS.
-        tarea_completada = completar_tarea(tarea, actor)
+        tarea_completada = completar_tarea(tarea, actor, evidencia=_evidencia_por_checklist(tarea))
         continuar_por_tareas_elementos(tarea_completada)
         return tarea_completada
     if vinculo is None:
@@ -110,9 +111,28 @@ def completar_tarea_workflow(tarea, actor):
 
     _exigir_datos_inicio_si_corresponde(vinculo.instancia_etapa)
     _exigir_columnas_requeridas(vinculo.instancia_etapa)
-    tarea_completada = completar_tarea(tarea, actor)
+    tarea_completada = completar_tarea(tarea, actor, evidencia=_evidencia_por_checklist(tarea))
     continuar_espera_externa(vinculo.instancia_etapa, motivo_espera=InstanciaEtapa.MotivoEspera.TAREA)
     return tarea_completada
+
+
+def _exigir_ticket_sin_cancelacion_pendiente(tarea):
+    """Una cancelación por aprobar congela el ticket: sus actividades no se completan mientras se decide."""
+    from apps.tickets.cancelaciones import exigir_sin_cancelacion_pendiente
+    from apps.tickets.vinculos import origen_de_tareas
+
+    origen = origen_de_tareas([tarea.pk]).get(tarea.pk)
+    if origen is not None:
+        exigir_sin_cancelacion_pendiente(origen["ticket_id"])
+
+
+def _evidencia_por_checklist(tarea):
+    """LA EVIDENCIA ES EL CHECKLIST: si la Tarea trabaja sobre un ítem cuya colección tiene una «Lista de
+    evidencias», su evidencia es ese checklist completo (`tickets.evidencias`); si no, `None` (adjunto de siempre)."""
+    from apps.tickets.evidencias import evidencia_de_tarea
+
+    usa, completo = evidencia_de_tarea(tarea)
+    return completo if usa else None
 
 
 def _exigir_columnas_requeridas(ejecucion):
@@ -239,6 +259,9 @@ def reintentar_tareas_elementos(ticket, actor):
         raise ValidationError("Este ticket fue cancelado: su flujo no se reactiva.")
     if not puede_editar_parrilla(actor, ticket):
         raise PermissionDenied("Solo quien atiende el ticket puede reintentar la generación de tareas.")
+    from apps.tickets.cancelaciones import exigir_sin_cancelacion_pendiente
+
+    exigir_sin_cancelacion_pendiente(ticket)  # una cancelación por aprobar congela el ticket
     if instancia.estado != InstanciaWorkflow.Estado.EN_ESPERA:
         return ResultadoReintento()
     # La fila de la instancia ya está bloqueada: nadie más avanza esta ejecución mientras tanto.
@@ -327,7 +350,7 @@ def entregar_tareas_pendientes_al_responsable(ticket, actor):
 
 
 @transaction.atomic
-def resolver_aprobacion_workflow(aprobacion, actor, *, decision, observacion=""):
+def resolver_aprobacion_workflow(aprobacion, actor, *, decision, observacion="", publicacion=None):
     """Única forma correcta de decidir una `Aprobacion` cuyo
     `EsquemaAprobacion` está vinculado a un Workflow y que, al cerrar,
     debe reanudar su ejecución (3.4, diseño técnico aprobado).
@@ -353,7 +376,10 @@ def resolver_aprobacion_workflow(aprobacion, actor, *, decision, observacion="")
     )
     if instancia_id is not None:
         bloquear_instancia(instancia_id)
+    eleccion = _eleccion_de_publicacion(aprobacion, decision, publicacion)
     aprobacion, esquema = resolver_aprobacion(aprobacion, actor, decision=decision, observacion=observacion)
+    if eleccion is not None:
+        _guardar_eleccion(aprobacion, eleccion)
     if esquema.resultado is None:
         return aprobacion, esquema
 
@@ -399,6 +425,51 @@ def resolver_aprobacion_workflow(aprobacion, actor, *, decision, observacion="")
 SALIDA_POR_RESULTADO = {"RECHAZADA": "RECHAZADO", "EXCLUIDA": "EXCLUIDO"}
 
 
+def _eleccion_de_publicacion(aprobacion, decision, publicacion):
+    """Lo que eligió el aprobador sobre «Publicar a los interesados» (`catalogo.gacetas.eleccion_de_publicacion`),
+    validado ANTES de decidir. Solo cuenta al APROBAR un bloque que lo ofrece; en cualquier otro caso `None`.
+    Marcar «publicar» y elegir otra decisión (corregir, rechazar, eliminar) se RECHAZA (2026-11-12): lo que se publica
+    ya está aprobado y no vuelve a corrección por esta vía."""
+    from apps.catalogo.gacetas import eleccion_de_publicacion
+
+    if decision != "APROBADA":
+        if (publicacion or {}).get("publicar"):
+            raise ValidationError(
+                "«Publicar a los interesados» solo se puede al aprobar: quita la marca para pedir correcciones."
+            )
+        return None
+    vinculo = EsquemaAprobacionWorkflow.objects.filter(esquema_id=aprobacion.esquema_id).select_related(
+        "instancia_etapa__bloque_operativo").first()
+    bloque = vinculo.instancia_etapa.bloque_operativo if vinculo is not None else None
+    if bloque is None:
+        return None
+    publicacion = publicacion or {}
+    return eleccion_de_publicacion(
+        bloque.configuracion, publicar=bool(publicacion.get("publicar")), dias=publicacion.get("dias"),
+    )
+
+
+def _guardar_eleccion(aprobacion, eleccion):
+    """La elección queda en el historial de ESTA ejecución (la última aprobación la fija) hasta que se publique con
+    el resultado del bloque (`aprobaciones.<clave>.publicar|dias`)."""
+    ejecucion = InstanciaEtapa.objects.select_for_update().get(
+        pk=EsquemaAprobacionWorkflow.objects.filter(esquema_id=aprobacion.esquema_id).values_list(
+            "instancia_etapa_id", flat=True).first()
+    )
+    ejecucion.resultado = {**(ejecucion.resultado or {}), "publicacion": eleccion}
+    ejecucion.save(update_fields=["resultado", "actualizado_en"])
+
+
+def _publicado_de_aprobacion(ejecucion, esquema):
+    datos = {"resultado": esquema.resultado}
+    eleccion = (ejecucion.resultado or {}).get("publicacion") if esquema.resultado == "APROBADA" else None
+    if isinstance(eleccion, dict):
+        datos.update(publicar=bool(eleccion.get("publicar")), dias=eleccion.get("dias"))
+    elif ejecucion.bloque_operativo is not None and "publicacion" in (ejecucion.bloque_operativo.configuracion or {}):
+        datos.update(publicar=False, dias=None)  # se ofrecía y no se eligió: no se publica
+    return datos
+
+
 def _decision_que_cerro(esquema):
     """La participación que decidió el resultado del esquema (la primera con ese estado): su autor y su
     observación justifican el cambio de alcance."""
@@ -417,7 +488,8 @@ def _resolver_aprobacion_contenida(ejecucion, esquema):
     from apps.workflows.motor import bloquear_con_padre, finalizar_subinstancia
 
     bloque = ejecucion.bloque_operativo
-    publicado = ("aprobaciones", {"resultado": esquema.resultado})
+    ejecucion.refresh_from_db(fields=["resultado"])
+    publicado = ("aprobaciones", _publicado_de_aprobacion(ejecucion, esquema))
     if bloque.rama == "ITEM" and esquema.resultado in SALIDA_POR_RESULTADO:
         hija = bloquear_con_padre(ejecucion.instancia_workflow_id)
         ejecucion = InstanciaEtapa.objects.select_for_update().get(pk=ejecucion.pk)
@@ -636,6 +708,9 @@ def reintentar_recorrido(hija, actor):
     ticket = Ticket.objects.select_for_update().get(instancia_workflow_id=hija.raiz_id)
     if not puede_editar_parrilla(actor, ticket):
         raise PermissionDenied("Solo quien atiende el ticket puede reintentar un recorrido.")
+    from apps.tickets.cancelaciones import exigir_sin_cancelacion_pendiente
+
+    exigir_sin_cancelacion_pendiente(ticket)  # una cancelación por aprobar congela el ticket
     if ticket.estado == Ticket.Estado.CANCELADO:
         raise ValidationError("Este ticket fue cancelado: su flujo no se reactiva.")
     hija = reintentar_subinstancia_con_error(hija)

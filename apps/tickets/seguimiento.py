@@ -2,7 +2,7 @@
 
 Solo lectura y solo lenguaje de quien pidió algo: en qué fase va, quién lo tiene, cuándo se
 espera y qué pidió. No ejecuta ni expone nada operativo (ni bloques, ni permisos, ni
-usernames). Reutiliza el estado real de la ejecución (`InstanciaWorkflow`/`InstanciaEtapa`/
+correos). Reutiliza el estado real de la ejecución (`InstanciaWorkflow`/`InstanciaEtapa`/
 `fase_workflow`); no existe otro «estado de progreso» paralelo."""
 
 from apps.workflows.models import InstanciaWorkflow
@@ -17,7 +17,7 @@ def nombre_visible(usuario):
     """Nombre para mostrar a otras personas: nombre completo, o el usuario solo si no hay otro."""
     if usuario is None:
         return ""
-    return usuario.get_full_name().strip() or usuario.get_username()
+    return usuario.nombre_visible
 
 
 def responsable_visible(ticket):

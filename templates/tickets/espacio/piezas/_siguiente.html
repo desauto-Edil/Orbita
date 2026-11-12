@@ -1,0 +1,17 @@
+{% comment %}
+  Después de la gaceta: qué sigue con la pieza (para TODOS los que la ven) y las pruebas ya subidas. Si la persona
+  puede hacer el paso (p. ej. cualquier miembro del equipo que sube la evidencia), un acceso a su actividad.
+  Espera `p` (con `siguiente` y `evidencias`) y `base`.
+{% endcomment %}
+{% if p.siguiente %}
+  <div class="pzv__sigue">
+    <p class="pzv__sub">{% if p.siguiente.terminado %}Recorrido{% else %}Qué sigue{% endif %}</p>
+    <p class="pzv__sigue-paso"><strong>{{ p.siguiente.paso }}</strong>{% if p.siguiente.fecha %} · <span class="tabular">{{ p.siguiente.fecha|date:"j M Y" }}</span>{% endif %}</p>
+    {% if p.siguiente.responsable and not p.siguiente.terminado %}<p class="pzv__sigue-quien">Lo hace {{ p.siguiente.responsable }}</p>{% endif %}
+    {% if p.siguiente.mision %}<a class="btn btn--primary btn--sm" href="{{ base }}?mision={{ p.siguiente.mision|urlencode }}#mision">Subir evidencia</a>{% endif %}
+  </div>
+{% endif %}
+{% if p.evidencias %}
+  <p class="pzv__sub">Pruebas</p>
+  {% for lista in p.evidencias %}{% include "tickets/evidencias/_lectura.html" %}{% endfor %}
+{% endif %}

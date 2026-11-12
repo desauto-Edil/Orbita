@@ -231,6 +231,9 @@ def _bloquear_revision(entregable, actor):
         raise ValidationError("Este entregable no revisa elementos.")
     if ticket.estado in parrilla_ops.ESTADOS_SIN_CAMBIOS:
         raise ValidationError("Este ticket ya no admite cambios en sus elementos.")
+    from apps.tickets.cancelaciones import exigir_sin_cancelacion_pendiente
+
+    exigir_sin_cancelacion_pendiente(ticket)  # una cancelación por aprobar congela el ticket
     if not puede_revisar_conjunto(actor, entregable):
         raise PermissionDenied("No está autorizado a revisar los elementos de este entregable.")
     parrilla = ParrillaTicket.objects.select_for_update(of=("self",)).filter(ticket=ticket).first()

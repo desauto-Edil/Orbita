@@ -68,14 +68,12 @@ class VinculosGacetaTests(_EscenarioGacetasMixin, TestCase):
         self.banner = self._item(self.ticket, self.columnas, "Banner", responsable=self.disenadora)
         self.p_banner = gacetas_ops.presentar(self.gaceta, self.banner, self.analista)
 
-    def test_la_aprobacion_de_una_ronda_y_la_correccion_apuntan_al_ticket(self):
-        aprobacion = self._aprobacion(self.p_banner)
-        origen = vinculos.origen_de_aprobaciones([aprobacion])
-        self.assertEqual(origen[aprobacion.pk], {"ticket_id": self.ticket.pk, "elemento_id": self.banner.pk, "origen": "GACETA"})
+    def test_la_correccion_de_una_ronda_apunta_al_ticket_y_no_hay_aprobacion(self):
+        self.assertIsNone(self.p_banner.rondas.get().esquema)  # nadie aprueba en una gaceta
+        self.assertFalse(vinculos.aprobaciones_del_ticket(self.ticket).exists())
         gacetas_ops.observar(self.p_banner, self.observador, "Falta el logo")
         correccion = Tarea.objects.get(ronda_gaceta__participacion=self.p_banner)
         self.assertEqual(vinculos.origen_de_tareas([correccion.pk])[correccion.pk]["origen"], "GACETA")
-        self.assertIn(aprobacion.pk, set(vinculos.aprobaciones_del_ticket(self.ticket).values_list("pk", flat=True)))
 
 
 # --- Bandeja «Mi trabajo» por ticket ---------------------------------------------------------------------
@@ -94,8 +92,9 @@ class BandejaPorTicketTests(_MediaAisladaMixin, _TareasConEdicionMixin, TestCase
         grupo = next(g for g in bandeja["atencion"] if g.ticket.pk == self.ticket.pk)
         self.assertIn(f"tarea-{self.tarea.pk}", [p.clave for p in grupo.acciones])
         self.assertNotIn(f"tarea-{self.tarea_ajena.pk}", [p.clave for p in grupo.pendientes])
-        # La tarea independiente no pertenece a ningún ticket: va aparte, con su enlace técnico de siempre.
-        self.assertIn(segunda.titulo, [f["titulo"] for f in bandeja["sueltos"]])
+        # Una tarea independiente no pertenece a ningún ticket: una sola vista de trabajo, no se lista.
+        pendientes = [p.clave for g in bandeja["atencion"] + bandeja["seguimiento"] for p in g.pendientes]
+        self.assertNotIn(f"tarea-{segunda.pk}", pendientes)
 
     def test_abrir_lleva_al_espacio_y_destaca_la_unica_accion(self):
         self.client.force_login(self.persona)
@@ -113,11 +112,11 @@ class BandejaPorTicketTests(_MediaAisladaMixin, _TareasConEdicionMixin, TestCase
         self.assertEqual([g.ticket.pk for g in grupos], [self.ticket.pk])
         self.assertIn("Responsable", grupos[0].participacion)
 
-    def test_las_pestanas_tecnicas_siguen_listando_cada_pendiente(self):
+    def test_las_pestanas_tecnicas_se_retiraron(self):
         self.client.force_login(self.persona)
         pagina = self.client.get(reverse("core:mi_trabajo"), {"tab": "tareas"})
-        self.assertContains(pagina, reverse("tareas:detalle", args=[self.tarea.pk]))
-        self.assertIsNone(pagina.context["bandeja"])
+        self.assertIsNotNone(pagina.context["bandeja"])  # `?tab=` ya no cambia nada: siempre la bandeja por ticket
+        self.assertNotContains(pagina, reverse("tareas:detalle", args=[self.tarea.pk]))
 
 
 class BandejaGacetaTests(_EscenarioGacetasMixin, TestCase):
@@ -141,11 +140,10 @@ class BandejaGacetaTests(_EscenarioGacetasMixin, TestCase):
         # El destino Trabajo del dock existe para el revisor.
         self.assertContains(self.client.get(reverse("core:inicio")), reverse("core:mi_trabajo"))
 
-    def test_el_aprobador_agrupa_su_aprobacion_bajo_el_ticket(self):
-        self.client.force_login(self.revisor)
+    def test_en_la_gaceta_nadie_tiene_una_aprobacion_pendiente(self):
+        self.client.force_login(self.revisor)  # el aprobador del flujo no participa en la gaceta
         bandeja = self.client.get(reverse("core:mi_trabajo")).context["bandeja"]
-        grupo = next(g for g in bandeja["atencion"] if g.ticket.pk == self.ticket.pk)
-        self.assertIn(f"aprobacion-{self._aprobacion(self.p_banner).pk}", [p.clave for p in grupo.acciones])
+        self.assertFalse(any(g.ticket.pk == self.ticket.pk for g in bandeja["atencion"]))
 
 
 # --- Acceso y composición del espacio ------------------------------------------------------------------
@@ -156,7 +154,7 @@ class EspacioAccesoTests(_MediaAisladaMixin, _TareasConEdicionMixin, TestCase):
         self._escenario()
 
     def test_sin_relacion_con_el_ticket_no_entra(self):
-        ajeno = Usuario.objects.create_user(username="ux1_ajeno", password=CLAVE_PRUEBA)
+        ajeno = Usuario.objects.create_user("ux1_ajeno@pruebas.orbita")
         self.client.force_login(ajeno)
         self.assertEqual(self.client.get(_espacio(self.ticket)).status_code, 403)
 
@@ -242,7 +240,10 @@ class EspacioGacetaTests(_EscenarioGacetasMixin, TestCase):
         tarjeta = pagina.context["galeria"]["tarjetas"][0]
         self.assertEqual(tarjeta["elemento"], self.banner)
         self.assertTrue(tarjeta["puede_observar"])
-        self.assertContains(pagina, 'class="pz pz--')  # UX-5: tarjeta solo visual; lo demás, en su visor
+        # Sin audiovisuales la gaceta es una lista compacta (la información protagonista), no tarjetas con portada.
+        self.assertEqual(pagina.context["galeria"]["modo"], "datos")
+        self.assertContains(pagina, 'class="pi-lista"')
+        self.assertNotContains(pagina, 'class="pz pz--')
         destino = _espacio(self.ticket)
         respuesta = self.client.post(
             reverse("gacetas:observar", args=[self.p_banner.pk]), {"texto": "Ajustar color", "next": destino}
@@ -263,26 +264,23 @@ class EspacioGacetaTests(_EscenarioGacetasMixin, TestCase):
         pagina = self.client.get(_espacio(self.ticket, accion=f"gaceta-{self.gaceta.pk}"))
         self.assertEqual(len(pagina.context["galeria"]["tarjetas"][0]["valores"]), len(self.columnas))
 
-    def test_el_aprobador_decide_desde_el_espacio(self):
-        aprobacion = self._aprobacion(self.p_banner)
-        self.client.force_login(self.revisor)
-        pagina = self.client.get(_espacio(self.ticket, accion=f"aprobacion-{aprobacion.pk}"))
-        self.assertEqual(pagina.context["seleccionada"]["tipo"], "aprobacion")
-        self.assertIsNotNone(pagina.context["seleccionada"]["form"])
-        # UX-4b: la decisión de la ronda está en la tarjeta de la pieza, dentro de la galería de la gaceta.
+    def test_el_revisor_solo_comenta_desde_el_espacio(self):
+        self.client.force_login(self.observador)
+        pagina = self.client.get(_espacio(self.ticket, accion=f"gaceta-{self.gaceta.pk}"))
         self.assertEqual(pagina.context["mision"]["tipo"], "gaceta")
-        self.assertIsNotNone(pagina.context["galeria"]["tarjetas"][0]["decision"])
-        destino = _espacio(self.ticket)
-        respuesta = self.client.post(
-            reverse("aprobaciones:decidir", args=[aprobacion.pk]), {"decision": "APROBADA", "next": destino}
-        )
-        self.assertRedirects(respuesta, destino, fetch_redirect_response=False)
-        aprobacion.refresh_from_db()
-        self.assertEqual(aprobacion.estado, "APROBADA")
-        # UX-4b: sin nada pendiente, la gaceta sigue a la vista como espacio de colaboración, con la pieza.
+        tarjeta = pagina.context["galeria"]["tarjetas"][0]
+        # Regla de oro: la tarjeta ofrece comentar, nunca decidir.
+        self.assertTrue(tarjeta["puede_observar"])
+        self.assertIsNone(tarjeta["decision"])
+        self.assertEqual(tarjeta["salidas"], [])
+        self.assertNotContains(pagina, "Aprobar")
+        gacetas_ops.cerrar_periodo(self.gaceta, self.analista)
+        # 2026-11-12: sin nada pendiente, la vista de la misión queda VACÍA (la gaceta ya no se pinta debajo).
         pagina = self.client.get(_espacio(self.ticket))
-        self.assertEqual([g["gaceta"] for g in pagina.context["galerias"]], [self.gaceta])
-        self.assertEqual(pagina.context["galerias"][0]["tarjetas"][0]["elemento"], self.banner)
+        self.assertContains(pagina, "Nada pendiente para ti ahora")
+        self.assertNotContains(pagina, f'id="gaceta-{self.gaceta.pk}"')
+        # Pero se abre a propósito con `?gaceta=` (enlaces del Resumen, avisos, «Coordinar»).
+        pagina = self.client.get(_espacio(self.ticket) + f"?gaceta={self.gaceta.pk}")
         self.assertContains(pagina, f'id="gaceta-{self.gaceta.pk}"')
 
 
@@ -354,18 +352,23 @@ class CompatibilidadUrlsTests(_EscenarioAtencionMixin, TestCase):
 
     def test_las_vistas_anteriores_siguen_respondiendo_y_enlazan_al_espacio(self):
         self.client.force_login(self.responsable_directo)
-        for nombre in ("tickets:detalle", "tickets:trabajo"):
-            with self.subTest(vista=nombre):
-                pagina = self.client.get(reverse(nombre, args=[self.ticket.pk]))
-                self.assertEqual(pagina.status_code, 200)
-                self.assertContains(pagina, f'href="{_espacio(self.ticket)}"')
+        pagina = self.client.get(reverse("tickets:trabajo", args=[self.ticket.pk]))
+        self.assertEqual(pagina.status_code, 200)
+        self.assertContains(pagina, f'href="{_espacio(self.ticket)}"')
+        # El detalle aislado se retiró: su URL lleva a la gestión DENTRO del espacio (enlaces ya enviados).
+        self.assertRedirects(
+            self.client.get(reverse("tickets:detalle", args=[self.ticket.pk])),
+            _espacio(self.ticket) + "?vista=resumen",
+        )
         self.client.force_login(self.solicitante)
         self.assertEqual(self.client.get(reverse("tickets:seguimiento", args=[self.ticket.pk])).status_code, 200)
 
-    def test_sin_next_las_acciones_vuelven_al_detalle_como_antes(self):
+    def test_sin_next_las_acciones_vuelven_al_espacio(self):
         self.client.force_login(self.responsable_directo)
-        respuesta = self.client.post(reverse("tickets:comentar", args=[self.ticket.pk]), {"contenido": "Hola"})
-        self.assertRedirects(respuesta, reverse("tickets:detalle", args=[self.ticket.pk]), fetch_redirect_response=False)
+        respuesta = self.client.post(
+            reverse("tickets:solicitar_informacion", args=[self.ticket.pk]), {"mensaje": "¿Formato?"}
+        )
+        self.assertRedirects(respuesta, _espacio(self.ticket), fetch_redirect_response=False)
 
     def test_un_borrador_lleva_a_su_formulario(self):
         from apps.tickets.operaciones import crear_borrador
@@ -414,15 +417,14 @@ class BandejaUx2Tests(_MediaAisladaMixin, _TareasConEdicionMixin, TestCase):
         hecha = crear_tarea(titulo="Ya terminada UX2", creada_por=self.persona, usuario_responsable=self.persona)
         Tarea.objects.filter(pk=hecha.pk).update(estado=Tarea.Estado.COMPLETADA)
         bandeja = self._bandeja()
-        self.assertNotIn(hecha.titulo, [f["titulo"] for f in bandeja["sueltos"]])
         for grupo in bandeja["atencion"] + bandeja["seguimiento"]:
             self.assertNotIn(f"tarea-{hecha.pk}", [p.clave for p in grupo.pendientes])
 
-    def test_sin_ticket_va_aparte_y_plegado(self):
+    def test_lo_que_no_tiene_ticket_no_se_lista(self):
         crear_tarea(titulo="Independiente UX2", creada_por=self.persona, usuario_responsable=self.persona)
         pagina = self.client.get(reverse("core:mi_trabajo"))
-        self.assertContains(pagina, 'class="bj-sueltos"')
-        self.assertContains(pagina, "Sin ticket asociado")
+        self.assertNotContains(pagina, "Sin ticket asociado")
+        self.assertNotContains(pagina, "Independiente UX2")
 
 
 class EspacioUx2Tests(_MediaAisladaMixin, _TareasConEdicionMixin, TestCase):
@@ -444,8 +446,12 @@ class EspacioUx2Tests(_MediaAisladaMixin, _TareasConEdicionMixin, TestCase):
             with self.subTest(panel=panel):
                 self.assertEqual(self.client.get(_espacio(self.ticket, panel=panel)).context["panel"], "")
         self.client.force_login(self.analista)  # responsable del ticket
+        # El Historial vive en el panel global del ticket (Conversación | Historial), no en el panel lateral.
         pagina = self.client.get(_espacio(self.ticket, panel="historial"))
-        self.assertEqual(pagina.context["panel"], "historial")
+        self.assertEqual(pagina.context["panel"], "")
+        self.assertEqual(pagina.context["panel_global"], "historial")
+        pagina = self.client.get(_espacio(self.ticket, panel="solicitud"))
+        self.assertEqual(pagina.context["panel"], "solicitud")
         self.assertContains(pagina, "tb-pagina--con-panel")
         self.assertEqual(pagina.context["url_sin_panel"], _espacio(self.ticket))
 

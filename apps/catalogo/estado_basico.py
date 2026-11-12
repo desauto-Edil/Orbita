@@ -120,6 +120,8 @@ def _tiempos(servicio):
         partes.append(f"{servicio.tiempo_objetivo_cantidad} {servicio.get_tiempo_objetivo_unidad_display().lower()}")
     if servicio.politica_prorroga and servicio.politica_prorroga != Servicio.PoliticaProrroga.NO_PERMITE:
         partes.append(servicio.get_politica_prorroga_display())
+    if servicio.cancelacion_con_aprobacion:
+        partes.append("Cancelación con aprobación")
     if partes:
         return COMPLETO, " · ".join(partes), []
     return OPCIONAL, "Sin compromiso de tiempo", []

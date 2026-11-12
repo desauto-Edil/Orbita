@@ -29,8 +29,7 @@ recorrido detenido (lo autoriza y revalida el dominio).{% endcomment %}
                   </td>
                   <td>{{ fila.responsable|default:"—" }}</td>
                   <td>
-                    {% if fila.tarea %}<a href="{% url 'tareas:detalle' fila.tarea.pk %}">Abrir tarea</a>{% endif %}
-                    {% if fila.aprobacion %}<a href="{% url 'aprobaciones:detalle' fila.aprobacion.pk %}">Abrir aprobación</a>{% endif %}
+                    {% if fila.tarea or fila.aprobacion %}<a href="{% url 'tickets:espacio' ticket.pk %}">Abrir en el espacio</a>{% endif %}
                     {% if fila.puede_reintentar %}
                       <form method="post" action="{% url 'tickets:recorrido_reintentar' ticket.pk fila.instancia.pk %}">
                         {% csrf_token %}

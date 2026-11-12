@@ -90,12 +90,14 @@ class Grupo:
         return self.pendientes[0] if self.pendientes else None
 
     def coincide(self, texto):
-        """Búsqueda de la bandeja (UX-2): código, nombre del servicio, etiqueta de la ejecución o título de un
-        pendiente. Solo filtra lo que ya se construyó; no consulta nada."""
+        """Búsqueda de la bandeja (UX-2): código, nombre del servicio, quien lo solicitó, etiqueta de la ejecución o
+        título de un pendiente. Solo filtra lo que ya se construyó; no consulta nada."""
         if not texto:
             return True
         texto = texto.casefold()
-        campos = [self.ticket.codigo or "", self.ticket.detalle_servicio.servicio.nombre, self.ticket.etiqueta or ""]
+        solicitante = self.ticket.solicitante
+        quien = (solicitante.nombre_visible) if solicitante is not None else ""
+        campos = [self.ticket.codigo or "", self.ticket.detalle_servicio.servicio.nombre, self.ticket.etiqueta or "", quien]
         campos += [p.titulo for p in self.pendientes]
         return any(texto in campo.casefold() for campo in campos)
 
@@ -114,7 +116,8 @@ def _como_instante(valor):
 
 
 _ROL_TAREA = {"FLUJO": "Actividades", "ELEMENTO": "Tareas por elemento", "GACETA": "Corrección"}
-_ROL_APROBACION = {"FLUJO": "Aprobación", "GACETA": "Aprobación de gaceta", "PRORROGA": "Aprobación de prórroga"}
+_ROL_APROBACION = {"FLUJO": "Aprobación", "GACETA": "Aprobación de gaceta", "PRORROGA": "Aprobación de prórroga",
+                   "CANCELACION": "Aprobación de cancelación"}
 
 
 def _pendiente_de_tarea(tarea):
@@ -225,7 +228,7 @@ def _gacetas_de(usuario):
             clave=f"gaceta-{gaceta.pk}", tipo="gaceta", titulo=gaceta.nombre,
             detalle="Revisión de gaceta",
             estado=f"{en_revision} pieza{'s' if en_revision != 1 else ''} en revisión" if en_revision else gaceta.get_estado_display(),
-            url_tecnica=reverse("tickets:espacio", args=[gaceta.ticket_id]) + f"#gaceta-{gaceta.pk}",
+            url_tecnica=reverse("tickets:espacio", args=[gaceta.ticket_id]) + f"?gaceta={gaceta.pk}#gaceta-{gaceta.pk}",
             vence=gaceta.vence_revision_en if en_revision else None,
             accion=bool(en_revision),
         ), "Revisión de gaceta" if revisor else "Gaceta"))
@@ -283,7 +286,7 @@ def construir(usuario, *, tareas, aprobaciones, revisiones, colecciones, a_cargo
 
     tickets = {
         t.pk: t for t in Ticket.objects.filter(pk__in=por_ticket).select_related(
-            "detalle_servicio__servicio", "usuario_responsable", "equipo_responsable"
+            "detalle_servicio__servicio", "usuario_responsable", "equipo_responsable", "solicitante"
         )
     }
     for ticket_id, entradas in por_ticket.items():

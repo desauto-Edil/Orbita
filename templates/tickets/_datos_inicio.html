@@ -7,7 +7,7 @@ diligenciamiento» valida los obligatorios y marca los datos como completos.{% e
   <section class="card" id="datos-inicio" aria-labelledby="datos-inicio-t">
     <h3 id="datos-inicio-t">Datos de inicio</h3>
     {% if datos_inicio.completo %}
-      <p>Completados el {{ datos_inicio.completado_en|date:"d/m/Y H:i" }}{% if datos_inicio.completado_por %} por {{ datos_inicio.completado_por.get_full_name|default:datos_inicio.completado_por.get_username }}{% endif %}.</p>
+      <p>Completados el {{ datos_inicio.completado_en|date:"d/m/Y H:i" }}{% if datos_inicio.completado_por %} por {{ datos_inicio.completado_por.nombre_visible }}{% endif %}.</p>
     {% else %}
       <p class="text-muted">Este proceso se inició sin exigir el formulario completo: se diligencia aquí, durante la ejecución.</p>
       {% if datos_inicio.pendientes %}

@@ -36,8 +36,8 @@ from apps.tickets.operaciones import (
 class _BaseInicio(_Base4A):
     def _preparar_inicio(self):
         self._preparar()
-        self.solicitante = Usuario.objects.create_user("b1_solicitante", password=CLAVE)
-        self.atiende = Usuario.objects.create_user("b1_atiende", password=CLAVE)
+        self.solicitante = Usuario.objects.create_user("b1_solicitante@pruebas.orbita")
+        self.atiende = Usuario.objects.create_user("b1_atiende@pruebas.orbita")
         _permiso_get_or_create(self.atiende, "tickets.atender", "Rol B1 atender")
         # El solicitante también tiene el permiso: aun así no puede tomar su propio ticket.
         _permiso_get_or_create(self.solicitante, "tickets.atender", "Rol B1 atender solicitante")

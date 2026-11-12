@@ -28,7 +28,7 @@
 <details class="svc-advanced"{% if form.requiere_evidencia.value or form.verificacion_obligatoria.value or form.verificacion_opcional.value or form.exige_datos_inicio.value or form.permite_subtareas.value %} open{% endif %}>
   <summary>Opciones avanzadas: evidencia, verificación y subtareas</summary>
   <label class="choice">{{ form.requiere_evidencia }} {{ form.requiere_evidencia.label_tag }}</label>
-  <div class="field">{{ form.verificacion_obligatoria.label_tag }}{{ form.verificacion_obligatoria }}</div>
+  <div class="field">{{ form.verificacion_obligatoria.label_tag }}{{ form.verificacion_obligatoria }}<small class="text-muted">{{ form.verificacion_obligatoria.help_text }}</small></div>
   <div class="field">{{ form.verificacion_opcional.label_tag }}{{ form.verificacion_opcional }}</div>
   <label class="choice">{{ form.exige_datos_inicio }} {{ form.exige_datos_inicio.label_tag }}</label>
   <label class="choice">{{ form.permite_subtareas }} {{ form.permite_subtareas.label_tag }}</label>

@@ -87,8 +87,8 @@
   {% include "tickets/_historial.html" %}
 
   {% if puede_ver_operacion %}
-    <p class="seg-nota"><a href="{% url 'tickets:detalle' ticket.pk %}">Abrir la vista de atención de este ticket</a></p>
+    <p class="seg-nota"><a href="{% url 'tickets:espacio' ticket.pk %}">Abrir el espacio de este ticket</a></p>
   {% elif es_solicitante %}
-    <p class="seg-nota"><a href="{% url 'tickets:espacio' ticket.pk %}?pestana=informacion#conversacion">Comentar o ver la comunicación del ticket</a></p>
+    <p class="seg-nota"><a href="{% url 'tickets:espacio' ticket.pk %}?panel=conversacion">Comentar o ver la comunicación del ticket</a></p>
   {% endif %}
 {% endblock %}
