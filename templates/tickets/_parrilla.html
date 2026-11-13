@@ -20,7 +20,7 @@
       {% endif %}
     </p>
     {% if parrilla.puede_editar and not alcance.cerrado %}
-      <form method="post" action="{% url 'tickets:alcance_cerrar' ticket.pk %}" onsubmit="return confirm('¿Cerrar el alcance? Después solo se podrán excluir o rechazar ítems con justificación.');">
+      <form method="post" action="{% url 'tickets:alcance_cerrar' ticket.pk %}" data-confirmar-formulario="¿Cerrar el alcance? Después solo se podrán excluir o rechazar ítems con justificación.">
         {% csrf_token %}{% if ws_next %}<input type="hidden" name="next" value="{{ ws_next }}">{% endif %}
         <input type="hidden" name="coleccion" value="{{ parrilla.parrilla.clave }}">
         <button type="submit" class="btn btn--ghost btn--sm">Cerrar alcance</button>

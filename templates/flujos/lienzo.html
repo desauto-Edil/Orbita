@@ -110,7 +110,7 @@
                           <button type="button" data-flow-open-inspector data-target="inspector-conectar-{{ fila.fase.pk }}">Conectar</button>
                           <form method="post" action="{% url 'flujos:fase_eliminar' workflow.pk fila.fase.pk %}">
                             {% csrf_token %}
-                            <button type="submit" onclick="return confirm('{% if fila.en_uso_por %}Esta fase tiene actividades en: {{ fila.en_uso_por|join:", "|escapejs }}. Al actualizar su configuración, cada uno decidirá a dónde moverlas (nada se borra solo). ¿Eliminar la fase de este borrador?{% else %}¿Eliminar esta fase?{% endif %}')">Eliminar</button>
+                            <button type="submit" data-confirmar-envio="{% if fila.en_uso_por %}Esta fase tiene actividades en: {{ fila.en_uso_por|join:", " }}. Al actualizar su configuración, cada uno decidirá a dónde moverlas (nada se borra solo). ¿Eliminar la fase de este borrador?{% else %}¿Eliminar esta fase?{% endif %}">Eliminar</button>
                           </form>
                         </div>
                       </details>
@@ -366,64 +366,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script>
-(function () {
-  var workspace = document.querySelector("[data-flow-workspace]");
-  if (!workspace) return;
-
-  var inspector = workspace.querySelector("#flow-inspector");
-  var toggle = workspace.querySelector("[data-flow-toggle-inspector]");
-  var panels = Array.prototype.slice.call(workspace.querySelectorAll(".flow-inspector__section.is-action-panel"));
-  var nodes = Array.prototype.slice.call(workspace.querySelectorAll("[data-flow-select]"));
-
-  function setInspector(open) {
-    workspace.classList.toggle("is-inspector-collapsed", !open);
-    if (toggle) toggle.setAttribute("aria-expanded", open ? "true" : "false");
-  }
-
-  function openPanel(id) {
-    setInspector(true);
-    panels.forEach(function (panel) {
-      panel.hidden = panel.id !== id;
-    });
-    var target = id ? document.getElementById(id) : null;
-    if (target) target.hidden = false;
-  }
-
-  workspace.addEventListener("click", function (event) {
-    var open = event.target.closest("[data-flow-open-inspector]");
-    if (open) {
-      event.preventDefault();
-      openPanel(open.getAttribute("data-target"));
-      return;
-    }
-
-    if (event.target.closest("[data-flow-close-inspector]")) {
-      event.preventDefault();
-      setInspector(false);
-      return;
-    }
-
-    if (event.target.closest("[data-flow-toggle-inspector]")) {
-      event.preventDefault();
-      setInspector(workspace.classList.contains("is-inspector-collapsed"));
-      return;
-    }
-
-    var selected = event.target.closest("[data-flow-select]");
-    if (selected && !event.target.closest(".flow-menu")) {
-      nodes.forEach(function (node) { node.classList.remove("is-selected"); });
-      selected.classList.add("is-selected");
-      openPanel(selected.getAttribute("data-target"));
-    }
-  });
-
-  workspace.addEventListener("keydown", function (event) {
-    if ((event.key === "Enter" || event.key === " ") && event.target.matches("[data-flow-select]")) {
-      event.preventDefault();
-      event.target.click();
-    }
-  });
-})();
-</script>
+<script src="{% static 'js/lienzo_flujo.js' %}"></script>
 {% endblock %}

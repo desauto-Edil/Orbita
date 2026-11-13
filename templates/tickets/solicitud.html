@@ -122,7 +122,7 @@
     </div>
   </form>
 
-  <form class="sol-discard" method="post" action="{% url 'tickets:eliminar' ticket.pk %}" onsubmit="return confirm('¿Eliminar este borrador? No se puede deshacer.');">
+  <form class="sol-discard" method="post" action="{% url 'tickets:eliminar' ticket.pk %}" data-confirmar-formulario="¿Eliminar este borrador? No se puede deshacer.">
     {% csrf_token %}
     <button type="submit" class="btn btn--ghost btn--sm">Eliminar borrador</button>
   </form>

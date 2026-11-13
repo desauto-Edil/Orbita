@@ -40,7 +40,7 @@
 
   {% if accion.puede_cerrar %}
     <div class="ws-acciones esp-panel__pie">
-      <form method="post" action="{% url 'tickets:alcance_cerrar' ticket.pk %}" onsubmit="return confirm('Después de cerrar el alcance ya no se agregan {{ parrilla.nombre_elemento|lower|default:"ítems" }} por la vía ordinaria. ¿Continuar?');">
+      <form method="post" action="{% url 'tickets:alcance_cerrar' ticket.pk %}" data-confirmar-formulario="Después de cerrar el alcance ya no se agregan {{ parrilla.nombre_elemento|lower|default:"ítems" }} por la vía ordinaria. ¿Continuar?">
         {% csrf_token %}<input type="hidden" name="next" value="{{ base }}"><input type="hidden" name="coleccion" value="{{ parrilla.clave }}">
         <button type="submit" class="btn btn--ghost">{% include "components/icon.html" with name="lock" size="sm" %}No habrá más: cerrar el alcance</button>
       </form>

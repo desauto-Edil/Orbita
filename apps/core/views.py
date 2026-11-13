@@ -58,26 +58,20 @@ from apps.tareas.models import Tarea
 
 
 def salud(request):
-    """Healthcheck sin autenticación: verifica DB y Redis, no depende de Celery."""
-    estado = {"status": "ok", "database": "ok", "redis": "ok"}
-    http_status = 200
+    """Healthcheck sin autenticación: verifica DB y Redis, no depende de Celery.
 
+    Versión 1: responde solo «ok» o «error» (y 200/503), sin decir QUÉ pieza falló: no revela la arquitectura
+    interna. Además Caddy la bloquea desde internet; la usan el healthcheck de Docker y el monitoreo interno."""
+    sano = True
     try:
         connections["default"].cursor()
     except OperationalError:
-        estado["database"] = "error"
-        estado["status"] = "error"
-        http_status = 503
-
+        sano = False
     try:
-        cliente = redis_client.from_url(settings.REDIS_URL)
-        cliente.ping()
+        redis_client.from_url(settings.REDIS_URL, socket_connect_timeout=2, socket_timeout=2).ping()
     except redis_client.RedisError:
-        estado["redis"] = "error"
-        estado["status"] = "error"
-        http_status = 503
-
-    return JsonResponse(estado, status=http_status)
+        sano = False
+    return JsonResponse({"status": "ok" if sano else "error"}, status=200 if sano else 503)
 
 
 def error_404(request, exception):
@@ -217,13 +211,14 @@ def bienvenida_view(request):
 
     paso = bienvenida.paso_valido(request.GET.get("paso"))
     anterior, siguiente = bienvenida.vecinos(paso)
+    numero = bienvenida.CLAVES.index(paso) + 1
     contexto = {
         "paso": paso,
         "pasos": [
-            {"clave": clave, "nombre": nombre, "numero": i, "actual": clave == paso}
+            {"clave": clave, "nombre": nombre, "numero": i, "actual": clave == paso, "hecho": i < numero}
             for i, (clave, nombre) in enumerate(bienvenida.PASOS, start=1)
         ],
-        "numero": bienvenida.CLAVES.index(paso) + 1,
+        "numero": numero,
         "total": len(bienvenida.PASOS),
         "anterior": anterior,
         "siguiente": siguiente,
@@ -262,6 +257,7 @@ def inicio_view(request):
         "frecuentes": usados["frecuentes"],
         "recientes": usados["recientes"],
         "tiene_usados": bool(usados["frecuentes"] or usados["recientes"]),
+        "ejemplos": inicio.ejemplos_busqueda(usados),
         "trabajo": inicio.resumen_trabajo(usuario),
         "ticket_general": inicio.ticket_general_disponible(usuario),
         "agenda": inicio.agenda(usuario, request.GET.get("mes")),
@@ -368,6 +364,7 @@ def mi_trabajo_view(request):
             "bandeja": {**bandeja, "ver": "historico", "q": "", "filas": [],
                         "total": bandeja["total_atencion"] + bandeja["total_seguimiento"],
                         "total_historico": historico.contar_atendidos(usuario)},
+            "contadores": inicio.contadores_trabajo(usuario),
             "historico": historico.contexto(
                 historico.atendidos_por(usuario), request.GET, ver="historico", persona_es="ambos",
                 persona_etiqueta="Persona", vacio="Aún no tienes tickets atendidos que hayan terminado.",
@@ -397,6 +394,8 @@ def mi_trabajo_view(request):
     bandeja["total_historico"] = historico.contar_atendidos(usuario)
     return render(request, "core/mi_trabajo.html", {
         "bandeja": bandeja,
+        # Rediseño 2026-11-13: resumen de lo que está a su nombre (misma regla que Inicio), solo presentación.
+        "contadores": inicio.contadores_trabajo(usuario),
         # 4.F3: los tickets bajo su responsabilidad individual (tarjeta con fase, bloque actual y progreso).
         "tarjetas": [trabajo_ops.tarjeta(usuario, ticket) for ticket in a_cargo[:MI_TRABAJO_TICKETS]],
         "titulo_pagina": "Mi trabajo",

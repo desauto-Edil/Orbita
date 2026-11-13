@@ -24,3 +24,6 @@ fallas_regresion.txt
 
 # Demo local del Diseñador (documento de trabajo, no versionado)
 /docs/demo/ORBITA_DEMO.md
+
+# Preferencias locales de Claude Code (personales)
+.claude/settings.local.json

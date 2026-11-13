@@ -1,0 +1,4 @@
+{% comment %}Icono del tipo, el MISMO vocabulario del Diseñador (docs/design/ORBITA_DESIGN.md §5.1): Proceso programado →
+`calendar-clock` · Proceso → `workflow` · Servicio → `hand-helping`. Uso con un servicio: `with tipo=servicio.tipo
+programado=servicio.programado`; con un ticket: `with tipo=ticket.tipo origen=ticket.origen` (origen PROGRAMACION =
+programado). `size` opcional. Decorativo: quien lo usa pone `aria-hidden` en su contenedor.{% endcomment %}{% if programado or origen == "PROGRAMACION" %}{% include "components/icon.html" with name="calendar-clock" size=size %}{% elif tipo == "PROCESO" %}{% include "components/icon.html" with name="workflow" size=size %}{% else %}{% include "components/icon.html" with name="hand-helping" size=size %}{% endif %}

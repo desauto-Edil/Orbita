@@ -50,6 +50,17 @@
       });
   });
 
+  // Ejemplos de Inicio (rediseño 2026-11-13): llenan el buscador y buscan sin salir de la página. Sin JS son
+  // enlaces a la página de resultados con el mismo texto.
+  document.addEventListener("click", function (evento) {
+    var ejemplo = evento.target.closest("[data-necesidad-ejemplo]");
+    if (!ejemplo || evento.ctrlKey || evento.metaKey || evento.shiftKey || evento.button === 1) return;
+    evento.preventDefault();
+    campo.value = ejemplo.getAttribute("data-necesidad-ejemplo");
+    formulario.dispatchEvent(new Event("submit", { cancelable: true }));
+    campo.focus();
+  });
+
   panel.addEventListener("click", function (evento) {
     if (!evento.target.closest("[data-necesidad-cerrar]")) return;
     evento.preventDefault();

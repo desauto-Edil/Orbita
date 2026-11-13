@@ -9,21 +9,24 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     env_file:
       - .env
+    # Solo desde este equipo (antes quedaba abierto a la red local). En producción no se publica: docker-compose.prod.yml.
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
 
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
 
   web:
-    build: .
+    build:
+      context: .
+      target: desarrollo
     command: python manage.py runserver 0.0.0.0:8000
     volumes:
       - .:/app
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     env_file:
       - .env
     depends_on:
@@ -35,7 +38,9 @@ services:
   # con `docker compose up`: se enciende cuando hace falta con `docker compose --profile admin up admin`.
   # Su callback de Google es local: registra http://127.0.0.1:8001/auth/google/callback/ en el cliente OAuth.
   admin:
-    build: .
+    build:
+      context: .
+      target: desarrollo
     profiles: ["admin"]
     command: python manage.py runserver 0.0.0.0:8001
     volumes:
@@ -53,7 +58,9 @@ services:
       - redis
 
   celery_worker:
-    build: .
+    build:
+      context: .
+      target: desarrollo
     command: celery -A config worker -l info
     # Si arranca antes que la base de datos o se cae, vuelve solo (los correos y avisos dependen de él).
     restart: unless-stopped
@@ -66,7 +73,9 @@ services:
       - redis
 
   celery_beat:
-    build: .
+    build:
+      context: .
+      target: desarrollo
     command: celery -A config beat -l info
     # Beat corre lo periódico (alertas, gacetas, ejecuciones programadas, reintentos): nunca debe quedarse detenido.
     restart: unless-stopped

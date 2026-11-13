@@ -1,4 +1,5 @@
 {% extends "configuracion/base.html" %}
+{% load static %}
 
 {% block config_miga %}
   <nav class="breadcrumb" aria-label="Ruta"><a href="{% url 'core:configuracion_usuarios' %}">Usuarios</a><span class="breadcrumb__separator" aria-hidden="true">/</span><span class="breadcrumb__current" aria-current="page">{{ objetivo.nombre_visible }}</span></nav>
@@ -109,19 +110,5 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<script>
-  /* Mejora progresiva: muestra solo el selector (Área o Unidad) que
-     corresponde al alcance elegido. La validación real la hace el servidor. */
-  document.querySelectorAll("[data-alcance]").forEach(function (formulario) {
-    var alcance = formulario.querySelector('select[name$="tipo_alcance"]');
-    if (!alcance) return;
-    function aplicar() {
-      formulario.querySelectorAll("[data-alcance-campo]").forEach(function (bloque) {
-        bloque.hidden = bloque.getAttribute("data-alcance-campo") !== alcance.value;
-      });
-    }
-    alcance.addEventListener("change", aplicar);
-    aplicar();
-  });
-</script>
+<script src="{% static 'js/configuracion_usuario.js' %}"></script>
 {% endblock %}

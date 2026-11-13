@@ -313,4 +313,26 @@
       }
     });
   });
+  /* Versión 1 (CSP sin código en línea): `data-confirmar-envio="…"` en un botón de envío pide confirmación antes de
+     enviar, `data-confirmar-formulario="…"` lo pide al enviar un formulario y `data-sin-envio` impide enviarlo
+     (vistas previas). Sustituyen a onclick/onsubmit. */
+  document.addEventListener("click", function (event) {
+    var boton = event.target.closest && event.target.closest("[data-confirmar-envio]");
+    if (boton && !window.confirm(boton.getAttribute("data-confirmar-envio"))) {
+      event.preventDefault();
+    }
+  });
+  document.addEventListener("submit", function (event) {
+    var formulario = event.target;
+    if (!formulario.matches) return;
+    if (formulario.matches("form[data-sin-envio]")) {
+      event.preventDefault();
+      return;
+    }
+    // `data-confirmar-formulario="…"`: confirmación al enviar el formulario (antes, onsubmit en la plantilla).
+    var mensaje = formulario.getAttribute("data-confirmar-formulario");
+    if (mensaje && !window.confirm(mensaje)) {
+      event.preventDefault();
+    }
+  });
 })();

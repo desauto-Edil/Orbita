@@ -261,3 +261,64 @@ GMAIL_REFRESH_TOKEN = env("GMAIL_REFRESH_TOKEN", default="")
 GMAIL_OAUTH_REDIRECT_URI = env(
     "GMAIL_OAUTH_REDIRECT_URI", default=f"{APP_BASE_URL}/auth/gmail/callback/"
 )
+
+# ---------------------------------------------------------------------------------------------------------------
+# Despliegue (Versión 1, etapa 8). Detrás de Caddy (TLS) en el VPS. Todo por entorno; los valores por defecto son
+# los SEGUROS cuando DEBUG está apagado. `manage.py check --deploy` debe quedar limpio en producción.
+# ---------------------------------------------------------------------------------------------------------------
+
+# El sitio se sirve por HTTPS (Caddy termina el TLS y reenvía X-Forwarded-Proto). Solo se apaga en desarrollo y en
+# el contenedor `admin`, que se usa por http en el 127.0.0.1 del servidor a través de un túnel SSH.
+SITIO_HTTPS = env.bool("SITIO_HTTPS", default=not DEBUG)
+if SITIO_HTTPS and not EN_PRUEBAS:
+    # Solo es seguro porque `web` NO publica puertos: la única entrada es Caddy, que siempre fija esta cabecera.
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SECURE_SSL_REDIRECT = True
+    SECURE_REDIRECT_EXEMPT = [r"^salud/$"]  # el healthcheck interno de Docker entra por http
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = env.int("SECURE_HSTS_SECONDS", default=31536000)
+    # includeSubDomains alcanza solo a los subdominios DEL HOST que la envía: con Órbita en su propio subdominio
+    # (orbita.tu-dominio.com) cubre *.orbita.tu-dominio.com, no a los hermanos. La plantilla de producción lo enciende.
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = env.bool("SECURE_HSTS_INCLUDE_SUBDOMAINS", default=False)
+    # La lista «preload» de los navegadores solo admite el dominio raíz (no un subdominio) y es difícil de revertir:
+    # no aplica a Órbita en su subdominio. Por eso su aviso (security.W021) se silencia a propósito.
+    SECURE_HSTS_PRELOAD = env.bool("SECURE_HSTS_PRELOAD", default=False)
+    if not SECURE_HSTS_PRELOAD:
+        SILENCED_SYSTEM_CHECKS = ["security.W021"]
+
+# Formularios enviados desde el propio dominio (detrás de un proxy Django necesita conocerlo).
+CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[APP_BASE_URL])
+
+# Una jornada: después hay que volver a ingresar con Google (la administración avanzada exige además un ingreso
+# reciente, `ADMIN_REAUTENTICACION_MINUTOS`).
+SESSION_COOKIE_AGE = env.int("SESSION_COOKIE_AGE", default=10 * 60 * 60)
+SESSION_COOKIE_HTTPONLY = True
+SESSION_COOKIE_SAMESITE = "Lax"
+# `static/js/app.js` lee el token CSRF de la cookie para las peticiones `fetch`: no puede ser HttpOnly.
+CSRF_COOKIE_HTTPONLY = False
+CSRF_COOKIE_SAMESITE = "Lax"
+X_FRAME_OPTIONS = "DENY"
+SECURE_CONTENT_TYPE_NOSNIFF = True
+SECURE_REFERRER_POLICY = "same-origin"
+SECURE_CROSS_ORIGIN_OPENER_POLICY = "same-origin"
+
+# Registro a la salida estándar (Docker lo rota, ver docker-compose.prod.yml). Nunca se registran tokens ni
+# contraseñas: las vistas de Google y Gmail no los imprimen.
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {"simple": {"format": "{asctime} {levelname} {name}: {message}", "style": "{"}},
+    "handlers": {"consola": {"class": "logging.StreamHandler", "formatter": "simple"}},
+    "root": {"handlers": ["consola"], "level": env("LOG_LEVEL", default="INFO")},
+    "loggers": {
+        "django": {"handlers": ["consola"], "level": env("LOG_LEVEL", default="INFO"), "propagate": False},
+        # Accesos denegados, hosts inválidos y CSRF rechazados: siempre visibles.
+        "django.security": {"handlers": ["consola"], "level": "WARNING", "propagate": False},
+    },
+}
+# Las pruebas provocan a propósito 403/404/400: sin esto, cada una imprimiría su traza y taparía los resultados.
+if EN_PRUEBAS:
+    for _registro in ("django", "django.security"):
+        LOGGING["loggers"][_registro]["level"] = "CRITICAL"
+

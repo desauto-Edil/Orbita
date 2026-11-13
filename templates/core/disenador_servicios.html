@@ -34,7 +34,7 @@
         {% for servicio in servicios %}
           <article class="designer-object designer-object--service" role="listitem">
             <div class="designer-object__top">
-              <span class="designer-tile" aria-hidden="true">{% if servicio.programado %}{% include "components/icon.html" with name="calendar-clock" %}{% elif servicio.tipo == "PROCESO" %}{% include "components/icon.html" with name="workflow" %}{% else %}{% include "components/icon.html" with name="hand-helping" %}{% endif %}</span>
+              <span class="designer-tile" aria-hidden="true">{% include "components/icono_tipo.html" with tipo=servicio.tipo programado=servicio.programado only %}</span>
               <div>
                 <h3><a href="{% url 'core:disenador_servicio' servicio.pk %}">{{ servicio.nombre }}</a></h3>
                 <p>{{ servicio.get_tipo_display }}{% if servicio.tipo == "PROCESO" %} {% if servicio.programado %}programado{% else %}manual{% endif %}{% endif %} · {{ servicio.categoria.nombre }}</p>

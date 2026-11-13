@@ -14,14 +14,17 @@
 {% endcomment %}
 
 {% block content %}
-  <header class="op-cabecera">
-    <h1 class="op-cabecera__titulo">Mis tickets</h1>
-    <a class="btn btn--primary btn--sm" href="{% url 'catalogo:lista' %}">{% include "components/icon.html" with name="plus" size="sm" %}Nuevo ticket</a>
-    <p class="op-cabecera__sub">Lo que has solicitado: borradores en curso y tickets en seguimiento.</p>
+  <header class="op-cabecera op-cabecera--icono">
+    <span class="op-cabecera__icono" aria-hidden="true">{% include "components/icon.html" with name="tickets" size="lg" %}</span>
+    <div class="op-cabecera__textos">
+      <h1 class="op-cabecera__titulo">Mis tickets</h1>
+      <p class="op-cabecera__sub">Lo que has solicitado: borradores en curso y tickets en seguimiento.</p>
+    </div>
+    <a class="btn btn--primary" href="{% url 'catalogo:lista' %}">{% include "components/icon.html" with name="plus" size="sm" %}Nuevo ticket</a>
   </header>
 
   {% if tickets %}
-    <div class="op-barra">
+    <div class="op-barra op-barra--pildoras">
       {% if not historico %}
       <form class="search op-barra__buscar" method="get" role="search">
         <span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" size="sm" %}</span>
@@ -30,7 +33,7 @@
         {% if ver != "todos" %}<input type="hidden" name="ver" value="{{ ver }}">{% endif %}
       </form>
       {% endif %}
-      <nav class="segmented" aria-label="Filtrar Mis tickets">
+      <nav class="segmented segmented--pildoras" aria-label="Filtrar Mis tickets">
         {% for segmento in segmentos %}
           <a class="segmented__item" href="?{% if segmento.clave != 'todos' %}ver={{ segmento.clave }}{% endif %}{% if q %}{% if segmento.clave != 'todos' %}&amp;{% endif %}q={{ q|urlencode }}{% endif %}"{% if ver == segmento.clave %} aria-current="page"{% endif %}>{{ segmento.etiqueta }} <span class="work-count">{{ segmento.total }}</span></a>
         {% endfor %}

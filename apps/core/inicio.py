@@ -181,6 +181,19 @@ def servicios_usados(usuario):
 # --- Tickets recientes ----------------------------------------------------------
 
 
+LIMITE_EJEMPLOS = 4
+
+
+def ejemplos_busqueda(usados):
+    """Ejemplos bajo el buscador «¿Qué necesitas?» (rediseño 2026-11-13): los nombres de los servicios que la
+    persona ya usó (frecuentes primero), sin repetir. Nunca inventados: sin historial no hay ejemplos."""
+    nombres = []
+    for servicio in [*usados["frecuentes"], *usados["recientes"]]:
+        if servicio.nombre not in nombres:
+            nombres.append(servicio.nombre)
+    return nombres[:LIMITE_EJEMPLOS]
+
+
 def tickets_recientes(usuario):
     """Pocos tickets propios, los de actividad más reciente (todos los
     estados salvo CANCELADO). No replica Mis tickets: es continuidad."""
@@ -200,6 +213,18 @@ def tickets_recientes(usuario):
 # --- Tu trabajo ----------------------------------------------------------------
 
 
+def contadores_trabajo(usuario):
+    """Pendientes A SU NOMBRE: tickets en atención a su cargo, tareas abiertas asignadas, tareas por tomar y
+    aprobaciones pendientes. Una sola regla para Inicio (`resumen_trabajo`) y el resumen de Mi trabajo."""
+    abiertas = ~Q(estado__in=Tarea.ESTADOS_CERRADOS)
+    return {
+        "tickets_a_cargo": Ticket.objects.filter(usuario_responsable=usuario, estado=Ticket.Estado.EN_ATENCION).count(),
+        "tareas": tareas_asignadas_a(usuario).filter(abiertas).count(),
+        "tareas_por_tomar": tareas_disponibles_para_tomar(usuario).filter(abiertas).count(),
+        "aprobaciones": aprobaciones_pendientes_para(usuario).count(),
+    }
+
+
 def resumen_trabajo(usuario):
     """Pendientes reales del usuario, o None si no tiene capacidad de Trabajo
     (ni Cola ni trabajo personal). Mismo criterio de visibilidad de Trabajo
@@ -208,12 +233,8 @@ def resumen_trabajo(usuario):
     nombre" (solo una señal discreta de "Todo al día")."""
     alcances = alcances_autorizados(usuario, "tickets.atender")
     acceso_cola = bool(alcances["global"] or alcances["areas"] or alcances["unidades_negocio"])
-    abiertas = ~Q(estado__in=Tarea.ESTADOS_CERRADOS)
-    tareas = tareas_asignadas_a(usuario).filter(abiertas).count()
-    tareas_por_tomar = tareas_disponibles_para_tomar(usuario).filter(abiertas).count()
-    aprobaciones = aprobaciones_pendientes_para(usuario).count()
-    tickets_a_cargo = Ticket.objects.filter(usuario_responsable=usuario, estado=Ticket.Estado.EN_ATENCION).count()
-    hay_pendientes = bool(tareas or tareas_por_tomar or aprobaciones or tickets_a_cargo)
+    contadores = contadores_trabajo(usuario)
+    hay_pendientes = any(contadores.values())
     if not (acceso_cola or hay_pendientes):
         return None
     return {
@@ -221,10 +242,7 @@ def resumen_trabajo(usuario):
         # módulo): sin ellos Inicio solo muestra una señal discreta.
         "hay_pendientes": hay_pendientes,
         "acceso_cola": acceso_cola,
-        "tareas": tareas,
-        "tareas_por_tomar": tareas_por_tomar,
-        "aprobaciones": aprobaciones,
-        "tickets_a_cargo": tickets_a_cargo,
+        **contadores,
         # 4.F3: los tickets que atiende (fase, bloque actual y objetivo), con acceso directo a «Continuar».
         "tickets": [
             trabajo_ops.tarjeta(usuario, ticket)

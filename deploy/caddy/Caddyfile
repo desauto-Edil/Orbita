@@ -1,0 +1,32 @@
+# Órbita — proxy público (Versión 1, etapa 8). Caddy obtiene y renueva solo el certificado de {$DOMINIO}
+# (Let's Encrypt) y redirige http → https. Reenvía el WebSocket de la Conversación (/ws/) sin configuración extra.
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMINIO} {
+	encode zstd gzip
+
+	# Las piezas de una colección admiten hasta 200 MB por archivo: un poco más por el resto del formulario.
+	request_body {
+		max_size 210MB
+	}
+
+	# Nunca desde internet: la administración avanzada (solo por túnel SSH al contenedor `admin`), los archivos
+	# subidos (se sirven por vistas con autorización, jamás como /media/), el healthcheck (muestra el estado
+	# interno) y la barra de depuración.
+	@privado path /admin /admin/* /media/* /salud /salud/* /__debug__/*
+	respond @privado 404
+
+	header {
+		-Server
+		X-Content-Type-Options "nosniff"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=()"
+		# Política de contenido EXIGIDA (Versión 1, etapa 9: ya no hay código JavaScript en las plantillas). Solo
+		# scripts propios; estilos en línea permitidos (atributos style=); imágenes propias y fotos de Google; el
+		# WebSocket de la Conversación; sin marcos ni plugins; formularios solo a Órbita y el viaje a Google.
+		Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://*.googleusercontent.com; media-src 'self' blob:; connect-src 'self' wss://{$DOMINIO}; font-src 'self'; frame-src 'none'; frame-ancestors 'none'; object-src 'none'; base-uri 'self'; form-action 'self' https://accounts.google.com"
+	}
+
+	reverse_proxy web:8000
+}

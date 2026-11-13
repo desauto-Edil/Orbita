@@ -1,23 +1,16 @@
-/* Órbita — Inicio / Mi Portal (V1). Solo tokens del sistema central (V0).
+/* Órbita — Inicio / Mi Portal (V1; rediseño 2026-11-13). Solo tokens del sistema central.
 
-   UNA retícula para toda la página, con ritmo 1 → 2 → 1 → 1 columnas:
+     ┌──────────────────────────────────────┬──────────────┐
+     │ Saludo + buscador + ejemplos          │ Ilustración  │  ← la ilustración solo desde 1100px
+     ├──────────────────────────────────────┼──────────────┤
+     │ Explora el catálogo completo (~65%)   │ Tu día       │
+     ├──────────────────────────────────────┤ (~35%)       │
+     │ Tickets recientes (solo si hay)       │              │
+     └──────────────────────────────────────┴──────────────┘
 
-     ┌──────────────────────────────────────────────┐
-     │ Hero + buscador                (ancho completo)│
-     ├───────────────────────────────┬──────────────┤
-     │ Explorar / Habituales  (~65%) │ Tu día (~35%) │  ← ambas nacen en el mismo eje
-     ├───────────────────────────────┴──────────────┤
-     │ Tu trabajo           (solo con pendientes)     │
-     ├──────────────────────────────────────────────┤
-     │ Tickets recientes             (solo si hay)    │
-     └──────────────────────────────────────────────┘
-
-   Gutters y espaciado vertical salen de dos variables (`--portal-gap-x`,
-   `--portal-gap-y`) usadas por toda la página. Los títulos de sección
-   comparten el mismo estilo (`.portal-head`) para que "Explorar" y "Tu día"
-   queden alineados. El servidor renderiza solo los bloques con datos reales;
-   no se ocultan columnas con CSS. El DOM ya está en el orden móvil (hero,
-   explorar, tu día, trabajo, recientes): bajo 760px todo se apila. */
+   El DOM va en el orden móvil (hero, catálogo, tu día, recientes) y la retícula de áreas lo reubica en escritorio.
+   Los degradados del acento (`--gradient-acento*`, tokens.css) solo en piezas decorativas: manchas, cajas de icono
+   y el tinte suave de la tarjeta del catálogo. Gutters y ritmo vertical: `--portal-gap-x` / `--portal-gap-y`. */
 
 .portal {
   --portal-gap-x: clamp(var(--space-5), 3vw, var(--space-7));
@@ -39,6 +32,20 @@
   padding-top: clamp(0px, 0.8vw, var(--space-4));
 }
 
+.portal-hero__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: center;
+  gap: var(--portal-gap-x);
+}
+
+.portal-hero__texto {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  min-width: 0;
+}
+
 .portal-hero__title {
   margin: 0;
   font-size: var(--font-size-hero);
@@ -50,8 +57,8 @@
 /* La pregunta acompaña al saludo; no compite como segundo titular. */
 .portal-hero__ask {
   display: block;
-  margin-top: var(--space-1);
-  color: var(--text-muted);
+  margin-top: var(--space-2);
+  color: var(--text-secondary);
   font-size: 0.62em;
   font-weight: var(--font-weight-medium);
   letter-spacing: -0.01em;
@@ -109,6 +116,198 @@
   color: var(--text-muted);
 }
 
+/* Ejemplos: servicios que la persona ya usó (nunca inventados); con JS llenan el buscador y buscan. */
+.portal-ejemplos {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: calc(var(--space-2) * -1) 0 0;
+  padding-left: var(--space-3);
+}
+
+.portal-ejemplos__rotulo {
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+}
+
+.portal-ejemplo {
+  display: inline-flex;
+  align-items: center;
+  max-width: 100%;
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition: border-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+
+.portal-ejemplo:hover {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+}
+
+/* Ilustración del hero (decorativa): equipo con pantalla, insignia de visto y notas flotantes sobre una mancha
+   con el degradado del acento. Solo desde 1100px; debajo el hero es una sola columna. */
+.portal-ilustra {
+  position: relative;
+  display: none;
+  width: 100%;
+  max-width: 420px;
+  aspect-ratio: 4 / 3;
+  justify-self: end;
+}
+
+.portal-ilustra__fondo {
+  position: absolute;
+  inset: 4% 0 6% 6%;
+  border-radius: 46% 54% 42% 58% / 55% 45% 55% 45%;
+  background: var(--gradient-acento);
+}
+
+.portal-ilustra__equipo {
+  position: absolute;
+  top: 22%;
+  left: 24%;
+  width: 54%;
+}
+
+.portal-ilustra__pantalla {
+  position: relative;
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  justify-items: center;
+  gap: 6%;
+  aspect-ratio: 16 / 10;
+  padding: 7% 9%;
+  border: 6px solid var(--text-primary);
+  border-radius: var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-sm);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-lg);
+}
+
+.portal-ilustra__barra,
+.portal-ilustra__linea {
+  display: block;
+  width: 100%;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+}
+
+.portal-ilustra__linea--corta {
+  width: 60%;
+}
+
+.portal-ilustra__marca {
+  display: grid;
+  place-items: center;
+  color: var(--text-primary);
+}
+
+.portal-ilustra__marca .icon {
+  width: 40px;
+  height: 40px;
+  stroke-width: 1.5;
+}
+
+.portal-ilustra__base {
+  display: block;
+  width: 116%;
+  height: 10px;
+  margin-left: -8%;
+  border-radius: 0 0 var(--radius-md) var(--radius-md);
+  background: var(--text-primary);
+}
+
+.portal-ilustra__visto {
+  position: absolute;
+  top: 6%;
+  left: 38%;
+  display: grid;
+  place-items: center;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-md);
+}
+
+.portal-ilustra__visto .icon {
+  box-sizing: content-box;
+  width: 22px;
+  height: 22px;
+  padding: 8px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+  stroke-width: 2.5;
+}
+
+.portal-ilustra__nota {
+  position: absolute;
+  display: grid;
+  gap: 8px;
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-md);
+}
+
+.portal-ilustra__nota i {
+  display: block;
+  height: 7px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+}
+
+.portal-ilustra__nota i:first-child {
+  background: var(--color-primary-soft);
+}
+
+.portal-ilustra__nota--izq {
+  bottom: 22%;
+  left: 6%;
+  width: 26%;
+}
+
+.portal-ilustra__nota--der {
+  right: 4%;
+  bottom: 10%;
+  width: 28%;
+}
+
+.portal-ilustra__deco {
+  position: absolute;
+  color: var(--text-secondary);
+}
+
+.portal-ilustra__deco .icon {
+  width: 30px;
+  height: 30px;
+}
+
+.portal-ilustra__deco--1 { top: 30%; left: 8%; transform: rotate(-12deg); }
+.portal-ilustra__deco--2 { top: 14%; right: 6%; transform: rotate(18deg); }
+
+@media (min-width: 1100px) {
+  .portal-hero__grid {
+    grid-template-columns: minmax(0, 13fr) minmax(320px, 7fr);
+  }
+
+  .portal-ilustra {
+    display: block;
+  }
+}
+
 /* ----------------------------------------------------------------------- */
 /* 2. Cuerpo: dos columnas que nacen sobre el mismo eje                     */
 /* ----------------------------------------------------------------------- */
@@ -116,23 +315,22 @@
 .portal-body {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
+  grid-template-areas: "catalogo" "agenda" "recientes";
   align-items: start;
-  gap: var(--portal-gap-y) var(--portal-gap-x);
+  gap: var(--space-5) var(--portal-gap-x);
 }
 
-.portal-col {
-  min-width: 0;
-}
+.portal-catalogo { grid-area: catalogo; min-width: 0; }
+.portal-agenda { grid-area: agenda; min-width: 0; }
+.portal-recientes { grid-area: recientes; min-width: 0; }
 
-.portal-col--main {
-  display: flex;
-  flex-direction: column;
-  gap: var(--portal-gap-y);
-}
-
-/* Tablet: ~60/40; desktop: ~65/35. Debajo de 760px, una columna. */
+/* Tablet: ~60/40; desktop: ~65/35 (mismo eje que el hero). Debajo de 760px, una columna. */
 @media (min-width: 760px) {
-  .portal-body { grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr); }
+  .portal-body {
+    grid-template-columns: minmax(0, 3fr) minmax(280px, 2fr);
+    grid-template-rows: auto 1fr;
+    grid-template-areas: "catalogo agenda" "recientes agenda";
+  }
 }
 
 @media (min-width: 1100px) {
@@ -154,6 +352,20 @@
 .portal-head h2 {
   margin: 0;
   font-size: var(--font-size-section-title);
+}
+
+.portal-head--icono {
+  align-items: center;
+}
+
+.portal-head--icono h2 {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.portal-head--icono h2 .icon {
+  color: var(--text-secondary);
 }
 
 .portal-sub {
@@ -338,24 +550,127 @@
 .tone-4 { --tone-bg: var(--tag-rose-bg); --tone-fg: var(--tag-rose-text); }
 
 /* ----------------------------------------------------------------------- */
-/* B. Explorar: categorías como chips ligeros que fluyen sobre el canvas    */
+/* B. Explora el catálogo: tarjeta con tinte suave, categorías y «Ver catálogo» */
 /* ----------------------------------------------------------------------- */
+
+.portal-catalogo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  padding: clamp(var(--space-4), 2.4vw, var(--space-6));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--gradient-acento-tenue);
+  box-shadow: var(--shadow-sm);
+}
+
+.portal-catalogo__cabeza {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.portal-catalogo__titulos h2 {
+  margin: 0;
+  font-size: var(--font-size-activity-title);
+}
+
+.portal-catalogo__titulos p {
+  margin: var(--space-1) 0 0;
+  color: var(--text-secondary);
+}
+
+.portal-icono {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-lg);
+  background: var(--gradient-acento-suave);
+  color: var(--text-primary);
+}
+
+.portal-catalogo__cuerpo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-4) var(--space-5);
+}
+
+.portal-catalogo__cuerpo .cat-cloud {
+  flex: 1 1 320px;
+}
+
+.portal-catalogo__accion {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: var(--space-4);
+  margin-left: auto;
+}
+
+.portal-catalogo__ilustra {
+  position: relative;
+  display: block;
+  width: 104px;
+  height: 76px;
+}
+
+.portal-catalogo__hoja {
+  position: absolute;
+  inset: 0 22px 8px 0;
+  display: grid;
+  align-content: center;
+  gap: 7px;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.portal-catalogo__hoja i {
+  display: block;
+  height: 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+}
+
+.portal-catalogo__hoja i:first-child {
+  width: 70%;
+  background: var(--gradient-acento-suave);
+}
+
+.portal-catalogo__lupa {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-pill);
+  background: var(--gradient-acento);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-sm);
+}
 
 .cat-cloud {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-3);
+  gap: var(--space-2);
 }
 
 .cat-chip {
   display: inline-flex;
   align-items: center;
   gap: var(--space-3);
-  min-height: 52px;
-  padding: var(--space-2) var(--space-5) var(--space-2) var(--space-2);
+  min-height: 48px;
+  padding: var(--space-1) var(--space-4) var(--space-1) var(--space-1);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-pill);
-  background: transparent;
+  background: var(--surface-card);
   color: inherit;
   text-decoration: none;
   transition: background-color var(--duration-fast) var(--ease-standard),
@@ -367,6 +682,23 @@
   background: var(--surface-card);
   border-color: var(--border-strong);
   transform: translateY(-1px);
+}
+
+/* «Todos»: la entrada al catálogo completo, marcada como la opción vigente. */
+.cat-chip--todos {
+  border-color: var(--border-selected);
+  background: var(--color-primary-soft);
+}
+
+.cat-chip__icono {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--gradient-acento-suave);
+  color: var(--text-primary);
 }
 
 .cat-chip__mono {
@@ -388,15 +720,22 @@
 }
 
 .cat-chip__count {
-  color: var(--text-muted);
-  font-size: var(--font-size-small);
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
   font-variant-numeric: tabular-nums;
 }
 
 /* ----------------------------------------------------------------------- */
 /* Tarjetas de Servicio/Proceso                                             */
 /*   · en el explorador (dialog): tarjetas con borde                        */
-/*   · en Habituales (canvas): filas ligeras, sin caja                      */
 /* ----------------------------------------------------------------------- */
 
 .svc-grid {
@@ -430,23 +769,6 @@
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
   border-color: var(--border-strong);
-}
-
-.portal-usados .svc-grid {
-  gap: var(--space-1) var(--space-4);
-}
-
-.portal-usados .svc-card {
-  padding: var(--space-2) var(--space-3);
-  border-color: transparent;
-  border-radius: var(--radius-md);
-  background: transparent;
-}
-
-.portal-usados .svc-card:hover {
-  background: var(--surface-card);
-  box-shadow: var(--shadow-sm);
-  transform: none;
 }
 
 .svc-card__tile {
@@ -499,60 +821,12 @@
 }
 
 /* ----------------------------------------------------------------------- */
-/* 3. Tu trabajo: banda compacta de ancho completo, solo con pendientes     */
-/* ----------------------------------------------------------------------- */
-
-.portal-trabajo {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: var(--space-3) var(--space-5);
-  padding: var(--space-4) var(--space-6);
-  border-radius: var(--radius-pill);
-  background: var(--surface-inverse);
-  color: var(--text-on-inverse);
-}
-
-.portal-trabajo__title {
-  margin: 0;
-  color: var(--text-on-inverse);
-  font-size: var(--font-size-card-title);
-}
-
-.work-pills {
-  display: flex;
-  flex: 1;
-  flex-wrap: wrap;
-  gap: var(--space-2);
-  list-style: none;
-}
-
-.work-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-1) var(--space-3);
-  border: 1px solid var(--border-glass-inverse);
-  border-radius: var(--radius-pill);
-  background: rgb(var(--rgb-vidrio) / 0.06);
-  font-size: var(--font-size-small);
-}
-
-.work-pill strong {
-  color: var(--color-primary);
-  font-size: var(--font-size-body-lg);
-}
-
-.work-pill--cola {
-  color: var(--text-on-inverse-muted);
-}
-
-/* ----------------------------------------------------------------------- */
 /* D. Tu día: fecha + calendario permanente                                 */
 /* ----------------------------------------------------------------------- */
 
 .agenda-card {
-  padding: var(--space-5);
+  padding: clamp(var(--space-4), 2.2vw, var(--space-6));
+  border: 1px solid var(--border-subtle);
   border-radius: var(--radius-xl);
   background: var(--surface-card);
   box-shadow: var(--shadow-sm);
@@ -579,6 +853,9 @@
   align-items: center;
   gap: var(--space-4);
   margin: 0 0 var(--space-5);
+  padding: var(--space-3);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
 }
 
 .agenda-today__num {
@@ -745,45 +1022,53 @@
 }
 
 /* ----------------------------------------------------------------------- */
-/* F. Tickets recientes: filas sobre el canvas, separadas por líneas finas  */
+/* F. Tickets recientes: tarjeta con filas que enlazan al ticket            */
 /* ----------------------------------------------------------------------- */
+
+.portal-recientes {
+  padding: clamp(var(--space-4), 2.4vw, var(--space-6));
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-xl);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-sm);
+}
 
 .ticket-rows {
   display: flex;
   flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
   list-style: none;
-  border-top: 1px solid var(--border-subtle);
-}
-
-.ticket-rows li {
-  border-bottom: 1px solid var(--border-subtle);
 }
 
 .ticket-row {
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-3) var(--space-2);
-  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
   color: inherit;
   text-decoration: none;
-  transition: background-color var(--duration-fast) var(--ease-standard);
+  transition: background-color var(--duration-fast) var(--ease-standard),
+    border-color var(--duration-fast) var(--ease-standard);
 }
 
 .ticket-row:hover {
-  background: var(--surface-card);
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
 }
 
 .ticket-row__icon {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
+  display: inline-grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
   flex-shrink: 0;
   border-radius: var(--radius-md);
-  background: var(--surface-card);
-  color: var(--text-secondary);
+  background: var(--gradient-acento-suave);
+  color: var(--text-primary);
 }
 
 .ticket-row__main {
@@ -801,8 +1086,26 @@
 }
 
 .ticket-row__meta {
+  overflow: hidden;
   color: var(--text-muted);
-  font-size: var(--font-size-caption);
+  font-size: var(--font-size-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ticket-row .estado-etiqueta {
+  flex-shrink: 0;
+}
+
+.ticket-row__ir {
+  display: inline-flex;
+  flex-shrink: 0;
+  color: var(--text-muted);
+  transition: transform var(--duration-fast) var(--ease-standard);
+}
+
+.ticket-row:hover .ticket-row__ir {
+  transform: translateX(2px);
 }
 
 /* ----------------------------------------------------------------------- */
@@ -861,6 +1164,56 @@
 }
 
 @media (max-width: 639px) {
+  .portal-catalogo__cabeza {
+    align-items: flex-start;
+  }
+
+  .portal-icono {
+    width: 44px;
+    height: 44px;
+  }
+
+  .portal-catalogo__accion {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .portal-catalogo__ilustra {
+    display: none;
+  }
+
+  .portal-catalogo__accion .btn {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .portal-ejemplos {
+    padding-left: 0;
+  }
+
+  /* La fila del ticket: icono + nombre arriba; estado debajo del texto. */
+  .ticket-row {
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-3);
+  }
+
+  .ticket-row__icon {
+    width: 40px;
+    height: 40px;
+  }
+
+  .ticket-row__main {
+    flex-basis: calc(100% - 40px - var(--space-3) - 24px);
+  }
+
+  .ticket-row .estado-etiqueta {
+    margin-left: calc(40px + var(--space-3));
+  }
+
+  .ticket-row__ir {
+    display: none;
+  }
+
   .portal-search {
     min-height: 54px;
     padding-left: var(--space-4);
@@ -868,17 +1221,6 @@
 
   .portal-search .btn {
     padding: 0 var(--space-4);
-  }
-
-  .portal-trabajo {
-    align-items: flex-start;
-    padding: var(--space-5);
-    border-radius: var(--radius-xl);
-  }
-
-  .portal-trabajo .btn {
-    width: 100%;
-    justify-content: center;
   }
 
   .cat-chip {

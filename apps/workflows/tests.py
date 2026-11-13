@@ -1273,6 +1273,11 @@ class AuditoriaInlinesWorkflowTests(TestCase):
         self.site = admin.site
         self.actor = Usuario.objects.create_user("admin@example.com")
         _otorgar_workflows_administrar(self.actor)
+        # Versión 1: los permisos de modelo de la administración avanzada los da el permiso de plataforma (antes,
+        # ser superusuario); eliminar no lo da nunca.
+        from apps.core.tests import _otorgar_permiso_nav
+
+        _otorgar_permiso_nav(self.actor, "plataforma.administracion_avanzada")
         self.request = RequestFactory().post("/admin/")
         self.request.user = self.actor
         workflow = Workflow.objects.create(nombre="Auditoría inlines")
@@ -1305,6 +1310,14 @@ class AuditoriaInlinesWorkflowTests(TestCase):
                 with transaction.atomic():
                     propietario.save_formset(self.request, None, formset, change=True)
                 nuevos = RegistroAuditoria.objects.exclude(pk__in=eventos)
+                if accion == "ELIMINAR":
+                    # Versión 1: la administración avanzada no elimina; el formulario ignora «DELETE».
+                    # (Reenviar la fila puede registrar una actualización —p. ej. el JSON de `configuracion`—; lo
+                    # que nunca hay es una eliminación.)
+                    self.assertFalse(formset.can_delete)
+                    self.assertFalse(nuevos.filter(accion=RegistroAuditoria.Accion.ELIMINAR).exists())
+                    self.assertTrue(modelo.objects.filter(pk=pk).exists())
+                    continue
                 self.assertEqual(nuevos.count(), 1)
                 evento = nuevos.get()
                 self.assertEqual(evento.accion, accion)
@@ -1319,10 +1332,6 @@ class AuditoriaInlinesWorkflowTests(TestCase):
                     for campo in cambio:
                         self.assertNotEqual(evento.datos_anteriores[campo], evento.datos_nuevos[campo])
                     self.assertTrue(modelo.objects.filter(pk=pk).exists())
-                else:
-                    self.assertIsNotNone(evento.datos_anteriores)
-                    self.assertIsNone(evento.datos_nuevos)
-                    self.assertFalse(modelo.objects.filter(pk=pk).exists())
                 self.assertEqual(evento.object_id, pk)
 
     def test_etapa_en_workflow_version(self):

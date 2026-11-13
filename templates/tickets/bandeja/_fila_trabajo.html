@@ -9,6 +9,7 @@
 <li class="bt-fila{% if grupo.requiere_atencion %} is-atencion{% endif %}{% if grupo.vencido or grupo.requiere_atencion and plazo == 'vencido' %} is-vencido{% endif %}" data-fila="{{ ticket.pk }}">
   <a class="bt-fila__enlace" href="{{ grupo.url }}" data-inspector="{% url 'tickets:inspector' ticket.pk %}?desde=trabajo&amp;situacion={{ grupo.situacion }}">
     <span class="bt-celda bt-celda--ticket">
+      <span class="bt-fila__icono" aria-hidden="true">{% include "components/icono_tipo.html" with tipo=ticket.tipo origen=ticket.origen only %}</span>
       {# Lo que distingue un ticket de otro del mismo servicio: su número y quién lo pidió (2026-11-12). #}
       <span class="bt-fila__nombre"><span class="bt-fila__codigo tabular">{{ ticket.codigo|default:"Sin código" }}</span><span class="bt-fila__sep" aria-hidden="true">·</span><span class="bt-fila__quien"><span class="sr-only">Solicitado por: </span>{% if ticket.solicitante %}{{ ticket.solicitante.nombre_visible }}{% else %}{{ ticket.etiqueta|default:"Proceso programado" }}{% endif %}</span></span>
       <span class="bt-fila__meta">

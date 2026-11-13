@@ -6,14 +6,7 @@
   {% comment %}Apariencia (Fase visual): `data-modo` es el modo efectivo que lee tokens.css §5. CLARO/OSCURO
   vienen del servidor; AUTOMÁTICO (SISTEMA) se resuelve aquí, antes de pintar, con la preferencia del
   dispositivo y la sigue si cambia. Sin JS, AUTOMÁTICO se ve claro.{% endcomment %}
-  <script>(function (d) {
-    var preferencia = d.getAttribute("data-apariencia");
-    if (preferencia !== "SISTEMA" || !window.matchMedia) return;
-    var oscuro = window.matchMedia("(prefers-color-scheme: dark)");
-    function aplicar() { d.setAttribute("data-modo", oscuro.matches ? "oscuro" : "claro"); }
-    aplicar();
-    if (oscuro.addEventListener) oscuro.addEventListener("change", aplicar);
-  })(document.documentElement);</script>
+  <script src="{% static 'js/apariencia.js' %}"></script>
   <title>{% block title %}{{ sistema.nombre }}{% endblock %}</title>
   <link rel="stylesheet" href="{% static 'css/tokens.css' %}">
   <link rel="stylesheet" href="{% static 'css/base.css' %}">

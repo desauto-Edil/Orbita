@@ -591,3 +591,26 @@
   --border-selected: var(--color-primary);
   --ring-selected: 0 0 0 3px color-mix(in srgb, var(--color-primary) 28%, transparent);
 }
+
+/* Degradados del acento (2026-11-13; bienvenida e Inicio). Para piezas DECORATIVAS acotadas: manchas detrás de
+   ilustraciones, cajas de icono y el tinte suave de una tarjeta destacada; nunca detrás de texto largo ni como
+   fondo de página. Se mezclan con `--surface-card`, así funcionan en claro y oscuro. Se redeclaran en cada
+   `[data-tema]` porque una variable se resuelve donde se declara (vista previa con su propio acento). */
+:root,
+[data-tema] {
+  --gradient-acento: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--color-primary) 55%, var(--surface-card)) 0%,
+    color-mix(in srgb, var(--color-primary) 14%, var(--surface-card)) 100%
+  );
+  --gradient-acento-suave: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--color-primary) 32%, var(--surface-card)) 0%,
+    color-mix(in srgb, var(--color-primary) 8%, var(--surface-card)) 100%
+  );
+  --gradient-acento-tenue: linear-gradient(
+    120deg,
+    color-mix(in srgb, var(--color-primary) 12%, var(--surface-card)) 0%,
+    var(--surface-card) 70%
+  );
+}

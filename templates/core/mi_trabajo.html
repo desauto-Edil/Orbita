@@ -8,13 +8,27 @@
 {% block extra_head %}<link rel="stylesheet" href="{% static 'css/trabajo.css' %}"><link rel="stylesheet" href="{% static 'css/espacio.css' %}"><link rel="stylesheet" href="{% static 'css/bandeja.css' %}">{% endblock %}
 
 {% block content %}
-  <header class="op-cabecera">
-    <h1 class="op-cabecera__titulo">Mi trabajo</h1>
+  <header class="op-cabecera op-cabecera--icono">
+    <span class="op-cabecera__icono" aria-hidden="true">{% include "components/icon.html" with name="trabajo" size="lg" %}</span>
+    <div class="op-cabecera__textos">
+      <h1 class="op-cabecera__titulo">Mi trabajo</h1>
+      <p class="op-cabecera__sub">Gestiona y avanza en las tareas y actividades que tienes asignadas.</p>
+    </div>
     {% include "layout/trabajo_tabs.html" %}
   </header>
 
+  {# Resumen de lo que está a tu nombre (`inicio.contadores_trabajo`, la misma regla de Inicio). Solo lo que tiene valor; los iconos son los del Diseñador (tarea, aprobación). #}
+  {% if contadores.tickets_a_cargo or contadores.tareas or contadores.tareas_por_tomar or contadores.aprobaciones %}
+    <ul class="op-resumen" aria-label="Lo que está a tu nombre">
+      {% if contadores.tickets_a_cargo %}<li class="op-resumen__item"><span class="op-resumen__icono" aria-hidden="true">{% include "components/icon.html" with name="tickets" %}</span><strong class="tabular">{{ contadores.tickets_a_cargo }}</strong><span>ticket{{ contadores.tickets_a_cargo|pluralize }} a tu cargo</span></li>{% endif %}
+      {% if contadores.tareas %}<li class="op-resumen__item"><span class="op-resumen__icono" aria-hidden="true">{% include "components/icon.html" with name="check-circle" %}</span><strong class="tabular">{{ contadores.tareas }}</strong><span>tarea{{ contadores.tareas|pluralize }}</span></li>{% endif %}
+      {% if contadores.tareas_por_tomar %}<li class="op-resumen__item"><span class="op-resumen__icono" aria-hidden="true">{% include "components/icon.html" with name="inbox" %}</span><strong class="tabular">{{ contadores.tareas_por_tomar }}</strong><span>tarea{{ contadores.tareas_por_tomar|pluralize }} por tomar</span></li>{% endif %}
+      {% if contadores.aprobaciones %}<li class="op-resumen__item"><span class="op-resumen__icono" aria-hidden="true">{% include "components/icon.html" with name="shield" %}</span><strong class="tabular">{{ contadores.aprobaciones }}</strong><span>aprobaci{{ contadores.aprobaciones|pluralize:"ón,ones" }}</span></li>{% endif %}
+    </ul>
+  {% endif %}
+
     {# Bandeja única: UNA fila por ticket (`apps/tickets/bandeja.py`), filtros y búsqueda locales e inspector lateral. #}
-    <div class="op-barra">
+    <div class="op-barra op-barra--pildoras">
       {% if not historico %}
       <form class="search op-barra__buscar" method="get" role="search">
         <span class="search__icon" aria-hidden="true">{% include "components/icon.html" with name="search" size="sm" %}</span>
@@ -23,7 +37,7 @@
         {% if bandeja.ver != "todos" %}<input type="hidden" name="ver" value="{{ bandeja.ver }}">{% endif %}
       </form>
       {% endif %}
-      <nav class="segmented" aria-label="Filtrar Mi trabajo">
+      <nav class="segmented segmented--pildoras" aria-label="Filtrar Mi trabajo">
         <a class="segmented__item" href="?{% if bandeja.q %}q={{ bandeja.q|urlencode }}{% endif %}"{% if bandeja.ver == "todos" %} aria-current="page"{% endif %}>Todos <span class="work-count">{{ bandeja.total }}</span></a>
         <a class="segmented__item" href="?ver=atencion{% if bandeja.q %}&amp;q={{ bandeja.q|urlencode }}{% endif %}"{% if bandeja.ver == "atencion" %} aria-current="page"{% endif %}>Requieren atención <span class="work-count">{{ bandeja.total_atencion }}</span></a>
         <a class="segmented__item" href="?ver=seguimiento{% if bandeja.q %}&amp;q={{ bandeja.q|urlencode }}{% endif %}"{% if bandeja.ver == "seguimiento" %} aria-current="page"{% endif %}>En seguimiento <span class="work-count">{{ bandeja.total_seguimiento }}</span></a>

@@ -1,0 +1,180 @@
+# Órbita en producción (Versión 1, etapa 8) — VPS sin VPN interna.
+#
+#   Internet ──443/80──▶ caddy ──▶ web (Daphne) ──▶ db / redis   (red «interna», sin salida ni puertos publicados)
+#                                   celery_worker / celery_beat ─┘
+#   127.0.0.1:8001 (túnel SSH) ──▶ admin (profile «admin», solo cuando hace falta)
+#
+# Solo Caddy publica puertos. Docker publica puertos SALTÁNDOSE UFW: por eso db, redis y web NO tienen `ports`.
+# Uso (ver deploy/DESPLIEGUE.md):
+#   docker compose -f docker-compose.prod.yml build
+#   docker compose -f docker-compose.prod.yml run --rm web python manage.py migrate
+#   docker compose -f docker-compose.prod.yml up -d
+# Variables en `.env` junto a este archivo (plantilla: deploy/env.produccion.example). Nunca en el repositorio.
+
+x-registro: &registro
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "5"
+
+x-app: &app
+  build:
+    context: .
+    target: produccion
+  image: orbita:produccion
+  env_file:
+    - .env
+  restart: unless-stopped
+  networks:
+    - interna
+    - salida
+  volumes:
+    - media:/app/media
+  depends_on:
+    db:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  <<: *registro
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      # Superusuario SOLO para inicializar y mantener; la aplicación usa ORBITA_DB_USER (sin superusuario).
+      POSTGRES_DB: ${POSTGRES_DB:?Define POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:?Define POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Define POSTGRES_PASSWORD}
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+      ORBITA_DB_USER: ${ORBITA_DB_USER:?Define ORBITA_DB_USER}
+      ORBITA_DB_PASSWORD: ${ORBITA_DB_PASSWORD:?Define ORBITA_DB_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./deploy/postgres/crear_rol_aplicacion.sh:/docker-entrypoint-initdb.d/10_crear_rol_aplicacion.sh:ro
+    networks:
+      - interna
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    <<: *registro
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Contraseña obligatoria; persistencia para no perder tareas de Celery al reiniciar; nunca expulsa claves
+    # (perdería tareas) y sin los comandos que vacían todo o cambian la configuración en caliente.
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD:?Define REDIS_PASSWORD}
+      - --appendonly
+      - "yes"
+      - --maxmemory
+      - 256mb
+      - --maxmemory-policy
+      - noeviction
+      - --rename-command
+      - FLUSHALL
+      - ""
+      - --rename-command
+      - FLUSHDB
+      - ""
+      - --rename-command
+      - CONFIG
+      - ""
+      - --rename-command
+      - DEBUG
+      - ""
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    networks:
+      - interna
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    <<: *registro
+
+  web:
+    <<: *app
+    command: ["daphne", "--bind", "0.0.0.0", "--port", "8000", "--proxy-headers", "config.asgi:application"]
+    healthcheck:
+      test:
+        - "CMD"
+        - "python"
+        - "-c"
+        - "import os,urllib.request;r=urllib.request.Request('http://127.0.0.1:8000/salud/',headers={'Host':os.environ['DOMINIO']});urllib.request.urlopen(r,timeout=5)"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  celery_worker:
+    <<: *app
+    command: ["celery", "-A", "config", "worker", "-l", "info"]
+
+  # UN solo Beat (varios duplicarían las tareas periódicas).
+  celery_beat:
+    <<: *app
+    command: ["celery", "-A", "config", "beat", "-l", "info"]
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMINIO: ${DOMINIO:?Define DOMINIO}
+      ACME_EMAIL: ${ACME_EMAIL:?Define ACME_EMAIL}
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - salida
+    depends_on:
+      - web
+    <<: *registro
+
+  # Administración avanzada: SOLO en 127.0.0.1 del servidor; se entra por túnel SSH
+  # (ssh -L 8001:127.0.0.1:8001 usuario@servidor). No arranca con `up`: se enciende cuando hace falta con
+  #   docker compose -f docker-compose.prod.yml --profile admin up -d admin
+  # y se apaga al terminar (… --profile admin stop admin).
+  # Registra http://127.0.0.1:8001/auth/google/callback/ en el cliente OAuth de producción.
+  admin:
+    <<: *app
+    profiles: ["admin"]
+    restart: "no"
+    command: ["daphne", "--bind", "0.0.0.0", "--port", "8000", "config.asgi:application"]
+    ports:
+      - "127.0.0.1:8001:8000"
+    environment:
+      ADMIN_HABILITADA: "True"
+      SITIO_HTTPS: "False"
+      APP_BASE_URL: "http://127.0.0.1:8001"
+      GOOGLE_OAUTH_REDIRECT_URI: "http://127.0.0.1:8001/auth/google/callback/"
+      CSRF_TRUSTED_ORIGINS: "http://127.0.0.1:8001"
+      ALLOWED_HOSTS: "127.0.0.1,localhost"
+
+networks:
+  # db y redis viven solo aquí: sin puertos y sin salida a internet.
+  interna:
+    internal: true
+  # Las aplicaciones salen a internet (Google: ingreso, Gmail) y Caddy recibe el tráfico público.
+  salida:
+
+volumes:
+  postgres_data:
+  redis_data:
+  media:
+  caddy_data:
+  caddy_config:

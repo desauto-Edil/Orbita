@@ -16,7 +16,7 @@
   <form method="post" action="{% url 'tickets:entregar' ticket.pk %}" class="form esp-cierre">
     {% csrf_token %}<input type="hidden" name="next" value="{{ base }}"><input type="hidden" name="confirmar" value="1">
     <p>¿Los resultados están listos para el solicitante? No podrás modificarlos mientras espera su respuesta.</p>
-    <button type="submit" class="btn btn--primary" onclick="return confirm('¿Confirmas entregar los resultados al solicitante?');">Entregar al solicitante</button>
+    <button type="submit" class="btn btn--primary" data-confirmar-envio="¿Confirmas entregar los resultados al solicitante?">Entregar al solicitante</button>
   </form>
 {% elif accion.puede_resolver %}
   <form method="post" action="{% url 'tickets:resolver' ticket.pk %}" enctype="multipart/form-data" class="form esp-cierre">

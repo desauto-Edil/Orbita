@@ -638,3 +638,240 @@
   .hs-tabla td::before { content: attr(data-rotulo) ": "; color: var(--text-muted); font-size: var(--font-size-caption); }
   .hs-tabla td[data-rotulo="Ticket"]::before { content: none; }
 }
+
+/* 5. Rediseño visual (2026-11-13) ------------------------------------------
+   Mis tickets y Mi trabajo: cabecera con caja de icono, resumen de lo que está a tu nombre (solo Mi trabajo),
+   buscador y filtros como píldoras, y cada fila con el icono del tipo (el mismo vocabulario del Diseñador:
+   `components/icono_tipo.html`). Solo presentación: búsqueda, segmentos, inspector y enlaces no cambian. Los
+   degradados del acento son los tokens compartidos (`--gradient-acento*`), solo en cajas de icono. */
+
+.op-cabecera--icono {
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.op-cabecera__icono {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  border-radius: var(--radius-lg);
+  background: var(--gradient-acento-suave);
+  color: var(--text-primary);
+}
+
+.op-cabecera__icono .icon {
+  width: 28px;
+  height: 28px;
+}
+
+.op-cabecera__textos {
+  display: grid;
+  flex: 1;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.op-cabecera--icono .op-cabecera__titulo {
+  font-size: clamp(var(--font-size-page-title), 1rem + 1.4vw, var(--font-size-display));
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-tight);
+}
+
+.op-cabecera--icono .op-cabecera__sub {
+  flex-basis: auto;
+  font-size: var(--font-size-body-lg);
+}
+
+.op-cabecera--icono > .btn,
+.op-cabecera--icono > .tabs {
+  flex: none;
+  margin-left: auto;
+}
+
+/* Resumen de Mi trabajo: tarjetas con caja de icono, número y rótulo. */
+.op-resumen {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.op-resumen__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+  font-size: var(--font-size-body-lg);
+}
+
+.op-resumen__item strong {
+  color: var(--text-primary);
+  font-size: var(--font-size-page-title);
+  font-weight: var(--font-weight-bold);
+  line-height: 1;
+}
+
+.op-resumen__icono,
+.bt-fila__icono {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
+  background: var(--gradient-acento-suave);
+  color: var(--text-primary);
+}
+
+/* Buscador amplio y filtros como píldoras separadas (el activo con el tinte del acento y su borde). */
+.op-barra--pildoras {
+  gap: var(--space-3) var(--space-4);
+}
+
+.op-barra--pildoras .op-barra__buscar {
+  flex: 1 1 320px;
+  max-width: 640px;
+}
+
+.op-barra--pildoras .search__input {
+  height: var(--control-h-lg);
+  padding-left: calc(var(--space-4) + 28px);
+  font-size: var(--font-size-body-lg);
+}
+
+.op-barra--pildoras .search__icon {
+  left: var(--space-4);
+}
+
+.segmented--pildoras {
+  gap: var(--space-2);
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.segmented--pildoras .segmented__item {
+  flex: none;
+  gap: var(--space-2);
+  height: var(--control-h-md);
+  padding: 0 var(--space-2) 0 var(--space-4);
+  border: 1px solid var(--border-subtle);
+  background: var(--surface-card);
+  color: var(--text-secondary);
+}
+
+.segmented--pildoras .segmented__item:hover {
+  border-color: var(--border-strong);
+}
+
+.segmented--pildoras .segmented__item[aria-current="page"] {
+  border-color: var(--border-selected);
+  background: var(--color-primary-soft);
+  color: var(--text-primary);
+  box-shadow: none;
+}
+
+.segmented--pildoras .work-count {
+  display: inline-grid;
+  place-items: center;
+  min-width: 26px;
+  height: 26px;
+  margin: 0;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  font-size: var(--font-size-caption);
+}
+
+/* Lista: superficie más redondeada, filas más amplias y caja de icono a la izquierda del ticket. */
+.op-barra--pildoras ~ .bt .bt__lista,
+.op-barra--pildoras ~ .bt .bt-inspector {
+  border-radius: var(--radius-xl);
+}
+
+.op-barra--pildoras ~ .bt .bt-fila__enlace {
+  min-height: 76px;
+}
+
+.bt-celda--ticket:has(> .bt-fila__icono) {
+  grid-template-columns: auto minmax(0, 1fr);
+  column-gap: var(--space-3);
+  align-items: center;
+}
+
+.bt-celda--ticket > .bt-fila__icono {
+  grid-row: 1 / span 3;
+  align-self: center;
+}
+
+.bt-celda--ticket:has(> .bt-fila__icono) > :not(.bt-fila__icono) {
+  grid-column: 2;
+}
+
+/* Escala de la tabla: DOS tamaños y nada más. Línea principal de cada celda (código y quién, situación, fecha) a
+   tamaño de cuerpo; todo lo secundario (servicio y participación, siguiente acción, rótulo de fecha, etiquetas
+   bajo el nombre) a tamaño pequeño. La jerarquía la da el peso y el color, no saltos de tamaño. */
+.op-barra--pildoras ~ .bt .bt-fila__nombre,
+.op-barra--pildoras ~ .bt .bt-fila__enlace,
+.op-barra--pildoras ~ .bt .bt-fecha__valor {
+  font-size: var(--font-size-body);
+}
+
+.op-barra--pildoras ~ .bt .bt-fila__meta,
+.op-barra--pildoras ~ .bt .bt-fila__compacto,
+.op-barra--pildoras ~ .bt .bt-fila__siguiente,
+.op-barra--pildoras ~ .bt .bt-fecha__etiqueta,
+.op-barra--pildoras ~ .bt .bt-fila .estado-etiqueta {
+  font-size: var(--font-size-small);
+}
+
+.op-barra--pildoras ~ .bt .bt-encabezado {
+  font-size: var(--font-size-small);
+}
+
+@container bandeja (max-width: 520px) {
+  .bt-fila__icono {
+    width: 36px;
+    height: 36px;
+  }
+}
+
+@media (max-width: 639px) {
+  .op-cabecera--icono {
+    flex-wrap: wrap;
+  }
+
+  .op-cabecera__icono {
+    width: 48px;
+    height: 48px;
+  }
+
+  .op-cabecera--icono > .btn,
+  .op-cabecera--icono > .tabs {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .op-cabecera--icono > .btn {
+    justify-content: center;
+  }
+
+  .op-resumen__item {
+    padding: var(--space-3);
+  }
+
+  .op-barra--pildoras .segmented {
+    width: 100%;
+  }
+}

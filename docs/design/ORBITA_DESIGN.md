@@ -13,7 +13,7 @@
    titulares gigantes ni gradientes decorativos.
 3. **El borde separa, la sombra apenas eleva.** Cada bloque se entiende por su borde gris sutil; la sombra solo
    indica que algo flota (popover, inspector, tarjeta seleccionada).
-4. **Un solo acento.** El lima (`--color-primary`) marca la acción principal, la selección y los indicadores.
+4. **Un solo acento.** El acento (`--color-primary`; Cielo por defecto desde la Versión 1) marca la acción principal, la selección y los indicadores.
    Nunca como superficie grande ni como color de texto; siempre con texto oscuro encima.
 5. **Divulgación progresiva.** Primero lo habitual; lo avanzado se abre a pedido («Opciones avanzadas»).
 6. **Honestidad.** La interfaz muestra el comportamiento real: no dibuja conexiones que el motor no ejecuta, no dice
@@ -31,7 +31,7 @@
 | Borde | `--border-subtle` | `#e2e4e8` | Separación entre componentes (obligatoria) |
 | Borde fuerte | `--border-strong` | `#cdd1d6` | Inputs, divisores de columnas del lienzo |
 | Texto | `--text-primary` / `--text-secondary` / `--text-muted` | carbón `#17181b` y grises cálidos | Identidad de Órbita, sin cambios |
-| Acción principal | `--color-primary` | lima `#d7ff3e` | CTA primario, selección, progreso |
+| Acción principal | `--color-primary` | cielo `#62d6ff` (por defecto) | CTA primario, selección, progreso |
 | Estados | `--status-success|warning|danger|info` (+ `-soft`) | | Siempre con texto o icono, nunca solo color |
 
 Los grises cálidos de la paleta original (`--palette-neutral-*`) siguen dando el tono del texto; los fondos y
@@ -43,13 +43,15 @@ El acento es lo ÚNICO configurable del color. Se elige entre estilos **curados*
 Configuración › General, junto al logo (`ConfiguracionSistema.tema`, auditado). `base.html` lo aplica con
 `<html data-tema="…">` y `tokens.css` §4 redefine para cada estilo `--color-primary` (+ `-hover`, `-active`,
 `-soft`, `-soft-hover`), `--gradient-brand`, `--border-selected` y `--ring-selected`. Carbón, superficies,
-textos, foco y estados no cambian con el estilo.
+textos, foco y estados no cambian con el estilo. Versión 1: además del estilo del sistema, cada persona puede
+elegir el suyo (`Usuario.tema`, Mi perfil › Color o la bienvenida); `<html data-tema>` = el personal o, si no
+hay, el del sistema. En el resto de este documento «lima» se refiere al ACENTO vigente.
 
 | Estilo | Clave | Acento (500) | Carácter |
 |---|---|---|---|
-| Lima (original, por defecto) | `lima` | `#d7ff3e` | Enérgica y tecnológica |
+| Lima (original) | `lima` | `#d7ff3e` | Enérgica y tecnológica |
 | Menta | `menta` | `#4ff0a8` | Fresca y serena |
-| Cielo | `cielo` | `#62d6ff` | Clara y confiable |
+| Cielo (por defecto, Versión 1) | `cielo` | `#62d6ff` | Clara y confiable |
 | Ámbar | `ambar` | `#ffc53d` | Cálida y optimista |
 | Coral | `coral` | `#ff8f6e` | Cercana y vibrante |
 | Lavanda | `lavanda` | `#b9a6ff` | Creativa y tranquila |

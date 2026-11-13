@@ -14,3 +14,21 @@ venv/
 htmlcov/
 .vscode/
 .idea/
+
+# Versión 1: respaldos de base de datos y secretos nunca entran a la imagen ni al repositorio.
+*.sql
+*.sql.gz
+*.dump
+respaldos/
+*.pem
+*.key
+docker-compose*.yml
+deploy/caddy/
+
+# Documentación y pruebas: no se ejecutan en el servidor (en desarrollo el código se monta como volumen).
+*.md
+docs/
+.claude/
+apps/**/tests.py
+apps/**/tests_*.py
+fallas_regresion.txt

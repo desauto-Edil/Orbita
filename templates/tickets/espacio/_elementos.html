@@ -49,7 +49,7 @@
         </details>
       {% endif %}
       {% if tabla.puede_editar and not tabla.alcance.cerrado %}
-        <form method="post" action="{% url 'tickets:alcance_cerrar' ticket.pk %}" class="esp-inline" onsubmit="return confirm('Después de cerrar el alcance ya no se agregan ni retiran ítems por la vía ordinaria. ¿Continuar?');">
+        <form method="post" action="{% url 'tickets:alcance_cerrar' ticket.pk %}" class="esp-inline" data-confirmar-formulario="Después de cerrar el alcance ya no se agregan ni retiran ítems por la vía ordinaria. ¿Continuar?">
           {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}"><input type="hidden" name="coleccion" value="{{ tabla.parrilla.clave }}">
           <button type="submit" class="btn btn--ghost btn--sm">Cerrar el alcance</button>
         </form>

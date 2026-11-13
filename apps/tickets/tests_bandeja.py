@@ -104,6 +104,21 @@ class BandejaMiTrabajoTests(_MediaAisladaMixin, _TareasConEdicionMixin, TestCase
         self.assertLess(html.index('class="bt-ins__cuerpo"'), html.index('class="bt-ins__pie"'))
         self.assertIn("Abrir espacio de trabajo", html[html.index('class="bt-ins__pie"'):])
 
+    def test_rediseno_icono_del_tipo_y_resumen_a_su_nombre(self):
+        # Rediseño 2026-11-13 (solo presentación): cada fila lleva el icono del Diseñador según el tipo del ticket y
+        # Mi trabajo resume lo que está a nombre de la persona con la misma regla de Inicio.
+        from apps.core.inicio import contadores_trabajo
+
+        pagina = self.client.get(reverse("core:mi_trabajo"))
+        if self.ticket.origen == "PROGRAMACION":
+            icono = "calendar-clock"
+        else:
+            icono = "workflow" if self.ticket.tipo == "PROCESO" else "hand-helping"
+        self.assertContains(pagina, 'class="bt-fila__icono"')
+        self.assertContains(pagina, f'href="#i-{icono}"')
+        self.assertEqual(pagina.context["contadores"], contadores_trabajo(self.persona))
+        self.assertContains(pagina, 'class="op-cabecera op-cabecera--icono"')
+
     def test_las_filas_usan_etiquetas_semanticas_sin_puntos(self):
         pagina = self.client.get(reverse("core:mi_trabajo"))
         self.assertContains(pagina, "estado-etiqueta estado-etiqueta--")

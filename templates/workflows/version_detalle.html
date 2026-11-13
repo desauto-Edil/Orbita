@@ -55,7 +55,7 @@
                   <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="etapa-{{ etapa.pk }}-configurar">Configurar</button>
                 {% endif %}
                 <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="etapa-{{ etapa.pk }}-transicion">+ Transición</button>
-                <form method="post" action="{% url 'workflows:eliminar_etapa' etapa.pk %}" onsubmit="return confirm('¿Eliminar esta etapa? Solo es posible si no tiene transiciones conectadas.');">
+                <form method="post" action="{% url 'workflows:eliminar_etapa' etapa.pk %}" data-confirmar-formulario="¿Eliminar esta etapa? Solo es posible si no tiene transiciones conectadas.">
                   {% csrf_token %}
                   <button type="submit" class="btn btn--ghost">Eliminar</button>
                 </form>
@@ -71,7 +71,7 @@
               </div>
 
               <div id="etapa-{{ etapa.pk }}-tipo" class="form" hidden>
-                <form method="post" action="{% url 'workflows:cambiar_tipo_etapa' etapa.pk %}" class="form" onsubmit="return confirm('Cambiar el tipo elimina la configuración especializada actual de esta etapa. ¿Continuar?');">
+                <form method="post" action="{% url 'workflows:cambiar_tipo_etapa' etapa.pk %}" class="form" data-confirmar-formulario="Cambiar el tipo elimina la configuración especializada actual de esta etapa. ¿Continuar?">
                   {% csrf_token %}
                   <div class="field"><label for="id_etapa-{{ etapa.pk }}-tipo-tipo">Nuevo tipo</label>{{ etapa.form_tipo.tipo }}</div>
                   <button type="submit" class="btn btn--secondary">Cambiar tipo</button>
@@ -174,7 +174,7 @@
             {% endif %}
             {% if editable %}
               <button type="button" class="btn btn--ghost" data-action="toggle-panel" data-target="transicion-{{ transicion.pk }}-editar">Editar</button>
-              <form method="post" action="{% url 'workflows:eliminar_transicion' transicion.pk %}" onsubmit="return confirm('¿Eliminar esta transición?');">
+              <form method="post" action="{% url 'workflows:eliminar_transicion' transicion.pk %}" data-confirmar-formulario="¿Eliminar esta transición?">
                 {% csrf_token %}
                 <button type="submit" class="btn btn--ghost">Eliminar</button>
               </form>
@@ -223,7 +223,7 @@
       {% endif %}
 
       {% if puede_administrar and not errores %}
-        <form method="post" action="{% url 'workflows:activar_version' version.pk %}" onsubmit="return confirm('¿Activar esta versión? La versión activa actual pasará a Histórica.');">
+        <form method="post" action="{% url 'workflows:activar_version' version.pk %}" data-confirmar-formulario="¿Activar esta versión? La versión activa actual pasará a Histórica.">
           {% csrf_token %}
           <button type="submit" class="btn btn--primary">Activar</button>
         </form>

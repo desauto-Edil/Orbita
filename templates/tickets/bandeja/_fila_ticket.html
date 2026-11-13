@@ -8,6 +8,7 @@
 <li class="bt-fila{% if ticket.requiere_respuesta %} is-atencion{% endif %}{% if plazo == 'vencido' %} is-vencido{% endif %}" data-fila="{{ ticket.pk }}">
   <a class="bt-fila__enlace" href="{% if borrador %}{% url 'tickets:borrador' ticket.pk %}{% else %}{% url 'tickets:espacio' ticket.pk %}{% endif %}" data-inspector="{% url 'tickets:inspector' ticket.pk %}?desde=tickets">
     <span class="bt-celda bt-celda--ticket">
+      <span class="bt-fila__icono" aria-hidden="true">{% include "components/icono_tipo.html" with tipo=ticket.tipo origen=ticket.origen only %}</span>
       {# En Mis tickets quien solicita es uno mismo: lo que distingue cada fila es su número; el servicio va debajo. #}
       <span class="bt-fila__nombre"><span class="bt-fila__codigo tabular">{% if borrador %}Borrador{% else %}{{ ticket.codigo|default:"Ticket" }}{% endif %}</span>{% if ticket.etiqueta %}<span class="bt-fila__sep" aria-hidden="true">·</span><span class="bt-fila__quien">{{ ticket.etiqueta }}</span>{% endif %}</span>
       <span class="bt-fila__meta">

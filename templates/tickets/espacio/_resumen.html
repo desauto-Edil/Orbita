@@ -219,7 +219,7 @@
       {% endif %}
 
       {% if puede_cerrar %}
-        <form method="post" action="{% url 'tickets:cerrar' ticket.pk %}" onsubmit="return confirm('¿Confirmas cerrar este ticket?');">
+        <form method="post" action="{% url 'tickets:cerrar' ticket.pk %}" data-confirmar-formulario="¿Confirmas cerrar este ticket?">
           {% csrf_token %}<input type="hidden" name="next" value="{{ aqui }}">
           <button type="submit" class="btn btn--primary">Cerrar</button>
         </form>

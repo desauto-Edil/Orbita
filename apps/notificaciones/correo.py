@@ -85,7 +85,7 @@ def contenido(notificacion):
         "enlace": enlace,
         "logo_cid": CID_LOGO if logo else "",
         "motivo": _motivo(notificacion),
-        "preferencias": f"{settings.APP_BASE_URL}/perfil/#notificaciones",
+        "preferencias": f"{settings.APP_BASE_URL}{reverse('core:perfil')}#notificaciones",
         "conversacion": _conversacion(notificacion),
     }
     texto = render_to_string("correo/notificacion.txt", contexto)

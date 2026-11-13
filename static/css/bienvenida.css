@@ -1,19 +1,31 @@
-/* Bienvenida (Versión 1, etapa 7; `templates/cuentas/bienvenida.html`). Una tarjeta centrada con los cinco pasos
-   arriba; solo tokens semánticos (nunca un color escrito aquí). Cada opción de color lleva su propio `data-tema`,
-   así su muestra pinta SU acento con tokens.css §4. Reutiliza de perfil.css las pastillas y la lista de personas. */
+/* Bienvenida (Versión 1, etapa 7; rediseño 2026-11-13; `templates/cuentas/bienvenida.html`).
+   Pastillas de pasos arriba y una tarjeta amplia: texto a la izquierda, ilustración a la derecha. Solo tokens
+   semánticos (nunca un color escrito aquí). Las ilustraciones son HTML + iconos del sprite: el fondo usa
+   superficies; el acento solo en piezas pequeñas (marcas, muestras, una pastilla), nunca en superficies grandes.
+   Las miniaturas de Apariencia usan `--muestra-claro-*` / `--muestra-oscuro-*` para verse igual en ambos modos.
+   Cada muestra de color y la vista previa llevan su propio `data-tema` (tokens.css §4).
+   Puntos de quiebre: 960 (una columna), 640 (móvil). */
 
 .bv {
   display: grid;
-  gap: var(--space-4);
+  gap: var(--space-5);
   width: 100%;
-  max-width: 720px;
+  max-width: 1120px;
   margin: 0 auto;
-  padding: var(--space-4) 0 var(--space-6);
+  padding: var(--space-2) 0 var(--space-7);
 }
+
+/* La página usa el ancho amplio; el contenedor centra la bienvenida. */
+.content-area--bienvenida {
+  align-items: stretch;
+}
+
+/* ---------- Pasos ---------- */
 
 .bv-pasos {
   display: flex;
   flex-wrap: wrap;
+  justify-content: center;
   gap: var(--space-2);
   margin: 0;
   padding: 0;
@@ -23,147 +35,898 @@
 .bv-pasos__item {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
-  padding: var(--space-1) var(--space-3) var(--space-1) var(--space-1);
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: var(--space-1) var(--space-4) var(--space-1) var(--space-1);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-pill);
-  color: var(--text-secondary);
+  background: var(--surface-card);
+  color: var(--text-muted);
   font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
 }
 
-.bv-pasos__numero {
+.bv-pasos__marca {
   display: inline-grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 28px;
+  height: 28px;
   border-radius: var(--radius-pill);
   background: var(--surface-sunken);
-  font-weight: 600;
+  font-weight: var(--font-weight-semibold);
 }
 
-.bv-pasos__item.is-actual {
-  border-color: var(--text-primary);
+.bv-pasos__item.is-hecho {
+  color: var(--text-secondary);
+}
+
+.bv-pasos__item.is-hecho .bv-pasos__marca {
+  background: var(--color-primary-soft);
   color: var(--text-primary);
 }
 
-.bv-pasos__item.is-actual .bv-pasos__numero {
+.bv-pasos__item.is-actual {
+  border-color: var(--border-selected);
+  background: var(--color-primary-soft);
+  color: var(--text-primary);
+}
+
+.bv-pasos__item.is-actual .bv-pasos__marca {
   background: var(--color-primary);
   color: var(--color-on-primary);
 }
 
+/* ---------- Tarjeta ---------- */
+
 .bv-tarjeta {
   display: grid;
-  gap: var(--space-4);
-  padding: var(--space-6);
+  gap: var(--space-6);
+  padding: clamp(var(--space-5), 4vw, var(--space-8));
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-lg);
+  border-radius: var(--radius-xl);
   background: var(--surface-card);
+  box-shadow: var(--shadow-md);
 }
 
-.bv-contador {
+.bv-insignia {
+  display: inline-flex;
+  align-items: center;
+  justify-self: start;
+  gap: var(--space-1);
+  width: fit-content;
   margin: 0;
-  color: var(--text-muted);
-  font-size: var(--font-size-small);
+  padding: var(--space-1) var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-primary-soft);
+  color: var(--text-primary);
+  font-size: var(--font-size-caption);
+  font-weight: var(--font-weight-semibold);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .bv-titulo {
   margin: 0;
-  font-size: var(--font-size-page-title);
-  font-weight: 600;
+  font-size: var(--font-size-display);
+  font-weight: var(--font-weight-bold);
+  line-height: var(--line-height-tight);
+  letter-spacing: -0.01em;
+  text-wrap: balance;
+}
+
+.bv-titulo--heroe {
+  font-size: var(--font-size-hero);
 }
 
 .bv-texto {
   margin: 0;
   max-width: var(--measure-text, 64ch);
   color: var(--text-secondary);
+  font-size: var(--font-size-body-lg);
+  line-height: var(--line-height-base);
 }
 
-.bv-texto--tenue {
+.bv-texto--tenue,
+.bv-tenue {
   color: var(--text-muted);
 }
 
-.bv-opciones {
+.bv-separador {
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.bv-pastilla {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  padding: 2px var(--space-3);
+  border-radius: var(--radius-pill);
+  background: var(--color-primary-soft);
+  color: var(--text-primary);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-medium);
+  white-space: nowrap;
+}
+
+.bv-icono-caja {
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--radius-md);
+  background: var(--gradient-acento-suave);
+  color: var(--text-primary);
+}
+
+/* ---------- Cabecera de paso + ilustración ---------- */
+
+.bv-cabecera {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--space-5);
+}
+
+.bv-cabecera__texto {
+  display: grid;
   gap: var(--space-3);
 }
 
-.bv-opcion {
+.bv-ilustra {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 240px;
+  height: 170px;
+}
+
+.bv-ilustra__fondo {
+  position: absolute;
+  inset: 8px 12px;
+  border-radius: 46% 54% 42% 58% / 55% 45% 55% 45%;
+  background: var(--gradient-acento);
+}
+
+.bv-ilustra__ficha {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 104px;
+  height: 104px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  color: var(--text-primary);
+  box-shadow: var(--shadow-md);
+}
+
+.bv-ilustra__ficha .icon {
+  width: 52px;
+  height: 52px;
+  stroke-width: 1.5;
+}
+
+.bv-ilustra__satelite {
+  position: absolute;
+  top: 16px;
+  right: 44px;
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.bv-ilustra__rayas {
+  position: absolute;
+  top: 0;
+  right: 6px;
+  width: 30px;
+  height: 30px;
+}
+
+.bv-ilustra__rayas i {
+  position: absolute;
+  width: 3px;
+  height: 11px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+}
+
+.bv-ilustra__rayas i:nth-child(1) { left: 2px; top: 4px; transform: rotate(-10deg); }
+.bv-ilustra__rayas i:nth-child(2) { left: 14px; top: 9px; transform: rotate(35deg); }
+.bv-ilustra__rayas i:nth-child(3) { left: 20px; top: 22px; transform: rotate(75deg); }
+
+/* ---------- Paso 1: héroe + mini portal (decorativo) ---------- */
+
+.bv-heroe {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr);
+  align-items: center;
+  gap: var(--space-7);
+}
+
+.bv-heroe__texto {
+  display: grid;
+  gap: var(--space-4);
+}
+
+.bv-portal {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-areas:
+    "buscar  buscar"
+    "nuevo   tickets"
+    "trabajo tickets";
+  align-items: start;
+  gap: var(--space-3);
+  padding: var(--space-5) var(--space-3);
+  font-size: var(--font-size-small);
+}
+
+.bv-portal .bv-ilustra__fondo {
+  inset: 6% 2%;
+}
+
+.bv-portal > :not(.bv-ilustra__fondo) {
+  position: relative;
+}
+
+.bv-portal__buscar,
+.bv-portal__tarjeta {
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-md);
+}
+
+.bv-portal__buscar {
+  grid-area: buscar;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0 var(--space-5);
+  padding: var(--space-3) var(--space-4);
+  color: var(--text-muted);
+  transform: rotate(-1.5deg);
+}
+
+.bv-portal__tarjeta {
+  display: grid;
+  gap: var(--space-2);
+  padding: var(--space-3);
+}
+
+.bv-portal__nuevo {
+  grid-area: nuevo;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  transform: rotate(-1.5deg);
+}
+
+.bv-portal__tickets {
+  grid-area: tickets;
+  transform: rotate(-2deg) translateY(-6px);
+}
+
+.bv-portal__trabajo {
+  grid-area: trabajo;
+  transform: rotate(-1deg) translateX(var(--space-4));
+}
+
+.bv-portal__accion {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+.bv-portal__textos {
+  display: grid;
+  min-width: 0;
+}
+
+.bv-portal__textos strong,
+.bv-portal__textos small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bv-portal__textos small {
+  color: var(--text-muted);
+}
+
+.bv-portal__titulo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: 0;
+  font-weight: var(--font-weight-semibold);
+}
+
+.bv-portal__tickets ul {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.bv-portal__tickets li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+  padding: var(--space-1) 0;
+  border-top: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.bv-portal__fila {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+
+.bv-portal__fila .bv-portal__textos {
+  flex: 1;
+}
+
+/* ---------- Paso 2: Apariencia ---------- */
+
+.bv-modos {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-4);
+}
+
+.bv-modo {
   position: relative;
   display: block;
   cursor: pointer;
 }
 
-.bv-opcion input {
+.bv-modo input,
+.bv-color__opcion input {
   position: absolute;
   opacity: 0;
   pointer-events: none;
 }
 
-.bv-opcion__cuerpo {
-  display: flex;
-  align-items: center;
-  gap: var(--space-2);
-  padding: var(--space-3);
+.bv-modo__cuerpo {
+  position: relative;
+  display: grid;
+  gap: var(--space-4);
+  height: 100%;
+  padding: var(--space-4) var(--space-4) var(--space-5);
   border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   background: var(--surface-card);
+  transition: border-color var(--motion-fast) var(--ease-orbita), box-shadow var(--motion-fast) var(--ease-orbita);
 }
 
-.bv-opcion input:checked + .bv-opcion__cuerpo {
+.bv-modo:hover .bv-modo__cuerpo {
+  border-color: var(--border-control-hover);
+}
+
+.bv-modo input:checked + .bv-modo__cuerpo {
   border-color: var(--border-selected);
+  background: var(--color-primary-soft);
   box-shadow: var(--ring-selected);
 }
 
-.bv-opcion input:focus-visible + .bv-opcion__cuerpo {
+.bv-modo input:focus-visible + .bv-modo__cuerpo {
   outline: 2px solid var(--color-focus-ring);
   outline-offset: 2px;
 }
 
-.bv-opcion__nombre {
-  font-weight: 500;
+.bv-modo__pie {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
 }
 
-.bv-muestra {
-  flex: none;
-  width: 24px;
-  height: 24px;
+.bv-modo__texto {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.bv-modo__nombre {
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.bv-modo__desc {
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+}
+
+/* El selector va en la esquina de la tarjeta (sobre la miniatura): así el nombre nunca lo empuja fuera. */
+.bv-radio {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 1;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 1.5px solid var(--border-control);
+  border-radius: var(--radius-pill);
+  background: var(--surface-card);
+  color: transparent;
+  box-shadow: var(--shadow-sm);
+}
+
+.bv-modo input:checked + .bv-modo__cuerpo .bv-radio {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: var(--color-on-primary);
+}
+
+/* Miniatura de la interfaz: barra superior, tres tarjetas y un panel. */
+.bv-mini {
+  position: relative;
+  display: block;
+  aspect-ratio: 16 / 10;
+  overflow: hidden;
+  border-radius: var(--radius-md);
+}
+
+.bv-mini__capa {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-rows: auto auto 1fr;
+  gap: 8%;
+  padding: 7%;
+  border: 1px solid var(--muestra-claro-borde);
+  border-radius: inherit;
+  background: var(--muestra-claro-fondo);
+  color: var(--muestra-claro-texto);
+}
+
+.bv-mini--oscuro .bv-mini__capa,
+.bv-mini__capa--oscura {
+  border-color: var(--muestra-oscuro-borde);
+  background: var(--muestra-oscuro-fondo);
+  color: var(--muestra-oscuro-texto);
+}
+
+.bv-mini__capa--oscura {
+  clip-path: polygon(62% 0, 100% 0, 100% 100%, 38% 100%);
+}
+
+.bv-mini i {
+  display: block;
+  border-radius: 4px;
+  background: currentColor;
+  opacity: 0.1;
+}
+
+.bv-mini__barra {
+  display: flex;
+  align-items: center;
+  gap: 6%;
+}
+
+.bv-mini__barra i {
+  height: 7px;
+  flex: 0 0 22%;
+}
+
+.bv-mini__barra .bv-mini__marca {
+  flex-basis: 10%;
+  height: 10px;
+  border-radius: var(--radius-pill);
+  opacity: 0.6;
+}
+
+.bv-mini__barra .bv-mini__acento {
+  margin-left: auto;
+  flex-basis: 14%;
+  height: 10px;
   border-radius: var(--radius-pill);
   background: var(--color-primary);
+  opacity: 1;
 }
 
-.bv-org {
+.bv-mini__tarjetas,
+.bv-mini__panel {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6%;
+}
+
+.bv-mini__tarjetas i {
+  aspect-ratio: 5 / 3;
+  opacity: 0.12;
+}
+
+.bv-mini__panel {
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr 1fr;
+}
+
+.bv-mini__panel i:first-child {
+  grid-row: span 2;
+}
+
+/* ---------- Paso 3: Color ---------- */
+
+.bv-color {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  align-items: start;
+  gap: var(--space-6);
+}
+
+.bv-colores {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--space-5) var(--space-3);
+  padding-right: var(--space-6);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.bv-color__opcion {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  text-align: center;
+}
+
+.bv-color__muestra {
+  display: grid;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  border-radius: var(--radius-pill);
+  background: var(--color-primary);
+  color: transparent;
+  box-shadow: 0 0 0 4px var(--surface-card), 0 0 0 5px transparent;
+  transition: box-shadow var(--motion-fast) var(--ease-orbita), transform var(--motion-fast) var(--ease-orbita);
+}
+
+.bv-color__opcion:hover .bv-color__muestra {
+  transform: scale(1.05);
+}
+
+.bv-color__opcion input:checked + .bv-color__muestra {
+  color: var(--color-on-primary);
+  box-shadow: 0 0 0 4px var(--surface-card), 0 0 0 6px var(--text-primary);
+}
+
+.bv-color__opcion input:focus-visible + .bv-color__muestra {
+  outline: 2px solid var(--color-focus-ring);
+  outline-offset: 8px;
+}
+
+.bv-color__nombre {
+  font-weight: var(--font-weight-medium);
+}
+
+.bv-vista {
   display: grid;
   gap: var(--space-3);
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+}
+
+.bv-vista__titulo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   margin: 0;
+  color: var(--text-secondary);
+  font-weight: var(--font-weight-semibold);
 }
 
-.bv-org > div {
+.bv-ejemplo {
   display: grid;
-  grid-template-columns: 140px minmax(0, 1fr);
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-left: 4px solid var(--color-primary);
+  border-radius: var(--radius-md);
+  background: var(--surface-card);
+  box-shadow: var(--shadow-sm);
+}
+
+.bv-ejemplo__cabeza {
+  display: flex;
+  align-items: flex-start;
   gap: var(--space-3);
 }
 
-.bv-org dt {
+.bv-ejemplo__nombre {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.bv-ejemplo__nombre small {
   color: var(--text-muted);
 }
 
-.bv-org dd {
+.bv-ejemplo__meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.bv-ejemplo__fecha {
+  display: inline-flex;
+  align-items: center;
   gap: var(--space-1);
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+}
+
+.bv-ejemplo__texto {
   margin: 0;
+  padding-bottom: var(--space-3);
+  border-bottom: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+}
+
+.bv-ejemplo__acciones {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.bv-ejemplo__acciones .btn {
+  pointer-events: none;
+}
+
+/* ---------- Avatares y personas ---------- */
+
+.bv-avatar {
+  position: relative;
+  display: inline-grid;
+  flex: none;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--gradient-brand);
+  color: var(--color-on-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.bv-avatar img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.bv-avatar--lg {
+  width: 88px;
+  height: 88px;
+  font-size: var(--font-size-display);
+}
+
+.bv-avatar--neutro {
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+}
+
+.bv-persona__textos {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.bv-persona__textos strong,
+.bv-persona__textos small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bv-persona__textos small {
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+}
+
+/* ---------- Paso 4: Tu organización ---------- */
+
+.bv-perfil {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.bv-perfil__id {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-5);
+  border-right: 1px solid var(--border-subtle);
+}
+
+.bv-perfil__quien {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.bv-perfil__nombre {
+  font-size: var(--font-size-activity-title);
+  font-weight: var(--font-weight-semibold);
+  overflow-wrap: anywhere;
+}
+
+.bv-datos {
+  display: grid;
+  margin: 0;
+  padding: var(--space-2) var(--space-5);
+}
+
+.bv-dato {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+}
+
+.bv-dato + .bv-dato {
+  border-top: 1px solid var(--border-subtle);
+}
+
+.bv-dato__cuerpo {
+  display: grid;
+  min-width: 0;
+}
+
+.bv-dato dt {
+  color: var(--text-muted);
+  font-size: var(--font-size-small);
+}
+
+.bv-dato dd {
+  margin: 0;
+  font-size: var(--font-size-body-lg);
+  font-weight: var(--font-weight-semibold);
+}
+
+.bv-dato dd small {
+  color: var(--text-secondary);
+  font-size: var(--font-size-small);
+  font-weight: var(--font-weight-regular);
+}
+
+.bv-jefe {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr);
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-4) var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+}
+
+.bv-jefe__rotulo {
+  margin: 0;
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-semibold);
+}
+
+.bv-jefe__persona {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
 }
 
 .bv-aviso {
   display: flex;
+  align-items: flex-start;
   gap: var(--space-2);
   margin: 0;
-  padding: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
   color: var(--text-secondary);
 }
+
+.bv-aviso .icon {
+  margin-top: 2px;
+}
+
+/* ---------- Paso 5: Tus compañeros ---------- */
+
+.bv-equipos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr));
+  align-items: start;
+  gap: var(--space-4);
+}
+
+.bv-equipo {
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+}
+
+.bv-equipo__cabeza {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--surface-sunken);
+}
+
+.bv-equipo__cabeza > .icon {
+  box-sizing: content-box;
+  padding: var(--space-2);
+  border-radius: var(--radius-md);
+  background: var(--gradient-acento-suave);
+}
+
+.bv-equipo__nombre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  font-size: var(--font-size-card-title);
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bv-personas {
+  display: grid;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3);
+  list-style: none;
+}
+
+.bv-persona {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.bv-persona.is-yo {
+  border-color: var(--border-selected);
+  background: var(--color-primary-soft);
+}
+
+/* ---------- Acciones ---------- */
 
 .bv-acciones {
   display: flex;
@@ -171,23 +934,153 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
-  padding-top: var(--space-2);
+  padding-top: var(--space-5);
   border-top: 1px solid var(--border-subtle);
 }
 
 .bv-acciones__avance {
   display: flex;
   gap: var(--space-2);
+  margin-left: auto;
+}
+
+.bv-acciones .btn {
+  min-width: 120px;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 960px) {
+  .bv-heroe,
+  .bv-color {
+    grid-template-columns: minmax(0, 1fr);
+    gap: var(--space-5);
+  }
+
+  .bv-portal {
+    max-width: 520px;
+    width: 100%;
+    justify-self: center;
+  }
+
+  .bv-colores {
+    padding-right: 0;
+    padding-bottom: var(--space-5);
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .bv-modos {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+  }
+
+  .bv-perfil,
+  .bv-jefe {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bv-perfil__id {
+    border-right: 0;
+    border-bottom: 1px solid var(--border-subtle);
+  }
+
+  .bv-jefe {
+    gap: var(--space-3);
+  }
 }
 
 @media (max-width: 640px) {
-  .bv-tarjeta {
-    padding: var(--space-4);
+  .bv {
+    gap: var(--space-4);
+    padding-top: var(--space-2);
   }
 
-  .bv-org > div {
+  /* En móvil solo el paso actual muestra su nombre; los demás quedan como marcas. */
+  .bv-pasos__item:not(.is-actual) {
+    padding: var(--space-1);
+  }
+
+  .bv-pasos__item:not(.is-actual) .bv-pasos__nombre {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+
+  .bv-tarjeta {
+    gap: var(--space-4);
+    padding: var(--space-5) var(--space-4);
+    border-radius: var(--radius-lg);
+  }
+
+  .bv-titulo {
+    font-size: var(--font-size-page-title);
+  }
+
+  .bv-titulo--heroe {
+    font-size: var(--font-size-hero);
+  }
+
+  .bv-texto {
+    font-size: var(--font-size-body);
+  }
+
+  .bv-cabecera {
     grid-template-columns: minmax(0, 1fr);
-    gap: var(--space-1);
+  }
+
+  .bv-ilustra {
+    display: none;
+  }
+
+  .bv-portal {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "buscar" "nuevo" "tickets";
+    padding: var(--space-3) 0;
+  }
+
+  .bv-portal__buscar {
+    margin: 0;
+  }
+
+  .bv-portal__trabajo {
+    display: none;
+  }
+
+  .bv-portal__tickets {
+    transform: rotate(-1deg);
+  }
+
+  .bv-colores {
+    gap: var(--space-4) var(--space-2);
+  }
+
+  .bv-color__muestra {
+    width: 52px;
+    height: 52px;
+  }
+
+  .bv-vista {
+    padding: var(--space-3);
+  }
+
+  .bv-ejemplo__acciones {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .bv-perfil__id,
+  .bv-datos,
+  .bv-jefe {
+    padding-left: var(--space-4);
+    padding-right: var(--space-4);
+  }
+
+  .bv-avatar--lg {
+    width: 64px;
+    height: 64px;
+    font-size: var(--font-size-page-title);
   }
 
   .bv-acciones {
@@ -196,6 +1089,18 @@
   }
 
   .bv-acciones__avance {
-    justify-content: flex-end;
+    margin-left: 0;
+  }
+
+  .bv-acciones__avance .btn {
+    flex: 1;
+    min-width: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bv-portal__buscar,
+  .bv-portal__tarjeta {
+    transform: none;
   }
 }

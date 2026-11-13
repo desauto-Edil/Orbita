@@ -2036,6 +2036,7 @@ def elemento_archivo_retirar_view(request, pk, adjunto_id):
     return _volver_a_elementos(request, pk)
 
 
+@login_required
 @require_GET
 def revision_conjunto_view(request, pk, entregable_id):
     """4.G2C1 — revisión de TODOS los elementos de un entregable de conjunto en una sola vista: N/N,

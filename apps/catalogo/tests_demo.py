@@ -151,7 +151,7 @@ class PreparacionDemoTests(_EscenarioDemo, TestCase):
 
     def test_no_crea_usuarios_y_rechaza_los_inexistentes(self):
         usuarios = Usuario.objects.count()
-        with self.assertRaisesMessage(ValidationError, "no existe el usuario"):
+        with self.assertRaisesMessage(ValidationError, "no existe una persona"):
             Participantes.desde_opciones(self._opciones(planificador="no_existe"))
         self._preparar_todos()
         self.assertEqual(Usuario.objects.count(), usuarios)

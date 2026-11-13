@@ -273,6 +273,7 @@ class ConversacionArchivosYPresenciaTests(_MediaAisladaMixin, _EscenarioAtencion
         from apps.notificaciones.correo import contenido
 
         _asunto, texto, html, _imagenes = contenido(envio.notificacion)
+        self.responsable_directo.refresh_from_db()  # su correo cambió arriba en la base
         nombre = self.responsable_directo.nombre_visible
         for parte in ("¿Puedes revisar?", "Te dejé una nota", nombre, "cuando no estabas", "Ir al ticket"):
             self.assertIn(parte, html)

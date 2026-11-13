@@ -8532,7 +8532,7 @@ class VariablesWorkflowTicketTests(_EscenarioFlujoFasesMixin, TestCase):
             ("ticket.estado", "IGUAL_A", "BORRADOR"),  # la radicación aún no cambió el estado
             ("ticket.tipo", "IGUAL_A", "SERVICIO"),
             ("ticket.es_general", "IGUAL_A", "no"),
-            ("ticket.solicitante", "IGUAL_A", "var_solicitante"),
+            ("ticket.solicitante", "IGUAL_A", "var_solicitante@pruebas.orbita"),  # Versión 1: el correo
             ("ticket.responsable", "ESTA_VACIO", "-"),
         ]
         for caso in casos:

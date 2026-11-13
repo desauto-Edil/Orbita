@@ -1834,7 +1834,8 @@ class InicioPortalTests(TestCase):
         self.assertEqual(len(respuesta.context["categorias_tiles"]), LIMITE_CATEGORIAS_TILES)
         self.assertEqual(len(respuesta.context["categorias"]), LIMITE_CATEGORIAS_TILES + 2)
         self.assertContains(respuesta, 'id="explorador"')
-        self.assertContains(respuesta, "Ver todo")
+        self.assertContains(respuesta, "Ver catálogo")
+        self.assertContains(respuesta, "cat-chip--todos")
 
     def test_inicio_no_lista_servicios_ni_consulta_por_tarjeta(self):
         from django.db import connection
@@ -1859,7 +1860,7 @@ class InicioPortalTests(TestCase):
         self.assertContains(respuesta, 'class="portal-empty"')
         self.assertContains(respuesta, "Aún no hay nada para solicitar")
         self.assertNotContains(respuesta, 'id="explorador"')
-        self.assertNotContains(respuesta, "Ver todo")
+        self.assertNotContains(respuesta, "Ver catálogo")
 
     def test_con_servicios_el_estado_vacio_desaparece(self):
         self._servicio("Algo disponible")
@@ -1867,14 +1868,16 @@ class InicioPortalTests(TestCase):
         self.assertNotContains(respuesta, "portal-empty")
         self.assertContains(respuesta, "cat-chip")
 
-    # --- Frecuentes y recientes ---
+    # --- Frecuentes y recientes: hoy son los ejemplos del buscador (rediseño 2026-11-13) ---
 
-    def test_sin_historial_no_hay_seccion_de_usados(self):
+    def test_sin_historial_no_hay_ejemplos_inventados(self):
         self._servicio("Algo disponible")
         respuesta = self._inicio()
         self.assertFalse(respuesta.context["tiene_usados"])
+        self.assertEqual(respuesta.context["ejemplos"], [])
+        self.assertNotContains(respuesta, "portal-ejemplos")
+        # Inicio ya no pinta la sección de habituales.
         self.assertNotContains(respuesta, "Tus habituales")
-        self.assertNotContains(respuesta, "Usados recientemente")
 
     def test_un_uso_es_reciente_y_dos_son_frecuentes(self):
         servicio = self._servicio_con_formulario()
@@ -1882,13 +1885,14 @@ class InicioPortalTests(TestCase):
         respuesta = self._inicio()
         self.assertEqual(respuesta.context["frecuentes"], [])
         self.assertEqual(respuesta.context["recientes"], [servicio])
-        self.assertContains(respuesta, "Usados recientemente")
+        self.assertEqual(respuesta.context["ejemplos"], [servicio.nombre])
+        self.assertContains(respuesta, f'data-necesidad-ejemplo="{servicio.nombre}"')
 
         self._ticket(servicio)
         respuesta = self._inicio()
         self.assertEqual(respuesta.context["frecuentes"], [servicio])
         self.assertEqual(respuesta.context["recientes"], [])
-        self.assertContains(respuesta, "Tus habituales")
+        self.assertEqual(respuesta.context["ejemplos"], [servicio.nombre])
 
     def test_los_usados_son_solo_los_propios_y_siguen_la_visibilidad(self):
         servicio = self._servicio_con_formulario()
@@ -1916,7 +1920,7 @@ class InicioPortalTests(TestCase):
         self.assertEqual(len(ids), LIMITE_TICKETS_RECIENTES)
         self.assertNotIn(ajeno.pk, ids)
         self.assertNotIn(cancelado.pk, ids)
-        self.assertContains(respuesta, "Tus tickets recientes")
+        self.assertContains(respuesta, "Tickets recientes")
         self.assertContains(respuesta, reverse("tickets:mis_tickets"))
 
     def test_un_borrador_enlaza_a_su_formulario(self):
@@ -1927,7 +1931,7 @@ class InicioPortalTests(TestCase):
     def test_sin_tickets_no_hay_tarjeta_vacia(self):
         respuesta = self._inicio()
         self.assertEqual(respuesta.context["tickets_recientes"], [])
-        self.assertNotContains(respuesta, "Tus tickets recientes")
+        self.assertNotContains(respuesta, "Tickets recientes")
 
     # --- Tu trabajo ---
 
@@ -1951,7 +1955,8 @@ class InicioPortalTests(TestCase):
         self.assertEqual((trabajo["tareas"], trabajo["aprobaciones"]), (1, 1))
         self.assertFalse(trabajo["acceso_cola"])
         self.assertEqual(trabajo["url"], reverse("core:mi_trabajo"))
-        self.assertContains(respuesta, "Tu trabajo")
+        # Rediseño 2026-11-13: Inicio ya no pinta la banda de Trabajo (vive en la navegación).
+        self.assertNotContains(respuesta, 'class="portal-trabajo"')
         self.assertNotContains(respuesta, reverse("tickets:cola"))
 
     def test_con_capacidad_pero_sin_pendientes_solo_hay_una_senal_discreta(self):
@@ -1975,21 +1980,19 @@ class InicioPortalTests(TestCase):
         trabajo = respuesta.context["trabajo"]
         self.assertTrue(trabajo["hay_pendientes"])
         self.assertEqual(trabajo["url"], reverse("core:mi_trabajo"))
-        self.assertContains(respuesta, "Tu trabajo")
-        self.assertContains(respuesta, "Cola de atención")
-        self.assertContains(respuesta, "Ir a Trabajo")
+        self.assertNotContains(respuesta, 'class="portal-trabajo"')
         self.assertNotContains(respuesta, "Todo al día")
 
-    def test_ritmo_de_la_pagina_hero_cuerpo_trabajo_recientes(self):
-        # Retícula 1 → 2 → 1 → 1 columnas. El orden del DOM es también el
-        # orden móvil: hero, explorar, tu día, trabajo, recientes.
+    def test_orden_de_la_pagina_hero_catalogo_tu_dia_recientes(self):
+        # Rediseño 2026-11-13. El orden del DOM es el orden móvil: hero, catálogo, tu día, recientes; en
+        # escritorio la retícula pone Tu día a la derecha.
         self._servicio("Algo disponible")
         self._ticket(self._servicio_con_formulario())
         crear_tarea(titulo="Pendiente", creada_por=self.usuario, usuario_responsable=self.usuario)
         html = self._inicio().content.decode()
         marcas = [
             'class="portal-hero"', 'class="portal-body"', 'id="t-explorar"', 'id="t-agenda"',
-            'class="portal-trabajo"', 'class="portal-recientes"',
+            'class="portal-recientes"',
         ]
         posiciones = [html.index(m) for m in marcas]
         self.assertEqual(posiciones, sorted(posiciones))
@@ -2584,6 +2587,27 @@ class ConfiguracionTests(TestCase):
         self.usuario.refresh_from_db()
         self.assertIsNotNone(self.usuario.bienvenida_completada_en)
         self.assertEqual(self.client.get(destino).status_code, 200)
+
+    @override_settings(BIENVENIDA_OBLIGATORIA=True)
+    def test_la_bienvenida_marca_los_pasos_hechos_y_se_incluye_como_tu_en_sus_equipos(self):
+        url = reverse("core:bienvenida")
+        # Rediseño 2026-11-13: en el paso 3 los dos anteriores van como hechos y el actual se anuncia.
+        color = self.client.get(url, {"paso": "color"}).content.decode()
+        self.assertEqual(color.count("bv-pasos__item is-hecho"), 2)
+        self.assertIn('aria-current="step"', color)
+        self.assertIn("data-bv-vista", color)
+        self.assertIn("js/bienvenida.js", color)
+        # «Tus compañeros»: la persona aparece al final como «Tú» y cuenta como integrante; Mi perfil no cambia.
+        equipo = Equipo.objects.create(nombre="Mesa de ayuda")
+        ana = Usuario.objects.create_user("ana_bv@pruebas.orbita", first_name="Ana")
+        MiembroEquipo.objects.create(equipo=equipo, usuario=self.usuario)
+        MiembroEquipo.objects.create(equipo=equipo, usuario=ana)
+        companeros = self.client.get(url, {"paso": "companeros"}).content.decode()
+        self.assertIn("Mesa de ayuda", companeros)
+        self.assertIn("2 integrantes", companeros)
+        self.assertIn('class="bv-persona is-yo"', companeros)
+        self.assertIn(">Tú<", companeros)
+        self.assertIn("Finalizar", companeros)
 
     @override_settings(BIENVENIDA_OBLIGATORIA=True)
     def test_la_bienvenida_se_puede_omitir_desde_cualquier_paso(self):
